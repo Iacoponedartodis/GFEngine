@@ -1,0 +1,40 @@
+# ============================================================
+# GFEngine — .gitignore
+# ============================================================
+ 
+# --- Output di build (CMake, MSBuild, Ninja) ---
+build/
+out/
+ 
+# --- Cache e file generati da CMake ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+install_manifest.txt
+CTestTestfile.cmake
+ 
+# --- Visual Studio ---
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.slnx
+ 
+# --- Binari e artefatti compilati ---
+*.exe
+*.dll
+*.lib
+*.a
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.idb
+ 
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
