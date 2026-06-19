@@ -10,6 +10,10 @@ typedef char          GLchar;
 typedef ptrdiff_t     GLsizeiptr;
 typedef ptrdiff_t     GLintptr;
 
+// ============================================================
+// Costanti aggiuntive (non in GL/gl.h su Windows)
+// ============================================================
+
 #ifndef GL_ARRAY_BUFFER
   #define GL_ARRAY_BUFFER         0x8892
 #endif
@@ -40,6 +44,17 @@ typedef ptrdiff_t     GLintptr;
 #ifndef GL_INFO_LOG_LENGTH
   #define GL_INFO_LOG_LENGTH      0x8B84
 #endif
+// Texture (GL 1.3+, non in <GL/gl.h> su Windows)
+#ifndef GL_TEXTURE0
+  #define GL_TEXTURE0             0x84C0
+#endif
+#ifndef GL_CLAMP_TO_EDGE
+  #define GL_CLAMP_TO_EDGE        0x812F
+#endif
+
+// ============================================================
+// Typedef function pointer
+// ============================================================
 
 typedef void   (APIENTRY* PFNGLGENBUFFERSPROC)              (GLsizei n, GLuint* buffers);
 typedef void   (APIENTRY* PFNGLBINDBUFFERPROC)              (GLenum target, GLuint buffer);
@@ -61,23 +76,35 @@ typedef void   (APIENTRY* PFNGLSHADERSOURCEPROC)            (GLuint shader, GLsi
                                                               const GLchar* const* string, const GLint* length);
 typedef void   (APIENTRY* PFNGLCOMPILESHADERPROC)           (GLuint shader);
 typedef void   (APIENTRY* PFNGLGETSHADERIVPROC)             (GLuint shader, GLenum pname, GLint* params);
-typedef void   (APIENTRY* PFNGLGETSHADERINFOLOGPROC)        (GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+typedef void   (APIENTRY* PFNGLGETSHADERINFOLOGPROC)        (GLuint shader, GLsizei bufSize,
+                                                              GLsizei* length, GLchar* infoLog);
 typedef void   (APIENTRY* PFNGLDELETESHADERPROC)            (GLuint shader);
 
 typedef GLuint (APIENTRY* PFNGLCREATEPROGRAMPROC)           (void);
 typedef void   (APIENTRY* PFNGLATTACHSHADERPROC)            (GLuint program, GLuint shader);
 typedef void   (APIENTRY* PFNGLLINKPROGRAMPROC)             (GLuint program);
 typedef void   (APIENTRY* PFNGLGETPROGRAMIVPROC)            (GLuint program, GLenum pname, GLint* params);
-typedef void   (APIENTRY* PFNGLGETPROGRAMINFOLOGPROC)       (GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+typedef void   (APIENTRY* PFNGLGETPROGRAMINFOLOGPROC)       (GLuint program, GLsizei bufSize,
+                                                              GLsizei* length, GLchar* infoLog);
 typedef void   (APIENTRY* PFNGLUSEPROGRAMPROC)              (GLuint program);
 typedef void   (APIENTRY* PFNGLDELETEPROGRAMPROC)           (GLuint program);
 
 typedef GLint  (APIENTRY* PFNGLGETUNIFORMLOCATIONPROC)      (GLuint program, const GLchar* name);
+typedef void   (APIENTRY* PFNGLUNIFORM1IPROC)               (GLint location, GLint v0);
 typedef void   (APIENTRY* PFNGLUNIFORM1FPROC)               (GLint location, GLfloat v0);
 typedef void   (APIENTRY* PFNGLUNIFORM2FPROC)               (GLint location, GLfloat v0, GLfloat v1);
 typedef void   (APIENTRY* PFNGLUNIFORM3FPROC)               (GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
 typedef void   (APIENTRY* PFNGLUNIFORM4FPROC)               (GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
-typedef void   (APIENTRY* PFNGLUNIFORMMATRIX4FVPROC)        (GLint location, GLsizei count, GLboolean transpose, const GLfloat* value);
+typedef void   (APIENTRY* PFNGLUNIFORMMATRIX4FVPROC)        (GLint location, GLsizei count,
+                                                              GLboolean transpose, const GLfloat* value);
+
+// Texture (GL 1.3 / 3.0 — non accessibili da opengl32.dll direttamente)
+typedef void   (APIENTRY* PFNGLACTIVETEXTUREPROC)           (GLenum texture);
+typedef void   (APIENTRY* PFNGLGENERATEMIPMAPPROC)          (GLenum target);
+
+// ============================================================
+// Extern declarations
+// ============================================================
 
 extern PFNGLGENBUFFERSPROC               glGenBuffers;
 extern PFNGLBINDBUFFERPROC               glBindBuffer;
@@ -109,10 +136,18 @@ extern PFNGLUSEPROGRAMPROC               glUseProgram;
 extern PFNGLDELETEPROGRAMPROC            glDeleteProgram;
 
 extern PFNGLGETUNIFORMLOCATIONPROC       glGetUniformLocation;
+extern PFNGLUNIFORM1IPROC                glUniform1i;
 extern PFNGLUNIFORM1FPROC                glUniform1f;
 extern PFNGLUNIFORM2FPROC                glUniform2f;
 extern PFNGLUNIFORM3FPROC                glUniform3f;
 extern PFNGLUNIFORM4FPROC                glUniform4f;
 extern PFNGLUNIFORMMATRIX4FVPROC         glUniformMatrix4fv;
+
+extern PFNGLACTIVETEXTUREPROC            glActiveTexture;
+extern PFNGLGENERATEMIPMAPPROC           glGenerateMipmap;
+
+// ============================================================
+// Loader
+// ============================================================
 
 bool miniGLLoad();

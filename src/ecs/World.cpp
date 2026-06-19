@@ -1,268 +1,91 @@
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/ISystem.hpp"
- 
+
 #include <algorithm>
 #include <iostream>
 #include <limits>
 #include <memory>
- 
+
 namespace mini
 {
- 
+
 void World::initialize()
 {
-    m_tickCount    = 0;
-    m_nextEntityId = 1;
- 
-    m_entities.clear();
-    m_aliveEntities.clear();
-    m_transforms.clear();
-    m_teams.clear();
-    m_velocities.clear();
-    m_healths.clear();
- 
+    m_tickCount = 0; m_nextEntityId = 1;
+    m_entities.clear(); m_aliveEntities.clear();
+    m_transforms.clear(); m_teams.clear();
+    m_velocities.clear(); m_healths.clear();
+    m_meshRenderers.clear();
     std::cout << "[World] Inizializzato." << std::endl;
 }
- 
-void World::tick(float deltaTime)
+
+void World::tick(float dt)
 {
     ++m_tickCount;
- 
-    for (auto& system : m_systems)
-    {
-        system->update(*this, deltaTime);
-    }
- 
-    if (!m_debugLogging)
-    {
-        return;
-    }
- 
-    std::cout << "[World] tick=" << m_tickCount
-              << " dt="          << deltaTime
-              << " entities="    << m_entities.size()
-              << std::endl;
- 
-    for (EntityId entity : m_entities)
-    {
-        std::cout << "  [Entity " << entity << "]";
- 
-        if (const TeamComponent* tm = getTeam(entity))
-            std::cout << " team=" << tm->teamId;
- 
-        if (const TransformComponent* t = getTransform(entity))
-            std::cout << " pos=(" << t->x << ", " << t->y << ", " << t->z << ")";
- 
-        if (const VelocityComponent* v = getVelocity(entity))
-            std::cout << " vel=(" << v->vx << ", " << v->vy << ", " << v->vz << ")";
- 
-        if (const HealthComponent* h = getHealth(entity))
-            std::cout << " hp=" << h->current << "/" << h->maximum;
- 
-        std::cout << std::endl;
-    }
+    for (auto& s : m_systems) s->update(*this, dt);
 }
- 
-void World::registerSystem(std::unique_ptr<ISystem> system)
-{
-    if (!system)
-    {
-        return;
-    }
- 
-    m_systems.push_back(std::move(system));
-}
- 
-// =============================================================
-// Lifecycle entita
-// =============================================================
- 
+
+void World::registerSystem(std::unique_ptr<ISystem> s)
+{ if (s) m_systems.push_back(std::move(s)); }
+
 EntityId World::createEntity()
 {
     if (m_nextEntityId == std::numeric_limits<EntityId>::max())
-    {
-        std::cerr << "[World] ERRORE: limite massimo EntityId raggiunto." << std::endl;
-        return 0;
-    }
- 
-    const EntityId entity = m_nextEntityId++;
-    m_entities.push_back(entity);
-    m_aliveEntities.insert(entity);
-    return entity;
+    { std::cerr << "[World] ERRORE: limite EntityId.\n"; return 0; }
+    const EntityId e = m_nextEntityId++;
+    m_entities.push_back(e);
+    m_aliveEntities.insert(e);
+    return e;
 }
- 
-bool World::destroyEntity(EntityId entity)
+
+bool World::destroyEntity(EntityId e)
 {
-    if (!isValidEntity(entity))
-    {
-        return false;
-    }
- 
-    m_transforms.erase(entity);
-    m_teams.erase(entity);
-    m_velocities.erase(entity);
-    m_healths.erase(entity);
- 
-    m_aliveEntities.erase(entity);
- 
-    const auto it = std::remove(m_entities.begin(), m_entities.end(), entity);
+    if (!isValidEntity(e)) return false;
+    m_transforms.erase(e); m_teams.erase(e);
+    m_velocities.erase(e); m_healths.erase(e);
+    m_meshRenderers.erase(e); m_aliveEntities.erase(e);
+    auto it = std::remove(m_entities.begin(), m_entities.end(), e);
     m_entities.erase(it, m_entities.end());
- 
     return true;
 }
- 
-bool World::isValidEntity(EntityId entity) const
-{
-    if (entity == 0)
-    {
-        return false;
-    }
- 
-    return m_aliveEntities.count(entity) > 0;
-}
- 
-// =============================================================
-// Transform
-// =============================================================
- 
-void World::addTransform(EntityId entity, const TransformComponent& transform)
-{
-    if (!isValidEntity(entity)) return;
-    m_transforms[entity] = transform;
-}
- 
-bool World::hasTransform(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return false;
-    return m_transforms.find(entity) != m_transforms.end();
-}
- 
-TransformComponent* World::getTransform(EntityId entity)
-{
-    if (!isValidEntity(entity)) return nullptr;
-    auto it = m_transforms.find(entity);
-    return (it != m_transforms.end()) ? &it->second : nullptr;
-}
- 
-const TransformComponent* World::getTransform(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return nullptr;
-    const auto it = m_transforms.find(entity);
-    return (it != m_transforms.end()) ? &it->second : nullptr;
-}
- 
-// =============================================================
-// Team
-// =============================================================
- 
-void World::addTeam(EntityId entity, const TeamComponent& team)
-{
-    if (!isValidEntity(entity)) return;
-    m_teams[entity] = team;
-}
- 
-bool World::hasTeam(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return false;
-    return m_teams.find(entity) != m_teams.end();
-}
- 
-TeamComponent* World::getTeam(EntityId entity)
-{
-    if (!isValidEntity(entity)) return nullptr;
-    auto it = m_teams.find(entity);
-    return (it != m_teams.end()) ? &it->second : nullptr;
-}
- 
-const TeamComponent* World::getTeam(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return nullptr;
-    const auto it = m_teams.find(entity);
-    return (it != m_teams.end()) ? &it->second : nullptr;
-}
- 
-// =============================================================
-// Velocity
-// =============================================================
- 
-void World::addVelocity(EntityId entity, const VelocityComponent& velocity)
-{
-    if (!isValidEntity(entity)) return;
-    m_velocities[entity] = velocity;
-}
- 
-bool World::hasVelocity(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return false;
-    return m_velocities.find(entity) != m_velocities.end();
-}
- 
-VelocityComponent* World::getVelocity(EntityId entity)
-{
-    if (!isValidEntity(entity)) return nullptr;
-    auto it = m_velocities.find(entity);
-    return (it != m_velocities.end()) ? &it->second : nullptr;
-}
- 
-const VelocityComponent* World::getVelocity(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return nullptr;
-    const auto it = m_velocities.find(entity);
-    return (it != m_velocities.end()) ? &it->second : nullptr;
-}
- 
-// =============================================================
-// Health
-// =============================================================
- 
-void World::addHealth(EntityId entity, const HealthComponent& health)
-{
-    if (!isValidEntity(entity)) return;
-    m_healths[entity] = health;
-}
- 
-bool World::hasHealth(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return false;
-    return m_healths.find(entity) != m_healths.end();
-}
- 
-HealthComponent* World::getHealth(EntityId entity)
-{
-    if (!isValidEntity(entity)) return nullptr;
-    auto it = m_healths.find(entity);
-    return (it != m_healths.end()) ? &it->second : nullptr;
-}
- 
-const HealthComponent* World::getHealth(EntityId entity) const
-{
-    if (!isValidEntity(entity)) return nullptr;
-    const auto it = m_healths.find(entity);
-    return (it != m_healths.end()) ? &it->second : nullptr;
-}
- 
-// =============================================================
-// Debug e utility
-// =============================================================
- 
-void World::setDebugLogging(bool enabled)
-{
-    m_debugLogging = enabled;
-}
- 
-bool World::isDebugLoggingEnabled() const
-{
-    return m_debugLogging;
-}
- 
-std::uint64_t World::getTickCount() const
-{
-    return m_tickCount;
-}
- 
-const std::vector<EntityId>& World::getEntities() const
-{
-    return m_entities;
-}
- 
+
+bool World::isValidEntity(EntityId e) const
+{ return e != 0 && m_aliveEntities.count(e) > 0; }
+
+// --- Transform ---
+void World::addTransform(EntityId e, const TransformComponent& c)    { if (isValidEntity(e)) m_transforms[e] = c; }
+bool World::hasTransform(EntityId e) const                            { return isValidEntity(e) && m_transforms.count(e); }
+TransformComponent*       World::getTransform(EntityId e)             { if (!isValidEntity(e)) return nullptr; auto it = m_transforms.find(e); return it != m_transforms.end() ? &it->second : nullptr; }
+const TransformComponent* World::getTransform(EntityId e) const       { if (!isValidEntity(e)) return nullptr; auto it = m_transforms.find(e); return it != m_transforms.end() ? &it->second : nullptr; }
+
+// --- Team ---
+void World::addTeam(EntityId e, const TeamComponent& c)               { if (isValidEntity(e)) m_teams[e] = c; }
+bool World::hasTeam(EntityId e) const                                  { return isValidEntity(e) && m_teams.count(e); }
+TeamComponent*       World::getTeam(EntityId e)                        { if (!isValidEntity(e)) return nullptr; auto it = m_teams.find(e); return it != m_teams.end() ? &it->second : nullptr; }
+const TeamComponent* World::getTeam(EntityId e) const                  { if (!isValidEntity(e)) return nullptr; auto it = m_teams.find(e); return it != m_teams.end() ? &it->second : nullptr; }
+
+// --- Velocity ---
+void World::addVelocity(EntityId e, const VelocityComponent& c)       { if (isValidEntity(e)) m_velocities[e] = c; }
+bool World::hasVelocity(EntityId e) const                              { return isValidEntity(e) && m_velocities.count(e); }
+VelocityComponent*       World::getVelocity(EntityId e)                { if (!isValidEntity(e)) return nullptr; auto it = m_velocities.find(e); return it != m_velocities.end() ? &it->second : nullptr; }
+const VelocityComponent* World::getVelocity(EntityId e) const          { if (!isValidEntity(e)) return nullptr; auto it = m_velocities.find(e); return it != m_velocities.end() ? &it->second : nullptr; }
+
+// --- Health ---
+void World::addHealth(EntityId e, const HealthComponent& c)            { if (isValidEntity(e)) m_healths[e] = c; }
+bool World::hasHealth(EntityId e) const                                 { return isValidEntity(e) && m_healths.count(e); }
+HealthComponent*       World::getHealth(EntityId e)                     { if (!isValidEntity(e)) return nullptr; auto it = m_healths.find(e); return it != m_healths.end() ? &it->second : nullptr; }
+const HealthComponent* World::getHealth(EntityId e) const               { if (!isValidEntity(e)) return nullptr; auto it = m_healths.find(e); return it != m_healths.end() ? &it->second : nullptr; }
+
+// --- MeshRenderer ---
+void World::addMeshRenderer(EntityId e, const MeshRendererComponent& c){ if (isValidEntity(e)) m_meshRenderers[e] = c; }
+bool World::hasMeshRenderer(EntityId e) const                           { return isValidEntity(e) && m_meshRenderers.count(e); }
+MeshRendererComponent*       World::getMeshRenderer(EntityId e)         { if (!isValidEntity(e)) return nullptr; auto it = m_meshRenderers.find(e); return it != m_meshRenderers.end() ? &it->second : nullptr; }
+const MeshRendererComponent* World::getMeshRenderer(EntityId e) const   { if (!isValidEntity(e)) return nullptr; auto it = m_meshRenderers.find(e); return it != m_meshRenderers.end() ? &it->second : nullptr; }
+
+// --- Utility ---
+void World::setDebugLogging(bool v)               { m_debugLogging = v; }
+bool World::isDebugLoggingEnabled() const         { return m_debugLogging; }
+std::uint64_t World::getTickCount() const         { return m_tickCount; }
+const std::vector<EntityId>& World::getEntities() const { return m_entities; }
+
 } // namespace mini

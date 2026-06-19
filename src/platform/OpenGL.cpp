@@ -1,5 +1,4 @@
 #include "mini/platform/OpenGL.hpp"
-
 #include <cstring>
 #include <iostream>
 
@@ -33,11 +32,15 @@ PFNGLUSEPROGRAMPROC              glUseProgram              = nullptr;
 PFNGLDELETEPROGRAMPROC           glDeleteProgram           = nullptr;
 
 PFNGLGETUNIFORMLOCATIONPROC      glGetUniformLocation      = nullptr;
+PFNGLUNIFORM1IPROC               glUniform1i               = nullptr;
 PFNGLUNIFORM1FPROC               glUniform1f               = nullptr;
 PFNGLUNIFORM2FPROC               glUniform2f               = nullptr;
 PFNGLUNIFORM3FPROC               glUniform3f               = nullptr;
 PFNGLUNIFORM4FPROC               glUniform4f               = nullptr;
 PFNGLUNIFORMMATRIX4FVPROC        glUniformMatrix4fv        = nullptr;
+
+PFNGLACTIVETEXTUREPROC           glActiveTexture           = nullptr;
+PFNGLGENERATEMIPMAPPROC          glGenerateMipmap          = nullptr;
 
 namespace
 {
@@ -90,11 +93,15 @@ bool miniGLLoad()
     ok &= loadFunc(glDeleteProgram,            "glDeleteProgram");
 
     ok &= loadFunc(glGetUniformLocation,       "glGetUniformLocation");
+    ok &= loadFunc(glUniform1i,                "glUniform1i");
     ok &= loadFunc(glUniform1f,                "glUniform1f");
     ok &= loadFunc(glUniform2f,                "glUniform2f");
     ok &= loadFunc(glUniform3f,                "glUniform3f");
     ok &= loadFunc(glUniform4f,                "glUniform4f");
     ok &= loadFunc(glUniformMatrix4fv,         "glUniformMatrix4fv");
+
+    ok &= loadFunc(glActiveTexture,            "glActiveTexture");
+    ok &= loadFunc(glGenerateMipmap,           "glGenerateMipmap");
 
     if (ok)
         std::cout << "[GL] Funzioni OpenGL 3.3 caricate." << std::endl;

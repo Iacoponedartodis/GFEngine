@@ -9,10 +9,6 @@
 namespace mini
 {
 
-// ============================================================
-// Compilazione stage singolo
-// ============================================================
-
 unsigned int Shader::compileStage(unsigned int type, const char* src)
 {
     const GLuint shader = glCreateShader(static_cast<GLenum>(type));
@@ -21,28 +17,18 @@ unsigned int Shader::compileStage(unsigned int type, const char* src)
 
     GLint ok = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-
     if (!ok)
     {
         GLint logLen = 0;
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
-
         std::vector<GLchar> log(static_cast<std::size_t>(logLen));
         glGetShaderInfoLog(shader, logLen, nullptr, log.data());
-
-        const std::string stageName = (type == GL_VERTEX_SHADER) ? "vertex" : "fragment";
-        std::string msg = "[Shader] Errore compilazione " + stageName + ":\n" + log.data();
-
+        const std::string stage = (type == GL_VERTEX_SHADER) ? "vertex" : "fragment";
         glDeleteShader(shader);
-        throw std::runtime_error(msg);
+        throw std::runtime_error("[Shader] Errore compilazione " + stage + ":\n" + log.data());
     }
-
     return static_cast<unsigned int>(shader);
 }
-
-// ============================================================
-// Costruttore / Distruttore
-// ============================================================
 
 Shader::Shader(const char* vertSrc, const char* fragSrc)
 {
@@ -54,25 +40,20 @@ Shader::Shader(const char* vertSrc, const char* fragSrc)
     glAttachShader(m_id, frag);
     glLinkProgram(m_id);
 
-    // Gli stage possono essere eliminati dopo il link
     glDeleteShader(vert);
     glDeleteShader(frag);
 
     GLint ok = 0;
     glGetProgramiv(m_id, GL_LINK_STATUS, &ok);
-
     if (!ok)
     {
         GLint logLen = 0;
         glGetProgramiv(m_id, GL_INFO_LOG_LENGTH, &logLen);
-
         std::vector<GLchar> log(static_cast<std::size_t>(logLen));
         glGetProgramInfoLog(m_id, logLen, nullptr, log.data());
-
-        const std::string msg = std::string("[Shader] Errore link:\n") + log.data();
         glDeleteProgram(m_id);
         m_id = 0;
-        throw std::runtime_error(msg);
+        throw std::runtime_error(std::string("[Shader] Errore link:\n") + log.data());
     }
 
     m_valid = true;
@@ -81,58 +62,18 @@ Shader::Shader(const char* vertSrc, const char* fragSrc)
 
 Shader::~Shader()
 {
-    if (m_id != 0)
-    {
-        glDeleteProgram(m_id);
-    }
+    if (m_id != 0) glDeleteProgram(m_id);
 }
 
-// ============================================================
-// API pubblica
-// ============================================================
+void Shader::use()    const { glUseProgram(m_id); }
+unsigned int Shader::getId()    const { return m_id; }
+bool         Shader::isValid()  const { return m_valid; }
 
-void Shader::use() const
-{
-    glUseProgram(m_id);
-}
-
-unsigned int Shader::getId() const
-{
-    return m_id;
-}
-
-bool Shader::isValid() const
-{
-    return m_valid;
-}
-
-// ============================================================
-// Uniform setters
-// ============================================================
-
-void Shader::setFloat(const char* name, float value) const
-{
-    glUniform1f(glGetUniformLocation(m_id, name), value);
-}
-
-void Shader::setVec2(const char* name, float x, float y) const
-{
-    glUniform2f(glGetUniformLocation(m_id, name), x, y);
-}
-
-void Shader::setVec3(const char* name, float x, float y, float z) const
-{
-    glUniform3f(glGetUniformLocation(m_id, name), x, y, z);
-}
-
-void Shader::setVec4(const char* name, float x, float y, float z, float w) const
-{
-    glUniform4f(glGetUniformLocation(m_id, name), x, y, z, w);
-}
-
-void Shader::setMat4(const char* name, const float* matrix) const
-{
-    glUniformMatrix4fv(glGetUniformLocation(m_id, name), 1, GL_FALSE, matrix);
-}
+void Shader::setInt  (const char* n, int v)                          const { glUniform1i(glGetUniformLocation(m_id, n), v); }
+void Shader::setFloat(const char* n, float v)                        const { glUniform1f(glGetUniformLocation(m_id, n), v); }
+void Shader::setVec2 (const char* n, float x, float y)              const { glUniform2f(glGetUniformLocation(m_id, n), x, y); }
+void Shader::setVec3 (const char* n, float x, float y, float z)     const { glUniform3f(glGetUniformLocation(m_id, n), x, y, z); }
+void Shader::setVec4 (const char* n, float x, float y, float z, float w) const { glUniform4f(glGetUniformLocation(m_id, n), x, y, z, w); }
+void Shader::setMat4 (const char* n, const float* m)                 const { glUniformMatrix4fv(glGetUniformLocation(m_id, n), 1, GL_FALSE, m); }
 
 } // namespace mini

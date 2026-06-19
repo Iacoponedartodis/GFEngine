@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <glm/glm.hpp>
 
 namespace mini
 {
@@ -8,15 +9,13 @@ namespace mini
 class Window;
 class Shader;
 class Camera;
+class Mesh;
+class Texture;
 
-struct ClearColor
-{
-    float r = 0.04f;
-    float g = 0.04f;
-    float b = 0.10f;
-    float a = 1.0f;
-};
+struct ClearColor { float r=0.04f, g=0.04f, b=0.10f, a=1.0f; };
 
+// Renderer: API di disegno multi-oggetto.
+// Usa beginFrame / drawMesh (N volte) / endFrame ogni frame.
 class Renderer
 {
 public:
@@ -26,25 +25,25 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
+    // Inizio frame: clear color+depth
     void beginFrame(const ClearColor& color = {});
-    void render(float dt = 0.0f);   // dt usato per animazioni future
+
+    // Disegna una singola mesh con la sua matrice model e un colore tint.
+    // texture == nullptr: usa il vertex color della mesh.
+    void drawMesh(const Mesh&    mesh,
+                  const Texture* texture,
+                  const glm::mat4& modelMatrix,
+                  const glm::vec3& colorTint = {1.0f, 1.0f, 1.0f});
+
+    // Fine frame: swap buffer
     void endFrame();
 
-    // Accesso alla camera per muoverla da Application o da sistemi ECS
     [[nodiscard]] Camera& getCamera();
 
 private:
     Window& m_window;
-
     std::unique_ptr<Shader> m_shader;
     std::unique_ptr<Camera> m_camera;
-
-    unsigned int m_vao = 0;
-    unsigned int m_vbo = 0;
-
-    float m_elapsedTime = 0.0f; // per animazioni (rotazione demo)
-
-    void initTriangle();
 };
 
 } // namespace mini
