@@ -74,7 +74,7 @@ void Application::run()
         // Input
         processEvents(window);
 
-        // Update fisico (60 Hz deterministici)
+        // Update fisico (60 Hz fissi)
         float elapsed = clock.restart();
         if (elapsed > 0.25f) elapsed = 0.25f;
         accumulator += elapsed;
@@ -84,9 +84,9 @@ void Application::run()
             accumulator -= fixedDt;
         }
 
-        // Render
+        // Render — passa elapsed per animazioni (rotazione demo)
         renderer.beginFrame({0.04f, 0.04f, 0.10f, 1.0f});
-        renderer.render();
+        renderer.render(elapsed);
         renderer.endFrame();
     }
 

@@ -9,36 +9,36 @@
     {
       "name": "windows-debug",
       "displayName": "Windows Debug",
-      "description": "Debug build with Ninja",
-      "generator": "Ninja",
+      "description": "Debug build con Visual Studio 2022.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_COMPILER": "cl",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
       }
     },
     {
       "name": "windows-release",
       "displayName": "Windows Release",
-      "description": "Release build with Ninja",
-      "generator": "Ninja",
+      "description": "Release build con Visual Studio 2022.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_COMPILER": "cl",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_CONFIGURATION_TYPES": "Release"
       }
     }
   ],
   "buildPresets": [
     {
       "name": "build-debug",
-      "configurePreset": "windows-debug"
+      "configurePreset": "windows-debug",
+      "configuration": "Debug"
     },
     {
       "name": "build-release",
-      "configurePreset": "windows-release"
+      "configurePreset": "windows-release",
+      "configuration": "Release"
     }
   ]
 }

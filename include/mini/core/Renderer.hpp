@@ -7,6 +7,7 @@ namespace mini
 
 class Window;
 class Shader;
+class Camera;
 
 struct ClearColor
 {
@@ -25,22 +26,23 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Chiama all'inizio di ogni frame: clear colore + depth
     void beginFrame(const ClearColor& color = {});
-
-    // Disegna la scena. Per ora: triangolo demo.
-    // In futuro: iterera' sulle entita' renderizzabili.
-    void render();
-
-    // Chiama alla fine: swap buffer
+    void render(float dt = 0.0f);   // dt usato per animazioni future
     void endFrame();
+
+    // Accesso alla camera per muoverla da Application o da sistemi ECS
+    [[nodiscard]] Camera& getCamera();
 
 private:
     Window& m_window;
 
     std::unique_ptr<Shader> m_shader;
-    unsigned int            m_vao = 0;
-    unsigned int            m_vbo = 0;
+    std::unique_ptr<Camera> m_camera;
+
+    unsigned int m_vao = 0;
+    unsigned int m_vbo = 0;
+
+    float m_elapsedTime = 0.0f; // per animazioni (rotazione demo)
 
     void initTriangle();
 };

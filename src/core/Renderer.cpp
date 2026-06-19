@@ -1,61 +1,64 @@
 #include "mini/core/Renderer.hpp"
 #include "mini/core/Window.hpp"
 #include "mini/platform/OpenGL.hpp"
+#include "mini/render/Camera.hpp"
 #include "mini/render/Shader.hpp"
 
-#include <cstdint>   // uintptr_t
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <cstdint>
 #include <iostream>
 
 namespace mini
 {
 
-// ============================================================
-// Debug: controlla e stampa eventuali errori GL dopo ogni call critica
-// ============================================================
-
 static void checkGL(const char* where)
 {
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR)
-    {
-        std::cerr << "[GL Error] " << where
-                  << " -> 0x" << std::hex << err << std::dec
-                  << std::endl;
-    }
+        std::cerr << "[GL Error] " << where << " -> 0x"
+                  << std::hex << err << std::dec << std::endl;
 }
 
 // ============================================================
-// GLSL — hardcoded per ora, asset system in futuro
+// GLSL 3.30 — vertex shader con matrice MVP
 // ============================================================
 
 static const char* k_vertSrc = R"glsl(
-#version 330 core
+#version 330 compatibility
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aColor;
+
+uniform mat4 uMVP;   // Model * View * Projection
+
 out vec3 fragColor;
+
 void main()
 {
-    gl_Position = vec4(aPos, 1.0);
+    gl_Position = uMVP * vec4(aPos, 1.0);
     fragColor   = aColor;
 }
 )glsl";
 
 static const char* k_fragSrc = R"glsl(
-#version 330 core
+#version 330 compatibility
 in  vec3 fragColor;
 out vec4 outColor;
+
 void main()
 {
     outColor = vec4(fragColor, 1.0);
 }
 )glsl";
 
-// Triangolo grande e visibile — colori Clone Wars
-// Layout interleaved: [x, y, z,  r, g, b]
+// Triangolo in world space — colori Clone Wars
+// Layout: [x, y, z,  r, g, b]
 static const float k_verts[] = {
-     0.0f,  0.7f, 0.0f,   1.00f, 0.55f, 0.05f,  // cima    — arancione
-    -0.7f, -0.6f, 0.0f,   0.20f, 0.50f, 1.00f,  // sin     — blu
-     0.7f, -0.6f, 0.0f,   1.00f, 1.00f, 1.00f,  // destra  — bianco
+     0.0f,  0.7f,  0.0f,   1.00f, 0.55f, 0.05f,  // cima    — arancione
+    -0.7f, -0.6f,  0.0f,   0.20f, 0.50f, 1.00f,  // sin     — blu
+     0.7f, -0.6f,  0.0f,   1.00f, 1.00f, 1.00f,  // destra  — bianco
 };
 
 // ============================================================
@@ -65,73 +68,40 @@ static const float k_verts[] = {
 Renderer::Renderer(Window& window)
     : m_window(window)
 {
-    // Pulisci eventuali errori pre-esistenti prima di iniziare
     while (glGetError() != GL_NO_ERROR) {}
 
     glViewport(0, 0, window.getWidth(), window.getHeight());
     checkGL("glViewport");
 
-    m_shader = std::make_unique<Shader>(k_vertSrc, k_fragSrc);
-    initTriangle();
+    glEnable(GL_DEPTH_TEST);
 
+    // Camera: posizione leggermente sopra e davanti al triangolo
+    const float aspect = static_cast<float>(window.getWidth())
+                       / static_cast<float>(window.getHeight());
+    m_camera = std::make_unique<Camera>(60.0f, aspect, 0.1f, 100.0f);
+    m_camera->setPosition({0.0f, 0.3f, 2.5f});
+    m_camera->lookAt({0.0f, 0.0f, 0.0f});
+
+    m_shader = std::make_unique<Shader>(k_vertSrc, k_fragSrc);
+
+    std::cout << "[Renderer] Camera e shader pronti." << std::endl;
     std::cout << "[Renderer] Pronto. Viewport "
               << window.getWidth() << "x" << window.getHeight() << std::endl;
 }
 
 Renderer::~Renderer()
 {
-    if (m_vbo != 0) glDeleteBuffers(1, &m_vbo);
-    if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
+    // m_vao/m_vbo sono 0 (client-side arrays) — niente da liberare
 }
-
-// ============================================================
-// Setup VAO / VBO — con controllo errori su ogni call
-// ============================================================
 
 void Renderer::initTriangle()
 {
-    while (glGetError() != GL_NO_ERROR) {}  // clear state
+    // Non usata in modalita' client-side arrays
+}
 
-    glGenVertexArrays(1, &m_vao);
-    checkGL("glGenVertexArrays");
-
-    glGenBuffers(1, &m_vbo);
-    checkGL("glGenBuffers");
-
-    glBindVertexArray(m_vao);
-    checkGL("glBindVertexArray");
-
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    checkGL("glBindBuffer");
-
-    glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(sizeof(k_verts)),
-                 k_verts,
-                 GL_STATIC_DRAW);
-    checkGL("glBufferData");
-
-    // stride: 6 float per vertice = 24 byte
-    // offset attr 0: 0 byte dall'inizio (posizione)
-    // offset attr 1: 12 byte (3 float) dall'inizio (colore)
-    constexpr GLsizei    stride = static_cast<GLsizei>(6 * sizeof(float));
-    constexpr uintptr_t  kOff1  = static_cast<uintptr_t>(3 * sizeof(float));
-
-    glVertexAttribPointer(0u, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-    checkGL("glVertexAttribPointer(0)");
-    glEnableVertexAttribArray(0u);
-    checkGL("glEnableVertexAttribArray(0)");
-
-    glVertexAttribPointer(1u, 3, GL_FLOAT, GL_FALSE, stride,
-                          reinterpret_cast<const void*>(kOff1));
-    checkGL("glVertexAttribPointer(1)");
-    glEnableVertexAttribArray(1u);
-    checkGL("glEnableVertexAttribArray(1)");
-
-    glBindVertexArray(0u);
-    checkGL("glBindVertexArray unbind");
-
-    std::cout << "[Renderer] VAO=" << m_vao
-              << " VBO=" << m_vbo << " configurati." << std::endl;
+Camera& Renderer::getCamera()
+{
+    return *m_camera;
 }
 
 // ============================================================
@@ -144,18 +114,39 @@ void Renderer::beginFrame(const ClearColor& color)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void Renderer::render()
+void Renderer::render(float dt)
 {
-    m_shader->use();
-    checkGL("glUseProgram");
+    m_elapsedTime += dt;
 
-    glBindVertexArray(m_vao);
-    checkGL("glBindVertexArray render");
+    // Matrice Model: lenta rotazione sull'asse Y per mostrare la 3D
+    const glm::mat4 model = glm::rotate(
+        glm::mat4(1.0f),
+        m_elapsedTime * 0.5f,   // 0.5 rad/s
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
+
+    const glm::mat4 mvp = m_camera->getViewProjection() * model;
+
+    m_shader->use();
+    m_shader->setMat4("uMVP", glm::value_ptr(mvp));
+    checkGL("setMat4 uMVP");
+
+    // Client-side vertex arrays (workaround driver Intel — vedi note in Window.cpp)
+    constexpr GLsizei stride = static_cast<GLsizei>(6 * sizeof(float));
+
+    glEnableVertexAttribArray(0u);
+    glEnableVertexAttribArray(1u);
+
+    glVertexAttribPointer(0u, 3, GL_FLOAT, GL_FALSE, stride,
+                          static_cast<const void*>(k_verts));
+    glVertexAttribPointer(1u, 3, GL_FLOAT, GL_FALSE, stride,
+                          static_cast<const void*>(k_verts + 3));
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
     checkGL("glDrawArrays");
 
-    glBindVertexArray(0u);
+    glDisableVertexAttribArray(0u);
+    glDisableVertexAttribArray(1u);
 }
 
 void Renderer::endFrame()
@@ -163,4 +154,4 @@ void Renderer::endFrame()
     m_window.swapBuffers();
 }
 
-} // namespace mininamespace mini
+} // namespace mini

@@ -23,7 +23,13 @@ Window::Window(const WindowConfig& config)
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
+    // Compatibility Profile invece di Core Profile:
+    // risolve un bug documentato dei driver Intel HD Graphics dove
+    // glBufferData genera GL_INVALID_ENUM in Core Profile.
+    // Tutte le feature OpenGL 3.3 (VAO, VBO, shader GLSL 3.30) restano disponibili.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,   24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
@@ -48,11 +54,9 @@ Window::Window(const WindowConfig& config)
         SDL_DestroyWindow(m_window);
         SDL_Quit();
         throw std::runtime_error(
-            std::string("[Window] SDL_GL_CreateContext fallito: ") + SDL_GetError()
-            + "\nAssicurati che la GPU supporti OpenGL 3.3 Core.");
+            std::string("[Window] SDL_GL_CreateContext fallito: ") + SDL_GetError());
     }
 
-    // Carica i function pointer OpenGL 3.3 subito dopo la creazione del contesto
     if (!miniGLLoad())
     {
         SDL_GL_DeleteContext(m_context);
@@ -74,7 +78,7 @@ Window::Window(const WindowConfig& config)
 
     std::cout << "[Window] Aperta " << config.width << "x" << config.height
               << " -- OpenGL " << major << "." << minor
-              << " -- VSync " << (config.vsync ? "ON" : "OFF")
+              << " (Compatibility) -- VSync " << (config.vsync ? "ON" : "OFF")
               << std::endl;
 }
 
@@ -94,17 +98,9 @@ Window::~Window()
     std::cout << "[Window] Chiusa." << std::endl;
 }
 
-void Window::swapBuffers()
-{
-    SDL_GL_SwapWindow(m_window);
-}
-
-void Window::close()
-{
-    m_open = false;
-}
-
-bool Window::isOpen() const { return m_open; }
+void Window::swapBuffers() { SDL_GL_SwapWindow(m_window); }
+void Window::close()       { m_open = false; }
+bool Window::isOpen()    const { return m_open; }
 int  Window::getWidth()  const { return m_width; }
 int  Window::getHeight() const { return m_height; }
 

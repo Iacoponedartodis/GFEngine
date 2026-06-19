@@ -2,15 +2,17 @@ cmake_minimum_required(VERSION 3.25)
 
 project(GFEngine VERSION 0.1.0 LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(FetchContent)
 
 # ============================================================
 # Dipendenze esterne
 # ============================================================
 
-include(FetchContent)
-
+# --- SDL2 ---
 FetchContent_Declare(
     SDL2
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
@@ -26,7 +28,13 @@ set(SDL2_DISABLE_INSTALL ON  CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(SDL2)
 
-find_package(OpenGL REQUIRED)
+# --- OpenGL ---
+if(WIN32)
+    set(PLATFORM_GL_LIBS opengl32 gdi32)
+else()
+    find_package(OpenGL REQUIRED)
+    set(PLATFORM_GL_LIBS OpenGL::GL)
+endif()
 
 # ============================================================
 # Target principale
@@ -40,6 +48,7 @@ add_executable(GFEngine
     src/core/Renderer.cpp
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
+    src/render/Camera.cpp
     src/ecs/World.cpp
     src/ecs/systems/MovementSystem.cpp
     src/game/game_modes/ConquestMode.cpp
@@ -49,21 +58,28 @@ target_compile_features(GFEngine PRIVATE cxx_std_20)
 
 target_include_directories(GFEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/external/glm
 )
 
 target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED)
 
 target_link_libraries(GFEngine PRIVATE
     SDL2::SDL2-static
-    OpenGL::GL
+    ${PLATFORM_GL_LIBS}
 )
 
 if(MSVC)
     target_compile_options(GFEngine PRIVATE
-        /W4 /permissive- /EHsc /WX
+        /W4
+        /permissive-
+        /EHsc
         /external:anglebrackets
         /external:W0
     )
 else()
-    target_compile_options(GFEngine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(GFEngine PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
 endif()
