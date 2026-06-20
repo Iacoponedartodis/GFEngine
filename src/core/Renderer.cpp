@@ -77,11 +77,11 @@ void main()
     vec3 n       = normalize(fragNormal);
     vec3 viewDir = normalize(uCameraPos - fragWorldPos);
 
-    vec3 ambient  = 0.15 * uLightColor;
+    vec3 ambient  = 0.45 * uLightColor;
     float diff    = max(dot(n, uLightDir), 0.0);
     vec3 diffuse  = diff * uLightColor;
     vec3 halfDir  = normalize(uLightDir + viewDir);
-    float spec    = pow(max(dot(n, halfDir), 0.0), 64.0);
+    float spec    = pow(max(dot(n, halfDir), 0.0), 24.0);
     vec3 specular = 0.4 * spec * uLightColor;
 
     outColor = vec4((ambient + diffuse + specular) * base, 1.0);
@@ -133,7 +133,7 @@ void Renderer::drawMesh(const Mesh&     mesh,
                          const glm::vec3& colorTint)
 {
     const glm::mat4 mvp      = m_camera->getViewProjection() * model;
-    const glm::vec3 lightDir = glm::normalize(glm::vec3{0.6f, 1.0f, 0.7f});
+    const glm::vec3 lightDir = glm::normalize(glm::vec3{0.4f, 0.8f, 0.5f});
     const glm::vec3& camPos  = m_camera->getPosition();
 
     m_shader->use();
@@ -141,7 +141,7 @@ void Renderer::drawMesh(const Mesh&     mesh,
     m_shader->setMat4("uModel",      glm::value_ptr(model));
     m_shader->setVec3("uColorTint",  colorTint.x, colorTint.y, colorTint.z);
     m_shader->setVec3("uLightDir",   lightDir.x,  lightDir.y,  lightDir.z);
-    m_shader->setVec3("uLightColor", 1.0f, 1.0f, 1.0f);
+    m_shader->setVec3("uLightColor", 1.0f, 0.95f, 0.85f);
     m_shader->setVec3("uCameraPos",  camPos.x,    camPos.y,    camPos.z);
 
     if (texture)

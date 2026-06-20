@@ -7,3 +7,4 @@
 #include "mini/ecs/components/MeshRendererComponent.hpp"
 #include "mini/ecs/components/BulletComponent.hpp"
 #include "mini/ecs/components/AiComponent.hpp"
+#include "mini/ecs/components/ColliderComponent.hpp"

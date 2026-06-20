@@ -14,6 +14,7 @@ void World::initialize()
     m_entities.clear(); m_aliveEntities.clear();
     m_transforms.clear(); m_teams.clear(); m_velocities.clear();
     m_healths.clear(); m_meshRenderers.clear(); m_bullets.clear(); m_ais.clear();
+    m_colliders.clear();
     std::cout << "[World] Inizializzato." << std::endl;
 }
 
@@ -60,6 +61,7 @@ IMPL(Health,       m_healths)
 IMPL(MeshRenderer, m_meshRenderers)
 IMPL(Bullet,       m_bullets)
 IMPL(Ai,           m_ais)
+IMPL(Collider,     m_colliders)
 #undef IMPL
 
 void World::setDebugLogging(bool v)               { m_debugLogging = v; }

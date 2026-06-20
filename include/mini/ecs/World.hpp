@@ -72,6 +72,12 @@ public:
     AiComponent*       getAi(EntityId e);
     const AiComponent* getAi(EntityId e) const;
 
+    // Collider (AABB statico — solo oggetti ambiente)
+    void addCollider(EntityId e, const ColliderComponent& c);
+    [[nodiscard]] bool hasCollider(EntityId e) const;
+    ColliderComponent*       getCollider(EntityId e);
+    const ColliderComponent* getCollider(EntityId e) const;
+
     void setDebugLogging(bool enabled);
     [[nodiscard]] bool isDebugLoggingEnabled() const;
     [[nodiscard]] std::uint64_t                getTickCount() const;
@@ -92,6 +98,7 @@ private:
     std::unordered_map<EntityId, MeshRendererComponent> m_meshRenderers;
     std::unordered_map<EntityId, BulletComponent>       m_bullets;
     std::unordered_map<EntityId, AiComponent>           m_ais;
+    std::unordered_map<EntityId, ColliderComponent>     m_colliders;
 
     bool m_debugLogging = false;
 };

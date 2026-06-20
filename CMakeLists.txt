@@ -41,15 +41,19 @@ endif()
 add_executable(GFEngine
     src/main.cpp
     src/core/Application.cpp
+    src/core/Audio.cpp
     src/core/Clock.cpp
     src/core/Window.cpp
     src/core/Renderer.cpp
     src/platform/OpenGL.cpp
+    src/physics/Collision.cpp
+    src/core/InputManager.cpp
     src/render/Shader.cpp
     src/render/Camera.cpp
     src/render/Mesh.cpp
     src/render/Texture.cpp
     src/render/Model.cpp
+    src/render/HUD.cpp
     src/vendor/stb_image_impl.cpp
     src/vendor/tinyobj_impl.cpp
     src/ecs/World.cpp
