@@ -397,7 +397,7 @@ void Application::run()
                 }
             }
 
-                                    // Shooting
+            // Shooting
             if (!playerIsDead && input.isDown(Action::Shoot))
             {
                 if (weapon.tryFire())
@@ -434,3 +434,39 @@ void Application::run()
                     }
                 }
             }
+        }
+
+        // ── Render ───────────────────────────────────────────────────────
+        renderer.beginFrame();
+
+        for (EntityId id : world.getEntities())
+        {
+            const auto* tr = world.getTransform(id);
+            const auto* mr = world.getMeshRenderer(id);
+            if (!tr || !mr || !mr->visible || !mr->mesh) continue;
+
+            const glm::mat4 model = toModelMatrix(*tr);
+            renderer.drawMesh(*mr->mesh, mr->texture, model,
+                              {mr->r, mr->g, mr->b});
+        }
+
+        if (gameState == ST_OPTIONS)
+        {
+            optMenu.render();
+        }
+        else if (gameState == ST_PREMATCH)
+        {
+            preMatchMenu.render();
+        }
+        else
+        {
+            hud.render(prevHp, currentSettings.playerHp, gameState,
+                       weapon.heat, weapon.overheated, weapon.name,
+                       conquestMode.getTeam1Tickets(), conquestMode.getTeam2Tickets());
+        }
+
+        renderer.endFrame();
+    } // fine while (m_running && window.isOpen())
+} // fine Application::run   
+} // namespace mini
+       
