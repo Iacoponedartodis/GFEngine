@@ -61,6 +61,7 @@ add_executable(GFEngine
     src/ecs/systems/CombatSystem.cpp
     src/ecs/systems/AiSystem.cpp
     src/game/game_modes/ConquestMode.cpp
+    src/render/OptionsMenu.cpp
 )
 
 target_include_directories(GFEngine PRIVATE

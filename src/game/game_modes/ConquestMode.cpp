@@ -104,6 +104,18 @@ void ConquestMode::checkDeaths(World& world)
     }
 }
 
+void ConquestMode::applySettings(const MatchSettings& s)
+{
+    initialTeam1Tickets = s.team1Tickets;
+    initialTeam2Tickets = s.team2Tickets;
+    respawnDelay        = s.respawnDelay;
+    aiSpeed             = s.aiSpeed;
+    aiFireInterval      = s.aiFireInterval;
+    aiRange             = s.aiRange;
+    playerHp            = s.playerHp;
+    playerSpeed         = s.playerSpeed;
+}
+
 void ConquestMode::start(World& world, Mesh* mesh, Texture* tex)
 {
     std::cout << "[ConquestMode] Firebase — caricamento..." << std::endl;

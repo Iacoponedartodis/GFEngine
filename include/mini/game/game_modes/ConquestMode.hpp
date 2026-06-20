@@ -1,5 +1,6 @@
 #pragma once
 #include "mini/ecs/Entity.hpp"
+#include "mini/game/MatchSettings.hpp"
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -10,11 +11,11 @@ namespace mini
 
 struct RespawnEntry
 {
-    float timer;          // secondi rimanenti prima del respawn
-    float x, z;           // posizione originale di spawn
+    float timer;
+    float x, z;
     int   teamId;
-    float mr, mg, mb;     // colore mesh
-    float br, bg, bb;     // colore proiettile
+    float mr, mg, mb;
+    float br, bg, bb;
     float hp;
     float pax, paz, pbx, pbz;
     float patSpd, interval, range;
@@ -24,20 +25,25 @@ struct RespawnEntry
 class ConquestMode
 {
 public:
+    void applySettings(const MatchSettings& s);   // chiama PRIMA di start()
     void start(World& world, Mesh* mesh, Texture* texture);
     void update(World& world, float deltaTime);
 
     [[nodiscard]] EntityId  getPlayerEntity() const { return m_playerEntity; }
     [[nodiscard]] glm::vec3 getSpawnPos()     const { return m_spawnPos; }
 
-    // Ticket system
     [[nodiscard]] int getTeam1Tickets() const { return m_team1Tickets; }
     [[nodiscard]] int getTeam2Tickets() const { return m_team2Tickets; }
 
-    // Configura prima di start()
-    int initialTeam1Tickets = 5;   // alleati (giocatore incluso)
-    int initialTeam2Tickets = 10;  // nemici
-    float respawnDelay      = 4.0f; // secondi
+    // Campi pubblici (retrocompatibilità e accesso diretto)
+    int   initialTeam1Tickets = 5;
+    int   initialTeam2Tickets = 10;
+    float respawnDelay        = 4.0f;
+    float aiSpeed             = 3.5f;
+    float aiFireInterval      = 1.8f;
+    float aiRange             = 12.0f;
+    float playerHp            = 100.0f;
+    float playerSpeed         = 5.0f;
 
 private:
     EntityId  m_playerEntity = 0;
