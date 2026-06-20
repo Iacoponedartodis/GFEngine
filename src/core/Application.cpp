@@ -18,6 +18,7 @@
 #include "mini/render/Mesh.hpp"
 #include "mini/render/Model.hpp"
 #include "mini/render/OptionsMenu.hpp"
+#include "mini/render/PreMatchMenu.hpp"
 #include "mini/render/Texture.hpp"
 
 #include <SDL2/SDL.h>
@@ -30,12 +31,13 @@
 namespace mini
 {
 
-static constexpr int ST_OPTIONS = -3;
-static constexpr int ST_PAUSE   = -2;
-static constexpr int ST_FREE    = -1;
-static constexpr int ST_PLAY    =  0;
-static constexpr int ST_WIN     =  1;
-static constexpr int ST_LOSE    =  2;
+static constexpr int ST_PREMATCH = -4;
+static constexpr int ST_OPTIONS  = -3;
+static constexpr int ST_PAUSE    = -2;
+static constexpr int ST_FREE     = -1;
+static constexpr int ST_PLAY     =  0;
+static constexpr int ST_WIN      =  1;
+static constexpr int ST_LOSE     =  2;
 
 void Application::initialize()
 { std::cout << "[Application] Inizializzazione GFEngine..." << std::endl; m_running = true; }
@@ -100,8 +102,9 @@ void Application::run()
     world.registerSystem(std::make_unique<CombatSystem>());
     world.registerSystem(std::make_unique<AiSystem>());
 
-    HUD         hud(W, H);
-    OptionsMenu optMenu(W, H);
+    HUD          hud(W, H);
+    OptionsMenu  optMenu(W, H);
+    PreMatchMenu preMatchMenu(W, H);
     MatchSettings currentSettings;
 
     ConquestMode conquestMode;
@@ -116,6 +119,9 @@ void Application::run()
     bool     onGround     = true;
     bool     stateChanged = false;
 
+    float playerRespawnTimer = -1.0f;
+    bool  playerIsDead       = false;
+
     Weapon weapon = makeBlasterRifle();
     weapon.reset();
 
@@ -128,7 +134,7 @@ void Application::run()
     cam.setPosition(FREE_POS);
     cam.lookAt(FREE_LOOK);
 
-    std::cout << "[Application] FreeRoam — WASD+mouse | ENTER=inizia | O=opzioni | ESC=esci"
+    std::cout << "[Application] FreeRoam — WASD+mouse | ENTER=menu partita | O=opzioni | ESC=esci"
               << std::endl;
 
     auto startGame = [&]()
@@ -139,6 +145,8 @@ void Application::run()
         prevHp = currentSettings.playerHp;
         playerVelY = 0.0f;
         onGround = true;
+        playerRespawnTimer = -1.0f;
+        playerIsDead = false;
         weapon.reset();
         gameState = ST_PLAY;
         stateChanged = true;
@@ -155,6 +163,8 @@ void Application::run()
         conquestMode.start(world, mesh.get(), albedo.get());
         playerEntity = conquestMode.getPlayerEntity();
         playerVelY = 0.0f;
+        playerRespawnTimer = -1.0f;
+        playerIsDead = false;
         gameState = ST_FREE;
         stateChanged = true;
         cam.setPosition(FREE_POS);
@@ -175,24 +185,42 @@ void Application::run()
             if (ev.type == SDL_QUIT) { window.close(); break; }
             input.processEvent(ev);
 
+            if (ev.type == SDL_TEXTINPUT)
+            {
+                if (gameState == ST_PREMATCH)
+                    preMatchMenu.handleTextInput(ev.text.text);
+                else if (gameState == ST_OPTIONS)
+                    optMenu.handleTextInput(ev.text.text);
+            }
+
             if (ev.type == SDL_KEYDOWN)
             {
                 const int sc = ev.key.keysym.scancode;
 
-                // ── Gestione menu opzioni ────────────────────────────
-                if (gameState == ST_OPTIONS)
+                // ── Menu pre-partita ─────────────────────────────────
+                if (gameState == ST_PREMATCH)
+                {
+                    auto res = preMatchMenu.handleKey(sc);
+                    if (res == PreMatchMenu::Result::StartGame)
+                    {
+                        currentSettings = preMatchMenu.getSettings();
+                        startGame();
+                    }
+                    else if (res == PreMatchMenu::Result::Back)
+                    {
+                        gameState = ST_FREE;
+                        stateChanged = true;
+                        window.setMouseCaptured(true);
+                    }
+                }
+                // ── Menu opzioni (O) ─────────────────────────────────
+                else if (gameState == ST_OPTIONS)
                 {
                     auto res = optMenu.handleKey(sc);
-                    if (res == OptionsMenu::Result::Confirmed)
+                    if (res == OptionsMenu::Result::Confirmed || res == OptionsMenu::Result::Back)
                     {
-                        currentSettings = optMenu.getSettings();
-                        gameState = prevState;
-                        stateChanged = true;
-                        if (gameState == ST_PLAY || gameState == ST_FREE)
-                            window.setMouseCaptured(true);
-                    }
-                    else if (res == OptionsMenu::Result::Back)
-                    {
+                        if (res == OptionsMenu::Result::Confirmed)
+                            currentSettings = optMenu.getSettings();
                         gameState = prevState;
                         stateChanged = true;
                         if (gameState == ST_PLAY || gameState == ST_FREE)
@@ -201,9 +229,17 @@ void Application::run()
                 }
                 else
                 {
-                    // O = apri opzioni (da FREE o PAUSE) — via evento, non GetKeyboardState
-                    if (sc == SDL_SCANCODE_O
-                        && !stateChanged
+                    // ENTER in FreeRoam → apri menu pre-partita
+                    if (sc == SDL_SCANCODE_RETURN && gameState == ST_FREE && !stateChanged)
+                    {
+                        preMatchMenu.setSettings(currentSettings);
+                        gameState = ST_PREMATCH;
+                        stateChanged = true;
+                        window.setMouseCaptured(false);
+                    }
+
+                    // O → opzioni
+                    if (sc == SDL_SCANCODE_O && !stateChanged
                         && (gameState == ST_FREE || gameState == ST_PAUSE))
                     {
                         prevState = gameState;
@@ -217,39 +253,24 @@ void Application::run()
             }
         }
 
-        // ── Transizioni stato (fuori dal loop eventi) ─────────────────
-        if (gameState != ST_OPTIONS)
+        // ── Transizioni stato ─────────────────────────────────────────
+        if (gameState != ST_PREMATCH && gameState != ST_OPTIONS)
         {
             const Uint8* ks = SDL_GetKeyboardState(nullptr);
 
-            // ESC
             if (input.isPressed(Action::Pause) && !stateChanged)
             {
                 if (gameState == ST_FREE)
                     window.close();
                 else if (gameState == ST_PLAY)
-                {
-                    gameState = ST_PAUSE;
-                    stateChanged = true;
-                    window.setMouseCaptured(false);
-                }
+                { gameState = ST_PAUSE; stateChanged = true; window.setMouseCaptured(false); }
                 else if (gameState == ST_PAUSE)
-                {
-                    gameState = ST_PLAY;
-                    stateChanged = true;
-                    window.setMouseCaptured(true);
-                }
+                { gameState = ST_PLAY; stateChanged = true; window.setMouseCaptured(true); }
             }
 
-            // Q da pausa = esci
             if (gameState == ST_PAUSE && ks[SDL_SCANCODE_Q])
                 window.close();
 
-            // ENTER da FREE = inizia
-            if (gameState == ST_FREE && input.isPressed(Action::StartGame) && !stateChanged)
-                startGame();
-
-            // Selezione arma in FreeRoam (1-4)
             if (gameState == ST_FREE)
             {
                 if (ks[SDL_SCANCODE_1]) { weapon = makeBlasterRifle();  weapon.reset(); }
@@ -258,7 +279,6 @@ void Application::run()
                 if (ks[SDL_SCANCODE_4]) { weapon = makeSniperRifle();   weapon.reset(); }
             }
 
-            // R / F da Win, Lose, Pause
             if ((gameState == ST_WIN || gameState == ST_LOSE || gameState == ST_PAUSE)
                 && input.isPressed(Action::Restart) && !stateChanged)
                 startGame();
@@ -278,6 +298,29 @@ void Application::run()
             while (accumulator >= fixedDt)
             { conquestMode.update(world, fixedDt); accumulator -= fixedDt; }
             weapon.update(elapsed);
+
+            // Respawn timer giocatore
+            if (playerRespawnTimer > 0.0f)
+            {
+                playerRespawnTimer -= elapsed;
+                if (playerRespawnTimer <= 0.0f)
+                {
+                    playerRespawnTimer = -1.0f;
+                    playerIsDead = false;
+                    playerEntity = world.createEntity();
+                    const glm::vec3 sp = conquestMode.getSpawnPos();
+                    world.addTransform(playerEntity, {sp.x, sp.y, sp.z});
+                    world.addTeam(playerEntity, {1});
+                    world.addHealth(playerEntity, {currentSettings.playerHp, currentSettings.playerHp});
+                    conquestMode.overridePlayerEntity(playerEntity);
+                    prevHp = currentSettings.playerHp;
+                    playerVelY = 0.0f;
+                    onGround = true;
+                    cam.setPosition(sp);
+                    std::cout << "[Respawn] Giocatore rinato! Ticket team 1 rimasti: "
+                              << conquestMode.getTeam1Tickets() << std::endl;
+                }
+            }
         }
 
         // ── Camera + Physics ──────────────────────────────────────────
@@ -294,7 +337,7 @@ void Application::run()
                 input.isDown(Action::Jump),
                 SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_LCTRL], elapsed);
         }
-        else if (gameState == ST_PLAY)
+        else if (gameState == ST_PLAY && !playerIsDead)
         {
             cam.processKeyboard(
                 input.isDown(Action::MoveForward), input.isDown(Action::MoveBack),
@@ -319,7 +362,7 @@ void Application::run()
         // ── Game logic ────────────────────────────────────────────────
         if (gameState == ST_PLAY)
         {
-            if (world.isValidEntity(playerEntity))
+            if (!playerIsDead && world.isValidEntity(playerEntity))
             {
                 auto* pt = world.getTransform(playerEntity);
                 if (pt)
@@ -328,91 +371,66 @@ void Application::run()
                     pt->x = p.x; pt->y = p.y; pt->z = p.z;
                 }
 
-                const auto* ph = world.getHealth(playerEntity);
-                if (ph && ph->current < prevHp - 0.5f)
-                { audio.playHit(); prevHp = ph->current; }
-                else if (ph) prevHp = ph->current;
-            }
-
-            const Uint32 mouseButtons = SDL_GetMouseState(nullptr, nullptr);
-            const bool mouseHeld = (mouseButtons & SDL_BUTTON_LMASK) != 0;
-
-            if (mouseHeld && window.isMouseCaptured() && world.isValidEntity(playerEntity))
-            {
-                if (weapon.tryFire())
+                const auto* hp = world.getHealth(playerEntity);
+                if (hp)
                 {
-                    audio.playShoot();
-                    const glm::vec3 org = cam.getPosition();
-                    const glm::vec3 fwd = cam.getForward();
-                    EntityId b = world.createEntity();
-                    world.addTransform(b, TransformComponent{
-                        .x  = org.x, .y  = org.y, .z  = org.z,
-                        .sx = weapon.bulletScale,
-                        .sy = weapon.bulletScale,
-                        .sz = weapon.bulletScale
-                    });
-                    world.addVelocity(b, {fwd.x * weapon.bulletSpeed,
-                                          fwd.y * weapon.bulletSpeed,
-                                          fwd.z * weapon.bulletSpeed});
-                    world.addTeam(b, {1});
-                    world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1});
-                    world.addMeshRenderer(b, {mesh.get(), nullptr,
-                                              weapon.bulletR, weapon.bulletG, weapon.bulletB});
+                    if (hp->current <= 0.0f && prevHp > 0.0f)
+                    {
+                        playerIsDead = true;
+                        int t1 = conquestMode.getTeam1Tickets();
+                        if (t1 > 0)
+                        {
+                            playerRespawnTimer = currentSettings.respawnDelay;
+                            std::cout << "[Respawn] Giocatore eliminato. Ticket rimasti: "
+                                      << t1 << " — respawn in "
+                                      << currentSettings.respawnDelay << "s" << std::endl;
+                        }
+                        else
+                        {
+                            gameState = ST_LOSE;
+                            stateChanged = true;
+                            window.setMouseCaptured(false);
+                            std::cout << "[Game] SCONFITTA!" << std::endl;
+                        }
+                    }
+                    prevHp = hp->current;
                 }
             }
 
-            if (world.getTickCount() > 10
-                && conquestMode.getTeam2Tickets() <= 0
-                && !anyEnemyAlive(world))
+                                    // Shooting
+            if (!playerIsDead && input.isDown(Action::Shoot))
             {
-                gameState = ST_WIN;
-                audio.playVictory();
-                std::cout << "\n[Game] VITTORIA!" << std::endl;
+                if (weapon.tryFire())
+                {
+                    const glm::vec3 origin   = cam.getPosition();
+                    const glm::vec3 dir      = cam.getForward();
+                    const float     maxRange = weapon.bulletSpeed * weapon.bulletLifetime;
+
+                    for (EntityId id : world.getEntities())
+                    {
+                        if (id == playerEntity) continue;
+                        const auto* tm = world.getTeam(id);
+                        if (!tm || tm->teamId == 1) continue;
+                        const auto* tr = world.getTransform(id);
+                        if (!tr) continue;
+
+                        glm::vec3 toTarget = glm::vec3(tr->x, tr->y, tr->z) - origin;
+                        float dist = glm::length(toTarget);
+                        if (dist < 0.1f || dist > maxRange) continue;
+
+                        glm::vec3 toNorm = toTarget / dist;
+                        if (glm::dot(dir, toNorm) > 0.97f)
+                        {
+                            auto* th = world.getHealth(id);
+                            if (th && th->current > 0.0f)
+                            {
+                                th->current -= weapon.bulletDamage;
+                                std::cout << "[Shoot] Colpito nemico " << id
+                                          << " — HP: " << th->current
+                                          << "/" << th->max << std::endl;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
-            else if (!world.isValidEntity(playerEntity))
-            {
-                gameState = ST_LOSE;
-                audio.playGameOver();
-                std::cout << "\n[Game] GAME OVER!" << std::endl;
-            }
-        }
-
-        // ── Render ────────────────────────────────────────────────────
-        renderer.beginFrame({0.05f, 0.06f, 0.12f, 1.0f});
-
-        // Scena 3D (sempre visibile, anche dietro il menu)
-        for (EntityId id : world.getEntities())
-        {
-            const auto* t  = world.getTransform(id);
-            const auto* mr = world.getMeshRenderer(id);
-            if (!t || !mr || !mr->mesh || !mr->visible) continue;
-            renderer.drawMesh(*mr->mesh, mr->texture, toModelMatrix(*t), {mr->r, mr->g, mr->b});
-        }
-
-        if (gameState == ST_OPTIONS)
-        {
-            optMenu.render();
-        }
-        else
-        {
-            float curHp = currentSettings.playerHp;
-            float maxHp = currentSettings.playerHp;
-            if (world.isValidEntity(playerEntity))
-            {
-                const auto* ph = world.getHealth(playerEntity);
-                if (ph) { curHp = ph->current; maxHp = ph->max; }
-            }
-            hud.render(curHp, maxHp, gameState,
-                       weapon.heat, weapon.overheated, weapon.name,
-                       conquestMode.getTeam1Tickets(),
-                       conquestMode.getTeam2Tickets());
-        }
-
-        renderer.endFrame();
-    }
-
-    std::cout << "[Application] Tick: " << world.getTickCount() << std::endl;
-    shutdown();
-}
-
-} // namespace mini

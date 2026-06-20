@@ -7,23 +7,15 @@ namespace mini
 
 struct MatchSettings
 {
-    // ── Partita ───────────────────────────────────────────────────────
-    int   team1Tickets  = 5;     // vite alleati (giocatore incluso)
-    int   team2Tickets  = 10;    // vite nemici
-
-    // ── Unità ────────────────────────────────────────────────────────
-    int   team1AiCount  = 1;     // quante AI alleate spawna ConquestMode
-    int   team2AiCount  = 6;     // quante AI nemiche spawna ConquestMode
-
-    // ── Giocatore ────────────────────────────────────────────────────
+    int   team1Tickets  = 5;
+    int   team2Tickets  = 10;
+    int   team1AiCount  = 1;
+    int   team2AiCount  = 6;
     float playerHp      = 100.0f;
     float respawnDelay  = 4.0f;
-
-    // ── Nome preset (vuoto = non salvato) ────────────────────────────
     std::string presetName;
 };
 
-// ── Preset salvati dall'utente (tenuti in memoria durante la sessione) ──
 struct UserPresets
 {
     static constexpr int MAX = 8;
@@ -36,9 +28,23 @@ struct UserPresets
         list[slot] = s;
     }
 
+    void remove(int slot)
+    {
+        if (slot < 0 || slot >= (int)list.size()) return;
+        list[slot].presetName.clear();
+    }
+
     const MatchSettings* get(int slot) const
     {
         if (slot < 0 || slot >= (int)list.size()) return nullptr;
+        if (list[slot].presetName.empty()) return nullptr;
+        return &list[slot];
+    }
+
+    MatchSettings* getMutable(int slot)
+    {
+        if (slot < 0 || slot >= (int)list.size()) return nullptr;
+        if (list[slot].presetName.empty()) return nullptr;
         return &list[slot];
     }
 };

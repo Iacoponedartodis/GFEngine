@@ -25,7 +25,7 @@ struct RespawnEntry
 class ConquestMode
 {
 public:
-    void applySettings(const MatchSettings& s);   // chiama PRIMA di start()
+    void applySettings(const MatchSettings& s);
     void start(World& world, Mesh* mesh, Texture* texture);
     void update(World& world, float deltaTime);
 
@@ -35,7 +35,17 @@ public:
     [[nodiscard]] int getTeam1Tickets() const { return m_team1Tickets; }
     [[nodiscard]] int getTeam2Tickets() const { return m_team2Tickets; }
 
-    // Campi pubblici
+    // Scala un ticket del team 1 (chiamato da Application quando il giocatore muore)
+    // Restituisce il numero di ticket rimasti DOPO la scalata
+    int consumeTeam1Ticket()
+    {
+        if (m_team1Tickets > 0) --m_team1Tickets;
+        return m_team1Tickets;
+    }
+
+    // Permette ad Application di aggiornare l'entità giocatore dopo un respawn
+    void overridePlayerEntity(EntityId e) { m_playerEntity = e; }
+
     int   initialTeam1Tickets = 5;
     int   initialTeam2Tickets = 10;
     int   team1AiCount        = 1;

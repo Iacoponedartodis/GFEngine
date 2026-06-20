@@ -7,30 +7,33 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
+# ── SDL2 ──────────────────────────────────────────────────────────────────────
 FetchContent_Declare(SDL2
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        release-2.30.3
-    GIT_SHALLOW TRUE GIT_PROGRESS TRUE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_TEST   OFF CACHE BOOL "" FORCE)
+    GIT_SHALLOW    TRUE
+    GIT_PROGRESS   TRUE)
+set(SDL_STATIC  ON  CACHE BOOL "" FORCE)
+set(SDL_SHARED  OFF CACHE BOOL "" FORCE)
+set(SDL_TEST    OFF CACHE BOOL "" FORCE)
 set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL2)
 
-FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_SHALLOW TRUE)
-FetchContent_GetProperties(stb)
-if(NOT stb_POPULATED)
-    FetchContent_Populate(stb)
-endif()
+# ── stb ───────────────────────────────────────────────────────────────────────
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(stb)
 
+# ── tinyobjloader ─────────────────────────────────────────────────────────────
 FetchContent_Declare(tinyobjloader
     GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
-    GIT_TAG v2.0.0rc13 GIT_SHALLOW TRUE)
-FetchContent_GetProperties(tinyobjloader)
-if(NOT tinyobjloader_POPULATED)
-    FetchContent_Populate(tinyobjloader)
-endif()
+    GIT_TAG        v2.0.0rc13
+    GIT_SHALLOW    TRUE)
+set(TINYOBJLOADER_BUILD_TEST_LOADER OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tinyobjloader)
 
+# ── OpenGL ────────────────────────────────────────────────────────────────────
 if(WIN32)
     set(PLATFORM_GL_LIBS opengl32 gdi32)
 else()
@@ -38,6 +41,7 @@ else()
     set(PLATFORM_GL_LIBS OpenGL::GL)
 endif()
 
+# ── Sorgenti ──────────────────────────────────────────────────────────────────
 add_executable(GFEngine
     src/main.cpp
     src/core/Application.cpp
@@ -62,8 +66,10 @@ add_executable(GFEngine
     src/ecs/systems/AiSystem.cpp
     src/game/game_modes/ConquestMode.cpp
     src/render/OptionsMenu.cpp
+    src/render/PreMatchMenu.cpp
 )
 
+# ── Include dirs ──────────────────────────────────────────────────────────────
 target_include_directories(GFEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/external/glm
@@ -71,12 +77,15 @@ target_include_directories(GFEngine PRIVATE
     ${tinyobjloader_SOURCE_DIR}
 )
 
+# ── Compile settings ──────────────────────────────────────────────────────────
 target_compile_features(GFEngine PRIVATE cxx_std_20)
 target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED)
 target_link_libraries(GFEngine PRIVATE SDL2::SDL2-static ${PLATFORM_GL_LIBS})
 
 if(MSVC)
-    target_compile_options(GFEngine PRIVATE /W4 /permissive- /EHsc /external:anglebrackets /external:W0)
+    target_compile_options(GFEngine PRIVATE
+        /W4 /permissive- /EHsc
+        /external:anglebrackets /external:W0)
 else()
     target_compile_options(GFEngine PRIVATE -Wall -Wextra -Wpedantic)
 endif()
