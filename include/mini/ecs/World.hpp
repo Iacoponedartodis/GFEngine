@@ -9,25 +9,23 @@
 #include <unordered_set>
 #include <vector>
 
+namespace mini { class ISystem; }
+
 namespace mini
 {
-
-class ISystem;
 
 class World
 {
 public:
     World()  = default;
     ~World() = default;
-
     World(const World&)            = delete;
     World& operator=(const World&) = delete;
 
     void initialize();
-    void tick(float deltaTime);
+    void tick(float dt);
     void registerSystem(std::unique_ptr<ISystem> system);
 
-    // Lifecycle entita'
     EntityId createEntity();
     bool     destroyEntity(EntityId entity);
     [[nodiscard]] bool isValidEntity(EntityId entity) const;
@@ -62,10 +60,20 @@ public:
     MeshRendererComponent*       getMeshRenderer(EntityId e);
     const MeshRendererComponent* getMeshRenderer(EntityId e) const;
 
-    // Debug
+    // Bullet
+    void addBullet(EntityId e, const BulletComponent& c);
+    [[nodiscard]] bool hasBullet(EntityId e) const;
+    BulletComponent*       getBullet(EntityId e);
+    const BulletComponent* getBullet(EntityId e) const;
+
+    // Ai
+    void addAi(EntityId e, const AiComponent& c);
+    [[nodiscard]] bool hasAi(EntityId e) const;
+    AiComponent*       getAi(EntityId e);
+    const AiComponent* getAi(EntityId e) const;
+
     void setDebugLogging(bool enabled);
     [[nodiscard]] bool isDebugLoggingEnabled() const;
-
     [[nodiscard]] std::uint64_t                getTickCount() const;
     [[nodiscard]] const std::vector<EntityId>& getEntities()  const;
 
@@ -82,6 +90,8 @@ private:
     std::unordered_map<EntityId, VelocityComponent>     m_velocities;
     std::unordered_map<EntityId, HealthComponent>       m_healths;
     std::unordered_map<EntityId, MeshRendererComponent> m_meshRenderers;
+    std::unordered_map<EntityId, BulletComponent>       m_bullets;
+    std::unordered_map<EntityId, AiComponent>           m_ais;
 
     bool m_debugLogging = false;
 };

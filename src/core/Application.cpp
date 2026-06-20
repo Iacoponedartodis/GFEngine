@@ -4,6 +4,7 @@
 #include "mini/core/Window.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/systems/MovementSystem.hpp"
+#include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/game/game_modes/ConquestMode.hpp"
 #include "mini/render/Camera.hpp"
 #include "mini/render/Mesh.hpp"
@@ -13,7 +14,6 @@
 #include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
 #include <iostream>
 #include <memory>
 
@@ -25,13 +25,7 @@ void Application::initialize()
     std::cout << "[Application] Inizializzazione GFEngine..." << std::endl;
     m_running = true;
 }
-
-void Application::shutdown()
-{
-    m_running = false;
-    std::cout << "[Application] Arresto GFEngine." << std::endl;
-}
-
+void Application::shutdown()    { m_running = false; std::cout << "[Application] Arresto GFEngine." << std::endl; }
 void Application::requestShutdown() { m_running = false; }
 
 void Application::processEvents(Window& window)
@@ -47,6 +41,10 @@ void Application::processEvents(Window& window)
                 if (event.key.keysym.sym == SDLK_TAB)
                     window.setMouseCaptured(!window.isMouseCaptured());
                 break;
+            case SDL_MOUSEBUTTONDOWN:
+                if (event.button.button == SDL_BUTTON_LEFT && window.isMouseCaptured())
+                    m_shootRequested = true;
+                break;
             default: break;
         }
     }
@@ -55,9 +53,9 @@ void Application::processEvents(Window& window)
 static glm::mat4 toModelMatrix(const TransformComponent& t)
 {
     glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(t.x, t.y, t.z));
-    m = glm::rotate(m, glm::radians(t.rx), glm::vec3(1, 0, 0));
-    m = glm::rotate(m, glm::radians(t.ry), glm::vec3(0, 1, 0));
-    m = glm::rotate(m, glm::radians(t.rz), glm::vec3(0, 0, 1));
+    m = glm::rotate(m, glm::radians(t.rx), glm::vec3(1,0,0));
+    m = glm::rotate(m, glm::radians(t.ry), glm::vec3(0,1,0));
+    m = glm::rotate(m, glm::radians(t.rz), glm::vec3(0,0,1));
     m = glm::scale(m,  glm::vec3(t.sx, t.sy, t.sz));
     return m;
 }
@@ -70,51 +68,44 @@ void Application::run()
     Renderer renderer(window);
     window.setMouseCaptured(true);
 
-    // ============================================================
-    // Caricamento risorse
-    // Tenta di caricare asset da file; se mancano usa fallback procedurali.
-    // Metti i file in:  assets/textures/   e   assets/models/
-    // ============================================================
-
-    // Texture: prova a caricare da file, altrimenti usa scacchiera
-    auto texOpt = Texture::loadFromFile(GFENGINE_ASSETS_DIR "/textures/default.png");
+    auto texOpt = Texture::loadFromFile("assets/textures/default.png");
     auto albedo = texOpt
         ? std::make_unique<Texture>(std::move(*texOpt))
         : std::make_unique<Texture>(Texture::createCheckerboard(128, 16));
 
-    // Mesh: prova a caricare un modello OBJ, altrimenti usa il cubo
+    auto modelOpt = Model::loadFromObj("assets/models/default.obj");
     std::unique_ptr<Mesh> defaultMesh;
-    auto modelOpt = Model::loadFromObj(GFENGINE_ASSETS_DIR "/models/default.obj");
     if (modelOpt && !modelOpt->isEmpty())
-    {
-        // Usa il primo sub-mesh del modello come mesh principale
         defaultMesh = std::make_unique<Mesh>(modelOpt->getMeshes()[0]);
-        std::cout << "[Application] Usando modello OBJ." << std::endl;
-    }
     else
-    {
         defaultMesh = std::make_unique<Mesh>(Mesh::createCube({1.0f, 1.0f, 1.0f}));
-        std::cout << "[Application] Usando mesh cubo (fallback)." << std::endl;
-    }
 
     World world;
+    // Registra MovementSystem e CombatSystem qui.
+    // AiSystem viene registrato in ConquestMode::start() per evitare
+    // dipendenze di include troppo profonde in Application.cpp.
     world.registerSystem(std::make_unique<MovementSystem>());
+    world.registerSystem(std::make_unique<CombatSystem>());
 
     ConquestMode conquestMode;
     conquestMode.start(world, defaultMesh.get(), albedo.get());
+    // Dopo start(): AiSystem e' gia' registrato da ConquestMode
+
+    EntityId playerEntity = conquestMode.getPlayerEntity();
+    bool     playerAlive  = true;
 
     constexpr float fixedDt = 1.0f / 60.0f;
     float accumulator       = 0.0f;
     Clock clock;
 
     std::cout << "[Application] Game loop avviato." << std::endl;
-    std::cout << "  WASD + mouse = FPS camera" << std::endl;
-    std::cout << "  SPACE/CTRL   = su/giu'" << std::endl;
-    std::cout << "  TAB          = libera/cattura mouse" << std::endl;
-    std::cout << "  ESC          = esci" << std::endl;
+    std::cout << "  WASD + mouse = camera FPS | SPACE/CTRL = su/giu'" << std::endl;
+    std::cout << "  TASTO SX     = spara!     | TAB = libera mouse | ESC = esci" << std::endl;
+    std::cout << "  >> Avvicinati ai nemici (entro 14u) per farli sparare <<" << std::endl;
 
     while (m_running && window.isOpen())
     {
+        m_shootRequested = false;
         processEvents(window);
 
         float elapsed = clock.restart();
@@ -142,7 +133,41 @@ void Application::run()
         if (window.isMouseCaptured())
             cam.processMouse(static_cast<float>(mdx), static_cast<float>(mdy));
 
-        // Render ECS
+        // Sincronizza entita' giocatore con la camera (bersaglio per gli AI)
+        if (playerAlive && world.isValidEntity(playerEntity))
+        {
+            auto* pt = world.getTransform(playerEntity);
+            if (pt)
+            {
+                const glm::vec3& p = cam.getPosition();
+                pt->x = p.x; pt->y = p.y; pt->z = p.z;
+            }
+        }
+        else if (playerAlive)
+        {
+            playerAlive = false;
+            std::cout << "\n[GAME OVER] Sei stato eliminato!" << std::endl;
+            std::cout << "  (continua a volare, ESC per uscire)" << std::endl;
+        }
+
+        // Sparo giocatore
+        if (m_shootRequested && playerAlive && world.isValidEntity(playerEntity))
+        {
+            const glm::vec3 origin  = cam.getPosition();
+            const glm::vec3 forward = cam.getForward();
+            constexpr float speed   = 18.0f;
+
+            const EntityId bullet = world.createEntity();
+            world.addTransform(bullet, TransformComponent{
+                .x = origin.x, .y = origin.y, .z = origin.z,
+                .sx = 0.12f, .sy = 0.12f, .sz = 0.12f
+            });
+            world.addVelocity(bullet, {forward.x*speed, forward.y*speed, forward.z*speed});
+            world.addTeam(bullet,   {1});
+            world.addBullet(bullet, {25.0f, 3.0f, 1});
+            world.addMeshRenderer(bullet, {defaultMesh.get(), nullptr, 1.0f, 0.92f, 0.0f});
+        }
+
         renderer.beginFrame({0.04f, 0.04f, 0.10f, 1.0f});
         for (EntityId id : world.getEntities())
         {
