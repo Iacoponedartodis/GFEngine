@@ -35,15 +35,13 @@ public:
     [[nodiscard]] int getTeam1Tickets() const { return m_team1Tickets; }
     [[nodiscard]] int getTeam2Tickets() const { return m_team2Tickets; }
 
-    // Campi pubblici (retrocompatibilità e accesso diretto)
+    // Campi pubblici
     int   initialTeam1Tickets = 5;
     int   initialTeam2Tickets = 10;
+    int   team1AiCount        = 1;
+    int   team2AiCount        = 6;
     float respawnDelay        = 4.0f;
-    float aiSpeed             = 3.5f;
-    float aiFireInterval      = 1.8f;
-    float aiRange             = 12.0f;
     float playerHp            = 100.0f;
-    float playerSpeed         = 5.0f;
 
 private:
     EntityId  m_playerEntity = 0;

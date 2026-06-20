@@ -10,7 +10,7 @@
 namespace mini
 {
 
-// ── Costruzione ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 OptionsMenu::OptionsMenu(int screenW, int screenH)
     : m_w(screenW), m_h(screenH)
@@ -18,69 +18,70 @@ OptionsMenu::OptionsMenu(int screenW, int screenH)
     buildRows();
 }
 
-void OptionsMenu::buildRows()
+void OptionsMenu::setSettings(const MatchSettings& s)
 {
-    m_rows.clear();
-
-    m_rows.push_back({ "Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets,   nullptr,  1,    1,   99 });
-    m_rows.push_back({ "Vite nemici   (team 2 tickets)", true,  &m_settings.team2Tickets,   nullptr,  1,    1,   99 });
-    m_rows.push_back({ "Ritardo respawn (s)",            false, nullptr, &m_settings.respawnDelay,   0.5f, 0,   30 });
-    m_rows.push_back({ "Velocita AI",                    false, nullptr, &m_settings.aiSpeed,        0.5f, 1,   12 });
-    m_rows.push_back({ "Cadenza fuoco AI (s)",           false, nullptr, &m_settings.aiFireInterval, 0.2f, 0.2f, 5 });
-    m_rows.push_back({ "Raggio vista AI",                false, nullptr, &m_settings.aiRange,        1.0f, 4,   40 });
-    m_rows.push_back({ "HP giocatore",                   false, nullptr, &m_settings.playerHp,       25,   25, 500 });
-    m_rows.push_back({ "Velocita giocatore",             false, nullptr, &m_settings.playerSpeed,    0.5f,  1,  15 });
-}
-
-// ── Preset ───────────────────────────────────────────────────────────────────
-
-void OptionsMenu::applyPreset(int index)
-{
-    auto presets = getBuiltinPresets();
-    if (index < 0 || index >= (int)presets.size()) return;
-    m_settings = presets[index].settings;   // <-- .settings, non .s
+    m_settings = s;
     buildRows();
 }
 
-// ── Input ────────────────────────────────────────────────────────────────────
+void OptionsMenu::buildRows()
+{
+    m_rows.clear();
+    // { label, isInt, ptr_int, ptr_float, step, min, max }
+    m_rows.push_back({ "Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,     1,  1, 99 });
+    m_rows.push_back({ "Vite nemici   (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,     1,  1, 99 });
+    m_rows.push_back({ "AI alleate  (num unita team 1)", true,  &m_settings.team1AiCount, nullptr,     1,  0, 10 });
+    m_rows.push_back({ "AI nemiche  (num unita team 2)", true,  &m_settings.team2AiCount, nullptr,     1,  0, 20 });
+    m_rows.push_back({ "HP giocatore",                   false, nullptr, &m_settings.playerHp,       25, 25,500 });
+    m_rows.push_back({ "Ritardo respawn (s)",            false, nullptr, &m_settings.respawnDelay,  0.5f, 0, 30 });
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
 
 OptionsMenu::Result OptionsMenu::handleKey(int sc)
+{
+    switch (m_page)
+    {
+    case Page::Main:       return handleMain(sc);
+    case Page::SavePreset: return handleSavePreset(sc);
+    case Page::LoadPreset: return handleLoadPreset(sc);
+    }
+    return Result::None;
+}
+
+OptionsMenu::Result OptionsMenu::handleMain(int sc)
 {
     const int rowCount = (int)m_rows.size();
 
     if (sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_W)
-    {
-        m_selectedRow = (m_selectedRow - 1 + rowCount) % rowCount;
-        return Result::None;
-    }
+    { m_selectedRow = (m_selectedRow - 1 + rowCount) % rowCount; return Result::None; }
+
     if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
-    {
-        m_selectedRow = (m_selectedRow + 1) % rowCount;
-        return Result::None;
-    }
+    { m_selectedRow = (m_selectedRow + 1) % rowCount; return Result::None; }
 
     Row& r = m_rows[m_selectedRow];
     auto clampApply = [&](float delta)
     {
         if (r.isInt)
         {
-            int newVal = *r.iVal + (int)delta;
-            *r.iVal = std::clamp(newVal, (int)r.minV, (int)r.maxV);
+            int v = *r.iVal + (int)delta;
+            *r.iVal = std::clamp(v, (int)r.minV, (int)r.maxV);
         }
         else
         {
-            float newVal = *r.fVal + delta * r.step;
-            *r.fVal = std::clamp(newVal, r.minV, r.maxV);
+            float v = *r.fVal + delta * r.step;
+            *r.fVal = std::clamp(v, r.minV, r.maxV);
         }
     };
 
     if (sc == SDL_SCANCODE_RIGHT || sc == SDL_SCANCODE_D) clampApply(+1.0f);
     if (sc == SDL_SCANCODE_LEFT  || sc == SDL_SCANCODE_A) clampApply(-1.0f);
 
-    if (sc == SDL_SCANCODE_F1) { applyPreset(0); return Result::None; }
-    if (sc == SDL_SCANCODE_F2) { applyPreset(1); return Result::None; }
-    if (sc == SDL_SCANCODE_F3) { applyPreset(2); return Result::None; }
-    if (sc == SDL_SCANCODE_F4) { applyPreset(3); return Result::None; }
+    // F5 = salva preset, F6 = carica preset
+    if (sc == SDL_SCANCODE_F5)
+    { m_page = Page::SavePreset; m_presetSlot = 0; return Result::None; }
+    if (sc == SDL_SCANCODE_F6)
+    { m_page = Page::LoadPreset; m_presetSlot = 0; return Result::None; }
 
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
         return Result::Confirmed;
@@ -91,7 +92,52 @@ OptionsMenu::Result OptionsMenu::handleKey(int sc)
     return Result::None;
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
+OptionsMenu::Result OptionsMenu::handleSavePreset(int sc)
+{
+    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
+    { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
+    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
+    { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
+
+    if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
+    {
+        MatchSettings toSave = m_settings;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "Preset %d", m_presetSlot + 1);
+        toSave.presetName = buf;
+        m_presets.save(toSave, m_presetSlot);
+        m_page = Page::Main;
+        return Result::None;
+    }
+
+    if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
+    { m_page = Page::Main; return Result::None; }
+
+    return Result::None;
+}
+
+OptionsMenu::Result OptionsMenu::handleLoadPreset(int sc)
+{
+    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
+    { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
+    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
+    { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
+
+    if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
+    {
+        const MatchSettings* p = m_presets.get(m_presetSlot);
+        if (p) { m_settings = *p; buildRows(); }
+        m_page = Page::Main;
+        return Result::None;
+    }
+
+    if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
+    { m_page = Page::Main; return Result::None; }
+
+    return Result::None;
+}
+
+// ── Rendering base ────────────────────────────────────────────────────────────
 
 void OptionsMenu::begin2D() const
 {
@@ -123,8 +169,7 @@ void OptionsMenu::drawRect(float x, float y, float w, float h,
     glEnd();
 }
 
-void OptionsMenu::drawText(float x, float y, float scale,
-                            const char* text,
+void OptionsMenu::drawText(float x, float y, float scale, const char* text,
                             float r, float g, float b) const
 {
     static char buf[131072];
@@ -141,39 +186,34 @@ void OptionsMenu::drawText(float x, float y, float scale,
     glPopMatrix();
 }
 
+// ── Render principale ─────────────────────────────────────────────────────────
+
 void OptionsMenu::render() const
 {
     begin2D();
+    switch (m_page)
+    {
+    case Page::Main:       renderMain();       break;
+    case Page::SavePreset: renderSavePreset(); break;
+    case Page::LoadPreset: renderLoadPreset(); break;
+    }
+    end2D();
+}
 
+void OptionsMenu::renderMain() const
+{
     const float W  = (float)m_w;
-    const float H  = (float)m_h;
     const float cx = W * 0.5f;
 
-    // Sfondo semi-trasparente
-    drawRect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.78f);
+    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.80f);
+    drawText(cx - 120, 35, 3.2f, "IMPOSTAZIONI PARTITA", 0.95f, 0.85f, 0.3f);
 
-    // Titolo
-    drawText(cx - 110, 38, 3.5f, "OPZIONI PARTITA", 0.95f, 0.85f, 0.3f);
-
-    // Preset rapidi
-    auto presets = getBuiltinPresets();   // <-- funzione libera corretta
-    float px = cx - 220;
-    drawText(px, 88, 1.6f, "Preset rapidi:", 0.7f, 0.7f, 0.7f);
-    for (int i = 0; i < (int)presets.size(); ++i)
-    {
-        char buf[64];
-        // presets[i].name  +  F1/F2/F3/F4
-        std::snprintf(buf, sizeof(buf), "F%d=%s", i + 1, presets[i].name);
-        drawText(px + 115.0f + i * 115.0f, 88, 1.6f, buf, 0.5f, 0.85f, 1.0f);
-    }
-
-    // Righe opzioni
-    const float startY = 130.0f;
-    const float rowH   = 36.0f;
-    const float labelX = cx - 290;
+    const float startY = 120.0f;
+    const float rowH   = 40.0f;
+    const float labelX = cx - 300;
     const float valueX = cx + 80;
     const float barX   = valueX + 70;
-    const float barW   = 160.0f;
+    const float barW   = 150.0f;
 
     for (int i = 0; i < (int)m_rows.size(); ++i)
     {
@@ -182,60 +222,120 @@ void OptionsMenu::render() const
         const bool  sel = (i == m_selectedRow);
 
         if (sel)
-            drawRect(labelX - 10, y - 4, W - (labelX - 10) * 2, rowH - 4,
-                     0.18f, 0.35f, 0.55f, 0.55f);
+            drawRect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
+                     0.15f, 0.32f, 0.55f, 0.55f);
 
-        float lr = sel ? 1.0f : 0.80f;
+        float lr = sel ? 1.0f  : 0.80f;
         float lg = sel ? 0.95f : 0.80f;
-        float lb = sel ? 0.55f : 0.80f;
-        drawText(labelX, y + 4, 1.7f, row.label, lr, lg, lb);
+        float lb = sel ? 0.50f : 0.80f;
+        drawText(labelX, y + 5, 1.8f, row.label, lr, lg, lb);
 
         char valBuf[32];
         float curF = 0.0f;
-        if (row.isInt)
-        {
-            std::snprintf(valBuf, sizeof(valBuf), "%d", *row.iVal);
-            curF = (float)*row.iVal;
-        }
-        else
-        {
-            std::snprintf(valBuf, sizeof(valBuf), "%.1f", *row.fVal);
-            curF = *row.fVal;
-        }
+        if (row.isInt) { std::snprintf(valBuf, sizeof(valBuf), "%d", *row.iVal); curF = (float)*row.iVal; }
+        else           { std::snprintf(valBuf, sizeof(valBuf), "%.1f", *row.fVal); curF = *row.fVal; }
 
-        float vr = sel ? 1.0f  : 0.90f;
-        float vg = sel ? 1.0f  : 0.90f;
-        float vb = sel ? 0.4f  : 0.90f;
-        drawText(valueX, y + 4, 1.8f, valBuf, vr, vg, vb);
+        drawText(valueX, y + 5, 1.9f, valBuf,
+                 sel ? 1.0f : 0.90f, sel ? 1.0f : 0.90f, sel ? 0.4f : 0.90f);
 
-        float pct = (row.maxV > row.minV)
-                    ? (curF - row.minV) / (row.maxV - row.minV)
-                    : 0.0f;
+        float pct = (row.maxV > row.minV) ? (curF - row.minV) / (row.maxV - row.minV) : 0.0f;
         pct = std::clamp(pct, 0.0f, 1.0f);
-        drawRect(barX, y + 8, barW,        10, 0.15f, 0.15f, 0.15f);
-        drawRect(barX, y + 8, barW * pct,  10,
-                 sel ? 0.3f : 0.25f,
-                 sel ? 0.75f : 0.55f,
-                 sel ? 1.0f  : 0.75f);
+        drawRect(barX, y + 10, barW,        10, 0.12f, 0.12f, 0.12f);
+        drawRect(barX, y + 10, barW * pct,  10,
+                 sel ? 0.3f : 0.2f, sel ? 0.75f : 0.5f, sel ? 1.0f : 0.7f);
 
         if (sel)
         {
-            drawText(valueX - 22, y + 4, 1.8f, "<", 1.0f, 0.8f, 0.2f);
-            drawText(valueX + 52, y + 4, 1.8f, ">", 1.0f, 0.8f, 0.2f);
+            drawText(valueX - 24, y + 5, 1.9f, "<", 1.0f, 0.8f, 0.2f);
+            drawText(valueX + 55, y + 5, 1.9f, ">", 1.0f, 0.8f, 0.2f);
         }
     }
 
-    // Legenda tasti
-    const float legendY = startY + m_rows.size() * rowH + 22;
-    drawRect(0, legendY - 6, W, 56, 0, 0, 0, 0.5f);
-    drawText(cx - 270, legendY,      1.6f,
-             "SU/GIU = naviga   |   SX/DX = cambia valore",
-             0.65f, 0.65f, 0.65f);
-    drawText(cx - 230, legendY + 22, 1.6f,
-             "INVIO = conferma e torna   |   ESC = annulla",
-             0.65f, 0.65f, 0.65f);
+    // Legenda in basso
+    const float ly = startY + m_rows.size() * rowH + 28;
+    drawRect(0, ly - 8, W, 60, 0, 0, 0, 0.55f);
+    drawText(cx - 290, ly,      1.6f, "SU/GIU = naviga   SX/DX = modifica valore", 0.6f, 0.6f, 0.6f);
+    drawText(cx - 290, ly + 20, 1.6f, "INVIO = avvia partita   ESC = annulla", 0.6f, 0.6f, 0.6f);
+    drawText(cx - 290, ly + 40, 1.6f, "F5 = salva preset   F6 = carica preset", 0.5f, 0.85f, 1.0f);
+}
 
-    end2D();
+void OptionsMenu::renderSavePreset() const
+{
+    const float W  = (float)m_w;
+    const float cx = W * 0.5f;
+
+    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
+    drawText(cx - 90, 35, 3.0f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
+    drawText(cx - 160, 85, 1.7f, "Scegli slot con SU/GIU — INVIO per salvare", 0.7f, 0.7f, 0.7f);
+
+    const float startY = 140.0f;
+    const float rowH   = 38.0f;
+
+    for (int i = 0; i < UserPresets::MAX; ++i)
+    {
+        const float y   = startY + i * rowH;
+        const bool  sel = (i == m_presetSlot);
+        const MatchSettings* p = m_presets.get(i);
+
+        if (sel)
+            drawRect(cx - 240, y - 4, 480, rowH - 4, 0.1f, 0.4f, 0.2f, 0.55f);
+
+        char buf[64];
+        if (p && !p->presetName.empty())
+            std::snprintf(buf, sizeof(buf), "Slot %d: %s", i + 1, p->presetName.c_str());
+        else
+            std::snprintf(buf, sizeof(buf), "Slot %d: [vuoto]", i + 1);
+
+        drawText(cx - 220, y + 5, 1.8f, buf,
+                 sel ? 1.0f : 0.7f, sel ? 1.0f : 0.7f, sel ? 0.5f : 0.7f);
+    }
+
+    const float ly = startY + UserPresets::MAX * rowH + 20;
+    drawText(cx - 120, ly, 1.6f, "ESC = torna indietro", 0.55f, 0.55f, 0.55f);
+}
+
+void OptionsMenu::renderLoadPreset() const
+{
+    const float W  = (float)m_w;
+    const float cx = W * 0.5f;
+
+    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
+    drawText(cx - 90, 35, 3.0f, "CARICA PRESET", 0.3f, 0.7f, 1.0f);
+    drawText(cx - 160, 85, 1.7f, "Scegli slot con SU/GIU — INVIO per caricare", 0.7f, 0.7f, 0.7f);
+
+    const float startY = 140.0f;
+    const float rowH   = 38.0f;
+
+    for (int i = 0; i < UserPresets::MAX; ++i)
+    {
+        const float y   = startY + i * rowH;
+        const bool  sel = (i == m_presetSlot);
+        const MatchSettings* p = m_presets.get(i);
+
+        if (sel)
+            drawRect(cx - 240, y - 4, 480, rowH - 4, 0.1f, 0.25f, 0.5f, 0.55f);
+
+        char buf[128];
+        if (p && !p->presetName.empty())
+        {
+            std::snprintf(buf, sizeof(buf),
+                "Slot %d: %s  [T1:%d T2:%d  AI-a:%d AI-n:%d  HP:%.0f]",
+                i + 1, p->presetName.c_str(),
+                p->team1Tickets, p->team2Tickets,
+                p->team1AiCount, p->team2AiCount,
+                p->playerHp);
+        }
+        else
+            std::snprintf(buf, sizeof(buf), "Slot %d: [vuoto]", i + 1);
+
+        drawText(cx - 230, y + 5, 1.6f, buf,
+                 sel ? 1.0f : (p ? 0.75f : 0.4f),
+                 sel ? 1.0f : (p ? 0.75f : 0.4f),
+                 sel ? 0.5f : (p ? 0.75f : 0.4f));
+    }
+
+    const float ly = startY + UserPresets::MAX * rowH + 20;
+    drawText(cx - 120, ly, 1.6f, "ESC = torna indietro", 0.55f, 0.55f, 0.55f);
 }
 
 } // namespace mini

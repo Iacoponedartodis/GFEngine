@@ -102,22 +102,20 @@ void Application::run()
 
     HUD         hud(W, H);
     OptionsMenu optMenu(W, H);
-    MatchSettings currentSettings;   // impostazioni correnti
+    MatchSettings currentSettings;
 
     ConquestMode conquestMode;
     conquestMode.applySettings(currentSettings);
     conquestMode.start(world, mesh.get(), albedo.get());
 
-    // ── Player state ─────────────────────────────────────────────────
     int      gameState    = ST_FREE;
-    int      prevState    = ST_FREE;   // per tornare alle opzioni
+    int      prevState    = ST_FREE;
     EntityId playerEntity = conquestMode.getPlayerEntity();
     float    prevHp       = 100.0f;
     float    playerVelY   = 0.0f;
     bool     onGround     = true;
     bool     stateChanged = false;
 
-    // ── Arma giocatore ───────────────────────────────────────────────
     Weapon weapon = makeBlasterRifle();
     weapon.reset();
 
@@ -133,16 +131,17 @@ void Application::run()
     std::cout << "[Application] FreeRoam — WASD+mouse | ENTER=inizia | O=opzioni | ESC=esci"
               << std::endl;
 
-    // ── Helpers lambda ───────────────────────────────────────────────
     auto startGame = [&]()
     {
         conquestMode.applySettings(currentSettings);
         conquestMode.start(world, mesh.get(), albedo.get());
         playerEntity = conquestMode.getPlayerEntity();
         prevHp = currentSettings.playerHp;
-        playerVelY = 0.0f; onGround = true;
+        playerVelY = 0.0f;
+        onGround = true;
         weapon.reset();
-        gameState = ST_PLAY; stateChanged = true;
+        gameState = ST_PLAY;
+        stateChanged = true;
         const glm::vec3 sp = conquestMode.getSpawnPos();
         cam.setPosition(sp);
         cam.lookAt({sp.x, sp.y, sp.z - 10.0f});
@@ -156,14 +155,15 @@ void Application::run()
         conquestMode.start(world, mesh.get(), albedo.get());
         playerEntity = conquestMode.getPlayerEntity();
         playerVelY = 0.0f;
-        gameState = ST_FREE; stateChanged = true;
+        gameState = ST_FREE;
+        stateChanged = true;
         cam.setPosition(FREE_POS);
         cam.lookAt(FREE_LOOK);
         window.setMouseCaptured(true);
         std::cout << "[Game] Volo libero." << std::endl;
     };
 
-    // ── Game loop ────────────────────────────────────────────────────
+    // ── Game loop ─────────────────────────────────────────────────────
     while (m_running && window.isOpen())
     {
         stateChanged = false;
@@ -175,28 +175,53 @@ void Application::run()
             if (ev.type == SDL_QUIT) { window.close(); break; }
             input.processEvent(ev);
 
-            // ── Input opzioni (solo quando ST_OPTIONS è attivo) ──────
-            if (gameState == ST_OPTIONS && ev.type == SDL_KEYDOWN)
+            if (ev.type == SDL_KEYDOWN)
             {
-                auto res = optMenu.handleKey(ev.key.keysym.scancode);
-                if (res == OptionsMenu::Result::Confirmed ||
-                    res == OptionsMenu::Result::Back)
-                {
-                    if (res == OptionsMenu::Result::Confirmed)
-                        currentSettings = optMenu.getSettings();
+                const int sc = ev.key.keysym.scancode;
 
-                    // Torna allo stato precedente
-                    gameState = prevState;
-                    stateChanged = true;
-                    if (gameState == ST_PLAY || gameState == ST_FREE)
-                        window.setMouseCaptured(true);
+                // ── Gestione menu opzioni ────────────────────────────
+                if (gameState == ST_OPTIONS)
+                {
+                    auto res = optMenu.handleKey(sc);
+                    if (res == OptionsMenu::Result::Confirmed)
+                    {
+                        currentSettings = optMenu.getSettings();
+                        gameState = prevState;
+                        stateChanged = true;
+                        if (gameState == ST_PLAY || gameState == ST_FREE)
+                            window.setMouseCaptured(true);
+                    }
+                    else if (res == OptionsMenu::Result::Back)
+                    {
+                        gameState = prevState;
+                        stateChanged = true;
+                        if (gameState == ST_PLAY || gameState == ST_FREE)
+                            window.setMouseCaptured(true);
+                    }
+                }
+                else
+                {
+                    // O = apri opzioni (da FREE o PAUSE) — via evento, non GetKeyboardState
+                    if (sc == SDL_SCANCODE_O
+                        && !stateChanged
+                        && (gameState == ST_FREE || gameState == ST_PAUSE))
+                    {
+                        prevState = gameState;
+                        optMenu.setSettings(currentSettings);
+                        gameState = ST_OPTIONS;
+                        stateChanged = true;
+                        window.setMouseCaptured(false);
+                        std::cout << "[Options] Menu aperto." << std::endl;
+                    }
                 }
             }
         }
 
-        // ── Transizioni stato ────────────────────────────────────────
+        // ── Transizioni stato (fuori dal loop eventi) ─────────────────
         if (gameState != ST_OPTIONS)
         {
+            const Uint8* ks = SDL_GetKeyboardState(nullptr);
+
             // ESC
             if (input.isPressed(Action::Pause) && !stateChanged)
             {
@@ -204,26 +229,16 @@ void Application::run()
                     window.close();
                 else if (gameState == ST_PLAY)
                 {
-                    gameState = ST_PAUSE; stateChanged = true;
+                    gameState = ST_PAUSE;
+                    stateChanged = true;
                     window.setMouseCaptured(false);
                 }
                 else if (gameState == ST_PAUSE)
                 {
-                    gameState = ST_PLAY; stateChanged = true;
+                    gameState = ST_PLAY;
+                    stateChanged = true;
                     window.setMouseCaptured(true);
                 }
-            }
-
-            // O = apri opzioni (da FREE o PAUSE)
-            const Uint8* ks = SDL_GetKeyboardState(nullptr);
-            if (ks[SDL_SCANCODE_O] && !stateChanged
-                && (gameState == ST_FREE || gameState == ST_PAUSE))
-            {
-                prevState = gameState;
-                gameState = ST_OPTIONS;
-                stateChanged = true;
-                window.setMouseCaptured(false);
-                std::cout << "[Options] Aperto menu opzioni." << std::endl;
             }
 
             // Q da pausa = esci
@@ -244,16 +259,16 @@ void Application::run()
             }
 
             // R / F da Win, Lose, Pause
-            if ((gameState==ST_WIN||gameState==ST_LOSE||gameState==ST_PAUSE)
+            if ((gameState == ST_WIN || gameState == ST_LOSE || gameState == ST_PAUSE)
                 && input.isPressed(Action::Restart) && !stateChanged)
                 startGame();
 
-            if ((gameState==ST_WIN||gameState==ST_LOSE||gameState==ST_PAUSE)
+            if ((gameState == ST_WIN || gameState == ST_LOSE || gameState == ST_PAUSE)
                 && input.isPressed(Action::FreeRoam) && !stateChanged)
                 goFreeRoam();
         }
 
-        // ── ECS tick ─────────────────────────────────────────────────
+        // ── ECS tick ──────────────────────────────────────────────────
         float elapsed = clock.restart();
         if (elapsed > 0.25f) elapsed = 0.25f;
 
@@ -265,14 +280,11 @@ void Application::run()
             weapon.update(elapsed);
         }
 
-        // ── Camera + Physics ─────────────────────────────────────────
+        // ── Camera + Physics ──────────────────────────────────────────
         const glm::vec3 prevPos = cam.getPosition();
 
-        if (gameState == ST_FREE || gameState == ST_PLAY)
-        {
-            if (window.isMouseCaptured())
-                cam.processMouse((float)input.mouseDX(), (float)input.mouseDY());
-        }
+        if ((gameState == ST_FREE || gameState == ST_PLAY) && window.isMouseCaptured())
+            cam.processMouse((float)input.mouseDX(), (float)input.mouseDY());
 
         if (gameState == ST_FREE)
         {
@@ -304,14 +316,17 @@ void Application::run()
             cam.setPosition(final_);
         }
 
-        // ── Game logic ───────────────────────────────────────────────
+        // ── Game logic ────────────────────────────────────────────────
         if (gameState == ST_PLAY)
         {
             if (world.isValidEntity(playerEntity))
             {
                 auto* pt = world.getTransform(playerEntity);
                 if (pt)
-                { const glm::vec3& p = cam.getPosition(); pt->x=p.x; pt->y=p.y; pt->z=p.z; }
+                {
+                    const glm::vec3& p = cam.getPosition();
+                    pt->x = p.x; pt->y = p.y; pt->z = p.z;
+                }
 
                 const auto* ph = world.getHealth(playerEntity);
                 if (ph && ph->current < prevHp - 0.5f)
@@ -322,8 +337,7 @@ void Application::run()
             const Uint32 mouseButtons = SDL_GetMouseState(nullptr, nullptr);
             const bool mouseHeld = (mouseButtons & SDL_BUTTON_LMASK) != 0;
 
-            if (mouseHeld && window.isMouseCaptured()
-                && world.isValidEntity(playerEntity))
+            if (mouseHeld && window.isMouseCaptured() && world.isValidEntity(playerEntity))
             {
                 if (weapon.tryFire())
                 {
@@ -332,12 +346,14 @@ void Application::run()
                     const glm::vec3 fwd = cam.getForward();
                     EntityId b = world.createEntity();
                     world.addTransform(b, TransformComponent{
-                        .x=org.x, .y=org.y, .z=org.z,
-                        .sx=weapon.bulletScale, .sy=weapon.bulletScale, .sz=weapon.bulletScale
+                        .x  = org.x, .y  = org.y, .z  = org.z,
+                        .sx = weapon.bulletScale,
+                        .sy = weapon.bulletScale,
+                        .sz = weapon.bulletScale
                     });
-                    world.addVelocity(b, {fwd.x*weapon.bulletSpeed,
-                                          fwd.y*weapon.bulletSpeed,
-                                          fwd.z*weapon.bulletSpeed});
+                    world.addVelocity(b, {fwd.x * weapon.bulletSpeed,
+                                          fwd.y * weapon.bulletSpeed,
+                                          fwd.z * weapon.bulletSpeed});
                     world.addTeam(b, {1});
                     world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1});
                     world.addMeshRenderer(b, {mesh.get(), nullptr,
@@ -349,30 +365,38 @@ void Application::run()
                 && conquestMode.getTeam2Tickets() <= 0
                 && !anyEnemyAlive(world))
             {
-                gameState = ST_WIN; audio.playVictory();
+                gameState = ST_WIN;
+                audio.playVictory();
                 std::cout << "\n[Game] VITTORIA!" << std::endl;
             }
             else if (!world.isValidEntity(playerEntity))
             {
-                gameState = ST_LOSE; audio.playGameOver();
+                gameState = ST_LOSE;
+                audio.playGameOver();
                 std::cout << "\n[Game] GAME OVER!" << std::endl;
             }
         }
 
-        // ── Render ───────────────────────────────────────────────────
+        // ── Render ────────────────────────────────────────────────────
         renderer.beginFrame({0.05f, 0.06f, 0.12f, 1.0f});
 
-        if (gameState != ST_OPTIONS)
+        // Scena 3D (sempre visibile, anche dietro il menu)
+        for (EntityId id : world.getEntities())
         {
-            for (EntityId id : world.getEntities())
-            {
-                const auto* t  = world.getTransform(id);
-                const auto* mr = world.getMeshRenderer(id);
-                if (!t || !mr || !mr->mesh || !mr->visible) continue;
-                renderer.drawMesh(*mr->mesh, mr->texture, toModelMatrix(*t), {mr->r, mr->g, mr->b});
-            }
+            const auto* t  = world.getTransform(id);
+            const auto* mr = world.getMeshRenderer(id);
+            if (!t || !mr || !mr->mesh || !mr->visible) continue;
+            renderer.drawMesh(*mr->mesh, mr->texture, toModelMatrix(*t), {mr->r, mr->g, mr->b});
+        }
 
-            float curHp = currentSettings.playerHp, maxHp = currentSettings.playerHp;
+        if (gameState == ST_OPTIONS)
+        {
+            optMenu.render();
+        }
+        else
+        {
+            float curHp = currentSettings.playerHp;
+            float maxHp = currentSettings.playerHp;
             if (world.isValidEntity(playerEntity))
             {
                 const auto* ph = world.getHealth(playerEntity);
@@ -382,18 +406,6 @@ void Application::run()
                        weapon.heat, weapon.overheated, weapon.name,
                        conquestMode.getTeam1Tickets(),
                        conquestMode.getTeam2Tickets());
-        }
-        else
-        {
-            // Render sfondo scena (world visibile dietro il menu)
-            for (EntityId id : world.getEntities())
-            {
-                const auto* t  = world.getTransform(id);
-                const auto* mr = world.getMeshRenderer(id);
-                if (!t || !mr || !mr->mesh || !mr->visible) continue;
-                renderer.drawMesh(*mr->mesh, mr->texture, toModelMatrix(*t), {mr->r, mr->g, mr->b});
-            }
-            optMenu.render();
         }
 
         renderer.endFrame();
