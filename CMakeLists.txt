@@ -58,6 +58,7 @@ add_executable(GFEngine
     src/render/Texture.cpp
     src/render/Model.cpp
     src/render/HUD.cpp
+    src/render/Ui2D.cpp
     src/vendor/stb_image_impl.cpp
     src/vendor/tinyobj_impl.cpp
     src/ecs/World.cpp

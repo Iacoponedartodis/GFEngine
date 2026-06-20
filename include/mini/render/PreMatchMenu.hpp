@@ -1,5 +1,6 @@
 #pragma once
 #include "mini/game/MatchSettings.hpp"
+#include "mini/render/Ui2D.hpp"
 #include <string>
 #include <vector>
 
@@ -24,7 +25,7 @@ public:
     void setSettings(const MatchSettings& s);
 
 private:
-    int m_w, m_h;
+    Ui2D m_ui;
 
     // ── Pagine ───────────────────────────────────────────────────────
     enum class Page { Root, Rules, SavePreset, ManagePresets, RenamePreset, LoadPreset };
@@ -71,13 +72,6 @@ private:
     void renderRenamePreset()  const;
     void renderLoadPreset()    const;
 
-    // ── OpenGL 2D helpers ────────────────────────────────────────────
-    void begin2D() const;
-    void end2D()   const;
-    void drawRect(float x, float y, float w, float h,
-                  float r, float g, float b, float a = 1.0f) const;
-    void drawText(float x, float y, float scale, const char* text,
-                  float r, float g, float b) const;
 };
 
 } // namespace mini

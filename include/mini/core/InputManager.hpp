@@ -49,6 +49,16 @@ public:
     // Restituisce il nome del tasto per un'azione (per UI)
     [[nodiscard]] const char* getKeyName(Action a) const;
 
+    // Restituisce lo scancode attualmente associato a un'azione
+    [[nodiscard]] SDL_Scancode getScancode(Action a) const;
+
+    // Nome leggibile di un'azione (per UI keybinding)
+    [[nodiscard]] static const char* actionName(Action a);
+
+    // Numero di azioni rimappabili (esclude Shoot che è il mouse)
+    [[nodiscard]] static int rebindableCount();
+    [[nodiscard]] static Action rebindableAt(int index);
+
 private:
     // Mappa Action → SDL_Scancode
     std::unordered_map<int, SDL_Scancode> m_bindings;
@@ -58,6 +68,7 @@ private:
     Uint8 m_prev[SDL_NUM_SCANCODES] = {};
 
     bool m_shootClicked = false;
+    bool m_mouseHeld    = false;
     int  m_mdx = 0, m_mdy = 0;
 };
 

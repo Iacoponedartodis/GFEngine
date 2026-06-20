@@ -58,7 +58,8 @@ void HUD::drawText(float x, float y, float scale,
 
 void HUD::render(float playerHp, float playerMaxHp, int state,
                  float weaponHeat, bool overheated, const char* weaponName,
-                 int team1Tickets, int team2Tickets)
+                 int team1Tickets, int team2Tickets,
+                 int aliveAllies, int aliveEnemies)
 {
     begin2D();
 

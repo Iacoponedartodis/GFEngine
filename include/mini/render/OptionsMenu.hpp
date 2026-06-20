@@ -1,80 +1,48 @@
 #pragma once
-#include "mini/game/MatchSettings.hpp"
-#include <string>
-#include <vector>
+#include "mini/render/Ui2D.hpp"
+#include "mini/core/InputManager.hpp"
 
 namespace mini
 {
 
+// Menu opzioni generale del gioco.
+// Aperto con O da FreeRoam o dal menu di pausa.
+//
+// Struttura a pagine:
+//   Root      → elenco categorie (Controlli, [Audio], [Video] in futuro)
+//   Controls  → editor keybinding: rimappa i tasti su InputManager
+//
+// A differenza del vecchio OptionsMenu, NON gestisce piu' le regole di gioco
+// o i preset: quelli appartengono a PreMatchMenu. Qui stanno solo le opzioni
+// generali (input, e in futuro audio/video/grafica).
 class OptionsMenu
 {
 public:
     OptionsMenu(int screenW, int screenH);
 
-    enum class Result { None, Back, Confirmed };
+    enum class Result { None, Back };
 
-    // Chiamato per ogni SDL_KEYDOWN (scancode)
-    Result handleKey(int sdlScancode);
-
-    // Chiamato per ogni SDL_TEXTINPUT (testo UTF-8 — per inserimento nome)
-    void handleTextInput(const char* text);
-
-    void render() const;
-
-    [[nodiscard]] const MatchSettings& getSettings() const { return m_settings; }
-    void setSettings(const MatchSettings& s);
+    // input: serve per leggere/scrivere i keybinding correnti
+    Result handleKey(int sdlScancode, InputManager& input);
+    void   render(const InputManager& input) const;
 
 private:
-    int m_w, m_h;
+    Ui2D m_ui;
 
-    MatchSettings m_settings;
-    UserPresets   m_presets;
+    enum class Page { Root, Controls };
+    Page m_page = Page::Root;
 
-    // ── Pagine ───────────────────────────────────────────────────────
-    enum class Page { Main, SavePreset, ManagePresets, RenamePreset, LoadPreset };
-    Page m_page        = Page::Main;
-    int  m_selectedRow = 0;
-    int  m_presetSlot  = 0;
-
-    // ── Input testo per nomi preset ──────────────────────────────────
-    std::string m_textInput;
-    static constexpr int MAX_NAME = 24;
-
-    // ── Righe modificabili (Main) ────────────────────────────────────
-    struct Row
-    {
-        const char* label;
-        bool        isInt;
-        int*        iVal;
-        float*      fVal;
-        float       step;
-        float       minV;
-        float       maxV;
-    };
-    std::vector<Row> m_rows;
-    void buildRows();
+    int  m_rootRow     = 0;   // categoria selezionata in Root
+    int  m_controlRow  = 0;   // azione selezionata in Controls
+    bool m_awaitingKey = false; // true = in attesa del nuovo tasto da assegnare
 
     // ── Handler per pagina ───────────────────────────────────────────
-    Result handleMain(int sc);
-    Result handleSavePreset(int sc);
-    Result handleManagePresets(int sc);
-    Result handleRenamePreset(int sc);
-    Result handleLoadPreset(int sc);
+    Result handleRoot(int sc);
+    Result handleControls(int sc, InputManager& input);
 
     // ── Render per pagina ────────────────────────────────────────────
-    void renderMain()          const;
-    void renderSavePreset()    const;
-    void renderManagePresets() const;
-    void renderRenamePreset()  const;
-    void renderLoadPreset()    const;
-
-    // ── Helpers OpenGL 2D ────────────────────────────────────────────
-    void begin2D() const;
-    void end2D()   const;
-    void drawRect(float x, float y, float w, float h,
-                  float r, float g, float b, float a = 1.0f) const;
-    void drawText(float x, float y, float scale, const char* text,
-                  float r, float g, float b) const;
+    void renderRoot()                          const;
+    void renderControls(const InputManager& in) const;
 };
 
 } // namespace mini

@@ -165,26 +165,32 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex)
     // Posizioni predefinite nemici (fino a 20 slot)
     struct UnitPos { float x, z, pax, paz, pbx, pbz; bool stat; };
     static const UnitPos enemyPos[20] = {
-        {  7,-2,   5,-2,  9,-2, false },
-        { -7,-2,  -9,-2, -5,-2, false },
-        {  0,-5,  -3,-5,  3,-5, false },
-        {  5,-4,   4,-2,  6,-6, false },
-        {  8,-8,   0, 0,  0, 0, true  },
-        { -8,-8,   0, 0,  0, 0, true  },
-        {  4,-3,   2,-1,  6,-5, false },
-        { -4,-3,  -6,-1, -2,-5, false },
-        {  0,-9,  -2,-7,  2,-9, false },
-        {  9,-5,   7,-3, 11,-7, false },
-        { -9,-5, -11,-3, -7,-7, false },
-        {  3,-7,   1,-5,  5,-9, false },
-        { -3,-7,  -5,-5, -1,-9, false },
-        {  6,-6,   4,-4,  8,-8, false },
-        { -6,-6,  -8,-4, -4,-8, false },
-        {  2,-4,   0,-2,  4,-6, false },
-        { -2,-4,  -4,-2,  0,-6, false },
-        { 10,-3,   8,-1, 12,-5, false },
-        {-10,-3, -12,-1, -8,-5, false },
-        {  0,-3,  -2,-1,  2,-5, false },
+        // 0-3: pattuglie zona gate (z=-2)
+        {  7,-2,    5,-2,   9,-2,  false },
+        { -7,-2,   -9,-2,  -5,-2,  false },
+        {  3,-2,    1,-2,   5,-2,  false },
+        { -3,-2,   -5,-2,  -1,-2,  false },
+        // 4-5: cecchini piattaforme (stationary)
+        {  8,-8,    0, 0,   0, 0,  true  },
+        { -8,-8,    0, 0,   0, 0,  true  },
+        // 6-9: zona centro (tra gate e piattaforme)
+        {  0,-5,   -2,-5,   2,-5,  false },
+        {  4,-4,    3,-3,   5,-5,  false },
+        { -4,-4,   -5,-3,  -3,-5,  false },
+        {  2,-6,    1,-5,   3,-7,  false },
+        // 10-13: zona nord (dietro le piattaforme)
+        { -2,-6,   -3,-5,  -1,-7,  false },
+        {  0,-9,   -1,-8,   1,-9.5,false },
+        {  4,-9,    3,-8,   5,-9.5,false },
+        { -4,-9,   -5,-8,  -3,-9.5,false },
+        // 14-17: flanchi (lontano dalle scale)
+        {  9,-2,    8,-1,  10,-3,  false },
+        { -9,-2,  -10,-1,  -8,-3,  false },
+        {  9,-6,    8,-5,  10,-7,  false },
+        { -9,-6,  -10,-5,  -8,-7,  false },
+        // 18-19: zona sud (rinforzi)
+        {  6,-1,    5, 0,   7,-2,  false },
+        { -6,-1,   -7, 0,  -5,-2,  false },
     };
 
     // Posizioni predefinite alleati (fino a 10 slot)

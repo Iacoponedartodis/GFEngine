@@ -1,579 +1,221 @@
 #include "mini/render/OptionsMenu.hpp"
 #include "mini/platform/OpenGL.hpp"
 
-#include <stb_easy_font.h>
 #include <SDL2/SDL.h>
 #include <cstdio>
 #include <cstring>
-#include <algorithm>
 
 namespace mini
 {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Costruzione
-// ─────────────────────────────────────────────────────────────────────────────
-
 OptionsMenu::OptionsMenu(int screenW, int screenH)
-    : m_w(screenW), m_h(screenH)
-{
-    buildRows();
-    // Pre-alloca tutti gli slot in modo che get()/getMutable() funzionino sempre
-    while ((int)m_presets.list.size() < UserPresets::MAX)
-        m_presets.list.push_back({});
-}
-
-void OptionsMenu::setSettings(const MatchSettings& s)
-{
-    m_settings = s;
-    buildRows();
-}
-
-void OptionsMenu::buildRows()
-{
-    m_rows.clear();
-    m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
-    m_rows.push_back({"Vite nemici   (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
-    m_rows.push_back({"AI alleate  (num unita team 1)", true,  &m_settings.team1AiCount, nullptr,   1,   0,  10});
-    m_rows.push_back({"AI nemiche  (num unita team 2)", true,  &m_settings.team2AiCount, nullptr,   1,   0,  20});
-    m_rows.push_back({"HP giocatore",                   false, nullptr, &m_settings.playerHp,       25,  25, 500});
-    m_rows.push_back({"Ritardo respawn (s)",            false, nullptr, &m_settings.respawnDelay, 0.5f,  0,  30});
-}
+    : m_ui(screenW, screenH) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Input testo
+// Dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
-void OptionsMenu::handleTextInput(const char* text)
-{
-    if (m_page != Page::SavePreset && m_page != Page::RenamePreset) return;
-    if ((int)m_textInput.size() >= MAX_NAME) return;
-    m_textInput += text;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dispatch input
-// ─────────────────────────────────────────────────────────────────────────────
-
-OptionsMenu::Result OptionsMenu::handleKey(int sc)
+OptionsMenu::Result OptionsMenu::handleKey(int sc, InputManager& input)
 {
     switch (m_page)
     {
-    case Page::Main:           return handleMain(sc);
-    case Page::SavePreset:     return handleSavePreset(sc);
-    case Page::ManagePresets:  return handleManagePresets(sc);
-    case Page::RenamePreset:   return handleRenamePreset(sc);
-    case Page::LoadPreset:     return handleLoadPreset(sc);
+    case Page::Root:     return handleRoot(sc);
+    case Page::Controls: return handleControls(sc, input);
     }
     return Result::None;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Handler — Main
-// ─────────────────────────────────────────────────────────────────────────────
-
-OptionsMenu::Result OptionsMenu::handleMain(int sc)
+// ── Root: elenco categorie ───────────────────────────────────────────────
+OptionsMenu::Result OptionsMenu::handleRoot(int sc)
 {
-    const int rowCount = (int)m_rows.size();
+    constexpr int ITEMS = 1; // 0 = Controlli (in futuro: Audio, Video...)
 
     if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
-    { m_selectedRow = (m_selectedRow - 1 + rowCount) % rowCount; return Result::None; }
+    { m_rootRow = (m_rootRow - 1 + ITEMS) % ITEMS; return Result::None; }
     if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
-    { m_selectedRow = (m_selectedRow + 1) % rowCount; return Result::None; }
-
-    Row& r = m_rows[m_selectedRow];
-    auto clampApply = [&](float delta)
-    {
-        if (r.isInt)
-        {
-            int v = *r.iVal + (int)delta;
-            *r.iVal = std::clamp(v, (int)r.minV, (int)r.maxV);
-        }
-        else
-        {
-            float v = *r.fVal + delta * r.step;
-            *r.fVal = std::clamp(v, r.minV, r.maxV);
-        }
-    };
-
-    if (sc == SDL_SCANCODE_RIGHT || sc == SDL_SCANCODE_D) clampApply(+1.0f);
-    if (sc == SDL_SCANCODE_LEFT  || sc == SDL_SCANCODE_A) clampApply(-1.0f);
-
-    if (sc == SDL_SCANCODE_F5)
-    {
-        m_page = Page::SavePreset;
-        m_presetSlot = 0;
-        m_textInput.clear();
-        SDL_StartTextInput();
-        return Result::None;
-    }
-    if (sc == SDL_SCANCODE_F6)
-    { m_page = Page::LoadPreset; m_presetSlot = 0; return Result::None; }
-    if (sc == SDL_SCANCODE_F7)
-    { m_page = Page::ManagePresets; m_presetSlot = 0; return Result::None; }
+    { m_rootRow = (m_rootRow + 1) % ITEMS; return Result::None; }
 
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-        return Result::Confirmed;
+    {
+        if (m_rootRow == 0) { m_page = Page::Controls; m_controlRow = 0; }
+        return Result::None;
+    }
+
     if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
         return Result::Back;
 
     return Result::None;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Handler — SavePreset (con nome)
-// ─────────────────────────────────────────────────────────────────────────────
-
-OptionsMenu::Result OptionsMenu::handleSavePreset(int sc)
+// ── Controls: editor keybinding ──────────────────────────────────────────
+OptionsMenu::Result OptionsMenu::handleControls(int sc, InputManager& input)
 {
-    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
-    { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
-    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
-    { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
+    const int count = InputManager::rebindableCount();
 
-    if (sc == SDL_SCANCODE_BACKSPACE && !m_textInput.empty())
-    { m_textInput.pop_back(); return Result::None; }
+    // Se siamo in attesa di un nuovo tasto, il prossimo scancode lo assegna
+    if (m_awaitingKey)
+    {
+        if (sc == SDL_SCANCODE_ESCAPE)
+        {
+            m_awaitingKey = false; // annulla
+            return Result::None;
+        }
+        // Assegna il nuovo tasto all'azione selezionata
+        Action a = InputManager::rebindableAt(m_controlRow);
+        input.rebind(a, (SDL_Scancode)sc);
+        m_awaitingKey = false;
+        return Result::None;
+    }
+
+    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
+    { m_controlRow = (m_controlRow - 1 + count) % count; return Result::None; }
+    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
+    { m_controlRow = (m_controlRow + 1) % count; return Result::None; }
 
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
     {
-        MatchSettings toSave = m_settings;
-        if (m_textInput.empty())
-        {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "Preset %d", m_presetSlot + 1);
-            toSave.presetName = buf;
-        }
-        else
-        {
-            toSave.presetName = m_textInput;
-        }
-        m_presets.save(toSave, m_presetSlot);
-        SDL_StopTextInput();
-        m_page = Page::Main;
-        return Result::None;
-    }
-
-    if (sc == SDL_SCANCODE_ESCAPE)
-    {
-        SDL_StopTextInput();
-        m_page = Page::Main;
-        return Result::None;
-    }
-
-    return Result::None;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Handler — ManagePresets (modifica / rinomina / elimina)
-// ─────────────────────────────────────────────────────────────────────────────
-
-OptionsMenu::Result OptionsMenu::handleManagePresets(int sc)
-{
-    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
-    { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
-    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
-    { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
-
-    // INVIO = carica il preset nelle impostazioni correnti (modifica)
-    if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-    {
-        const MatchSettings* p = m_presets.get(m_presetSlot);
-        if (p) { m_settings = *p; buildRows(); }
-        m_page = Page::Main;
-        return Result::None;
-    }
-
-    // R = rinomina
-    if (sc == SDL_SCANCODE_R)
-    {
-        const MatchSettings* p = m_presets.get(m_presetSlot);
-        if (p)
-        {
-            m_textInput = p->presetName;
-            m_page = Page::RenamePreset;
-            SDL_StartTextInput();
-        }
-        return Result::None;
-    }
-
-    // CANC o D = elimina
-    if (sc == SDL_SCANCODE_DELETE || sc == SDL_SCANCODE_X)
-    {
-        m_presets.remove(m_presetSlot);
+        m_awaitingKey = true; // entra in modalità "premi un tasto"
         return Result::None;
     }
 
     if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
-    { m_page = Page::Main; return Result::None; }
+    { m_page = Page::Root; return Result::None; }
 
     return Result::None;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Handler — RenamePreset
+// Render
 // ─────────────────────────────────────────────────────────────────────────────
 
-OptionsMenu::Result OptionsMenu::handleRenamePreset(int sc)
+void OptionsMenu::render(const InputManager& input) const
 {
-    if (sc == SDL_SCANCODE_BACKSPACE && !m_textInput.empty())
-    { m_textInput.pop_back(); return Result::None; }
-
-    if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-    {
-        MatchSettings* p = m_presets.getMutable(m_presetSlot);
-        if (p && !m_textInput.empty())
-            p->presetName = m_textInput;
-        SDL_StopTextInput();
-        m_page = Page::ManagePresets;
-        return Result::None;
-    }
-
-    if (sc == SDL_SCANCODE_ESCAPE)
-    {
-        SDL_StopTextInput();
-        m_page = Page::ManagePresets;
-        return Result::None;
-    }
-
-    return Result::None;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Handler — LoadPreset
-// ─────────────────────────────────────────────────────────────────────────────
-
-OptionsMenu::Result OptionsMenu::handleLoadPreset(int sc)
-{
-    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
-    { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
-    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
-    { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
-
-    if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-    {
-        const MatchSettings* p = m_presets.get(m_presetSlot);
-        if (p) { m_settings = *p; buildRows(); }
-        m_page = Page::Main;
-        return Result::None;
-    }
-
-    if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
-    { m_page = Page::Main; return Result::None; }
-
-    return Result::None;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// OpenGL 2D helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::begin2D() const
-{
-    glUseProgram(0);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
-    glOrtho(0.0, m_w, m_h, 0.0, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity();
-}
-
-void OptionsMenu::end2D() const
-{
-    glMatrixMode(GL_MODELVIEW);  glPopMatrix();
-    glMatrixMode(GL_PROJECTION); glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-}
-
-void OptionsMenu::drawRect(float x, float y, float w, float h,
-                            float r, float g, float b, float a) const
-{
-    glColor4f(r, g, b, a);
-    glBegin(GL_QUADS);
-    glVertex2f(x,   y);   glVertex2f(x+w, y);
-    glVertex2f(x+w, y+h); glVertex2f(x,   y+h);
-    glEnd();
-}
-
-void OptionsMenu::drawText(float x, float y, float scale, const char* text,
-                            float r, float g, float b) const
-{
-    static char buf[131072];
-    int quads = stb_easy_font_print(0, 0, const_cast<char*>(text),
-                                    nullptr, buf, sizeof(buf));
-    glPushMatrix();
-    glTranslatef(x, y, 0.0f);
-    glScalef(scale, scale, 1.0f);
-    glColor3f(r, g, b);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(3, GL_FLOAT, 16, buf);
-    glDrawArrays(GL_QUADS, 0, quads * 4);
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glPopMatrix();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Render dispatch
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::render() const
-{
-    begin2D();
+    m_ui.begin();
     switch (m_page)
     {
-    case Page::Main:          renderMain();          break;
-    case Page::SavePreset:    renderSavePreset();    break;
-    case Page::ManagePresets: renderManagePresets(); break;
-    case Page::RenamePreset:  renderRenamePreset();  break;
-    case Page::LoadPreset:    renderLoadPreset();    break;
+    case Page::Root:     renderRoot();           break;
+    case Page::Controls: renderControls(input);  break;
     }
-    end2D();
+    m_ui.end();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Render — Main
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::renderMain() const
+void OptionsMenu::renderRoot() const
 {
-    const float W  = (float)m_w;
+    const float W = (float)m_ui.width();
+    const float H = (float)m_ui.height();
+    const float cx = W * 0.5f, cy = H * 0.5f;
+
+    m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.82f);
+    m_ui.textCentered(cx, cy - 130, 3.5f, "OPZIONI", 0.95f, 0.85f, 0.3f);
+
+    struct Item { const char* label; };
+    const Item items[] = { { "Controlli  (tastiera e mouse)" } };
+    constexpr int N = 1;
+
+    const float startY = cy - 30.0f;
+    const float rowH   = 58.0f;
+
+    for (int i = 0; i < N; ++i)
+    {
+        const float y = startY + i * rowH;
+        const bool sel = (i == m_rootRow);
+        const float bx = cx - 240, bw = 480, bh = 44;
+
+        m_ui.rect(bx, y - 4, bw, bh,
+                  sel ? 0.12f : 0.08f, sel ? 0.28f : 0.08f, sel ? 0.50f : 0.10f,
+                  sel ? 0.65f : 0.45f);
+        m_ui.border(bx, y - 4, bw, bh, 0.25f, 0.35f, 0.55f);
+
+        float scale = sel ? 2.4f : 2.0f;
+        float c = sel ? 1.0f : 0.6f;
+        m_ui.textCentered(cx, y + 10, scale, items[i].label, c * 0.5f, c, c);
+    }
+
+    m_ui.textCentered(cx, startY + N * rowH + 24, 1.7f,
+                      "SU/GIU = naviga   INVIO = apri   ESC = indietro",
+                      0.5f, 0.5f, 0.5f);
+}
+
+void OptionsMenu::renderControls(const InputManager& input) const
+{
+    const float W = (float)m_ui.width();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.82f);
-    drawText(cx - 120, 30, 3.0f, "IMPOSTAZIONI PARTITA", 0.95f, 0.85f, 0.3f);
+    m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.85f);
+    m_ui.textCentered(cx, 28, 3.0f, "CONTROLLI", 0.95f, 0.85f, 0.3f);
 
-    // Hint apertura menu
-    drawText(cx - 95, 70, 1.55f, "Premi  O  per aprire questo menu", 0.5f, 0.8f, 0.5f);
+    // Info fissa: Sparo (mouse, non rimappabile)
+    m_ui.rect(cx - 280 - 12, 70.0f, (float)m_ui.width() - (cx - 280 - 12) * 2, 36.0f,
+              0.08f, 0.10f, 0.14f, 0.6f);
+    m_ui.text(cx - 280, 78.0f, 1.8f, "Sparo", 0.7f, 0.7f, 0.7f);
+    m_ui.rect(cx + 100 - 8, 74.0f, 230, 30, 0.12f, 0.12f, 0.15f, 0.8f);
+    m_ui.border(cx + 100 - 8, 74.0f, 230, 30, 0.25f, 0.25f, 0.35f);
+    m_ui.text(cx + 100, 78.0f, 1.7f, "Mouse Sinistro (fisso)", 0.6f, 0.6f, 0.6f);
 
+    const int count = InputManager::rebindableCount();
     const float startY = 115.0f;
-    const float rowH   = 40.0f;
-    const float labelX = cx - 300;
-    const float valueX = cx + 80;
-    const float barX   = valueX + 70;
-    const float barW   = 150.0f;
+    const float rowH   = 42.0f;
+    const float labelX = cx - 280;
+    const float keyX   = cx + 100;
 
-    for (int i = 0; i < (int)m_rows.size(); ++i)
+    for (int i = 0; i < count; ++i)
     {
-        const Row& row = m_rows[i];
-        const float y  = startY + i * rowH;
-        const bool  sel = (i == m_selectedRow);
+        Action a = InputManager::rebindableAt(i);
+        const float y = startY + i * rowH;
+        const bool sel = (i == m_controlRow);
 
         if (sel)
-            drawRect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
-                     0.15f, 0.32f, 0.55f, 0.55f);
+            m_ui.rect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
+                      0.15f, 0.32f, 0.55f, 0.55f);
 
-        float lr = sel ? 1.0f  : 0.80f;
-        float lg = sel ? 0.95f : 0.80f;
-        float lb = sel ? 0.50f : 0.80f;
-        drawText(labelX, y + 5, 1.8f, row.label, lr, lg, lb);
+        // Nome azione
+        m_ui.text(labelX, y + 6, 1.9f, InputManager::actionName(a),
+                  sel ? 1.0f : 0.8f, sel ? 0.95f : 0.8f, sel ? 0.5f : 0.8f);
 
-        char valBuf[32];
-        float curF = 0.0f;
-        if (row.isInt) { std::snprintf(valBuf, sizeof(valBuf), "%d",   *row.iVal); curF = (float)*row.iVal; }
-        else           { std::snprintf(valBuf, sizeof(valBuf), "%.1f", *row.fVal); curF = *row.fVal; }
+        // Tasto attualmente assegnato
+        SDL_Scancode sc = input.getScancode(a);
+        const char* keyName = SDL_GetScancodeName(sc);
+        char keyBuf[48];
 
-        drawText(valueX, y + 5, 1.9f, valBuf,
-                 sel ? 1.0f : 0.90f, sel ? 1.0f : 0.90f, sel ? 0.4f : 0.90f);
-
-        float pct = (row.maxV > row.minV) ? (curF - row.minV) / (row.maxV - row.minV) : 0.0f;
-        pct = std::clamp(pct, 0.0f, 1.0f);
-        drawRect(barX, y + 10, barW,       10, 0.12f, 0.12f, 0.12f);
-        drawRect(barX, y + 10, barW * pct, 10,
-                 sel ? 0.3f : 0.2f, sel ? 0.75f : 0.5f, sel ? 1.0f : 0.7f);
-
-        if (sel)
+        if (sel && m_awaitingKey)
         {
-            drawText(valueX - 24, y + 5, 1.9f, "<", 1.0f, 0.8f, 0.2f);
-            drawText(valueX + 55, y + 5, 1.9f, ">", 1.0f, 0.8f, 0.2f);
-        }
-    }
-
-    const float ly = startY + m_rows.size() * rowH + 24;
-    drawRect(0, ly - 8, W, 72, 0, 0, 0, 0.55f);
-    drawText(cx - 290, ly,      1.6f, "SU/GIU = naviga    SX/DX = modifica valore", 0.6f, 0.6f, 0.6f);
-    drawText(cx - 290, ly + 18, 1.6f, "INVIO = applica e avvia    ESC = annulla",    0.6f, 0.6f, 0.6f);
-    drawText(cx - 290, ly + 36, 1.6f, "F5 = salva preset    F6 = carica preset    F7 = gestisci preset",
-             0.5f, 0.85f, 1.0f);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Render — SavePreset
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::renderSavePreset() const
-{
-    const float W  = (float)m_w;
-    const float cx = W * 0.5f;
-
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 80, 28, 2.8f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
-    drawText(cx - 175, 72, 1.6f, "SU/GIU = scegli slot    Scrivi il nome    INVIO = salva    ESC = annulla",
-             0.6f, 0.6f, 0.6f);
-
-    // Box nome
-    const float bx = cx - 200, by = 100.0f;
-    drawRect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
-    drawRect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
-    std::string shown = m_textInput + "|";
-    drawText(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
-
-    const float startY = 148.0f;
-    const float rowH   = 38.0f;
-
-    for (int i = 0; i < UserPresets::MAX; ++i)
-    {
-        const float y   = startY + i * rowH;
-        const bool  sel = (i == m_presetSlot);
-        const MatchSettings* p = m_presets.get(i);
-
-        if (sel) drawRect(cx - 240, y - 4, 480, rowH - 4, 0.1f, 0.4f, 0.2f, 0.5f);
-
-        char buf[64];
-        if (p) std::snprintf(buf, sizeof(buf), "Slot %d: %s", i + 1, p->presetName.c_str());
-        else   std::snprintf(buf, sizeof(buf), "Slot %d: [vuoto]", i + 1);
-
-        drawText(cx - 220, y + 5, 1.8f, buf,
-                 sel ? 1.0f : 0.65f, sel ? 1.0f : 0.65f, sel ? 0.5f : 0.65f);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Render — ManagePresets
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::renderManagePresets() const
-{
-    const float W  = (float)m_w;
-    const float cx = W * 0.5f;
-
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 95, 28, 2.8f, "GESTIONE PRESET", 0.8f, 0.6f, 1.0f);
-
-    const float startY = 80.0f;
-    const float rowH   = 44.0f;
-
-    for (int i = 0; i < UserPresets::MAX; ++i)
-    {
-        const float y   = startY + i * rowH;
-        const bool  sel = (i == m_presetSlot);
-        const MatchSettings* p = m_presets.get(i);
-
-        if (sel) drawRect(cx - 290, y - 4, 580, rowH - 4, 0.2f, 0.15f, 0.4f, 0.55f);
-
-        char line1[80], line2[80];
-        if (p)
-        {
-            std::snprintf(line1, sizeof(line1), "Slot %d: %s", i + 1, p->presetName.c_str());
-            std::snprintf(line2, sizeof(line2),
-                "  T1:%d vite  T2:%d vite  AI-a:%d  AI-n:%d  HP:%.0f  Respawn:%.1fs",
-                p->team1Tickets, p->team2Tickets,
-                p->team1AiCount, p->team2AiCount,
-                p->playerHp, p->respawnDelay);
+            std::snprintf(keyBuf, sizeof(keyBuf), "[ premi un tasto... ]");
+            m_ui.rect(keyX - 8, y - 2, 230, 30, 0.4f, 0.2f, 0.05f, 0.7f);
+            m_ui.text(keyX, y + 6, 1.7f, keyBuf, 1.0f, 0.7f, 0.2f);
         }
         else
         {
-            std::snprintf(line1, sizeof(line1), "Slot %d: [vuoto]", i + 1);
-            line2[0] = '\0';
+            std::snprintf(keyBuf, sizeof(keyBuf), "%s",
+                          (keyName && keyName[0]) ? keyName : "—");
+            m_ui.rect(keyX - 8, y - 2, 230, 30, 0.12f, 0.12f, 0.15f, 0.8f);
+            m_ui.border(keyX - 8, y - 2, 230, 30, 0.3f, 0.35f, 0.45f);
+            m_ui.text(keyX, y + 6, 1.8f, keyBuf,
+                      sel ? 1.0f : 0.85f, sel ? 1.0f : 0.85f, sel ? 0.6f : 0.85f);
         }
-
-        float nameR = sel ? 1.0f : (p ? 0.85f : 0.35f);
-        float nameG = sel ? 0.85f : (p ? 0.85f : 0.35f);
-        float nameB = sel ? 1.0f  : (p ? 0.85f : 0.35f);
-        drawText(cx - 270, y + 3,  1.9f, line1, nameR, nameG, nameB);
-        if (p)
-            drawText(cx - 265, y + 22, 1.4f, line2, 0.55f, 0.7f, 0.55f);
     }
 
-    const float ly = startY + UserPresets::MAX * rowH + 16;
-    drawRect(0, ly - 6, W, 56, 0, 0, 0, 0.55f);
-    drawText(cx - 280, ly,      1.6f, "SU/GIU = naviga    INVIO = carica nelle impostazioni    ESC = indietro",
-             0.6f, 0.6f, 0.6f);
-    drawText(cx - 280, ly + 18, 1.6f, "R = rinomina    X o CANC = elimina",
-             0.8f, 0.5f, 0.5f);
-}
+    // Voce fissa: sparo (mouse, non rimappabile)
+    const float shootY = startY + count * rowH;
+    m_ui.rect(labelX - 12, shootY - 5, W - (labelX - 12) * 2, rowH - 4,
+              0.08f, 0.08f, 0.10f, 0.35f);
+    m_ui.text(labelX, shootY + 6, 1.9f, "Sparo", 0.5f, 0.5f, 0.5f);
+    m_ui.rect(keyX - 8, shootY - 2, 230, 30, 0.12f, 0.12f, 0.15f, 0.5f);
+    m_ui.text(keyX, shootY + 6, 1.8f, "Mouse Sinistro", 0.5f, 0.5f, 0.5f);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Render — RenamePreset
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::renderRenamePreset() const
-{
-    const float W  = (float)m_w;
-    const float cx = W * 0.5f;
-    const float H  = (float)m_h;
-
-    drawRect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 80, H * 0.35f - 40, 2.8f, "RINOMINA PRESET", 1.0f, 0.7f, 0.3f);
-
-    const MatchSettings* p = m_presets.get(m_presetSlot);
-    if (p)
+    const float ly = shootY + rowH + 12;
+    m_ui.rect(0, ly - 8, W, 64, 0, 0, 0, 0.55f);
+    if (m_awaitingKey)
     {
-        char info[64];
-        std::snprintf(info, sizeof(info), "Slot %d — nome attuale: %s",
-                      m_presetSlot + 1, p->presetName.c_str());
-        drawText(cx - 175, H * 0.35f, 1.7f, info, 0.7f, 0.7f, 0.7f);
+        m_ui.textCentered(cx, ly, 1.7f,
+                          "Premi il nuovo tasto da assegnare   (ESC = annulla)",
+                          1.0f, 0.7f, 0.2f);
     }
-
-    drawText(cx - 130, H * 0.35f + 28, 1.6f, "Scrivi il nuovo nome:", 0.75f, 0.75f, 0.75f);
-
-    const float bx = cx - 200, by = H * 0.35f + 55;
-    drawRect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
-    drawRect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
-    std::string shown = m_textInput + "|";
-    drawText(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
-
-    drawText(cx - 165, by + 46, 1.6f, "INVIO = conferma    ESC = annulla", 0.55f, 0.55f, 0.55f);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Render — LoadPreset
-// ─────────────────────────────────────────────────────────────────────────────
-
-void OptionsMenu::renderLoadPreset() const
-{
-    const float W  = (float)m_w;
-    const float cx = W * 0.5f;
-
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 85, 28, 2.8f, "CARICA PRESET", 0.3f, 0.7f, 1.0f);
-    drawText(cx - 165, 68, 1.6f, "SU/GIU = naviga    INVIO = carica    ESC = annulla",
-             0.6f, 0.6f, 0.6f);
-
-    const float startY = 104.0f;
-    const float rowH   = 44.0f;
-
-    for (int i = 0; i < UserPresets::MAX; ++i)
+    else
     {
-        const float y   = startY + i * rowH;
-        const bool  sel = (i == m_presetSlot);
-        const MatchSettings* p = m_presets.get(i);
-
-        if (sel) drawRect(cx - 290, y - 4, 580, rowH - 4, 0.1f, 0.25f, 0.5f, 0.55f);
-
-        char line1[80], line2[80];
-        if (p)
-        {
-            std::snprintf(line1, sizeof(line1), "Slot %d: %s", i + 1, p->presetName.c_str());
-            std::snprintf(line2, sizeof(line2),
-                "  T1:%d vite  T2:%d vite  AI-a:%d  AI-n:%d  HP:%.0f  Respawn:%.1fs",
-                p->team1Tickets, p->team2Tickets,
-                p->team1AiCount, p->team2AiCount,
-                p->playerHp, p->respawnDelay);
-        }
-        else
-        {
-            std::snprintf(line1, sizeof(line1), "Slot %d: [vuoto]", i + 1);
-            line2[0] = '\0';
-        }
-
-        drawText(cx - 270, y + 3,  1.9f, line1,
-                 sel ? 1.0f : (p ? 0.75f : 0.35f),
-                 sel ? 1.0f : (p ? 0.75f : 0.35f),
-                 sel ? 0.5f : (p ? 0.75f : 0.35f));
-        if (p)
-            drawText(cx - 265, y + 22, 1.4f, line2, 0.5f, 0.65f, 0.5f);
+        m_ui.textCentered(cx, ly, 1.6f,
+                          "SU/GIU = naviga   INVIO = rimappa tasto", 0.6f, 0.6f, 0.6f);
+        m_ui.textCentered(cx, ly + 20, 1.6f,
+                          "ESC = torna alle opzioni", 0.6f, 0.6f, 0.6f);
     }
 }
 

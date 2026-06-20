@@ -147,4 +147,13 @@ void Audio::playGameOver()
     enqueue(jingle);
 }
 
+
+void Audio::playOverheat()
+{
+    // Steam hiss: rumore con chirp discendente breve
+    const Buf hiss  = makeNoise(0.15f, 0.4f);
+    const Buf chirp = makeChirp(600.0f, 150.0f, 0.12f, 0.35f);
+    enqueue(mixBufs(hiss, chirp));
+}
+
 } // namespace mini

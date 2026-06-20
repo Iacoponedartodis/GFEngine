@@ -117,6 +117,8 @@ void Application::run()
     float    prevHp       = 100.0f;
     float    playerVelY   = 0.0f;
     bool     onGround     = true;
+    float    airVelX      = 0.0f;
+    float    airVelZ      = 0.0f;
     bool     stateChanged = false;
 
     float playerRespawnTimer = -1.0f;
@@ -124,6 +126,7 @@ void Application::run()
 
     Weapon weapon = makeBlasterRifle();
     weapon.reset();
+    bool wasOverheated = false;
 
     const glm::vec3 PHALF = playerHalf();
     constexpr float fixedDt = 1.0f / 60.0f;
@@ -189,8 +192,7 @@ void Application::run()
             {
                 if (gameState == ST_PREMATCH)
                     preMatchMenu.handleTextInput(ev.text.text);
-                else if (gameState == ST_OPTIONS)
-                    optMenu.handleTextInput(ev.text.text);
+                // OptionsMenu non usa text input (solo keybinding)
             }
 
             if (ev.type == SDL_KEYDOWN)
@@ -216,11 +218,9 @@ void Application::run()
                 // ── Menu opzioni (O) ─────────────────────────────────
                 else if (gameState == ST_OPTIONS)
                 {
-                    auto res = optMenu.handleKey(sc);
-                    if (res == OptionsMenu::Result::Confirmed || res == OptionsMenu::Result::Back)
+                    auto res = optMenu.handleKey(sc, input);
+                    if (res == OptionsMenu::Result::Back)
                     {
-                        if (res == OptionsMenu::Result::Confirmed)
-                            currentSettings = optMenu.getSettings();
                         gameState = prevState;
                         stateChanged = true;
                         if (gameState == ST_PLAY || gameState == ST_FREE)
@@ -243,7 +243,6 @@ void Application::run()
                         && (gameState == ST_FREE || gameState == ST_PAUSE))
                     {
                         prevState = gameState;
-                        optMenu.setSettings(currentSettings);
                         gameState = ST_OPTIONS;
                         stateChanged = true;
                         window.setMouseCaptured(false);
@@ -299,6 +298,11 @@ void Application::run()
             { conquestMode.update(world, fixedDt); accumulator -= fixedDt; }
             weapon.update(elapsed);
 
+            // Suono overheat (solo al momento in cui scatta)
+            if (weapon.overheated && !wasOverheated)
+                audio.playOverheat();
+            wasOverheated = weapon.overheated;
+
             // Respawn timer giocatore
             if (playerRespawnTimer > 0.0f)
             {
@@ -339,15 +343,43 @@ void Application::run()
         }
         else if (gameState == ST_PLAY && !playerIsDead)
         {
-            cam.processKeyboard(
-                input.isDown(Action::MoveForward), input.isDown(Action::MoveBack),
-                input.isDown(Action::MoveLeft),    input.isDown(Action::MoveRight),
-                false, false, elapsed);
-            cam.setPosition({cam.getPosition().x, prevPos.y, cam.getPosition().z});
+            glm::vec3 movePos = prevPos;
 
-            if (input.isDown(Action::Jump) && onGround)
-            { playerVelY = JUMP_IMPULSE; onGround = false; }
+            if (onGround)
+            {
+                // A terra: WASD controlla il movimento normalmente
+                cam.processKeyboard(
+                    input.isDown(Action::MoveForward), input.isDown(Action::MoveBack),
+                    input.isDown(Action::MoveLeft),    input.isDown(Action::MoveRight),
+                    false, false, elapsed);
+                cam.setPosition({cam.getPosition().x, prevPos.y, cam.getPosition().z});
+                movePos = cam.getPosition();
 
+                // Salva la velocità orizzontale corrente per il salto
+                if (elapsed > 0.0001f)
+                {
+                    airVelX = (movePos.x - prevPos.x) / elapsed;
+                    airVelZ = (movePos.z - prevPos.z) / elapsed;
+                }
+
+                // Salto
+                if (input.isDown(Action::Jump))
+                {
+                    playerVelY = JUMP_IMPULSE;
+                    onGround = false;
+                }
+            }
+            else
+            {
+                // In aria: mantiene la direzione del salto, niente WASD
+                // (la rotazione della telecamera resta attiva via processMouse)
+                movePos = {prevPos.x + airVelX * elapsed,
+                           prevPos.y,
+                           prevPos.z + airVelZ * elapsed};
+                cam.setPosition(movePos);
+            }
+
+            // Gravità + sliding
             playerVelY += GRAVITY * elapsed;
             const glm::vec3 target = {cam.getPosition().x,
                                       cam.getPosition().y + playerVelY * elapsed,
@@ -355,7 +387,10 @@ void Application::run()
             const glm::vec3 final_ = physics::slideMoveWithStepUp(
                 prevPos, target, PHALF, world, STEP_HEIGHT);
             if (playerVelY < 0.0f && final_.y > target.y + 0.001f)
-            { playerVelY = 0.0f; onGround = true; }
+            {
+                playerVelY = 0.0f;
+                onGround = true;
+            }
             cam.setPosition(final_);
         }
 
@@ -397,42 +432,57 @@ void Application::run()
                 }
             }
 
-            // Shooting
-            if (!playerIsDead && input.isDown(Action::Shoot))
+            // Shooting — crea proiettili visibili (hold-to-fire)
+            if (!playerIsDead && input.isDown(Action::Shoot) && window.isMouseCaptured())
             {
                 if (weapon.tryFire())
                 {
-                    const glm::vec3 origin   = cam.getPosition();
-                    const glm::vec3 dir      = cam.getForward();
-                    const float     maxRange = weapon.bulletSpeed * weapon.bulletLifetime;
+                    audio.playShoot();
+                    const glm::vec3 org = cam.getPosition();
+                    const glm::vec3 fwd = cam.getForward();
 
-                    for (EntityId id : world.getEntities())
-                    {
-                        if (id == playerEntity) continue;
-                        const auto* tm = world.getTeam(id);
-                        if (!tm || tm->teamId == 1) continue;
-                        const auto* tr = world.getTransform(id);
-                        if (!tr) continue;
-
-                        glm::vec3 toTarget = glm::vec3(tr->x, tr->y, tr->z) - origin;
-                        float dist = glm::length(toTarget);
-                        if (dist < 0.1f || dist > maxRange) continue;
-
-                        glm::vec3 toNorm = toTarget / dist;
-                        if (glm::dot(dir, toNorm) > 0.97f)
-                        {
-                            auto* th = world.getHealth(id);
-                            if (th && th->current > 0.0f)
-                            {
-                                th->current -= weapon.bulletDamage;
-                                std::cout << "[Shoot] Colpito nemico " << id
-                                          << " — HP: " << th->current
-                                          << "/" << th->max << std::endl;
-                                break;
-                            }
-                        }
-                    }
+                    EntityId b = world.createEntity();
+                    world.addTransform(b, TransformComponent{
+                        .x = org.x, .y = org.y, .z = org.z,
+                        .sx = weapon.bulletScale, .sy = weapon.bulletScale, .sz = weapon.bulletScale
+                    });
+                    world.addVelocity(b, {
+                        fwd.x * weapon.bulletSpeed,
+                        fwd.y * weapon.bulletSpeed,
+                        fwd.z * weapon.bulletSpeed
+                    });
+                    world.addTeam(b, {1});
+                    world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1});
+                    world.addMeshRenderer(b, {mesh.get(), nullptr,
+                                              weapon.bulletR, weapon.bulletG, weapon.bulletB});
                 }
+            }
+        }
+
+        // ── Win condition ─────────────────────────────────────────────
+        if (gameState == ST_PLAY
+            && world.getTickCount() > 10
+            && conquestMode.getTeam2Tickets() <= 0
+            && !anyEnemyAlive(world))
+        {
+            gameState = ST_WIN;
+            stateChanged = true;
+            window.setMouseCaptured(false);
+            audio.playVictory();
+            std::cout << "\n[Game] VITTORIA! Rinforzi nemici esauriti." << std::endl;
+        }
+
+        // ── Contatori vivi ────────────────────────────────────────────────
+        int aliveAllies = 0, aliveEnemies = 0;
+        if (gameState == ST_PLAY)
+        {
+            for (EntityId id : world.getEntities())
+            {
+                const auto* tm = world.getTeam(id);
+                const auto* hp = world.getHealth(id);
+                if (!tm || !hp || hp->current <= 0 || world.getBullet(id)) continue;
+                if (tm->teamId == 1) ++aliveAllies;
+                else if (tm->teamId == 2) ++aliveEnemies;
             }
         }
 
@@ -452,7 +502,7 @@ void Application::run()
 
         if (gameState == ST_OPTIONS)
         {
-            optMenu.render();
+            optMenu.render(input);
         }
         else if (gameState == ST_PREMATCH)
         {
@@ -462,11 +512,11 @@ void Application::run()
         {
             hud.render(prevHp, currentSettings.playerHp, gameState,
                        weapon.heat, weapon.overheated, weapon.name,
-                       conquestMode.getTeam1Tickets(), conquestMode.getTeam2Tickets());
+                       conquestMode.getTeam1Tickets(), conquestMode.getTeam2Tickets(),
+                       aliveAllies, aliveEnemies);
         }
 
         renderer.endFrame();
     } // fine while (m_running && window.isOpen())
 } // fine Application::run   
 } // namespace mini
-       

@@ -1,7 +1,5 @@
 #include "mini/render/PreMatchMenu.hpp"
-#include "mini/platform/OpenGL.hpp"
 
-#include <stb_easy_font.h>
 #include <SDL2/SDL.h>
 #include <cstdio>
 #include <algorithm>
@@ -12,7 +10,7 @@ namespace mini
 // ─────────────────────────────────────────────────────────────────────────────
 
 PreMatchMenu::PreMatchMenu(int screenW, int screenH)
-    : m_w(screenW), m_h(screenH)
+    : m_ui(screenW, screenH)
 {
     buildRows();
     while ((int)m_presets.list.size() < UserPresets::MAX)
@@ -251,62 +249,12 @@ PreMatchMenu::Result PreMatchMenu::handleLoadPreset(int sc)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OpenGL 2D helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-void PreMatchMenu::begin2D() const
-{
-    glUseProgram(0);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
-    glOrtho(0.0, m_w, m_h, 0.0, -1.0, 1.0);
-    glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity();
-}
-
-void PreMatchMenu::end2D() const
-{
-    glMatrixMode(GL_MODELVIEW);  glPopMatrix();
-    glMatrixMode(GL_PROJECTION); glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-}
-
-void PreMatchMenu::drawRect(float x, float y, float w, float h,
-                             float r, float g, float b, float a) const
-{
-    glColor4f(r, g, b, a);
-    glBegin(GL_QUADS);
-    glVertex2f(x,   y);   glVertex2f(x+w, y);
-    glVertex2f(x+w, y+h); glVertex2f(x,   y+h);
-    glEnd();
-}
-
-void PreMatchMenu::drawText(float x, float y, float scale, const char* text,
-                             float r, float g, float b) const
-{
-    static char buf[131072];
-    int quads = stb_easy_font_print(0, 0, const_cast<char*>(text), nullptr, buf, sizeof(buf));
-    glPushMatrix();
-    glTranslatef(x, y, 0.0f);
-    glScalef(scale, scale, 1.0f);
-    glColor3f(r, g, b);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(3, GL_FLOAT, 16, buf);
-    glDrawArrays(GL_QUADS, 0, quads * 4);
-    glDisableClientState(GL_VERTEX_ARRAY);
-    glPopMatrix();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Render dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
 void PreMatchMenu::render() const
 {
-    begin2D();
+    m_ui.begin();
     switch (m_page)
     {
     case Page::Root:          renderRoot();          break;
@@ -316,7 +264,7 @@ void PreMatchMenu::render() const
     case Page::RenamePreset:  renderRenamePreset();  break;
     case Page::LoadPreset:    renderLoadPreset();    break;
     }
-    end2D();
+    m_ui.end();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -325,13 +273,13 @@ void PreMatchMenu::render() const
 
 void PreMatchMenu::renderRoot() const
 {
-    const float W  = (float)m_w;
-    const float H  = (float)m_h;
+    const float W  = (float)m_ui.width();
+    const float H  = (float)m_ui.height();
     const float cx = W * 0.5f;
     const float cy = H * 0.5f;
 
-    drawRect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.80f);
-    drawText(cx - 100, cy - 120, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
+    m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.80f);
+    m_ui.text(cx - 100, cy - 120, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
 
     struct Item { const char* label; float r, g, b; };
     const Item items[] = {
@@ -350,15 +298,15 @@ void PreMatchMenu::renderRoot() const
 
         float bx = cx - 220, bw = 440, bh = 44;
         if (sel)
-            drawRect(bx, y - 4, bw, bh, 0.12f, 0.28f, 0.50f, 0.65f);
+            m_ui.rect(bx, y - 4, bw, bh, 0.12f, 0.28f, 0.50f, 0.65f);
         else
-            drawRect(bx, y - 4, bw, bh, 0.08f, 0.08f, 0.10f, 0.45f);
+            m_ui.rect(bx, y - 4, bw, bh, 0.08f, 0.08f, 0.10f, 0.45f);
 
         // Bordo sottile
-        drawRect(bx,          y - 4,     bw, 1,   0.25f, 0.35f, 0.55f);
-        drawRect(bx,          y + bh - 5, bw, 1,  0.25f, 0.35f, 0.55f);
-        drawRect(bx,          y - 4,     1, bh,   0.25f, 0.35f, 0.55f);
-        drawRect(bx + bw - 1, y - 4,     1, bh,   0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx,          y - 4,     bw, 1,   0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx,          y + bh - 5, bw, 1,  0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx,          y - 4,     1, bh,   0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx + bw - 1, y - 4,     1, bh,   0.25f, 0.35f, 0.55f);
 
         float scale = sel ? 2.4f : 2.0f;
         float ir = sel ? items[i].r : items[i].r * 0.65f;
@@ -367,10 +315,10 @@ void PreMatchMenu::renderRoot() const
 
         // Centra il testo nel box (approssimazione)
         float tx = cx - (float)strlen(items[i].label) * scale * 4.0f;
-        drawText(tx, y + 10, scale, items[i].label, ir, ig, ib);
+        m_ui.text(tx, y + 10, scale, items[i].label, ir, ig, ib);
     }
 
-    drawText(cx - 145, startY + N * rowH + 24, 1.7f,
+    m_ui.text(cx - 145, startY + N * rowH + 24, 1.7f,
              "SU/GIU = naviga   INVIO = seleziona   ESC = indietro",
              0.50f, 0.50f, 0.50f);
 }
@@ -381,11 +329,11 @@ void PreMatchMenu::renderRoot() const
 
 void PreMatchMenu::renderRules() const
 {
-    const float W  = (float)m_w;
+    const float W  = (float)m_ui.width();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.82f);
-    drawText(cx - 115, 28, 3.0f, "REGOLE DI GIOCO", 0.95f, 0.85f, 0.3f);
+    m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.82f);
+    m_ui.text(cx - 115, 28, 3.0f, "REGOLE DI GIOCO", 0.95f, 0.85f, 0.3f);
 
     const float startY = 95.0f;
     const float rowH   = 40.0f;
@@ -401,40 +349,40 @@ void PreMatchMenu::renderRules() const
         const bool  sel = (i == m_rulesRow);
 
         if (sel)
-            drawRect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
+            m_ui.rect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
                      0.15f, 0.32f, 0.55f, 0.55f);
 
         float lr = sel ? 1.0f  : 0.80f;
         float lg = sel ? 0.95f : 0.80f;
         float lb = sel ? 0.50f : 0.80f;
-        drawText(labelX, y + 5, 1.8f, row.label, lr, lg, lb);
+        m_ui.text(labelX, y + 5, 1.8f, row.label, lr, lg, lb);
 
         char valBuf[32];
         float curF = 0.0f;
         if (row.isInt) { std::snprintf(valBuf, sizeof(valBuf), "%d",   *row.iVal); curF = (float)*row.iVal; }
         else           { std::snprintf(valBuf, sizeof(valBuf), "%.1f", *row.fVal); curF = *row.fVal; }
 
-        drawText(valueX, y + 5, 1.9f, valBuf,
+        m_ui.text(valueX, y + 5, 1.9f, valBuf,
                  sel ? 1.0f : 0.90f, sel ? 1.0f : 0.90f, sel ? 0.4f : 0.90f);
 
         float pct = (row.maxV > row.minV) ? (curF - row.minV) / (row.maxV - row.minV) : 0.0f;
         pct = std::clamp(pct, 0.0f, 1.0f);
-        drawRect(barX, y + 10, barW,       10, 0.12f, 0.12f, 0.12f);
-        drawRect(barX, y + 10, barW * pct, 10,
+        m_ui.rect(barX, y + 10, barW,       10, 0.12f, 0.12f, 0.12f);
+        m_ui.rect(barX, y + 10, barW * pct, 10,
                  sel ? 0.3f : 0.2f, sel ? 0.75f : 0.5f, sel ? 1.0f : 0.7f);
 
         if (sel)
         {
-            drawText(valueX - 24, y + 5, 1.9f, "<", 1.0f, 0.8f, 0.2f);
-            drawText(valueX + 55, y + 5, 1.9f, ">", 1.0f, 0.8f, 0.2f);
+            m_ui.text(valueX - 24, y + 5, 1.9f, "<", 1.0f, 0.8f, 0.2f);
+            m_ui.text(valueX + 55, y + 5, 1.9f, ">", 1.0f, 0.8f, 0.2f);
         }
     }
 
     const float ly = startY + m_rows.size() * rowH + 22;
-    drawRect(0, ly - 8, W, 72, 0, 0, 0, 0.55f);
-    drawText(cx - 290, ly,      1.6f, "SU/GIU = naviga   SX/DX = modifica valore",            0.6f, 0.6f, 0.6f);
-    drawText(cx - 290, ly + 18, 1.6f, "ESC = torna al menu partita",                           0.6f, 0.6f, 0.6f);
-    drawText(cx - 290, ly + 36, 1.6f, "F5 = salva preset   F6 = carica preset   F7 = gestisci preset",
+    m_ui.rect(0, ly - 8, W, 72, 0, 0, 0, 0.55f);
+    m_ui.text(cx - 290, ly,      1.6f, "SU/GIU = naviga   SX/DX = modifica valore",            0.6f, 0.6f, 0.6f);
+    m_ui.text(cx - 290, ly + 18, 1.6f, "ESC = torna al menu partita",                           0.6f, 0.6f, 0.6f);
+    m_ui.text(cx - 290, ly + 36, 1.6f, "F5 = salva preset   F6 = carica preset   F7 = gestisci preset",
              0.5f, 0.85f, 1.0f);
 }
 
@@ -444,20 +392,20 @@ void PreMatchMenu::renderRules() const
 
 void PreMatchMenu::renderSavePreset() const
 {
-    const float W  = (float)m_w;
+    const float W  = (float)m_ui.width();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 80, 28, 2.8f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
-    drawText(cx - 190, 68, 1.6f,
+    m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.88f);
+    m_ui.text(cx - 80, 28, 2.8f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
+    m_ui.text(cx - 190, 68, 1.6f,
              "SU/GIU = slot   Scrivi nome   INVIO = salva   ESC = annulla",
              0.6f, 0.6f, 0.6f);
 
     const float bx = cx - 200, by = 98.0f;
-    drawRect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
-    drawRect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
+    m_ui.rect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
+    m_ui.rect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
     std::string shown = m_textInput + "|";
-    drawText(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
+    m_ui.text(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
 
     const float startY = 146.0f, rowH = 38.0f;
     for (int i = 0; i < UserPresets::MAX; ++i)
@@ -465,11 +413,11 @@ void PreMatchMenu::renderSavePreset() const
         const float y   = startY + i * rowH;
         const bool  sel = (i == m_presetSlot);
         const MatchSettings* p = m_presets.get(i);
-        if (sel) drawRect(cx - 240, y - 4, 480, rowH - 4, 0.1f, 0.4f, 0.2f, 0.5f);
+        if (sel) m_ui.rect(cx - 240, y - 4, 480, rowH - 4, 0.1f, 0.4f, 0.2f, 0.5f);
         char buf[64];
         if (p) std::snprintf(buf, sizeof(buf), "Slot %d: %s", i + 1, p->presetName.c_str());
         else   std::snprintf(buf, sizeof(buf), "Slot %d: [vuoto]", i + 1);
-        drawText(cx - 220, y + 5, 1.8f, buf,
+        m_ui.text(cx - 220, y + 5, 1.8f, buf,
                  sel ? 1.0f : 0.65f, sel ? 1.0f : 0.65f, sel ? 0.5f : 0.65f);
     }
 }
@@ -480,11 +428,11 @@ void PreMatchMenu::renderSavePreset() const
 
 void PreMatchMenu::renderManagePresets() const
 {
-    const float W  = (float)m_w;
+    const float W  = (float)m_ui.width();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 95, 28, 2.8f, "GESTIONE PRESET", 0.8f, 0.6f, 1.0f);
+    m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.88f);
+    m_ui.text(cx - 95, 28, 2.8f, "GESTIONE PRESET", 0.8f, 0.6f, 1.0f);
 
     const float startY = 80.0f, rowH = 44.0f;
     for (int i = 0; i < UserPresets::MAX; ++i)
@@ -492,7 +440,7 @@ void PreMatchMenu::renderManagePresets() const
         const float y   = startY + i * rowH;
         const bool  sel = (i == m_presetSlot);
         const MatchSettings* p = m_presets.get(i);
-        if (sel) drawRect(cx - 290, y - 4, 580, rowH - 4, 0.2f, 0.15f, 0.4f, 0.55f);
+        if (sel) m_ui.rect(cx - 290, y - 4, 580, rowH - 4, 0.2f, 0.15f, 0.4f, 0.55f);
 
         char line1[80], line2[80];
         if (p)
@@ -506,17 +454,17 @@ void PreMatchMenu::renderManagePresets() const
         }
         else { std::snprintf(line1, sizeof(line1), "Slot %d: [vuoto]", i + 1); line2[0] = '\0'; }
 
-        drawText(cx - 270, y + 3,  1.9f, line1,
+        m_ui.text(cx - 270, y + 3,  1.9f, line1,
                  sel ? 1.0f : (p ? 0.85f : 0.35f),
                  sel ? 0.85f : (p ? 0.85f : 0.35f),
                  sel ? 1.0f  : (p ? 0.85f : 0.35f));
-        if (p) drawText(cx - 265, y + 22, 1.4f, line2, 0.55f, 0.7f, 0.55f);
+        if (p) m_ui.text(cx - 265, y + 22, 1.4f, line2, 0.55f, 0.7f, 0.55f);
     }
 
     const float ly = startY + UserPresets::MAX * rowH + 16;
-    drawRect(0, ly - 6, W, 56, 0, 0, 0, 0.55f);
-    drawText(cx - 280, ly,      1.6f, "INVIO = carica nelle impostazioni   ESC = indietro", 0.6f, 0.6f, 0.6f);
-    drawText(cx - 280, ly + 18, 1.6f, "R = rinomina   X o CANC = elimina", 0.8f, 0.5f, 0.5f);
+    m_ui.rect(0, ly - 6, W, 56, 0, 0, 0, 0.55f);
+    m_ui.text(cx - 280, ly,      1.6f, "INVIO = carica nelle impostazioni   ESC = indietro", 0.6f, 0.6f, 0.6f);
+    m_ui.text(cx - 280, ly + 18, 1.6f, "R = rinomina   X o CANC = elimina", 0.8f, 0.5f, 0.5f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -525,12 +473,12 @@ void PreMatchMenu::renderManagePresets() const
 
 void PreMatchMenu::renderRenamePreset() const
 {
-    const float W  = (float)m_w;
-    const float H  = (float)m_h;
+    const float W  = (float)m_ui.width();
+    const float H  = (float)m_ui.height();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 95, H * 0.35f - 40, 2.8f, "RINOMINA PRESET", 1.0f, 0.7f, 0.3f);
+    m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
+    m_ui.text(cx - 95, H * 0.35f - 40, 2.8f, "RINOMINA PRESET", 1.0f, 0.7f, 0.3f);
 
     const MatchSettings* p = m_presets.get(m_presetSlot);
     if (p)
@@ -538,16 +486,16 @@ void PreMatchMenu::renderRenamePreset() const
         char info[64];
         std::snprintf(info, sizeof(info), "Slot %d — nome attuale: %s",
                       m_presetSlot + 1, p->presetName.c_str());
-        drawText(cx - 175, H * 0.35f, 1.7f, info, 0.7f, 0.7f, 0.7f);
+        m_ui.text(cx - 175, H * 0.35f, 1.7f, info, 0.7f, 0.7f, 0.7f);
     }
-    drawText(cx - 130, H * 0.35f + 28, 1.6f, "Scrivi il nuovo nome:", 0.75f, 0.75f, 0.75f);
+    m_ui.text(cx - 130, H * 0.35f + 28, 1.6f, "Scrivi il nuovo nome:", 0.75f, 0.75f, 0.75f);
 
     const float bx = cx - 200, by = H * 0.35f + 55;
-    drawRect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
-    drawRect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
+    m_ui.rect(bx - 4, by - 4, 408, 32, 0.1f, 0.1f, 0.1f);
+    m_ui.rect(bx - 2, by - 2, 404, 28, 0.18f, 0.18f, 0.22f);
     std::string shown = m_textInput + "|";
-    drawText(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
-    drawText(cx - 165, by + 46, 1.6f, "INVIO = conferma   ESC = annulla", 0.55f, 0.55f, 0.55f);
+    m_ui.text(bx + 4, by + 4, 1.9f, shown.c_str(), 1.0f, 1.0f, 0.6f);
+    m_ui.text(cx - 165, by + 46, 1.6f, "INVIO = conferma   ESC = annulla", 0.55f, 0.55f, 0.55f);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -556,12 +504,12 @@ void PreMatchMenu::renderRenamePreset() const
 
 void PreMatchMenu::renderLoadPreset() const
 {
-    const float W  = (float)m_w;
+    const float W  = (float)m_ui.width();
     const float cx = W * 0.5f;
 
-    drawRect(0, 0, W, (float)m_h, 0.0f, 0.0f, 0.0f, 0.88f);
-    drawText(cx - 85, 28, 2.8f, "CARICA PRESET", 0.3f, 0.7f, 1.0f);
-    drawText(cx - 165, 68, 1.6f, "SU/GIU = naviga   INVIO = carica   ESC = annulla",
+    m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.88f);
+    m_ui.text(cx - 85, 28, 2.8f, "CARICA PRESET", 0.3f, 0.7f, 1.0f);
+    m_ui.text(cx - 165, 68, 1.6f, "SU/GIU = naviga   INVIO = carica   ESC = annulla",
              0.6f, 0.6f, 0.6f);
 
     const float startY = 104.0f, rowH = 44.0f;
@@ -570,7 +518,7 @@ void PreMatchMenu::renderLoadPreset() const
         const float y   = startY + i * rowH;
         const bool  sel = (i == m_presetSlot);
         const MatchSettings* p = m_presets.get(i);
-        if (sel) drawRect(cx - 290, y - 4, 580, rowH - 4, 0.1f, 0.25f, 0.5f, 0.55f);
+        if (sel) m_ui.rect(cx - 290, y - 4, 580, rowH - 4, 0.1f, 0.25f, 0.5f, 0.55f);
 
         char line1[80], line2[80];
         if (p)
@@ -584,11 +532,11 @@ void PreMatchMenu::renderLoadPreset() const
         }
         else { std::snprintf(line1, sizeof(line1), "Slot %d: [vuoto]", i + 1); line2[0] = '\0'; }
 
-        drawText(cx - 270, y + 3,  1.9f, line1,
+        m_ui.text(cx - 270, y + 3,  1.9f, line1,
                  sel ? 1.0f : (p ? 0.75f : 0.35f),
                  sel ? 1.0f : (p ? 0.75f : 0.35f),
                  sel ? 0.5f : (p ? 0.75f : 0.35f));
-        if (p) drawText(cx - 265, y + 22, 1.4f, line2, 0.5f, 0.65f, 0.5f);
+        if (p) m_ui.text(cx - 265, y + 22, 1.4f, line2, 0.5f, 0.65f, 0.5f);
     }
 }
 

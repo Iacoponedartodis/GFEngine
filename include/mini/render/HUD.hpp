@@ -12,7 +12,8 @@ public:
     void render(float playerHp, float playerMaxHp, int state,
                 float weaponHeat = 0.0f, bool overheated = false,
                 const char* weaponName = nullptr,
-                int team1Tickets = -1, int team2Tickets = -1);
+                int team1Tickets = -1, int team2Tickets = -1,
+                int aliveAllies = 0, int aliveEnemies = 0);
 
 private:
     int m_w, m_h;

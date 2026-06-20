@@ -21,7 +21,8 @@ public:
     void playShoot();      // giocatore spara   — chirp discendente
     void playHit();        // giocatore colpito  — impatto basso + rumore
     void playVictory();    // vittoria           — arpeggio ascendente
-    void playGameOver();   // sconfitta          — accordo discendente
+    void playGameOver();   // sconfitta          
+    void playOverheat();   // arma surriscaldata  — accordo discendente
 
 private:
     SDL_AudioDeviceID m_device = 0;

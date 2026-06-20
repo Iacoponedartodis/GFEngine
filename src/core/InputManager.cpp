@@ -32,6 +32,10 @@ void InputManager::update()
     // Mouse delta
     SDL_GetRelativeMouseState(&m_mdx, &m_mdy);
 
+    // Mouse hold state
+    const Uint32 mb = SDL_GetMouseState(nullptr, nullptr);
+    m_mouseHeld = (mb & SDL_BUTTON_LMASK) != 0;
+
     // Reset eventi discreti
     m_shootClicked = false;
 }
@@ -44,6 +48,9 @@ void InputManager::processEvent(const SDL_Event& event)
 
 bool InputManager::isDown(Action a) const
 {
+    // Shoot usa il mouse sinistro (non lo scancode keyboard)
+    if (a == Action::Shoot) return m_mouseHeld;
+
     auto it = m_bindings.find((int)a);
     if (it == m_bindings.end() || it->second == SDL_SCANCODE_UNKNOWN) return false;
     return m_keyState[it->second] != 0;
@@ -66,6 +73,52 @@ const char* InputManager::getKeyName(Action a) const
     auto it = m_bindings.find((int)a);
     if (it == m_bindings.end()) return "???";
     return SDL_GetScancodeName(it->second);
+}
+
+SDL_Scancode InputManager::getScancode(Action a) const
+{
+    auto it = m_bindings.find((int)a);
+    if (it == m_bindings.end()) return SDL_SCANCODE_UNKNOWN;
+    return it->second;
+}
+
+const char* InputManager::actionName(Action a)
+{
+    switch (a)
+    {
+        case Action::MoveForward: return "Avanti";
+        case Action::MoveBack:    return "Indietro";
+        case Action::MoveLeft:    return "Sinistra";
+        case Action::MoveRight:   return "Destra";
+        case Action::Jump:        return "Salto";
+        case Action::Shoot:       return "Sparo (mouse)";
+        case Action::Reload:      return "Ricarica";
+        case Action::Pause:       return "Pausa";
+        case Action::Restart:     return "Riavvia";
+        case Action::FreeRoam:    return "Volo libero";
+        case Action::StartGame:   return "Avvia/Conferma";
+        case Action::ToggleMouse: return "Cattura mouse";
+        case Action::Quit:        return "Esci";
+        default:                  return "???";
+    }
+}
+
+// Azioni rimappabili: escludiamo Shoot (mouse), Quit/Pause (ESC riservato),
+// StartGame (INVIO riservato per i menu). L'utente puo' rimappare il resto.
+static const Action s_rebindable[] = {
+    Action::MoveForward, Action::MoveBack, Action::MoveLeft, Action::MoveRight,
+    Action::Jump, Action::Reload, Action::FreeRoam, Action::ToggleMouse
+};
+
+int InputManager::rebindableCount()
+{
+    return (int)(sizeof(s_rebindable) / sizeof(s_rebindable[0]));
+}
+
+Action InputManager::rebindableAt(int index)
+{
+    if (index < 0 || index >= rebindableCount()) return Action::MoveForward;
+    return s_rebindable[index];
 }
 
 } // namespace mini
