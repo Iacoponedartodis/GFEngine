@@ -1,0 +1,10 @@
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\SDL2-SUBBUILD\CMAKEFILES\5B0257D788728D722E1C595A6141E0E8\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/sdl2-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

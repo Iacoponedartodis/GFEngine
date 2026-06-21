@@ -1,0 +1,150 @@
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-MKDIR.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -Dcfgdir=/Debug -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/tmp/tinyobjloader-populate-mkdirs.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-mkdir
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-DOWNLOAD.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/tmp/tinyobjloader-populate-gitclone.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-download
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-UPDATE.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -Dcan_fetch=YES -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/tmp/tinyobjloader-populate-gitupdate.cmake
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-PATCH.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-patch
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-CONFIGURE.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-configure
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-BUILD.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-build
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-INSTALL.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-install
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\76DC64574A9B67A38D7363263BC2DE70\TINYOBJLOADER-POPULATE-TEST.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-test
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\DE58110FBEFC6D9FA5C1D8941BA91787\TINYOBJLOADER-POPULATE-COMPLETE.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/Debug
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/Debug/tinyobjloader-populate-complete
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/tinyobjloader-populate-prefix/src/tinyobjloader-populate-stamp/Debug/tinyobjloader-populate-done
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKEFILES\E10AE1D161E28684F32FF568FDC58E15\TINYOBJLOADER-POPULATE.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYOBJLOADER-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild --check-stamp-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

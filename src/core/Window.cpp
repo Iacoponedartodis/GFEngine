@@ -81,6 +81,24 @@ Window::~Window()
 }
 
 void Window::swapBuffers()     { SDL_GL_SwapWindow(m_window); }
+
+void Window::toggleFullscreen()
+{
+    m_fullscreen = !m_fullscreen;
+    // SDL_WINDOW_FULLSCREEN_DESKTOP = borderless windowed che rispetta la taskbar
+    SDL_SetWindowFullscreen(m_window,
+        m_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+
+    if (!m_fullscreen)
+    {
+        // Ripristina dimensioni normali centrate
+        SDL_SetWindowSize(m_window, m_width, m_height);
+        SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+}
+
+bool Window::isFullscreen() const { return m_fullscreen; }
+
 void Window::close()           { m_open = false; }
 bool Window::isOpen()          const { return m_open; }
 bool Window::isMouseCaptured() const { return m_mouseCaptured; }

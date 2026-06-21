@@ -5,17 +5,12 @@
 #include <glm/glm.hpp>
 #include <iostream>
 #include <vector>
-#include <string>
+#include <cmath>
 
 namespace mini
 {
 
-// ── AABB zone hit test ────────────────────────────────────────────────────
-// Testa se il punto 'p' (posizione proiettile) si trova dentro la zona
-// 'zone' centrata su 'entityPos'.
-static bool pointInZone(const glm::vec3& p,
-                        const glm::vec3& entityPos,
-                        const HitZone& zone)
+static bool pointInZone(const glm::vec3& p, const glm::vec3& entityPos, const HitZone& zone)
 {
     const glm::vec3 center = entityPos + zone.offset;
     return (std::abs(p.x - center.x) <= zone.halfExtents.x &&
@@ -23,41 +18,41 @@ static bool pointInZone(const glm::vec3& p,
             std::abs(p.z - center.z) <= zone.halfExtents.z);
 }
 
-// ── Hit test completo: hitbox a zone o fallback sferico ──────────────────
-struct HitResult
-{
-    bool  hit             = false;
-    float damageMultiplier = 1.0f;
-    std::string zoneName; // vuoto = hit fallback
-};
+struct HitResult { bool hit = false; float mult = 1.0f; std::string zone; };
 
 static HitResult testHit(const glm::vec3& bulletPos,
                           const glm::vec3& entityPos,
                           const HitboxComponent* hb)
 {
+    // ── 1. Broad sphere test (O(1) early-out) ──────────────────────────
+    const glm::vec3 d = entityPos - bulletPos;
+    const float distSq = d.x*d.x + d.y*d.y + d.z*d.z;
+    const float broadR = 1.2f; // leggermente più grande del corpo
+    if (distSq >= broadR * broadR) return {false, 1.0f, ""};
+
+    // ── 2. Zone test se disponibile ────────────────────────────────────
     if (hb && hb->profile && !hb->profile->zones.empty())
     {
-        // Prova tutte le zone: la prima che contiene il punto è quella colpita
         for (const auto& zone : hb->profile->zones)
         {
             if (pointInZone(bulletPos, entityPos, zone))
-            {
                 return {true, zone.damageMultiplier, zone.name};
-            }
         }
+        // Nessuna zona colpita → usa fallback sferico con raggio ridotto
+        // (il broad test è già passato: il proiettile è vicino ma non in zona)
+        const float fallbackR = 0.7f;
+        if (distSq < fallbackR * fallbackR)
+            return {true, 0.5f, "glance"}; // colpo di striscio
         return {false, 1.0f, ""};
     }
 
-    // Fallback: sfera di raggio k_hitRadius
-    const glm::vec3 d = entityPos - bulletPos;
-    const float distSq = d.x*d.x + d.y*d.y + d.z*d.z;
+    // ── 3. Fallback sferico puro (nessun profilo hitbox) ───────────────
     if (distSq < CombatSystem::k_hitRadius * CombatSystem::k_hitRadius)
-        return {true, 1.0f, "fallback"};
+        return {true, 1.0f, ""};
 
     return {false, 1.0f, ""};
 }
 
-// ── Update ────────────────────────────────────────────────────────────────
 void CombatSystem::update(World& world, float dt)
 {
     std::vector<EntityId> toDestroy;
@@ -69,63 +64,44 @@ void CombatSystem::update(World& world, float dt)
         if (!bullet) continue;
 
         bullet->lifetime -= dt;
-        if (bullet->lifetime <= 0.0f)
-        { toDestroy.push_back(bid); continue; }
+        if (bullet->lifetime <= 0.0f) { toDestroy.push_back(bid); continue; }
 
         auto* bt = world.getTransform(bid);
         if (!bt) continue;
-
-        const glm::vec3 bulletPos = {bt->x, bt->y, bt->z};
+        const glm::vec3 bPos = {bt->x, bt->y, bt->z};
 
         for (EntityId eid : entities)
         {
-            if (eid == bid) continue;
-            if (world.getBullet(eid)) continue;
-
+            if (eid == bid || world.getBullet(eid)) continue;
             auto* team = world.getTeam(eid);
             if (!team || team->teamId == bullet->ownerTeam) continue;
-
             auto* et = world.getTransform(eid);
             auto* eh = world.getHealth(eid);
             if (!et || !eh || eh->current <= 0.0f) continue;
 
-            const glm::vec3 entityPos = {et->x, et->y, et->z};
-            const auto*     hb        = world.getHitbox(eid);
-
-            auto result = testHit(bulletPos, entityPos, hb);
+            const glm::vec3 ePos = {et->x, et->y, et->z};
+            const auto* hb = world.getHitbox(eid);
+            auto result = testHit(bPos, ePos, hb);
             if (!result.hit) continue;
 
-            // Danno con moltiplicatore zona
-            const float finalDamage = bullet->damage * result.damageMultiplier;
-            eh->current -= finalDamage;
+            const float dmg = bullet->damage * result.mult;
+            eh->current -= dmg;
 
-            if (!result.zoneName.empty() && result.zoneName != "fallback")
-            {
-                std::cout << "[Combat] Colpito: " << result.zoneName
-                          << " x" << result.damageMultiplier
-                          << " — danno: " << (int)finalDamage
-                          << " | HP: " << (int)eh->current
-                          << "/" << (int)eh->max << std::endl;
-            }
+            if (!result.zone.empty() && result.zone != "glance")
+                std::cout << "[Combat] " << result.zone << " x" << result.mult
+                          << " — danno: " << (int)dmg
+                          << " HP: " << (int)eh->current << "/" << (int)eh->max << "\n";
             else
-            {
                 std::cout << "[Combat] Colpito! HP: "
-                          << (int)eh->current << "/" << (int)eh->max << std::endl;
-            }
+                          << (int)eh->current << "/" << (int)eh->max << "\n";
 
             toDestroy.push_back(bid);
-
             if (eh->current <= 0.0f)
-            {
-                std::cout << "[Combat] Bersaglio eliminato!" << std::endl;
-                toDestroy.push_back(eid);
-            }
+            { std::cout << "[Combat] Eliminato!\n"; toDestroy.push_back(eid); }
             break;
         }
     }
-
-    for (EntityId id : toDestroy)
-        world.destroyEntity(id);
+    for (EntityId id : toDestroy) world.destroyEntity(id);
 }
 
 } // namespace mini

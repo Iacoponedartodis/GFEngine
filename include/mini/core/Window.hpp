@@ -32,7 +32,9 @@ public:
     // Tab per alternare durante il gioco.
     void setMouseCaptured(bool captured);
 
+    void toggleFullscreen();
     [[nodiscard]] bool isOpen()          const;
+    [[nodiscard]] bool isFullscreen()     const;
     [[nodiscard]] bool isMouseCaptured() const;
     [[nodiscard]] int  getWidth()        const;
     [[nodiscard]] int  getHeight()       const;
@@ -42,6 +44,7 @@ private:
     SDL_GLContext m_context       = nullptr;
     bool          m_open          = false;
     bool          m_mouseCaptured = false;
+    bool          m_fullscreen    = false;
     int           m_width         = 0;
     int           m_height        = 0;
 };

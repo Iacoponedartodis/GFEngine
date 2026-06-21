@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/tinyobjloader-populate"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/e10ae1d161e28684f32ff568fdc58e15/tinyobjloader-populate.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/de58110fbefc6d9fa5c1d8941ba91787/tinyobjloader-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-subbuild/CMakeFiles/76dc64574a9b67a38d7363263bc2de70/tinyobjloader-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"tinyobjloader-populate"
+		],
+		"name" : "tinyobjloader-populate"
+	}
+}

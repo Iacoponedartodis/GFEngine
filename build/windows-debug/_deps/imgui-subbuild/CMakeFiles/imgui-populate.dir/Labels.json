@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/imgui-populate"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/255b6547b1d2a4234106f9d3985cc7c3/imgui-populate.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/b59d427c739482fccf7f902d472d3288/imgui-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/imgui-subbuild/CMakeFiles/a9dcd3c55eae70f1077c57ec0a575f65/imgui-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"imgui-populate"
+		],
+		"name" : "imgui-populate"
+	}
+}

@@ -6,6 +6,7 @@
 #include "mini/render/Shader.hpp"
 #include "mini/render/Texture.hpp"
 
+#include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -123,6 +124,14 @@ Camera& Renderer::getCamera() { return *m_camera; }
 
 void Renderer::beginFrame(const ClearColor& col)
 {
+    // Aggiorna viewport alle dimensioni correnti della finestra
+    int w = 0, h = 0;
+    SDL_GL_GetDrawableSize(SDL_GL_GetCurrentWindow(), &w, &h);
+    if (w > 0 && h > 0)
+    {
+        glViewport(0, 0, w, h);
+        m_camera->setAspect((float)w / (float)h);
+    }
     glClearColor(col.r, col.g, col.b, col.a);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }

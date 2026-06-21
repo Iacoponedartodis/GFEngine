@@ -139,8 +139,8 @@ void Application::run(bool directPreMatch)
     player.weapon = makeBlasterRifle();
 
     // ── Stato ────────────────────────────────────────────────────────
-    GameState state     = GameState::Launcher;
-    GameState prevState = GameState::Launcher;
+    GameState state     = directPreMatch ? GameState::PreMatch : GameState::Launcher;
+    GameState prevState = state;
     bool      stateChanged  = false;
     bool      wasOverheated = false;
 
@@ -252,6 +252,8 @@ void Application::run(bool directPreMatch)
             {
                 const int sc = ev.key.keysym.scancode;
 
+                // F11 globale
+                if (sc == SDL_SCANCODE_F11) window.toggleFullscreen();
                 // ── Launcher ─────────────────────────────────────────
                 if (state == GameState::Launcher)
                 {

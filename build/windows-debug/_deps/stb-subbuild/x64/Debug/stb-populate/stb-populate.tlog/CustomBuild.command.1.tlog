@@ -1,0 +1,150 @@
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-MKDIR.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -Dcfgdir=/Debug -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/tmp/stb-populate-mkdirs.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-mkdir
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-DOWNLOAD.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/tmp/stb-populate-gitclone.cmake
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-download
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-UPDATE.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -Dcan_fetch=YES -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -P C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/tmp/stb-populate-gitupdate.cmake
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-PATCH.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-patch
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-CONFIGURE.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-configure
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-BUILD.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-build
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-INSTALL.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-install
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\F1AEFD026BDE8283000EA5AA0AF530B2\STB-POPULATE-TEST.RULE
+setlocal
+cd C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-build
+if %errorlevel% neq 0 goto :cmEnd
+C:
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E echo_append
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-test
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\8A2EA1F00F428AD904646EDBFED2BFBE\STB-POPULATE-COMPLETE.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E make_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/Debug
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/Debug/stb-populate-complete
+if %errorlevel% neq 0 goto :cmEnd
+"C:\Program Files\CMake\bin\cmake.exe" -E touch C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/stb-populate-prefix/src/stb-populate-stamp/Debug/stb-populate-done
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKEFILES\BDF244A282622DB2466EEB8457D29C06\STB-POPULATE.RULE
+setlocal
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\STB-SUBBUILD\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild --check-stamp-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

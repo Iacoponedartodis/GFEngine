@@ -1,0 +1,10 @@
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\NLOHMANN_JSON-SUBBUILD\CMAKEFILES\9F18D318BE67E59E646056078357FF87\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/nlohmann_json-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

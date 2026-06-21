@@ -1,0 +1,3 @@
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/stb-populate.dir
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/ALL_BUILD.dir
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/ZERO_CHECK.dir

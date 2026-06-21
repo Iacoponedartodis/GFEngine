@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\f1aefd026bde8283000ea5aa0af530b2\stb-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\8a2ea1f00f428ad904646edbfed2bfbe\stb-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\bdf244a282622db2466eeb8457d29c06\stb-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-subbuild\CMakeFiles\stb-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{B47D7918-7BBD-3415-AFA5-03D30CBB7F48}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

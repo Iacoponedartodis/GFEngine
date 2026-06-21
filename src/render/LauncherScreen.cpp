@@ -31,7 +31,7 @@ void LauncherScreen::render() const
     m_ui.rect(0, 0, W, H, 0.03f, 0.04f, 0.08f, 1.0f);
 
     // Titolo
-    m_ui.textCentered(cx, H * 0.28f, 6.0f, "GFENGINE", 0.85f, 0.75f, 0.3f);
+    m_ui.textCentered(cx, H * 0.28f, 5.0f, "GFENGINE", 0.85f, 0.75f, 0.3f);
     m_ui.textCentered(cx, H * 0.28f + 58, 2.0f, "v0.1 — alpha", 0.45f, 0.45f, 0.5f);
 
     // Separatore

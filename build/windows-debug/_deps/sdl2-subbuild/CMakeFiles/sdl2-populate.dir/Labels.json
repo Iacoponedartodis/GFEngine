@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/sdl2-populate"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/5b0257d788728d722e1c595a6141e0e8/sdl2-populate.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/e9394f1ba232c27d96703bb1f68ad38c/sdl2-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-subbuild/CMakeFiles/3bd03bdf89f4e478405ffd7ce8823171/sdl2-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"sdl2-populate"
+		],
+		"name" : "sdl2-populate"
+	}
+}

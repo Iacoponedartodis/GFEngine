@@ -12,7 +12,7 @@ struct ModuleCard
     const char*  description;
     ActiveModule module;
     bool         available;
-    float        r, g, b; // colore icona
+    float        r, g, b;
 };
 
 static const ModuleCard k_modules[] = {
@@ -66,15 +66,15 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
     // ── Titolo ────────────────────────────────────────────────────────
     ImGui::SetCursorPos({W * 0.5f - 90.0f, H * 0.06f});
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.75f, 0.30f, 1.0f));
-    ImGui::SetWindowFontSize(28.0f);
+    ImGui::SetWindowFontScale(1.6f);          // ← FIX: era SetWindowFontSize(28)
     ImGui::Text("GFEngine Editor");
+    ImGui::SetWindowFontScale(1.0f);          // ← reset
     ImGui::PopStyleColor();
-    ImGui::SetWindowFontSize(0); // reset
 
     ImGui::SetCursorPos({W * 0.5f - 60.0f, H * 0.06f + 34.0f});
     ImGui::TextDisabled("v0.1 — Stage 1");
 
-    // ── Pulsante avvia gioco ─────────────────────────────────────────
+    // ── Pulsante avvia gioco ──────────────────────────────────────────
     const float btnW = 220, btnH = 44;
     ImGui::SetCursorPos({W * 0.5f - btnW * 0.5f, H * 0.14f});
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.12f, 0.50f, 0.20f, 0.90f));
@@ -87,24 +87,23 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
     ImGui::TextDisabled("(apre la partita con --direct-prematch)");
 
     // ── Griglia moduli ────────────────────────────────────────────────
-    const float cardW   = 220, cardH = 160;
-    const float gapX    = 24, gapY = 20;
-    const int   cols    = 3;
-    const float gridW   = cols * cardW + (cols - 1) * gapX;
-    const float startX  = (W - gridW) * 0.5f;
-    const float startY  = H * 0.28f;
+    const float cardW  = 220, cardH = 160;
+    const float gapX   = 24,  gapY  = 20;
+    const int   cols   = 3;
+    const float gridW  = cols * cardW + (cols - 1) * gapX;
+    const float startX = (W - gridW) * 0.5f;
+    const float startY = H * 0.28f;
 
     for (int i = 0; i < k_moduleCount; ++i)
     {
         const auto& m = k_modules[i];
-        int  col = i % cols;
-        int  row = i / cols;
+        int   col = i % cols;
+        int   row = i / cols;
         float x = startX + col * (cardW + gapX);
         float y = startY + row * (cardH + gapY);
 
         ImGui::SetCursorPos({x, y});
 
-        // Colore card diverso se disponibile o stub
         float alpha = m.available ? 0.85f : 0.45f;
         ImGui::PushStyleColor(ImGuiCol_ChildBg,
             ImVec4(0.10f, 0.12f, 0.18f, alpha));
@@ -113,7 +112,6 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
         char childId[32]; std::snprintf(childId, sizeof(childId), "##card%d", i);
         ImGui::BeginChild(childId, ImVec2(cardW, cardH), true);
 
-        // Barra colorata in alto
         ImVec2 p = ImGui::GetWindowPos();
         ImGui::GetWindowDrawList()->AddRectFilled(
             {p.x, p.y}, {p.x + cardW, p.y + 4},
@@ -121,7 +119,6 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
         );
         ImGui::Dummy({0, 8});
 
-        // Titolo
         ImGui::PushStyleColor(ImGuiCol_Text,
             m.available ? ImVec4(0.9f,0.9f,0.95f,1.0f) : ImVec4(0.5f,0.5f,0.55f,1.0f));
         ImGui::TextUnformatted(m.label);
@@ -129,12 +126,10 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
 
         ImGui::Dummy({0, 4});
 
-        // Descrizione
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f,0.55f,0.60f,1.0f));
         ImGui::TextUnformatted(m.description);
         ImGui::PopStyleColor();
 
-        // Pulsante apri
         if (m.available)
         {
             ImGui::SetCursorPosY(cardH - 32);

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/stb-populate"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/bdf244a282622db2466eeb8457d29c06/stb-populate.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/8a2ea1f00f428ad904646edbfed2bfbe/stb-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"stb-populate"
+		],
+		"name" : "stb-populate"
+	}
+}

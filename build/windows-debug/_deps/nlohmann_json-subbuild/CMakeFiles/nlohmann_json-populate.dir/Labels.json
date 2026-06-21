@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/nlohmann_json-populate"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/9f18d318be67e59e646056078357ff87/nlohmann_json-populate.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/c1786623aad51a2b8a77e9d567888945/nlohmann_json-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-subbuild/CMakeFiles/a085fe28f6f452e6dfd3cd3d501ff2f9/nlohmann_json-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"nlohmann_json-populate"
+		],
+		"name" : "nlohmann_json-populate"
+	}
+}

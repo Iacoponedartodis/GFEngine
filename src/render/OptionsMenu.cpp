@@ -144,16 +144,8 @@ void OptionsMenu::renderControls(const InputManager& input) const
     m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.85f);
     m_ui.textCentered(cx, 28, 3.0f, "CONTROLLI", 0.95f, 0.85f, 0.3f);
 
-    // Info fissa: Sparo (mouse, non rimappabile)
-    m_ui.rect(cx - 280 - 12, 70.0f, (float)m_ui.width() - (cx - 280 - 12) * 2, 36.0f,
-              0.08f, 0.10f, 0.14f, 0.6f);
-    m_ui.text(cx - 280, 78.0f, 1.8f, "Sparo", 0.7f, 0.7f, 0.7f);
-    m_ui.rect(cx + 100 - 8, 74.0f, 230, 30, 0.12f, 0.12f, 0.15f, 0.8f);
-    m_ui.border(cx + 100 - 8, 74.0f, 230, 30, 0.25f, 0.25f, 0.35f);
-    m_ui.text(cx + 100, 78.0f, 1.7f, "Mouse Sinistro (fisso)", 0.6f, 0.6f, 0.6f);
-
     const int count = InputManager::rebindableCount();
-    const float startY = 115.0f;
+    const float startY = 78.0f;
     const float rowH   = 42.0f;
     const float labelX = cx - 280;
     const float keyX   = cx + 100;

@@ -1,0 +1,14 @@
+# Target labels
+ stb-populate
+# Source files and their labels
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/stb-populate
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/bdf244a282622db2466eeb8457d29c06/stb-populate.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/8a2ea1f00f428ad904646edbfed2bfbe/stb-populate-complete.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-build.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-configure.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-download.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-install.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-mkdir.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-patch.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-test.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/stb-subbuild/CMakeFiles/f1aefd026bde8283000ea5aa0af530b2/stb-populate-update.rule
