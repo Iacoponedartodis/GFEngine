@@ -31,7 +31,7 @@ void PreMatchMenu::buildRows()
     m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  10});
     m_rows.push_back({"AI nemiche   (num unita team 2)", true,  &m_settings.team2AiCount, nullptr,   1,   0,  20});
     m_rows.push_back({"HP giocatore",                    false, nullptr, &m_settings.playerHp,       25,  25, 500});
-    m_rows.push_back({"Ritardo respawn (s)",             false, nullptr, &m_settings.respawnDelay, 0.5f,  0,  30});
+    m_rows.push_back({"Ritardo respawn (s)",             false, nullptr, &m_settings.respawnDelay, 0.5f, 0.5f, 30});
 }
 
 void PreMatchMenu::handleTextInput(const char* text)
@@ -347,13 +347,14 @@ void PreMatchMenu::renderRoot() const
     const float cy = H * 0.5f;
 
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.80f);
-    m_ui.text(cx - 100, cy - 120, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
+
+    m_ui.text(cx - 138.0f, cy - 120.0f, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
 
     struct Item { const char* label; float r, g, b; };
     const Item items[] = {
-        { "Avvia partita",             0.3f, 1.0f, 0.45f },
-        { "Personalizzazione",         0.85f, 0.75f, 0.4f },
-        { "Regole di gioco e preset",   0.5f, 0.85f, 1.0f },
+        { "Avvia partita",     0.3f, 1.0f, 0.45f },
+        { "Personalizzazione", 0.85f, 0.75f, 0.4f },
+        { "Regole di gioco",   0.5f, 0.85f, 1.0f },
     };
     constexpr int N = 3;
 
@@ -365,27 +366,34 @@ void PreMatchMenu::renderRoot() const
         const float y = startY + i * rowH;
         const bool sel = (i == m_selectedRow);
 
-        float bx = cx - 220, bw = 440, bh = 44;
+        const float bx = cx - 220.0f;
+        const float bw = 440.0f;
+        const float bh = 44.0f;
+
         if (sel)
             m_ui.rect(bx, y - 4, bw, bh, 0.12f, 0.28f, 0.50f, 0.65f);
         else
             m_ui.rect(bx, y - 4, bw, bh, 0.08f, 0.08f, 0.10f, 0.45f);
 
-        m_ui.rect(bx,          y - 4,     bw, 1, 0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx,          y - 4,      bw, 1, 0.25f, 0.35f, 0.55f);
         m_ui.rect(bx,          y + bh - 5, bw, 1, 0.25f, 0.35f, 0.55f);
-        m_ui.rect(bx,          y - 4,     1, bh, 0.25f, 0.35f, 0.55f);
-        m_ui.rect(bx + bw - 1, y - 4,     1, bh, 0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx,          y - 4,      1, bh, 0.25f, 0.35f, 0.55f);
+        m_ui.rect(bx + bw - 1, y - 4,      1, bh, 0.25f, 0.35f, 0.55f);
 
         float scale = sel ? 2.4f : 2.0f;
         float ir = sel ? items[i].r : items[i].r * 0.65f;
         float ig = sel ? items[i].g : items[i].g * 0.65f;
         float ib = sel ? items[i].b : items[i].b * 0.65f;
 
-        float tx = cx - (float)std::strlen(items[i].label) * scale * 4.0f;
+        float tx = 0.0f;
+        if (i == 0) tx = cx - 110.0f;
+        if (i == 1) tx = cx - 122.0f;
+        if (i == 2) tx = cx - 102.0f;
+
         m_ui.text(tx, y + 10, scale, items[i].label, ir, ig, ib);
     }
 
-    m_ui.text(cx - 145, startY + N * rowH + 24, 1.7f,
+    m_ui.text(cx - 187.0f, startY + N * rowH + 24.0f, 1.7f,
               "SU/GIU = naviga   INVIO = seleziona   ESC = indietro",
               0.50f, 0.50f, 0.50f);
 }

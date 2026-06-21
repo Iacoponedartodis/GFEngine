@@ -1,10 +1,8 @@
 #include "viewport/FreeCameraViewport.hpp"
 
-// OpenGL.hpp DEVE stare prima: definisce GLsizei, GLuint, GLenum, ecc.
 #include <mini/platform/OpenGL.hpp>
 #include <SDL2/SDL.h>
 
-// ── Costanti FBO (GL 3.0+, non in <GL/gl.h> su Windows) ─────────────────
 #ifndef GL_FRAMEBUFFER
   #define GL_FRAMEBUFFER              0x8D40
 #endif
@@ -24,7 +22,6 @@
   #define GL_FRAMEBUFFER_COMPLETE     0x8CD5
 #endif
 
-// ── Puntatori funzione FBO (caricati a runtime) ──────────────────────────
 typedef void   (*PFBO_GenFBO)    (GLsizei, GLuint*);
 typedef void   (*PFBO_BindFBO)   (GLenum,  GLuint);
 typedef void   (*PFBO_DelFBO)    (GLsizei, const GLuint*);
@@ -66,7 +63,6 @@ static void loadFBOFunctions()
         SDL_Log("[Viewport] FBO functions OK.");
 }
 
-// ── Altri include ─────────────────────────────────────────────────────────
 #include <mini/render/Camera.hpp>
 #include <mini/render/Shader.hpp>
 
@@ -205,13 +201,24 @@ void FreeCameraViewport::renderScene()
 void FreeCameraViewport::tick(float dt)
 {
     if (!m_focused) return;
+
     const Uint8* ks = SDL_GetKeyboardState(nullptr);
+
+    const bool tabNow = ks[SDL_SCANCODE_TAB] != 0;
+    if (tabNow && !m_tabWasDown)
+    {
+        m_mouseCapture = !m_mouseCapture;
+        SDL_SetRelativeMouseMode(m_mouseCapture ? SDL_TRUE : SDL_FALSE);
+    }
+    m_tabWasDown = tabNow;
+
     m_camera->setSpeed(ks[SDL_SCANCODE_LSHIFT] ? m_camSpeed*3.0f : m_camSpeed);
     m_camera->processKeyboard(
         ks[SDL_SCANCODE_W], ks[SDL_SCANCODE_S],
         ks[SDL_SCANCODE_A], ks[SDL_SCANCODE_D],
         ks[SDL_SCANCODE_E] || ks[SDL_SCANCODE_SPACE],
         ks[SDL_SCANCODE_Q] || ks[SDL_SCANCODE_LCTRL], dt);
+
     if (m_mouseCapture) {
         int dx=0, dy=0;
         SDL_GetRelativeMouseState(&dx, &dy);
@@ -221,16 +228,14 @@ void FreeCameraViewport::tick(float dt)
 
 void FreeCameraViewport::draw()
 {
+    ImGui::TextDisabled(m_mouseCapture
+        ? "TAB = rilascia mouse  |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce"
+        : "TAB = cattura mouse   |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce");
+    ImGui::Separator();
+
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const int w = (int)avail.x;
-    const int h = (int)(avail.y - 30);
-
-    ImGui::TextDisabled("WASD = muovi  |  E/Q = su/giu  |  Shift = veloce");
-    ImGui::SameLine(avail.x - 150.0f);
-    if (ImGui::Button(m_mouseCapture ? "Rilascia mouse" : "Cattura mouse")) {
-        m_mouseCapture = !m_mouseCapture;
-        SDL_SetRelativeMouseMode(m_mouseCapture ? SDL_TRUE : SDL_FALSE);
-    }
+    const int h = (int)avail.y;
 
     m_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
@@ -238,12 +243,13 @@ void FreeCameraViewport::draw()
         m_camera->setAspect((float)w / (float)h);
         resizeFBO(w, h);
         renderScene();
-        // Reset GL state per ImGui
+
         glUseProgram(0);
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
+
         if (m_colorTex)
             ImGui::Image((ImTextureID)(uintptr_t)m_colorTex,
                          ImVec2((float)w,(float)h),
