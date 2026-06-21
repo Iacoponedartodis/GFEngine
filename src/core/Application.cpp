@@ -14,6 +14,7 @@
 #include "mini/game/MatchSettings.hpp"
 #include "mini/game/PlayerController.hpp"
 #include "mini/game/Weapon.hpp"
+#include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/physics/Collision.hpp"
 #include "mini/render/Camera.hpp"
 #include "mini/render/HUD.hpp"
@@ -30,6 +31,28 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <memory>
+
+// ── weaponFromDef inline ─────────────────────────────────────────────────────
+namespace mini {
+inline Weapon weaponFromDef(const WeaponDef& def)
+{
+    Weapon w;
+    w.name            = def.name;
+    w.fireRate        = def.fireRate;
+    w.bulletSpeed     = def.bulletSpeed;
+    w.bulletDamage    = def.damage;
+    w.bulletLifetime  = def.bulletLifetime;
+    w.bulletScale     = def.bulletScale;
+    w.bulletR         = def.bulletColor[0];
+    w.bulletG         = def.bulletColor[1];
+    w.bulletB         = def.bulletColor[2];
+    w.heatPerShot     = def.heatPerShot;
+    w.cooldownRate    = def.cooldownRate;
+    w.overheatPenalty = def.overheatPenalty;
+    return w;
+}
+} // namespace mini
+
 
 namespace mini
 {
@@ -61,10 +84,14 @@ static bool anyEnemyAlive(World& w)
     return false;
 }
 
-void Application::run()
+void Application::run(bool directPreMatch)
 {
     using namespace config;
     initialize();
+
+    // ── Definition Registry ──────────────────────────────────────────
+    DefinitionRegistry registry;
+    registry.loadAll("data");
 
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
@@ -122,13 +149,16 @@ void Application::run()
     Clock clock;
     Camera& cam = renderer.getCamera();
 
-    std::cout << "[Application] Launcher avviato." << std::endl;
+    if (directPreMatch)
+        std::cout << "[Application] Direct PreMatch mode." << std::endl;
+    else
+        std::cout << "[Application] Launcher avviato." << std::endl;
 
     // ── Lambda transizioni ───────────────────────────────────────────
     auto initWorld = [&]()
     {
         conquestMode.applySettings(currentSettings);
-        conquestMode.start(world, mesh.get(), albedo.get());
+        conquestMode.start(world, mesh.get(), albedo.get(), &registry);
         player.reset(conquestMode.getPlayerEntity(), currentSettings.playerHp,
                      conquestMode.getSpawnPos(), cam);
         worldReady = true;
@@ -136,12 +166,23 @@ void Application::run()
 
     auto startGame = [&]()
     {
-        switch (preMatchMenu.getSelectedWeapon())
+        // Prova a caricare l'arma dal registry; fallback agli inline preset
+        static const char* weaponIds[] = {
+            "blaster_rifle", "blaster_pistol", "heavy_blaster", "sniper_rifle"
+        };
+        int wIdx = preMatchMenu.getSelectedWeapon();
+        const auto* wDef = registry.getWeapon(weaponIds[wIdx]);
+        if (wDef)
+            player.weapon = weaponFromDef(*wDef);
+        else
         {
-        case 0: player.weapon = makeBlasterRifle();  break;
-        case 1: player.weapon = makeBlasterPistol(); break;
-        case 2: player.weapon = makeHeavyBlaster();  break;
-        case 3: player.weapon = makeSniperRifle();   break;
+            switch (wIdx)
+            {
+            case 0: player.weapon = makeBlasterRifle();  break;
+            case 1: player.weapon = makeBlasterPistol(); break;
+            case 2: player.weapon = makeHeavyBlaster();  break;
+            case 3: player.weapon = makeSniperRifle();   break;
+            }
         }
         initWorld();
         state = GameState::Playing;
@@ -253,7 +294,7 @@ void Application::run()
                     if (res == OptionsMenu::Result::Back)
                     {
                         state = prevState; stateChanged = true;
-                        if (isGameplayState(state)) window.setMouseCaptured(true);
+                        if (state == GameState::Playing) window.setMouseCaptured(true);
                     }
                 }
                 // ── Paused: K = respawn volontario ───────────────────
@@ -323,7 +364,7 @@ void Application::run()
         }
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
-        if (isGameplayState(state) && window.isMouseCaptured())
+        if (state == GameState::Playing && window.isMouseCaptured())
             cam.processMouse((float)input.mouseDX(), (float)input.mouseDY());
 
         if (state == GameState::Playing)
@@ -391,7 +432,7 @@ void Application::run()
         // ── 6. RENDER ────────────────────────────────────────────────
         renderer.beginFrame();
 
-        if (worldReady && isGameplayState(state))
+        if (worldReady && state == GameState::Playing)
         {
             for (EntityId id : world.getEntities())
             {
@@ -426,7 +467,7 @@ void Application::run()
                 }
             }
             hud.render(player.prevHp, currentSettings.playerHp, (int)state,
-                       player.weapon.heat, player.weapon.overheated, player.weapon.name,
+                       player.weapon.heat, player.weapon.overheated, player.weapon.name.c_str(),
                        conquestMode.getTeam1Tickets(), conquestMode.getTeam2Tickets(),
                        aliveAllies, aliveEnemies);
         }

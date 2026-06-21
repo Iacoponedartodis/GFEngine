@@ -9,7 +9,7 @@ class HUD
 public:
     HUD(int screenW, int screenH);
 
-    // state: -2=Paused, -1=FreeRoam, 0=Playing, 1=Win, 2=Lose
+    // state: -1=Paused, 0=Playing, 1=Win, 2=Lose
     void render(float playerHp, float playerMaxHp, int state,
                 float weaponHeat = 0.0f, bool overheated = false,
                 const char* weaponName = nullptr,

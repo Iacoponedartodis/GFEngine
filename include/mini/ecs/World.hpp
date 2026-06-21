@@ -78,6 +78,12 @@ public:
     ColliderComponent*       getCollider(EntityId e);
     const ColliderComponent* getCollider(EntityId e) const;
 
+    // Hitbox
+    void addHitbox(EntityId e, const HitboxComponent& c);
+    [[nodiscard]] bool hasHitbox(EntityId e) const;
+    HitboxComponent*       getHitbox(EntityId e);
+    const HitboxComponent* getHitbox(EntityId e) const;
+
     void setDebugLogging(bool enabled);
     [[nodiscard]] bool isDebugLoggingEnabled() const;
     [[nodiscard]] std::uint64_t                getTickCount() const;
@@ -99,6 +105,7 @@ private:
     std::unordered_map<EntityId, BulletComponent>       m_bullets;
     std::unordered_map<EntityId, AiComponent>           m_ais;
     std::unordered_map<EntityId, ColliderComponent>     m_colliders;
+    std::unordered_map<EntityId, HitboxComponent>      m_hitboxes;
 
     bool m_debugLogging = false;
 };

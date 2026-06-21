@@ -16,7 +16,6 @@ InputManager::InputManager()
     m_bindings[(int)Action::Reload]       = SDL_SCANCODE_R;
     m_bindings[(int)Action::Pause]        = SDL_SCANCODE_ESCAPE;
     m_bindings[(int)Action::Restart]      = SDL_SCANCODE_R;
-    m_bindings[(int)Action::FreeRoam]     = SDL_SCANCODE_F;
     m_bindings[(int)Action::StartGame]    = SDL_SCANCODE_RETURN;
     m_bindings[(int)Action::ToggleMouse]  = SDL_SCANCODE_TAB;
     m_bindings[(int)Action::Quit]         = SDL_SCANCODE_ESCAPE;
@@ -95,7 +94,6 @@ const char* InputManager::actionName(Action a)
         case Action::Reload:      return "Ricarica";
         case Action::Pause:       return "Pausa";
         case Action::Restart:     return "Riavvia";
-        case Action::FreeRoam:    return "Volo libero";
         case Action::StartGame:   return "Avvia/Conferma";
         case Action::ToggleMouse: return "Cattura mouse";
         case Action::Quit:        return "Esci";
@@ -107,7 +105,7 @@ const char* InputManager::actionName(Action a)
 // StartGame (INVIO riservato per i menu). L'utente puo' rimappare il resto.
 static const Action s_rebindable[] = {
     Action::MoveForward, Action::MoveBack, Action::MoveLeft, Action::MoveRight,
-    Action::Jump, Action::Reload, Action::FreeRoam, Action::ToggleMouse
+    Action::Jump, Action::Reload, Action::ToggleMouse
 };
 
 int InputManager::rebindableCount()

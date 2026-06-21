@@ -18,14 +18,14 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
     const float W = (float)m_ui.width(), H = (float)m_ui.height();
     const float cx = W * 0.5f, cy = H * 0.5f;
 
-    if (state == -2) // Paused
+    if (state == -1) // Paused
     {
         m_ui.rect(0, 0, W, H, 0, 0, 0, 0.65f);
-        m_ui.text(cx - 75,  cy - 90, 4.5f, "PAUSA",                    0.95f, 0.95f, 0.95f);
-        m_ui.text(cx - 105, cy - 20, 2.3f, "ESC  =  Riprendi",         0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy + 12, 2.3f, "R    =  Riavvia partita",  0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy + 44, 2.3f, "K    =  Respawn",          0.95f, 0.75f, 0.35f);
-        m_ui.text(cx - 105, cy + 76, 2.3f, "O    =  Opzioni",          0.75f, 0.85f, 0.95f);
+        m_ui.text(cx - 75,  cy - 90, 4.5f, "PAUSA",                   0.95f, 0.95f, 0.95f);
+        m_ui.text(cx - 105, cy - 20, 2.3f, "ESC  =  Riprendi",        0.75f, 0.85f, 0.95f);
+        m_ui.text(cx - 105, cy + 12, 2.3f, "R    =  Riavvia partita", 0.75f, 0.85f, 0.95f);
+        m_ui.text(cx - 105, cy + 44, 2.3f, "K    =  Respawn volontario",     0.75f, 0.85f, 0.95f);
+        m_ui.text(cx - 105, cy + 76, 2.3f, "O    =  Opzioni",         0.75f, 0.85f, 0.95f);
         m_ui.text(cx - 105, cy +108, 2.3f, "Q    =  Menu principale",  0.75f, 0.85f, 0.95f);
     }
     else // Playing / Win / Lose

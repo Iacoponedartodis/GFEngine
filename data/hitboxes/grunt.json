@@ -1,0 +1,35 @@
+{
+    "profile_id": "grunt",
+    "zones": [
+        {
+            "name": "head",
+            "offset": [0.0, 1.75, 0.0],
+            "half_extents": [0.14, 0.14, 0.14],
+            "damage_multiplier": 2.5
+        },
+        {
+            "name": "torso",
+            "offset": [0.0, 1.15, 0.0],
+            "half_extents": [0.24, 0.33, 0.18],
+            "damage_multiplier": 1.0
+        },
+        {
+            "name": "left_arm",
+            "offset": [-0.38, 1.1, 0.0],
+            "half_extents": [0.10, 0.28, 0.10],
+            "damage_multiplier": 0.7
+        },
+        {
+            "name": "right_arm",
+            "offset": [0.38, 1.1, 0.0],
+            "half_extents": [0.10, 0.28, 0.10],
+            "damage_multiplier": 0.7
+        },
+        {
+            "name": "legs",
+            "offset": [0.0, 0.48, 0.0],
+            "half_extents": [0.18, 0.48, 0.16],
+            "damage_multiplier": 0.5
+        }
+    ]
+}

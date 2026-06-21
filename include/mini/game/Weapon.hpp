@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 namespace mini
 {
@@ -10,7 +11,7 @@ namespace mini
 struct Weapon
 {
     // ── Identità ─────────────────────────────────────────────────────
-    const char* name      = "DC-15A";
+    std::string name = "DC-15A";
 
     // ── Statistiche di fuoco ─────────────────────────────────────────
     float fireRate        = 4.0f;    // colpi al secondo

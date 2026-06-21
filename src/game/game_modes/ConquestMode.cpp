@@ -1,4 +1,6 @@
 #include "mini/game/game_modes/ConquestMode.hpp"
+#include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
 
@@ -38,6 +40,21 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
                         info.br, info.bg, info.bb,
                         info.hp, info.pax, info.paz, info.pbx, info.pbz,
                         info.patSpd, info.interval, info.range, info.stationary};
+    // Assegna hitbox profile dal registry se disponibile
+    if (m_registry)
+    {
+        // Usa hitboxProfileId dall'info se non vuoto,
+        // altrimenti prova il profileId == teamId==2 ? "grunt" : ""
+        const std::string profileId = info.hitboxProfileId.empty()
+                                      ? (info.teamId == 2 ? "grunt" : "")
+                                      : info.hitboxProfileId;
+        if (!profileId.empty())
+        {
+            const auto* hp = m_registry->getHitboxProfile(profileId);
+            if (hp) world.addHitbox(e, HitboxComponent{hp});
+        }
+    }
+
     m_trackedUnits.push_back({e, tpl});
 }
 
@@ -106,13 +123,15 @@ void ConquestMode::applySettings(const MatchSettings& s)
     playerHp            = s.playerHp;
 }
 
-void ConquestMode::start(World& world, Mesh* mesh, Texture* tex)
+void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
+                          const DefinitionRegistry* registry)
 {
     std::cout << "[ConquestMode] Firebase — caricamento..." << std::endl;
     world.initialize();
     m_spawnPos = {0, SPAWN_Y, SPAWN_Z};
-    m_mesh = mesh;
-    m_tex  = tex;
+    m_mesh     = mesh;
+    m_tex      = tex;
+    m_registry = registry;
 
     m_team1Tickets = initialTeam1Tickets;
     m_team2Tickets = initialTeam2Tickets;

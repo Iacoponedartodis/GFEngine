@@ -14,7 +14,6 @@ enum class Action : int
     Jump, Shoot, Reload,
     Pause,           // toggle pausa
     Restart,         // riavvia partita
-    FreeRoam,        // torna a volo libero
     StartGame,       // ENTER per iniziare
     ToggleMouse,     // TAB
     Quit,            // ESC in free roam

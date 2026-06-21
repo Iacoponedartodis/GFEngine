@@ -1,0 +1,15 @@
+{
+    "id": "sniper_rifle",
+    "name": "DC-15x Sniper",
+    "damage": 70.0,
+    "fire_rate": 1.0,
+    "bullet_speed": 35.0,
+    "bullet_lifetime": 4.0,
+    "bullet_scale": 0.06,
+    "bullet_color": [0.2, 0.5, 1.0],
+    "heat_per_shot": 0.30,
+    "cooldown_rate": 0.25,
+    "overheat_penalty": 2.5,
+    "mesh": "assets/models/sniper_rifle.obj",
+    "projectile_mesh": "assets/models/laser_bolt.obj"
+}

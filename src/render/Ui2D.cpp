@@ -10,6 +10,12 @@ namespace mini
 void Ui2D::begin() const
 {
     glUseProgram(0);
+
+    // Disabilita eventuali vertex attrib array rimasti attivi dal renderer 3D
+    for (int i = 0; i < 8; ++i)
+        glDisableVertexAttribArray(i);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

@@ -12,7 +12,8 @@ FetchContent_Declare(SDL2
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        release-2.30.3
     GIT_SHALLOW    TRUE
-    GIT_PROGRESS   TRUE)
+    GIT_PROGRESS   TRUE
+)
 set(SDL_STATIC  ON  CACHE BOOL "" FORCE)
 set(SDL_SHARED  OFF CACHE BOOL "" FORCE)
 set(SDL_TEST    OFF CACHE BOOL "" FORCE)
@@ -22,16 +23,26 @@ FetchContent_MakeAvailable(SDL2)
 # ── stb ───────────────────────────────────────────────────────────────────────
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_SHALLOW    TRUE)
+    GIT_SHALLOW    TRUE
+)
 FetchContent_MakeAvailable(stb)
 
 # ── tinyobjloader ─────────────────────────────────────────────────────────────
 FetchContent_Declare(tinyobjloader
     GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
     GIT_TAG        v2.0.0rc13
-    GIT_SHALLOW    TRUE)
+    GIT_SHALLOW    TRUE
+)
 set(TINYOBJLOADER_BUILD_TEST_LOADER OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tinyobjloader)
+
+# ── nlohmann/json ─────────────────────────────────────────────────────────────
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # ── OpenGL ────────────────────────────────────────────────────────────────────
 if(WIN32)
@@ -41,7 +52,40 @@ else()
     set(PLATFORM_GL_LIBS OpenGL::GL)
 endif()
 
-# ── Sorgenti ──────────────────────────────────────────────────────────────────
+# ── Dear ImGui (docking branch) ───────────────────────────────────────────────
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        docking
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+    ${SDL2_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(imgui PUBLIC
+    SDL2::SDL2-static
+    ${PLATFORM_GL_LIBS}
+)
+
+# NON definire IMGUI_IMPL_OPENGL_LOADER_CUSTOM qui:
+# nel tuo setup attuale rompe il backend OpenGL3 di ImGui, che infatti
+# è coerente con gli errori su GLuint/glEnable/GL_BLEND visti in build. [file:979]
+
+# ── GFEngine ──────────────────────────────────────────────────────────────────
 add_executable(GFEngine
     src/main.cpp
     src/core/Application.cpp
@@ -71,9 +115,9 @@ add_executable(GFEngine
     src/render/PreMatchMenu.cpp
     src/render/LauncherScreen.cpp
     src/render/MainMenuScreen.cpp
+    src/game/data/DefinitionRegistry.cpp
 )
 
-# ── Include dirs ──────────────────────────────────────────────────────────────
 target_include_directories(GFEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/external/glm
@@ -81,15 +125,81 @@ target_include_directories(GFEngine PRIVATE
     ${tinyobjloader_SOURCE_DIR}
 )
 
-# ── Compile settings ──────────────────────────────────────────────────────────
 target_compile_features(GFEngine PRIVATE cxx_std_20)
 target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED)
-target_link_libraries(GFEngine PRIVATE SDL2::SDL2-static ${PLATFORM_GL_LIBS})
+
+target_link_libraries(GFEngine PRIVATE
+    SDL2::SDL2-static
+    ${PLATFORM_GL_LIBS}
+    nlohmann_json::nlohmann_json
+)
 
 if(MSVC)
     target_compile_options(GFEngine PRIVATE
-        /W4 /permissive- /EHsc
-        /external:anglebrackets /external:W0)
+        /W4
+        /permissive-
+        /EHsc
+        /external:anglebrackets
+        /external:W0
+    )
 else()
-    target_compile_options(GFEngine PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(GFEngine PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+endif()
+
+# ── GFEditor ──────────────────────────────────────────────────────────────────
+add_executable(GFEditor
+    editor/src/main.cpp
+    editor/src/EditorApp.cpp
+    editor/src/ui/HomeScreen.cpp
+    editor/src/viewport/FreeCameraViewport.cpp
+
+    # Riuso sorgenti engine
+    src/platform/OpenGL.cpp
+    src/render/Shader.cpp
+    src/render/Camera.cpp
+    src/render/Mesh.cpp
+    src/render/Texture.cpp
+    src/render/Model.cpp
+    src/vendor/stb_image_impl.cpp
+    src/vendor/tinyobj_impl.cpp
+)
+
+target_include_directories(GFEditor PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/editor/include
+    ${CMAKE_SOURCE_DIR}/external/glm
+    ${stb_SOURCE_DIR}
+    ${tinyobjloader_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
+target_compile_features(GFEditor PRIVATE cxx_std_20)
+target_compile_definitions(GFEditor PRIVATE SDL_MAIN_HANDLED)
+
+target_link_libraries(GFEditor PRIVATE
+    SDL2::SDL2-static
+    ${PLATFORM_GL_LIBS}
+    imgui
+    nlohmann_json::nlohmann_json
+)
+
+if(MSVC)
+    target_compile_options(GFEditor PRIVATE
+        /W4
+        /permissive-
+        /EHsc
+        /external:anglebrackets
+        /external:W0
+    )
+else()
+    target_compile_options(GFEditor PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
 endif()

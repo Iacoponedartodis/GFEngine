@@ -1,0 +1,12 @@
+{
+    "id": "firebase",
+    "name": "Firebase",
+    "mesh": "assets/maps/firebase.obj",
+    "metadata": "assets/maps/firebase_meta.json",
+    "navmesh": "assets/maps/firebase.navmesh",
+    "spawn_team1": [0.0, 0.86, 8.0],
+    "spawn_team2": [0.0, 0.86, -8.0],
+    "max_tickets": 10,
+    "enemy_count": 6,
+    "enemy_types": ["grunt", "grunt", "grunt", "grunt", "sniper", "sniper"]
+}

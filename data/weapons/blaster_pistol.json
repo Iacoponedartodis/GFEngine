@@ -1,0 +1,15 @@
+{
+    "id": "blaster_pistol",
+    "name": "DC-17 Pistol",
+    "damage": 17.0,
+    "fire_rate": 6.0,
+    "bullet_speed": 20.0,
+    "bullet_lifetime": 2.5,
+    "bullet_scale": 0.08,
+    "bullet_color": [0.3, 0.65, 1.0],
+    "heat_per_shot": 0.10,
+    "cooldown_rate": 0.45,
+    "overheat_penalty": 1.2,
+    "mesh": "assets/models/blaster_pistol.obj",
+    "projectile_mesh": "assets/models/laser_bolt.obj"
+}

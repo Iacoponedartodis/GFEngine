@@ -15,6 +15,7 @@ void World::initialize()
     m_transforms.clear(); m_teams.clear(); m_velocities.clear();
     m_healths.clear(); m_meshRenderers.clear(); m_bullets.clear(); m_ais.clear();
     m_colliders.clear();
+    m_hitboxes.clear();
     std::cout << "[World] Inizializzato." << std::endl;
 }
 
@@ -39,6 +40,7 @@ bool World::destroyEntity(EntityId e)
     if (!isValidEntity(e)) return false;
     m_transforms.erase(e); m_teams.erase(e); m_velocities.erase(e);
     m_healths.erase(e); m_meshRenderers.erase(e); m_bullets.erase(e); m_ais.erase(e);
+    m_hitboxes.erase(e);
     m_aliveEntities.erase(e);
     // Swap-and-pop O(1)
     auto it = std::find(m_entities.begin(), m_entities.end(), e);
@@ -63,6 +65,7 @@ IMPL(MeshRenderer, m_meshRenderers)
 IMPL(Bullet,       m_bullets)
 IMPL(Ai,           m_ais)
 IMPL(Collider,     m_colliders)
+IMPL(Hitbox,       m_hitboxes)
 #undef IMPL
 
 void World::setDebugLogging(bool v)               { m_debugLogging = v; }
