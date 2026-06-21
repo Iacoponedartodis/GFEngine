@@ -1,0 +1,14 @@
+{
+    "versions": [
+        {
+            "label": "Stable",
+            "description": "Build 0.1 — Release candidate",
+            "config_path": "config/stable"
+        },
+        {
+            "label": "Dev",
+            "description": "Build 0.1-dev — Latest changes",
+            "config_path": "config/dev"
+        }
+    ]
+}

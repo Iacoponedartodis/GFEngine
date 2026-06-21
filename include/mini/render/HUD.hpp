@@ -1,4 +1,5 @@
 #pragma once
+#include "mini/render/Ui2D.hpp"
 
 namespace mini
 {
@@ -16,13 +17,7 @@ public:
                 int aliveAllies = 0, int aliveEnemies = 0);
 
 private:
-    int m_w, m_h;
-    void begin2D();
-    void end2D();
-    void drawRect(float x, float y, float w, float h,
-                  float r, float g, float b, float a = 1.0f);
-    void drawText(float x, float y, float scale,
-                  const char* text, float r, float g, float b);
+    Ui2D m_ui;
 };
 
 } // namespace mini

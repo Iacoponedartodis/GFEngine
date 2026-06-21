@@ -13,19 +13,7 @@ static constexpr float AI_GND_Y = 0.50f;
 static constexpr float AI_PLT_Y = 2.50f;
 static constexpr float SPAWN_Z  = 8.0f;
 
-struct UnitTemplate
-{
-    float x, z, yPos;
-    int   teamId;
-    float mr, mg, mb;
-    float br, bg, bb;
-    float hp;
-    float pax, paz, pbx, pbz;
-    float patSpd, interval, range;
-    bool  stationary;
-};
-
-static std::vector<std::pair<EntityId, UnitTemplate>> s_trackedUnits;
+// UnitTemplate e m_trackedUnits sono membri di ConquestMode (vedi header)
 
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
@@ -50,13 +38,13 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
                         info.br, info.bg, info.bb,
                         info.hp, info.pax, info.paz, info.pbx, info.pbz,
                         info.patSpd, info.interval, info.range, info.stationary};
-    s_trackedUnits.push_back({e, tpl});
+    m_trackedUnits.push_back({e, tpl});
 }
 
 void ConquestMode::checkDeaths(World& world)
 {
-    auto it = s_trackedUnits.begin();
-    while (it != s_trackedUnits.end())
+    auto it = m_trackedUnits.begin();
+    while (it != m_trackedUnits.end())
     {
         if (!world.isValidEntity(it->first))
         {
@@ -99,7 +87,7 @@ void ConquestMode::checkDeaths(World& world)
                           << " eliminato. NESSUN ticket — morte permanente." << std::endl;
             }
 
-            it = s_trackedUnits.erase(it);
+            it = m_trackedUnits.erase(it);
         }
         else
         {
@@ -129,7 +117,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex)
     m_team1Tickets = initialTeam1Tickets;
     m_team2Tickets = initialTeam2Tickets;
     m_respawnQueue.clear();
-    s_trackedUnits.clear();
+    m_trackedUnits.clear();
 
     // Giocatore
     m_playerEntity = world.createEntity();

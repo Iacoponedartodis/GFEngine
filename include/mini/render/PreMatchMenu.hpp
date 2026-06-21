@@ -1,15 +1,15 @@
 #pragma once
+
 #include "mini/game/MatchSettings.hpp"
+#include "mini/game/Weapon.hpp"
 #include "mini/render/Ui2D.hpp"
+
 #include <string>
 #include <vector>
 
 namespace mini
 {
 
-// ── Menu pre-partita: aperto da ENTER in FreeRoam ────────────────────────────
-// Voce 0: Avvia partita
-// Voce 1: Regole di gioco e preset  →  sotto-pagina con le impostazioni
 class PreMatchMenu
 {
 public:
@@ -18,60 +18,60 @@ public:
     enum class Result { None, StartGame, Back };
 
     Result handleKey(int sdlScancode);
-    void   handleTextInput(const char* text);
-    void   render() const;
+    void handleTextInput(const char* text);
+    void render() const;
 
     [[nodiscard]] const MatchSettings& getSettings() const { return m_settings; }
     void setSettings(const MatchSettings& s);
 
+    [[nodiscard]] int getSelectedWeapon() const { return m_weaponIdx; }
+
 private:
     Ui2D m_ui;
 
-    // ── Pagine ───────────────────────────────────────────────────────
-    enum class Page { Root, Rules, SavePreset, ManagePresets, RenamePreset, LoadPreset };
-    Page m_page        = Page::Root;
-    int  m_selectedRow = 0;   // usato in Root (0=Avvia, 1=Regole)
-    int  m_presetSlot  = 0;
+    enum class Page { Root, Loadout, Rules, SavePreset, ManagePresets, RenamePreset, LoadPreset };
+    Page m_page = Page::Root;
+    int m_selectedRow = 0;
+    int m_presetSlot = 0;
 
-    // ── Impostazioni correnti ────────────────────────────────────────
     MatchSettings m_settings;
-    UserPresets   m_presets;
+    UserPresets m_presets;
 
-    // ── Righe modificabili (Rules) ───────────────────────────────────
+    int m_weaponIdx = 0;
+
     struct Row
     {
         const char* label;
-        bool        isInt;
-        int*        iVal;
-        float*      fVal;
-        float       step;
-        float       minV;
-        float       maxV;
+        bool isInt;
+        int* iVal;
+        float* fVal;
+        float step;
+        float minV;
+        float maxV;
     };
+
     std::vector<Row> m_rows;
     int m_rulesRow = 0;
     void buildRows();
 
-    // ── Input testo per nomi preset ──────────────────────────────────
     std::string m_textInput;
     static constexpr int MAX_NAME = 24;
 
-    // ── Handler ──────────────────────────────────────────────────────
     Result handleRoot(int sc);
+    Result handleLoadout(int sc);
     Result handleRules(int sc);
     Result handleSavePreset(int sc);
     Result handleManagePresets(int sc);
     Result handleRenamePreset(int sc);
     Result handleLoadPreset(int sc);
 
-    // ── Render ───────────────────────────────────────────────────────
-    void renderRoot()          const;
-    void renderRules()         const;
-    void renderSavePreset()    const;
+    void renderRoot() const;
+    void renderLoadout() const;
+    void renderRules() const;
+    void renderSavePreset() const;
     void renderManagePresets() const;
-    void renderRenamePreset()  const;
-    void renderLoadPreset()    const;
-
+    void renderRenamePreset() const;
+    void renderLoadPreset() const;
 };
 
 } // namespace mini

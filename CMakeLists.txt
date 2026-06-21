@@ -66,8 +66,11 @@ add_executable(GFEngine
     src/ecs/systems/CombatSystem.cpp
     src/ecs/systems/AiSystem.cpp
     src/game/game_modes/ConquestMode.cpp
+    src/game/PlayerController.cpp
     src/render/OptionsMenu.cpp
     src/render/PreMatchMenu.cpp
+    src/render/LauncherScreen.cpp
+    src/render/MainMenuScreen.cpp
 )
 
 # ── Include dirs ──────────────────────────────────────────────────────────────

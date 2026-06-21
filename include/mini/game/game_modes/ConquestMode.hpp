@@ -65,6 +65,20 @@ private:
 
     std::vector<RespawnEntry> m_respawnQueue;
 
+    // Traccia le unità vive per rilevare le morti (sostituisce il static global)
+    struct UnitTemplate
+    {
+        float x, z, yPos;
+        int   teamId;
+        float mr, mg, mb;
+        float br, bg, bb;
+        float hp;
+        float pax, paz, pbx, pbz;
+        float patSpd, interval, range;
+        bool  stationary;
+    };
+    std::vector<std::pair<EntityId, UnitTemplate>> m_trackedUnits;
+
     void spawnUnit(World& world, const RespawnEntry& info);
     void checkDeaths(World& world);
 };

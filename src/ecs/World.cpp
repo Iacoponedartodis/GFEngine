@@ -40,8 +40,9 @@ bool World::destroyEntity(EntityId e)
     m_transforms.erase(e); m_teams.erase(e); m_velocities.erase(e);
     m_healths.erase(e); m_meshRenderers.erase(e); m_bullets.erase(e); m_ais.erase(e);
     m_aliveEntities.erase(e);
-    auto it = std::remove(m_entities.begin(), m_entities.end(), e);
-    m_entities.erase(it, m_entities.end());
+    // Swap-and-pop O(1)
+    auto it = std::find(m_entities.begin(), m_entities.end(), e);
+    if (it != m_entities.end()) { *it = m_entities.back(); m_entities.pop_back(); }
     return true;
 }
 
