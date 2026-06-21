@@ -61,9 +61,6 @@ static bool anyEnemyAlive(World& w)
     return false;
 }
 
-static const glm::vec3 FREE_POS  = {0.0f, 9.0f, 17.0f};
-static const glm::vec3 FREE_LOOK = {0.0f, 0.5f, -1.0f};
-
 void Application::run()
 {
     using namespace config;
@@ -72,7 +69,7 @@ void Application::run()
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
     Renderer renderer(window);
-    window.setMouseCaptured(false); // inizia senza cattura (launcher)
+    window.setMouseCaptured(false);
     Audio audio;
     InputManager input;
 
@@ -108,7 +105,7 @@ void Application::run()
     // ── Game mode ────────────────────────────────────────────────────
     MatchSettings currentSettings;
     ConquestMode  conquestMode;
-    bool worldReady = false; // true dopo il primo start()
+    bool worldReady = false;
 
     // ── Player controller ────────────────────────────────────────────
     PlayerController player;
@@ -117,7 +114,7 @@ void Application::run()
     // ── Stato ────────────────────────────────────────────────────────
     GameState state     = GameState::Launcher;
     GameState prevState = GameState::Launcher;
-    bool      stateChanged = false;
+    bool      stateChanged  = false;
     bool      wasOverheated = false;
 
     constexpr float fixedDt = 1.0f / 60.0f;
@@ -139,7 +136,6 @@ void Application::run()
 
     auto startGame = [&]()
     {
-        // Applica arma selezionata nel PreMatchMenu
         switch (preMatchMenu.getSelectedWeapon())
         {
         case 0: player.weapon = makeBlasterRifle();  break;
@@ -154,22 +150,43 @@ void Application::run()
         std::cout << "[Game] Partita iniziata — " << player.weapon.name << std::endl;
     };
 
-    auto goFreeRoam = [&]()
-    {
-        initWorld();
-        state = GameState::FreeRoam;
-        stateChanged = true;
-        cam.setPosition(FREE_POS);
-        cam.lookAt(FREE_LOOK);
-        window.setMouseCaptured(true);
-        std::cout << "[Game] Volo libero." << std::endl;
-    };
-
     auto goMainMenu = [&]()
     {
         state = GameState::MainMenu;
         stateChanged = true;
         window.setMouseCaptured(false);
+    };
+
+    // Respawn volontario: consuma un ticket e avvia il timer come se il giocatore fosse morto
+    auto doVoluntaryRespawn = [&]()
+    {
+        if (player.isDead) return; // già morto, respawn già in corso
+        int t1 = conquestMode.getTeam1Tickets();
+        if (t1 <= 0)
+        {
+            // Nessun ticket: game over immediato
+            state = GameState::Lose;
+            stateChanged = true;
+            window.setMouseCaptured(false);
+            std::cout << "[Game] Nessun ticket per il respawn volontario. SCONFITTA!" << std::endl;
+            return;
+        }
+        conquestMode.consumeTeam1Ticket();
+        player.isDead = true;
+        player.prevHp = 0.0f;
+        player.respawnTimer = currentSettings.respawnDelay;
+        // Invalida l'entità corrente per simulare la morte
+        if (world.isValidEntity(player.entity))
+        {
+            auto* hp = world.getHealth(player.entity);
+            if (hp) hp->current = 0.0f;
+        }
+        state = GameState::Playing;
+        stateChanged = true;
+        window.setMouseCaptured(true);
+        std::cout << "[Respawn volontario] Ticket rimasti: "
+                  << conquestMode.getTeam1Tickets()
+                  << " — respawn in " << currentSettings.respawnDelay << "s" << std::endl;
     };
 
     // ═════════════════════════════════════════════════════════════════
@@ -239,22 +256,11 @@ void Application::run()
                         if (isGameplayState(state)) window.setMouseCaptured(true);
                     }
                 }
-                // ── Gameplay states (FreeRoam / Playing / Paused / Win / Lose)
-                else
+                // ── Paused: K = respawn volontario ───────────────────
+                else if (state == GameState::Paused)
                 {
-                    if (sc == SDL_SCANCODE_RETURN && state == GameState::FreeRoam && !stateChanged)
-                    {
-                        preMatchMenu.setSettings(currentSettings);
-                        state = GameState::PreMatch; stateChanged = true;
-                        window.setMouseCaptured(false);
-                    }
-                    if (sc == SDL_SCANCODE_O && !stateChanged
-                        && (state == GameState::FreeRoam || state == GameState::Paused))
-                    {
-                        prevState = state;
-                        state = GameState::Options; stateChanged = true;
-                        window.setMouseCaptured(false);
-                    }
+                    if (sc == SDL_SCANCODE_K && !stateChanged)
+                        doVoluntaryRespawn();
                 }
             }
         }
@@ -266,25 +272,26 @@ void Application::run()
 
             if (input.isPressed(Action::Pause) && !stateChanged)
             {
-                if (state == GameState::FreeRoam)
-                    goMainMenu(); // ESC in FreeRoam → torna al menu
-                else if (state == GameState::Playing)
+                if (state == GameState::Playing)
                 { state = GameState::Paused; stateChanged = true; window.setMouseCaptured(false); }
                 else if (state == GameState::Paused)
                 { state = GameState::Playing; stateChanged = true; window.setMouseCaptured(true); }
             }
 
-            if (state == GameState::Paused && ks[SDL_SCANCODE_Q])
-                goMainMenu();
-
-            // Selezione arma spostata nel menu Personalizzazione
+            if (state == GameState::Paused)
+            {
+                if (ks[SDL_SCANCODE_Q]) goMainMenu();
+                if (ks[SDL_SCANCODE_O] && !stateChanged)
+                {
+                    prevState = GameState::Paused;
+                    state = GameState::Options; stateChanged = true;
+                    window.setMouseCaptured(false);
+                }
+            }
 
             if (isOverlayState(state) && input.isPressed(Action::Restart) && !stateChanged)
                 startGame();
-            if (isOverlayState(state) && input.isPressed(Action::FreeRoam) && !stateChanged)
-                goFreeRoam();
 
-            // Q da Win/Lose → menu principale
             if ((state == GameState::Win || state == GameState::Lose) && ks[SDL_SCANCODE_Q])
                 goMainMenu();
         }
@@ -319,18 +326,8 @@ void Application::run()
         if (isGameplayState(state) && window.isMouseCaptured())
             cam.processMouse((float)input.mouseDX(), (float)input.mouseDY());
 
-        if (state == GameState::FreeRoam)
-        {
-            cam.processKeyboard(
-                input.isDown(Action::MoveForward), input.isDown(Action::MoveBack),
-                input.isDown(Action::MoveLeft),    input.isDown(Action::MoveRight),
-                input.isDown(Action::Jump),
-                SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_LCTRL], elapsed);
-        }
-        else if (state == GameState::Playing)
-        {
+        if (state == GameState::Playing)
             player.updateMovement(cam, input, world, elapsed);
-        }
 
         // ── 5. GAME LOGIC ────────────────────────────────────────────
         if (state == GameState::Playing)
@@ -394,7 +391,6 @@ void Application::run()
         // ── 6. RENDER ────────────────────────────────────────────────
         renderer.beginFrame();
 
-        // Render 3D world (solo se il mondo è stato inizializzato)
         if (worldReady && isGameplayState(state))
         {
             for (EntityId id : world.getEntities())
@@ -407,23 +403,14 @@ void Application::run()
             }
         }
 
-        // Render UI overlay per stato
         if (state == GameState::Launcher)
-        {
             launcher.render();
-        }
         else if (state == GameState::MainMenu)
-        {
             mainMenu.render();
-        }
         else if (state == GameState::Options)
-        {
             optMenu.render(input);
-        }
         else if (state == GameState::PreMatch)
-        {
             preMatchMenu.render();
-        }
         else
         {
             int aliveAllies = 0, aliveEnemies = 0;
