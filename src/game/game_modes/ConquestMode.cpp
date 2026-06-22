@@ -15,8 +15,6 @@ static constexpr float AI_GND_Y = 0.50f;
 static constexpr float AI_PLT_Y = 2.50f;
 static constexpr float SPAWN_Z  = 8.0f;
 
-// UnitTemplate e m_trackedUnits sono membri di ConquestMode (vedi header)
-
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
     EntityId e = world.createEntity();
@@ -39,12 +37,11 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
                         info.mr, info.mg, info.mb,
                         info.br, info.bg, info.bb,
                         info.hp, info.pax, info.paz, info.pbx, info.pbz,
-                        info.patSpd, info.interval, info.range, info.stationary};
-    // Assegna hitbox profile dal registry se disponibile
+                        info.patSpd, info.interval, info.range, info.stationary,
+                        info.hitboxProfileId};
+
     if (m_registry)
     {
-        // Usa hitboxProfileId dall'info se non vuoto,
-        // altrimenti prova il profileId == teamId==2 ? "grunt" : ""
         const std::string profileId = info.hitboxProfileId.empty()
                                       ? (info.teamId == 2 ? "grunt" : "")
                                       : info.hitboxProfileId;
@@ -72,44 +69,36 @@ void ConquestMode::checkDeaths(World& world)
             {
                 --tickets;
                 RespawnEntry entry;
-                entry.timer      = respawnDelay;
-                entry.x          = tpl.x;
-                entry.z          = tpl.z;
-                entry.teamId     = tpl.teamId;
-                entry.mr         = tpl.mr;
-                entry.mg         = tpl.mg;
-                entry.mb         = tpl.mb;
-                entry.br         = tpl.br;
-                entry.bg         = tpl.bg;
-                entry.bb         = tpl.bb;
-                entry.hp         = tpl.hp;
-                entry.pax        = tpl.pax;
-                entry.paz        = tpl.paz;
-                entry.pbx        = tpl.pbx;
-                entry.pbz        = tpl.pbz;
-                entry.patSpd     = tpl.patSpd;
-                entry.interval   = tpl.interval;
-                entry.range      = tpl.range;
-                entry.stationary = tpl.stationary;
+                entry.timer            = respawnDelay;
+                entry.x                = tpl.x;
+                entry.z                = tpl.z;
+                entry.teamId           = tpl.teamId;
+                entry.mr=tpl.mr; entry.mg=tpl.mg; entry.mb=tpl.mb;
+                entry.br=tpl.br; entry.bg=tpl.bg; entry.bb=tpl.bb;
+                entry.hp               = tpl.hp;
+                entry.pax=tpl.pax; entry.paz=tpl.paz;
+                entry.pbx=tpl.pbx; entry.pbz=tpl.pbz;
+                entry.patSpd           = tpl.patSpd;
+                entry.interval         = tpl.interval;
+                entry.range            = tpl.range;
+                entry.stationary       = tpl.stationary;
+                entry.hitboxProfileId  = tpl.hitboxProfileId;
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
                 std::cout << "[Respawn] " << team << " eliminato. Ticket rimasti: "
-                          << tickets << " — respawn in " << respawnDelay << "s" << std::endl;
+                          << tickets << " — respawn in " << respawnDelay << "s\n";
             }
             else
             {
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
                 std::cout << "[Respawn] " << team
-                          << " eliminato. NESSUN ticket — morte permanente." << std::endl;
+                          << " eliminato. NESSUN ticket — morte permanente.\n";
             }
 
             it = m_trackedUnits.erase(it);
         }
-        else
-        {
-            ++it;
-        }
+        else { ++it; }
     }
 }
 
@@ -126,7 +115,7 @@ void ConquestMode::applySettings(const MatchSettings& s)
 void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                           const DefinitionRegistry* registry)
 {
-    std::cout << "[ConquestMode] Firebase — caricamento..." << std::endl;
+    std::cout << "[ConquestMode] Firebase — caricamento...\n";
     world.initialize();
     m_spawnPos = {0, SPAWN_Y, SPAWN_Z};
     m_mesh     = mesh;
@@ -138,69 +127,130 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     m_respawnQueue.clear();
     m_trackedUnits.clear();
 
-    // Giocatore
+    // ── Giocatore ────────────────────────────────────────────────────────
     m_playerEntity = world.createEntity();
     world.addTransform(m_playerEntity, {0, SPAWN_Y, SPAWN_Z});
     world.addTeam(m_playerEntity, {1});
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
+    // ── Legge parametri grunt dal registry (fallback ai valori hardcoded) ─
+    float enemyHp       = 80.0f;
+    float enemyMoveSpd  = 2.5f;
+    float enemyInterval = 2.2f;
+    float enemyRange    = 18.0f;
+    float enemyMR=0.70f, enemyMG=0.65f, enemyMB=0.50f;
+    float enemyBR=1.00f, enemyBG=0.50f, enemyBB=0.00f;
+    std::string enemyHitboxProfile = "grunt";
+
+    if (registry)
+    {
+        const EnemyDef* grunt = registry->getEnemy("grunt");
+        if (grunt)
+        {
+            enemyHp    = grunt->hp;
+            enemyMoveSpd = grunt->moveSpeed;
+            enemyMR=grunt->color[0]; enemyMG=grunt->color[1]; enemyMB=grunt->color[2];
+            enemyBR=grunt->bulletColor[0]; enemyBG=grunt->bulletColor[1]; enemyBB=grunt->bulletColor[2];
+            enemyHitboxProfile = grunt->hitboxProfileId;
+            const AiProfileDef* ai = registry->getAiProfile(grunt->aiProfileId);
+            if (ai) { enemyMoveSpd=ai->patrolSpeed; enemyInterval=ai->shootInterval; enemyRange=ai->sightRange; }
+            std::cout << "[ConquestMode] Grunt dal registry: hp=" << enemyHp
+                      << " spd=" << enemyMoveSpd << " interval=" << enemyInterval << "\n";
+        }
+    }
+
+    // ── Legge parametri heavy dal registry ────────────────────────────────
+    float heavyHp=140.0f, heavyMoveSpd=2.0f, heavyInterval=1.5f, heavyRange=16.0f;
+    float heavyMR=0.50f, heavyMG=0.45f, heavyMB=0.35f;
+    float heavyBR=1.00f, heavyBG=0.40f, heavyBB=0.00f;
+    std::string heavyHitboxProfile = "heavy";
+
+    if (registry)
+    {
+        const EnemyDef* heavy = registry->getEnemy("heavy");
+        if (heavy)
+        {
+            heavyHp=heavy->hp; heavyMoveSpd=heavy->moveSpeed;
+            heavyMR=heavy->color[0]; heavyMG=heavy->color[1]; heavyMB=heavy->color[2];
+            heavyBR=heavy->bulletColor[0]; heavyBG=heavy->bulletColor[1]; heavyBB=heavy->bulletColor[2];
+            heavyHitboxProfile=heavy->hitboxProfileId;
+            const AiProfileDef* ai = registry->getAiProfile(heavy->aiProfileId);
+            if (ai) { heavyMoveSpd=ai->patrolSpeed; heavyInterval=ai->shootInterval; heavyRange=ai->sightRange; }
+        }
+    }
+
+    // ── Legge parametri sniper dal registry ───────────────────────────────
+    float sniperHp=55.0f, sniperMoveSpd=1.8f, sniperInterval=4.0f, sniperRange=30.0f;
+    float sniperMR=0.35f, sniperMG=0.30f, sniperMB=0.25f;
+    float sniperBR=0.20f, sniperBG=0.50f, sniperBB=1.00f;
+    std::string sniperHitboxProfile = "sniper";
+
+    if (registry)
+    {
+        const EnemyDef* sniper = registry->getEnemy("sniper");
+        if (sniper)
+        {
+            sniperHp=sniper->hp; sniperMoveSpd=sniper->moveSpeed;
+            sniperMR=sniper->color[0]; sniperMG=sniper->color[1]; sniperMB=sniper->color[2];
+            sniperBR=sniper->bulletColor[0]; sniperBG=sniper->bulletColor[1]; sniperBB=sniper->bulletColor[2];
+            sniperHitboxProfile=sniper->hitboxProfileId;
+            const AiProfileDef* ai = registry->getAiProfile(sniper->aiProfileId);
+            if (ai) { sniperMoveSpd=ai->patrolSpeed; sniperInterval=ai->shootInterval; sniperRange=ai->sightRange; }
+        }
+    }
+
+    // ── Lambda helper spawn ───────────────────────────────────────────────
     auto mkUnit = [&](float x, float z, int team,
                       float mr, float mg, float mb,
                       float br, float bg, float bb,
                       float hp,
                       float pax, float paz, float pbx, float pbz,
                       float pspd, float intv, float range,
+                      const std::string& hitboxProfile = "",
                       bool stat = false)
     {
         RespawnEntry info;
-        info.timer      = 0;
-        info.x          = x;
-        info.z          = z;
-        info.teamId     = team;
-        info.mr         = mr; info.mg = mg; info.mb = mb;
-        info.br         = br; info.bg = bg; info.bb = bb;
-        info.hp         = hp;
-        info.pax        = pax; info.paz = paz;
-        info.pbx        = pbx; info.pbz = pbz;
-        info.patSpd     = pspd;
-        info.interval   = intv;
-        info.range      = range;
-        info.stationary = stat;
+        info.timer           = 0;
+        info.x=x; info.z=z;
+        info.teamId          = team;
+        info.mr=mr; info.mg=mg; info.mb=mb;
+        info.br=br; info.bg=bg; info.bb=bb;
+        info.hp              = hp;
+        info.pax=pax; info.paz=paz; info.pbx=pbx; info.pbz=pbz;
+        info.patSpd          = pspd;
+        info.interval        = intv;
+        info.range           = range;
+        info.hitboxProfileId = hitboxProfile;
+        info.stationary      = stat;
         spawnUnit(world, info);
     };
 
-    // Posizioni predefinite nemici (fino a 20 slot)
+    // ── Posizioni predefinite ─────────────────────────────────────────────
     struct UnitPos { float x, z, pax, paz, pbx, pbz; bool stat; };
+
     static const UnitPos enemyPos[20] = {
-        // 0-3: pattuglie zona gate (z=-2)
-        {  7,-2,    5,-2,   9,-2,  false },
-        { -7,-2,   -9,-2,  -5,-2,  false },
-        {  3,-2,    1,-2,   5,-2,  false },
-        { -3,-2,   -5,-2,  -1,-2,  false },
-        // 4-5: cecchini piattaforme (stationary)
-        {  8,-8,    0, 0,   0, 0,  true  },
-        { -8,-8,    0, 0,   0, 0,  true  },
-        // 6-9: zona centro (tra gate e piattaforme)
-        {  0,-5,   -2,-5,   2,-5,  false },
-        {  4,-4,    3,-3,   5,-5,  false },
-        { -4,-4,   -5,-3,  -3,-5,  false },
-        {  2,-6,    1,-5,   3,-7,  false },
-        // 10-13: zona nord (dietro le piattaforme)
-        { -2,-6,   -3,-5,  -1,-7,  false },
-        {  0,-9,   -1,-8,   1,-9.5,false },
-        {  4,-9,    3,-8,   5,-9.5,false },
-        { -4,-9,   -5,-8,  -3,-9.5,false },
-        // 14-17: flanchi (lontano dalle scale)
-        {  9,-2,    8,-1,  10,-3,  false },
-        { -9,-2,  -10,-1,  -8,-3,  false },
-        {  9,-6,    8,-5,  10,-7,  false },
-        { -9,-6,  -10,-5,  -8,-7,  false },
-        // 18-19: zona sud (rinforzi)
-        {  6,-1,    5, 0,   7,-2,  false },
-        { -6,-1,   -7, 0,  -5,-2,  false },
+        {  7,-2,   5,-2,   9,-2, false },
+        { -7,-2,  -9,-2,  -5,-2, false },
+        {  3,-2,   1,-2,   5,-2, false },
+        { -3,-2,  -5,-2,  -1,-2, false },
+        {  8,-8,   0, 0,   0, 0, true  },
+        { -8,-8,   0, 0,   0, 0, true  },
+        {  0,-5,  -2,-5,   2,-5, false },
+        {  4,-4,   3,-3,   5,-5, false },
+        { -4,-4,  -5,-3,  -3,-5, false },
+        {  2,-6,   1,-5,   3,-7, false },
+        { -2,-6,  -3,-5,  -1,-7, false },
+        {  0,-9,  -1,-8,   1,-9.5f, false },
+        {  4,-9,   3,-8,   5,-9.5f, false },
+        { -4,-9,  -5,-8,  -3,-9.5f, false },
+        {  9,-2,   8,-1,  10,-3, false },
+        { -9,-2, -10,-1,  -8,-3, false },
+        {  9,-6,   8,-5,  10,-7, false },
+        { -9,-6, -10,-5,  -8,-7, false },
+        {  6,-1,   5, 0,   7,-2, false },
+        { -6,-1,  -7, 0,  -5,-2, false },
     };
 
-    // Posizioni predefinite alleati (fino a 10 slot)
     static const UnitPos allyPos[10] = {
         { -7, 4, -7, 2, -7, 6, false },
         {  7, 4,  7, 2,  7, 6, false },
@@ -214,36 +264,48 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         {  0, 3,  0, 1,  0, 5, false },
     };
 
-    // Spawn nemici
+    // ── Spawn nemici ──────────────────────────────────────────────────────
     int nEnemies = std::min(team2AiCount, 20);
     for (int i = 0; i < nEnemies; ++i)
     {
         const auto& p = enemyPos[i];
-        float r = 0.6f + (i % 3) * 0.2f;
-        float g = 0.1f + (i % 4) * 0.1f;
-        float b = 0.05f;
-        mkUnit(p.x, p.z, 2,
-               r, g, b,
-               1.0f, 0.6f, 0.0f,
-               80.0f,
-               p.pax, p.paz, p.pbx, p.pbz,
-               2.5f, 2.2f, 18.0f, p.stat);
+        if (i == 4 || i == 5)
+        {
+            mkUnit(p.x, p.z, 2,
+                   sniperMR, sniperMG, sniperMB,
+                   sniperBR, sniperBG, sniperBB,
+                   sniperHp,
+                   p.pax, p.paz, p.pbx, p.pbz,
+                   sniperMoveSpd, sniperInterval, sniperRange,
+                   sniperHitboxProfile, true);
+        }
+        else
+        {
+            mkUnit(p.x, p.z, 2,
+                   enemyMR, enemyMG, enemyMB,
+                   enemyBR, enemyBG, enemyBB,
+                   enemyHp,
+                   p.pax, p.paz, p.pbx, p.pbz,
+                   enemyMoveSpd, enemyInterval, enemyRange,
+                   enemyHitboxProfile, p.stat);
+        }
     }
 
-    // Spawn alleati AI
+    // ── Spawn alleati AI ──────────────────────────────────────────────────
     int nAllies = std::min(team1AiCount, 10);
     for (int i = 0; i < nAllies; ++i)
     {
         const auto& p = allyPos[i];
         mkUnit(p.x, p.z, 1,
                0.25f, 0.45f, 1.0f,
-               0.3f,  0.6f,  1.0f,
+               0.30f, 0.60f, 1.0f,
                60.0f,
                p.pax, p.paz, p.pbx, p.pbz,
-               1.8f, 3.5f, 14.0f, p.stat);
+               1.8f, 3.5f, 14.0f,
+               "", p.stat);
     }
 
-    // Geometria
+    // ── Geometria ─────────────────────────────────────────────────────────
     auto addBox = [&](float x, float yc, float z, float ry,
                       float sx, float sy, float sz,
                       float cr, float cg, float cb)
@@ -265,35 +327,29 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     for (int i = 1; i <= 5; ++i)
     {
         float top = i*0.4f, yc = top*0.5f;
-        float zc = -3.575f - (i-1)*0.55f;
+        float zc  = -3.575f - (i-1)*0.55f;
         addBox( 8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
         addBox(-8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
     }
-    addBox( 0, 0.25f, 0, 0, 3,0.5f,2, 0.38f,0.35f,0.30f);
-    addBox(-5,0.7f,-1, 0, 0.4f,1.4f,3, 0.40f,0.38f,0.34f);
-    addBox( 5,0.7f,-1, 0, 0.4f,1.4f,3, 0.40f,0.38f,0.34f);
-    addBox(-3,0.7f, 3, 90, 0.4f,1.4f,2.5f, 0.44f,0.42f,0.38f);
-    addBox( 3,0.7f, 3, 90, 0.4f,1.4f,2.5f, 0.44f,0.42f,0.38f);
+    addBox(  6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
+    addBox( -6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
+    addBox(  0,0.7f,-5,    0, 3.5f,1.4f,0.4f, 0.32f,0.30f,0.28f);
 
-    std::cout << "[ConquestMode] Firebase pronto." << std::endl;
-    std::cout << "  Nemici: " << m_team2Tickets << " ticket | " << nEnemies << " AI attive" << std::endl;
-    std::cout << "  Alleati: " << m_team1Tickets << " ticket | " << nAllies << " AI attive" << std::endl;
+    std::cout << "[ConquestMode] Spawn completato: "
+              << nEnemies << " nemici, " << nAllies << " alleati AI.\n";
 }
 
 void ConquestMode::update(World& world, float dt)
 {
-    world.tick(dt);
     checkDeaths(world);
 
-    auto it = m_respawnQueue.begin();
-    while (it != m_respawnQueue.end())
+    // Processa la coda di respawn: ogni entry ha il suo timer interno
+    for (auto it = m_respawnQueue.begin(); it != m_respawnQueue.end(); )
     {
         it->timer -= dt;
         if (it->timer <= 0.0f)
         {
             spawnUnit(world, *it);
-            const char* team = (it->teamId == 1) ? "alleato" : "nemico";
-            std::cout << "[Respawn] " << team << " rinato!" << std::endl;
             it = m_respawnQueue.erase(it);
         }
         else { ++it; }

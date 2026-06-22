@@ -1,32 +1,57 @@
 #include "modules/BalanceEditor.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <SDL2/SDL.h>
 #include <fstream>
 #include <iostream>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 using json = nlohmann::json;
 
+#include <filesystem>
+namespace fs = std::filesystem;
+
 namespace editor
 {
+
+// Restituisce la dir SOURCE del progetto (data/ nella root).
+// L'exe è in build/windows-debug/Debug/ → sali 3 livelli per il source.
+static std::string getSourceDataDir()
+{
+    char* base = SDL_GetBasePath();
+    fs::path exeDir = base ? base : ".";
+    SDL_free(base);
+
+    // Prova 3 livelli su: build/config/Debug → project root
+    std::error_code ec;
+    fs::path sourceData = fs::canonical(exeDir / "../../../data", ec);
+    if (!ec && fs::exists(sourceData / "weapons", ec))
+        return sourceData.string() + "/";
+
+    // Fallback: usa la copia locale nell'output dir
+    return (exeDir / "data").string() + "/";
+}
+
 
 BalanceEditor::BalanceEditor() { reload(); }
 
 void BalanceEditor::reload()
 {
-    m_registry.loadAll("data");
+    m_registry.loadAll(getSourceDataDir());
     m_selWeapon.clear();
     m_selEnemy.clear();
     m_selAI.clear();
     m_dirty = false;
+    std::cout << "[Balance] Dati caricati da: " << getSourceDataDir() << "\n";
 }
 
 // ── Salvataggio ──────────────────────────────────────────────────────────
 
 void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
 {
-    std::string path = "data/weapons/" + w.id + ".json";
+    std::string path = getSourceDataDir() + "weapons/" + w.id + ".json";
     json j;
     j["id"]               = w.id;
     j["name"]             = w.name;
@@ -42,15 +67,21 @@ void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
     j["mesh"]             = w.meshPath;
     j["projectile_mesh"]  = w.projectileMeshPath;
     std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Balance] Cannot write: " << path << "\n"; return; }
+    if (!f.is_open())
+    {
+        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
+        return;
+    }
     f << j.dump(4) << "\n";
-    std::cout << "[Balance] Saved: " << path << "\n";
+    f.close(); // flush e chiudi prima del reload
+    std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
+    m_registry.reload(getSourceDataDir());
 }
 
 void BalanceEditor::saveEnemy(const mini::EnemyDef& e)
 {
-    std::string path = "data/enemies/" + e.id + ".json";
+    std::string path = getSourceDataDir() + "enemies/" + e.id + ".json";
     json j;
     j["id"]             = e.id;
     j["name"]           = e.name;
@@ -65,15 +96,21 @@ void BalanceEditor::saveEnemy(const mini::EnemyDef& e)
     j["stats"]["hp"]         = e.hp;
     j["stats"]["move_speed"] = e.moveSpeed;
     std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Balance] Cannot write: " << path << "\n"; return; }
+    if (!f.is_open())
+    {
+        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
+        return;
+    }
     f << j.dump(4) << "\n";
-    std::cout << "[Balance] Saved: " << path << "\n";
+    f.close(); // flush e chiudi prima del reload
+    std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
+    m_registry.reload(getSourceDataDir());
 }
 
 void BalanceEditor::saveAI(const mini::AiProfileDef& a)
 {
-    std::string path = "data/ai/" + a.id + ".json";
+    std::string path = getSourceDataDir() + "ai/" + a.id + ".json";
     json j;
     j["profile_id"]            = a.id;
     j["sight_range"]           = a.sightRange;
@@ -95,10 +132,16 @@ void BalanceEditor::saveAI(const mini::AiProfileDef& a)
     j["seek_speed"]            = a.seekSpeed;
     j["jump_enabled"]          = a.jumpEnabled;
     std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Balance] Cannot write: " << path << "\n"; return; }
+    if (!f.is_open())
+    {
+        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
+        return;
+    }
     f << j.dump(4) << "\n";
-    std::cout << "[Balance] Saved: " << path << "\n";
+    f.close(); // flush e chiudi prima del reload
+    std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
+    m_registry.reload(getSourceDataDir());
 }
 
 // ── Weapons tab ──────────────────────────────────────────────────────────
@@ -116,18 +159,31 @@ void BalanceEditor::drawWeaponsTab()
             m_selWeapon = id;
     }
     ImGui::EndChild();
-
     ImGui::SameLine();
 
-    auto it = weapons.find(m_selWeapon);
-    if (it == weapons.end()) { ImGui::TextDisabled("Seleziona un'arma."); return; }
-
-    // Copia modificabile (il registry è const)
     static mini::WeaponDef edit;
     static std::string editId;
-    if (editId != m_selWeapon) { edit = it->second; editId = m_selWeapon; }
+    static char newWId[64] = "";
 
     ImGui::BeginChild("##wedit", ImVec2(0, 0), false);
+
+    // Crea nuova arma
+    ImGui::SetNextItemWidth(130);
+    ImGui::InputText("Nuovo ID##w", newWId, 64);
+    ImGui::SameLine();
+    if (ImGui::Button("+ Crea arma") && newWId[0] != '\0')
+    {
+        std::string path = getSourceDataDir() + "weapons/" + newWId + ".json";
+        if (!fs::exists(path))
+        { mini::WeaponDef def; def.id=newWId; def.name=newWId; saveWeapon(def); m_selWeapon=newWId; }
+        newWId[0] = '\0';
+    }
+    ImGui::Separator();
+
+    auto it = weapons.find(m_selWeapon);
+    if (it == weapons.end())
+    { ImGui::TextDisabled("Seleziona un'arma."); ImGui::EndChild(); return; }
+    if (editId != m_selWeapon) { edit = it->second; editId = m_selWeapon; }
 
     ImGui::Text("Arma: %s  [%s]", edit.name.c_str(), edit.id.c_str());
     ImGui::Separator();
@@ -173,14 +229,27 @@ void BalanceEditor::drawEnemiesTab()
     ImGui::EndChild();
     ImGui::SameLine();
 
-    auto it = enemies.find(m_selEnemy);
-    if (it == enemies.end()) { ImGui::TextDisabled("Seleziona un nemico."); return; }
-
     static mini::EnemyDef edit;
     static std::string editId;
-    if (editId != m_selEnemy) { edit = it->second; editId = m_selEnemy; }
+    static char newEId[64] = "";
 
     ImGui::BeginChild("##eedit", ImVec2(0, 0), false);
+
+    ImGui::SetNextItemWidth(130); ImGui::InputText("Nuovo ID##e", newEId, 64); ImGui::SameLine();
+    if (ImGui::Button("+ Crea nemico") && newEId[0] != '\0')
+    {
+        std::string path = getSourceDataDir() + "enemies/" + newEId + ".json";
+        if (!fs::exists(path))
+        { mini::EnemyDef def; def.id=newEId; def.name=newEId; saveEnemy(def); m_selEnemy=newEId; }
+        newEId[0] = '\0';
+    }
+    ImGui::Separator();
+
+    auto it = enemies.find(m_selEnemy);
+    if (it == enemies.end())
+    { ImGui::TextDisabled("Seleziona un nemico."); ImGui::EndChild(); return; }
+
+    if (editId != m_selEnemy) { edit = it->second; editId = m_selEnemy; }
     ImGui::Text("Nemico: %s  [%s]", edit.name.c_str(), edit.id.c_str());
     ImGui::Separator();
 
@@ -198,7 +267,7 @@ void BalanceEditor::drawEnemiesTab()
     if (ImGui::InputText("Hitbox ID",     hBuf, 64)) edit.hitboxProfileId = hBuf;
 
     ImGui::Separator();
-    if (ImGui::Button("Salva", {120,0}))    saveEnemy(edit);
+    if (ImGui::Button("Salva", {120,0}))     saveEnemy(edit);
     ImGui::SameLine();
     if (ImGui::Button("Ripristina",{120,0})) edit = it->second;
     ImGui::SameLine();
@@ -222,14 +291,27 @@ void BalanceEditor::drawAITab()
     ImGui::EndChild();
     ImGui::SameLine();
 
-    auto it = profiles.find(m_selAI);
-    if (it == profiles.end()) { ImGui::TextDisabled("Seleziona un profilo AI."); return; }
-
     static mini::AiProfileDef edit;
     static std::string editId;
-    if (editId != m_selAI) { edit = it->second; editId = m_selAI; }
+    static char newAId[64] = "";
 
     ImGui::BeginChild("##aiedit", ImVec2(0, 0), false);
+
+    ImGui::SetNextItemWidth(130); ImGui::InputText("Nuovo ID##a", newAId, 64); ImGui::SameLine();
+    if (ImGui::Button("+ Crea profilo AI") && newAId[0] != '\0')
+    {
+        std::string path = getSourceDataDir() + "ai/" + newAId + ".json";
+        if (!fs::exists(path))
+        { mini::AiProfileDef def; def.id=newAId; saveAI(def); m_selAI=newAId; }
+        newAId[0] = '\0';
+    }
+    ImGui::Separator();
+
+    auto it = profiles.find(m_selAI);
+    if (it == profiles.end())
+    { ImGui::TextDisabled("Seleziona un profilo AI."); ImGui::EndChild(); return; }
+
+    if (editId != m_selAI) { edit = it->second; editId = m_selAI; }
     ImGui::Text("AI Profile: %s", edit.id.c_str());
     ImGui::Separator();
 

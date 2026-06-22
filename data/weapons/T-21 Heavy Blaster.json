@@ -1,0 +1,19 @@
+{
+    "bullet_color": [
+        1.0,
+        0.0,
+        0.0
+    ],
+    "bullet_lifetime": 5.0,
+    "bullet_scale": 0.15000000596046448,
+    "bullet_speed": 50.0,
+    "cooldown_rate": 0.30000001192092896,
+    "damage": 45.0,
+    "fire_rate": 2.75,
+    "heat_per_shot": 0.4000000059604645,
+    "id": "T-21 Heavy Blaster",
+    "mesh": "",
+    "name": "T-21 Heavy Blaster",
+    "overheat_penalty": 2.0,
+    "projectile_mesh": ""
+}

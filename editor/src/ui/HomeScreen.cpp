@@ -22,11 +22,11 @@ static const ModuleCard k_modules[] = {
 
     {"hitbox",  "Hitbox\nEditor",
      "Modifica le zone di hitbox\nper ogni tipo di personaggio.\nSalva come JSON.",
-     ActiveModule::HitboxEditor,       false, 1.0f,  0.55f, 0.2f},
+     ActiveModule::HitboxEditor,       true,  1.0f,  0.55f, 0.2f},  // <-- era false
 
     {"balance", "Balance\nEditor",
      "Regola parametri di armi,\nnemici e AI con slider.\nSalva preset.",
-     ActiveModule::BalanceEditor,      false, 0.4f,  0.9f,  0.4f},
+     ActiveModule::BalanceEditor,      true,  0.4f,  0.9f,  0.4f},  // <-- era false
 
     {"assets",  "Asset\nManager",
      "Esplora e assegna modelli,\ntexture e materiali alle\ndefinizioni entità.",
@@ -66,9 +66,9 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
     // ── Titolo ────────────────────────────────────────────────────────
     ImGui::SetCursorPos({W * 0.5f - 90.0f, H * 0.06f});
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.75f, 0.30f, 1.0f));
-    ImGui::SetWindowFontScale(1.6f);          // ← FIX: era SetWindowFontSize(28)
+    ImGui::SetWindowFontScale(1.6f);
     ImGui::Text("GFEngine Editor");
-    ImGui::SetWindowFontScale(1.0f);          // ← reset
+    ImGui::SetWindowFontScale(1.0f);
     ImGui::PopStyleColor();
 
     ImGui::SetCursorPos({W * 0.5f - 60.0f, H * 0.06f + 34.0f});

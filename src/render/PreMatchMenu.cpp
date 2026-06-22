@@ -9,6 +9,23 @@
 namespace mini
 {
 
+void PreMatchMenu::setWeaponList(const std::vector<WeaponEntry>& weapons)
+{
+    m_weaponList = weapons;
+    // Clamp index in case list changed
+    if (!m_weaponList.empty() && m_weaponIdx >= (int)m_weaponList.size())
+        m_weaponIdx = 0;
+}
+
+const std::string& PreMatchMenu::getSelectedWeaponId() const
+{
+    static const std::string fallback = "blaster_rifle";
+    if (m_weaponList.empty() || m_weaponIdx < 0 || m_weaponIdx >= (int)m_weaponList.size())
+        return fallback;
+    return m_weaponList[m_weaponIdx].id;
+}
+
+
 PreMatchMenu::PreMatchMenu(int screenW, int screenH)
     : m_ui(screenW, screenH)
 {
@@ -86,7 +103,7 @@ PreMatchMenu::Result PreMatchMenu::handleRoot(int sc)
 
 PreMatchMenu::Result PreMatchMenu::handleLoadout(int sc)
 {
-    constexpr int N = 4;
+    const int N = m_weaponList.empty() ? 4 : (int)m_weaponList.size();
 
     if (sc == SDL_SCANCODE_UP || sc == SDL_SCANCODE_W)
     {
@@ -402,25 +419,27 @@ void PreMatchMenu::renderLoadout() const
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
     m_ui.textCentered(cx, 30, 3.0f, "LOADOUT", 0.95f, 0.85f, 0.3f);
 
-    const char* weapons[4] = {
-        "Blaster Rifle",
-        "Blaster Pistol",
-        "Heavy Blaster",
-        "Sniper Rifle"
+    // Lista dinamica da DefinitionRegistry (fallback a nomi hardcoded se vuota)
+    const int nWeapons = m_weaponList.empty() ? 4 : (int)m_weaponList.size();
+    static const char* fallbackNames[4] = {
+        "Blaster Rifle", "Blaster Pistol", "Heavy Blaster", "Sniper Rifle"
     };
 
     const float startY = 120.0f;
-    const float rowH = 50.0f;
+    const float rowH   = 50.0f;
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < nWeapons; ++i)
     {
-        const float y = startY + i * rowH;
-        const bool sel = (i == m_weaponIdx);
+        const float y   = startY + i * rowH;
+        const bool  sel = (i == m_weaponIdx);
+        const char* label = m_weaponList.empty()
+            ? fallbackNames[i]
+            : m_weaponList[i].name.c_str();
 
         if (sel)
             m_ui.rect(cx - 220, y - 4, 440, 40, 0.15f, 0.30f, 0.55f, 0.60f);
 
-        m_ui.text(cx - 120, y + 4, sel ? 2.1f : 1.8f, weapons[i],
+        m_ui.textCentered(cx, y + 4, sel ? 2.1f : 1.8f, label,
                   sel ? 1.0f : 0.75f,
                   sel ? 0.9f : 0.75f,
                   sel ? 0.4f : 0.75f);

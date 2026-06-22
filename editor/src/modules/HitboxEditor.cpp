@@ -1,31 +1,49 @@
 #include "modules/HitboxEditor.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <SDL2/SDL.h>
 #include <fstream>
 #include <iostream>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <string>
 
 using json = nlohmann::json;
 
+#include <filesystem>
+namespace fs = std::filesystem;
+
 namespace editor
 {
+
+static std::string getSourceDataDir()
+{
+    char* base = SDL_GetBasePath();
+    fs::path exeDir = base ? base : ".";
+    SDL_free(base);
+    std::error_code ec;
+    fs::path sourceData = fs::canonical(exeDir / "../../../data", ec);
+    if (!ec && fs::exists(sourceData / "hitboxes", ec))
+        return sourceData.string() + "/";
+    return (exeDir / "data").string() + "/";
+}
 
 HitboxEditor::HitboxEditor() { reload(); }
 
 void HitboxEditor::reload()
 {
-    m_registry.loadAll("data");
+    m_registry.loadAll(getSourceDataDir());
     m_selProfile.clear();
     m_selZone = -1;
     m_edit = {};
     m_dirty = false;
+    std::cout << "[Hitbox] Dati caricati da: " << getSourceDataDir() << "\n";
 }
 
 void HitboxEditor::saveProfile(const mini::HitboxProfile& p)
 {
-    std::string path = "data/hitboxes/" + p.profileId + ".json";
+    std::string path = getSourceDataDir() + "hitboxes/" + p.profileId + ".json";
     json j;
     j["profile_id"] = p.profileId;
     json zones = json::array();
@@ -41,10 +59,16 @@ void HitboxEditor::saveProfile(const mini::HitboxProfile& p)
     }
     j["zones"] = zones;
     std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Hitbox] Cannot write: " << path << "\n"; return; }
+    if (!f.is_open())
+    {
+        std::cerr << "[Hitbox] ERRORE scrittura: " << path << "\n";
+        return;
+    }
     f << j.dump(4) << "\n";
-    std::cout << "[Hitbox] Saved: " << path << "\n";
+    f.close(); // flush e chiudi prima del reload
+    std::cout << "[Hitbox] Salvato: " << path << "\n";
     m_dirty = false;
+    m_registry.reload(getSourceDataDir());
 }
 
 void HitboxEditor::addZone()
@@ -79,8 +103,11 @@ void HitboxEditor::duplicateZone(int idx)
 
 void HitboxEditor::drawProfileList()
 {
+    // BeginGroup fa sì che SameLine() in draw() sia relativo all'intera colonna sinistra
+    ImGui::BeginGroup();
     ImGui::Text("Profili hitbox:");
-    ImGui::BeginChild("##hlist", ImVec2(160, 0), true);
+    // Altezza -50 lascia spazio al campo "nuovo profilo" sotto la lista
+    ImGui::BeginChild("##hlist", ImVec2(160, -50), true);
     for (auto& [id, p] : m_registry.hitboxProfiles())
     {
         bool sel = (id == m_selProfile);
@@ -88,13 +115,31 @@ void HitboxEditor::drawProfileList()
         {
             m_selProfile = id;
             m_selZone = -1;
-            // Copia profilo per editare (dobbiamo creare copia non-const)
             m_edit.profileId = p.profileId;
             m_edit.zones = p.zones;
             m_dirty = false;
         }
     }
     ImGui::EndChild();
+
+    // Crea nuovo profilo (sotto la lista, dentro il group)
+    static char newHId[64] = "";
+    ImGui::SetNextItemWidth(120); ImGui::InputText("##newhid", newHId, 64); ImGui::SameLine();
+    if (ImGui::Button("+ Nuovo") && newHId[0] != '\0')
+    {
+        std::string path = getSourceDataDir() + "hitboxes/" + newHId + ".json";
+        if (!fs::exists(path))
+        {
+            mini::HitboxProfile p2;
+            p2.profileId = newHId;
+            saveProfile(p2);
+            m_selProfile = newHId;
+            m_edit = p2;
+            m_selZone = -1;
+        }
+        newHId[0] = '\0';
+    }
+    ImGui::EndGroup(); // chiude la colonna sinistra
 }
 
 void HitboxEditor::drawZoneList()
@@ -104,11 +149,10 @@ void HitboxEditor::drawZoneList()
     for (int i = 0; i < (int)m_edit.zones.size(); ++i)
     {
         auto& z = m_edit.zones[i];
-        // Colore in base al moltiplicatore
         float mult = z.damageMultiplier;
-        ImVec4 col = (mult >= 2.0f) ? ImVec4(1,0.3f,0.3f,1) :   // rosso = critico
-                     (mult >= 1.0f) ? ImVec4(1,0.85f,0.3f,1) :   // giallo = normale
-                                      ImVec4(0.6f,0.6f,1,1);      // blu = ridotto
+        ImVec4 col = (mult >= 2.0f) ? ImVec4(1,0.3f,0.3f,1) :
+                     (mult >= 1.0f) ? ImVec4(1,0.85f,0.3f,1) :
+                                      ImVec4(0.6f,0.6f,1,1);
         ImGui::PushStyleColor(ImGuiCol_Text, col);
         bool sel = (i == m_selZone);
         char lbl[64]; std::snprintf(lbl, 64, "%s  x%.1f", z.name.c_str(), mult);
@@ -151,7 +195,6 @@ void HitboxEditor::drawZoneProperties()
         m_dirty = true;
 
     ImGui::Separator();
-    // Legenda moltiplicatori
     ImGui::TextColored({1,0.3f,0.3f,1}, "  >= 2.0 = critico (testa)");
     ImGui::TextColored({1,0.85f,0.3f,1},"  1.0    = normale (torso)");
     ImGui::TextColored({0.6f,0.6f,1,1}, "  < 1.0  = ridotto (braccia/gambe)");
@@ -159,15 +202,13 @@ void HitboxEditor::drawZoneProperties()
 
 void HitboxEditor::drawVisualPreview()
 {
-    // Vista frontale 2D delle zone come rettangoli colorati
-    const float scale = 120.0f;  // pixel per metro
+    const float scale = 120.0f;
     const float pivotX = 100.0f;
-    const float pivotY = 200.0f; // base del personaggio in pixel
+    const float pivotY = 200.0f;
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
 
-    // Sagoma personaggio (rettangolo grigio)
     dl->AddRect(
         {p.x + pivotX - 0.25f*scale, p.y + pivotY - 2.0f*scale},
         {p.x + pivotX + 0.25f*scale, p.y + pivotY},
@@ -177,7 +218,7 @@ void HitboxEditor::drawVisualPreview()
     {
         auto& z = m_edit.zones[i];
         float cx = p.x + pivotX + z.offset.x * scale;
-        float cy = p.y + pivotY - z.offset.y * scale; // Y invertita
+        float cy = p.y + pivotY - z.offset.y * scale;
         float hw = z.halfExtents.x * scale;
         float hh = z.halfExtents.y * scale;
 
@@ -190,11 +231,8 @@ void HitboxEditor::drawVisualPreview()
 
         dl->AddRectFilled({cx-hw, cy-hh}, {cx+hw, cy+hh}, fill);
         dl->AddRect      ({cx-hw, cy-hh}, {cx+hw, cy+hh}, border, 0, 0, sel?2.0f:1.0f);
-
-        // Label zona
         dl->AddText({cx-hw+2, cy-8}, IM_COL32(255,255,255,200), z.name.c_str());
 
-        // Click per selezionare zona dalla preview
         if (ImGui::IsMouseClicked(0))
         {
             ImVec2 mp = ImGui::GetMousePos();
@@ -203,11 +241,9 @@ void HitboxEditor::drawVisualPreview()
         }
     }
 
-    // Asse Y (linea verde)
     dl->AddLine({p.x+pivotX, p.y+pivotY-2.2f*scale},
                 {p.x+pivotX, p.y+pivotY+0.1f*scale},
                 IM_COL32(80,200,80,160), 1.0f);
-    // Ticks altezza
     for (int y = 0; y <= 2; ++y) {
         float py = p.y + pivotY - y * scale;
         dl->AddLine({p.x+pivotX-8, py}, {p.x+pivotX+8, py}, IM_COL32(80,200,80,100));
@@ -220,7 +256,6 @@ void HitboxEditor::drawVisualPreview()
 
 void HitboxEditor::draw()
 {
-    // ── Colonna sinistra: lista profili ──────────────────────────────
     drawProfileList();
     ImGui::SameLine();
 
@@ -230,7 +265,6 @@ void HitboxEditor::draw()
         return;
     }
 
-    // ── Colonna centrale: lista zone + proprietà ──────────────────────
     ImGui::BeginGroup();
     drawZoneList();
     ImGui::Separator();
@@ -239,14 +273,12 @@ void HitboxEditor::draw()
 
     ImGui::SameLine();
 
-    // ── Colonna destra: preview 2D ───────────────────────────────────
     ImGui::BeginChild("##hpreview", ImVec2(230, 0), true);
     ImGui::Text("Vista frontale");
     ImGui::Separator();
     drawVisualPreview();
     ImGui::EndChild();
 
-    // ── Toolbar salvataggio ───────────────────────────────────────────
     ImGui::Separator();
     if (m_dirty)
         ImGui::TextColored({1,0.7f,0.2f,1}, "* Modifiche non salvate");

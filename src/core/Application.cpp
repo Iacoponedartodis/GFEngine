@@ -30,6 +30,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <algorithm>
 #include <memory>
 
 // ── weaponFromDef inline ─────────────────────────────────────────────────────
@@ -92,6 +93,17 @@ void Application::run(bool directPreMatch)
     // ── Definition Registry ──────────────────────────────────────────
     DefinitionRegistry registry;
     registry.loadAll("data");
+
+    // Popola la lista armi del PreMatchMenu dal registry (armi ordinate per nome)
+    {
+        std::vector<PreMatchMenu::WeaponEntry> wList;
+        for (auto& [id, def] : registry.weapons())
+            wList.push_back({id, def.name});
+        // Ordina per nome per consistenza UI
+        std::sort(wList.begin(), wList.end(),
+            [](const auto& a, const auto& b){ return a.name < b.name; });
+        preMatchMenu.setWeaponList(wList);
+    }
 
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
@@ -166,23 +178,16 @@ void Application::run(bool directPreMatch)
 
     auto startGame = [&]()
     {
-        // Prova a caricare l'arma dal registry; fallback agli inline preset
-        static const char* weaponIds[] = {
-            "blaster_rifle", "blaster_pistol", "heavy_blaster", "sniper_rifle"
-        };
-        int wIdx = preMatchMenu.getSelectedWeapon();
-        const auto* wDef = registry.getWeapon(weaponIds[wIdx]);
+        // Usa l'ID dell'arma selezionata dal menu (lista dinamica dal registry)
+        const std::string& selectedId = preMatchMenu.getSelectedWeaponId();
+        const auto* wDef = registry.getWeapon(selectedId);
         if (wDef)
             player.weapon = weaponFromDef(*wDef);
         else
         {
-            switch (wIdx)
-            {
-            case 0: player.weapon = makeBlasterRifle();  break;
-            case 1: player.weapon = makeBlasterPistol(); break;
-            case 2: player.weapon = makeHeavyBlaster();  break;
-            case 3: player.weapon = makeSniperRifle();   break;
-            }
+            std::cerr << "[Game] Arma non trovata nel registry: " << selectedId
+                      << " -- fallback blaster rifle\n";
+            player.weapon = makeBlasterRifle();
         }
         initWorld();
         state = GameState::Playing;
@@ -347,7 +352,7 @@ void Application::run(bool directPreMatch)
         {
             accumulator += elapsed;
             while (accumulator >= fixedDt)
-            { conquestMode.update(world, fixedDt); accumulator -= fixedDt; }
+            { conquestMode.update(world, fixedDt); world.tick(fixedDt); accumulator -= fixedDt; }
 
             player.weapon.update(elapsed);
             if (player.weapon.overheated && !wasOverheated) audio.playOverheat();

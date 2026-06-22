@@ -24,6 +24,10 @@ public:
     [[nodiscard]] const MatchSettings& getSettings() const { return m_settings; }
     void setSettings(const MatchSettings& s);
 
+    // Lista armi dinamica da DefinitionRegistry
+    struct WeaponEntry { std::string id; std::string name; };
+    void setWeaponList(const std::vector<WeaponEntry>& weapons);
+    [[nodiscard]] const std::string& getSelectedWeaponId() const;
     [[nodiscard]] int getSelectedWeapon() const { return m_weaponIdx; }
 
 private:
@@ -38,6 +42,7 @@ private:
     UserPresets m_presets;
 
     int m_weaponIdx = 0;
+    std::vector<WeaponEntry> m_weaponList;
 
     struct Row
     {

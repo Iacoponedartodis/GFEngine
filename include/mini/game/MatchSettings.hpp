@@ -1,4 +1,5 @@
 #pragma once
+#include <SDL2/SDL.h>
 
 // NOMINMAX impedisce a windows.h di definire le macro min/max
 // che confliggono con std::min/std::max nel resto del codice
@@ -64,24 +65,36 @@ struct UserPresets
     }
 
     // ── Persistenza JSON in data/presets/match/ ──────────────────────────
-    static constexpr const char* PRESET_DIR = "data/presets/match";
+    // Percorso basato sull'exe (SDL_GetBasePath) -- funziona da qualsiasi CWD
+    static std::string getPresetDir()
+    {
+        char* base = SDL_GetBasePath();
+        std::string dir = (base ? base : "./");
+        SDL_free(base);
+        return dir + "data/presets/match";
+    }
 
     static void ensureDir()
     {
+        std::string pd = getPresetDir();
+        // risale alla cartella dell'exe per creare data/presets/match
+        // SDL_GetBasePath restituisce es: C:/path/to/Debug/
 #ifdef _WIN32
-        CreateDirectoryA("data",              nullptr);
-        CreateDirectoryA("data\\presets",     nullptr);
-        CreateDirectoryA("data\\presets\\match", nullptr);
+        std::string exeDir = pd.substr(0, pd.size() - std::string("data/presets/match").size());
+        CreateDirectoryA((exeDir + "data").c_str(),           nullptr);
+        CreateDirectoryA((exeDir + "data/presets").c_str(),   nullptr);
+        CreateDirectoryA(pd.c_str(),                           nullptr);
 #else
-        ::mkdir("data",               0755);
-        ::mkdir("data/presets",       0755);
-        ::mkdir("data/presets/match", 0755);
+        std::string exeDir = pd.substr(0, pd.size() - std::string("data/presets/match").size());
+        ::mkdir((exeDir + "data").c_str(),          0755);
+        ::mkdir((exeDir + "data/presets").c_str(),  0755);
+        ::mkdir(pd.c_str(),                          0755);
 #endif
     }
 
     static std::string slotPath(int slot)
     {
-        return std::string(PRESET_DIR) + "/slot_" + std::to_string(slot) + ".json";
+        return getPresetDir() + "/slot_" + std::to_string(slot) + ".json";
     }
 
     void saveToFile() const
@@ -169,7 +182,7 @@ struct UserPresets
         }
         if (loaded > 0)
             std::cout << "[Presets] Caricati " << loaded << " preset da "
-                      << PRESET_DIR << "\n";
+                      << getPresetDir() << "\n";
     }
 };
 

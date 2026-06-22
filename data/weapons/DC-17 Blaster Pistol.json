@@ -7,13 +7,13 @@
     "bullet_lifetime": 2.5,
     "bullet_scale": 0.06499999761581421,
     "bullet_speed": 20.0,
-    "cooldown_rate": 0.44999998807907104,
+    "cooldown_rate": 0.3499999940395355,
     "damage": 17.0,
-    "fire_rate": 6.0,
-    "heat_per_shot": 0.10000000149011612,
-    "id": "blaster_pistol",
+    "fire_rate": 7.0,
+    "heat_per_shot": 0.30000001192092896,
+    "id": "DC-17 Blaster Pistol",
     "mesh": "assets/models/blaster_pistol.obj",
-    "name": "DC-17 Pistol",
+    "name": "DC-17 Blaster Pistol",
     "overheat_penalty": 1.2000000476837158,
     "projectile_mesh": "assets/models/laser_bolt.obj"
 }

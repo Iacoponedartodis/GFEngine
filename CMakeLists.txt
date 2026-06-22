@@ -177,3 +177,17 @@ if(MSVC)
 else()
     target_compile_options(GFEditor PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# ── Copia cartella data nella directory di output ─────────────────────────────
+add_custom_command(TARGET GFEngine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/data"
+        "$<TARGET_FILE_DIR:GFEngine>/data"
+    COMMENT "Copia data/ -> GFEngine output dir"
+)
+add_custom_command(TARGET GFEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/data"
+        "$<TARGET_FILE_DIR:GFEditor>/data"
+    COMMENT "Copia data/ -> GFEditor output dir"
+)

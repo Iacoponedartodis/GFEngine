@@ -1,0 +1,35 @@
+{
+    "profile_id": "heavy",
+    "zones": [
+        {
+            "name": "head",
+            "offset": [0.0, 1.9, 0.0],
+            "half_extents": [0.18, 0.18, 0.18],
+            "damage_multiplier": 2.0
+        },
+        {
+            "name": "torso",
+            "offset": [0.0, 1.2, 0.0],
+            "half_extents": [0.35, 0.42, 0.28],
+            "damage_multiplier": 0.8
+        },
+        {
+            "name": "left_arm",
+            "offset": [-0.52, 1.15, 0.0],
+            "half_extents": [0.14, 0.36, 0.14],
+            "damage_multiplier": 0.6
+        },
+        {
+            "name": "right_arm",
+            "offset": [0.52, 1.15, 0.0],
+            "half_extents": [0.14, 0.36, 0.14],
+            "damage_multiplier": 0.6
+        },
+        {
+            "name": "legs",
+            "offset": [0.0, 0.45, 0.0],
+            "half_extents": [0.25, 0.45, 0.22],
+            "damage_multiplier": 0.4
+        }
+    ]
+}

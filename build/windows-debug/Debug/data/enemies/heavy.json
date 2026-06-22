@@ -1,0 +1,24 @@
+{
+    "id": "heavy",
+    "name": "B2 Super Battle Droid",
+    "mesh": "assets/models/b2_droid.obj",
+    "texture": "assets/textures/b2_droid.png",
+    "hitbox_profile": "heavy",
+    "ai_profile": "heavy_ai",
+    "weapon": "heavy_blaster",
+    "team": 2,
+    "color": [
+        0.35,
+        0.4,
+        0.55
+    ],
+    "bullet_color": [
+        1.0,
+        0.6,
+        0.1
+    ],
+    "stats": {
+        "hp": 140.0,
+        "move_speed": 2.5
+    }
+}
