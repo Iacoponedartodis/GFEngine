@@ -1,9 +1,8 @@
 #pragma once
-
 #include <memory>
 #include <glm/glm.hpp>
 
-namespace mini { class Camera; class Shader; }
+namespace mini { class Camera; }
 
 namespace editor
 {
@@ -18,28 +17,27 @@ public:
     void draw();
 
 private:
-    unsigned int m_fbo = 0;
-    unsigned int m_colorTex = 0;
-    unsigned int m_depthRbo = 0;
-    int m_fbWidth = 0;
-    int m_fbHeight = 0;
-
+    // ── FBO ──────────────────────────────────────────────────────────
+    unsigned int m_fbo=0, m_colorTex=0, m_depthRbo=0;
+    int m_fbWidth=0, m_fbHeight=0;
     void resizeFBO(int w, int h);
+
+    // ── Shader (compilato localmente, no mini::Shader) ────────────────
+    unsigned int m_shaderProgram = 0;
+
+    // ── Grid ─────────────────────────────────────────────────────────
+    unsigned int m_gridVAO=0, m_gridVBO=0;
+    int          m_gridVertCount=0;
+    void buildGrid(float size, int div);
+    void drawGrid(const glm::mat4& vp);
     void renderScene();
 
+    // ── Camera ───────────────────────────────────────────────────────
     std::unique_ptr<mini::Camera> m_camera;
-    bool m_focused = false;
-    bool m_mouseCapture = false;
-    bool m_tabWasDown = false;
-    float m_camSpeed = 8.0f;
-
-    std::unique_ptr<mini::Shader> m_shader;
-    unsigned int m_gridVAO = 0;
-    unsigned int m_gridVBO = 0;
-    int m_gridVertCount = 0;
-
-    void buildGrid(float size, int divisions);
-    void drawGrid(const glm::mat4& vp);
+    float m_camSpeed  = 8.0f;
+    bool  m_focused   = false;
+    bool  m_mouseCapture = false;
+    bool  m_tabWasDown   = false;
 };
 
 } // namespace editor

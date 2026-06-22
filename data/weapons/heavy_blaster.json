@@ -1,15 +1,19 @@
 {
-    "id": "heavy_blaster",
-    "name": "Z-6 Rotary",
+    "bullet_color": [
+        0.30000001192092896,
+        0.6499999761581421,
+        1.0
+    ],
+    "bullet_lifetime": 2.0,
+    "bullet_scale": 0.06499999761581421,
+    "bullet_speed": 20.0,
+    "cooldown_rate": 0.20000000298023224,
     "damage": 13.0,
     "fire_rate": 11.0,
-    "bullet_speed": 20.0,
-    "bullet_lifetime": 2.0,
-    "bullet_scale": 0.09,
-    "bullet_color": [0.3, 0.65, 1.0],
-    "heat_per_shot": 0.03,
-    "cooldown_rate": 0.20,
-    "overheat_penalty": 3.0,
+    "heat_per_shot": 0.029999999329447746,
+    "id": "heavy_blaster",
     "mesh": "assets/models/z6_rotary.obj",
+    "name": "Z-6 Rotary",
+    "overheat_penalty": 3.0,
     "projectile_mesh": "assets/models/laser_bolt.obj"
 }

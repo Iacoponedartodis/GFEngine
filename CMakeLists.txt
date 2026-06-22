@@ -139,6 +139,9 @@ add_executable(GFEditor
     editor/src/EditorApp.cpp
     editor/src/ui/HomeScreen.cpp
     editor/src/viewport/FreeCameraViewport.cpp
+    editor/src/modules/BalanceEditor.cpp
+    editor/src/modules/HitboxEditor.cpp
+    src/game/data/DefinitionRegistry.cpp
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
     src/render/Camera.cpp
@@ -151,6 +154,7 @@ add_executable(GFEditor
 target_include_directories(GFEditor PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/editor/include
+    ${CMAKE_SOURCE_DIR}/editor/include/modules
     ${CMAKE_SOURCE_DIR}/external/glm
     ${stb_SOURCE_DIR}
     ${tinyobjloader_SOURCE_DIR}

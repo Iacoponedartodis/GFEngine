@@ -2,6 +2,9 @@ C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\main.cpp;C:\Users\HP\De
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\EditorApp.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\EditorApp.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\ui\HomeScreen.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\HomeScreen.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\viewport\FreeCameraViewport.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\FreeCameraViewport.obj
+C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\BalanceEditor.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\BalanceEditor.obj
+C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\HitboxEditor.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\HitboxEditor.obj
+C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\DefinitionRegistry.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\platform\OpenGL.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\OpenGL.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\Shader.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\Shader.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\Camera.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\Camera.obj

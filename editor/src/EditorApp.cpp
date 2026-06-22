@@ -1,6 +1,8 @@
 #include "EditorApp.hpp"
 #include "ui/HomeScreen.hpp"
 #include "viewport/FreeCameraViewport.hpp"
+#include "modules/BalanceEditor.hpp"
+#include "modules/HitboxEditor.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
@@ -80,8 +82,10 @@ void EditorApp::init()
     ImGui_ImplSDL2_InitForOpenGL(m_window, m_glCtx);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    m_homeScreen = std::make_unique<HomeScreen>();
-    m_viewport   = std::make_unique<FreeCameraViewport>();
+    m_homeScreen    = std::make_unique<HomeScreen>();
+    m_viewport      = std::make_unique<FreeCameraViewport>();
+    m_balanceEditor = std::make_unique<BalanceEditor>();
+    m_hitboxEditor  = std::make_unique<HitboxEditor>();
 
     m_running = true;
     std::cout << "[GFEditor] Avviato." << std::endl;
@@ -173,8 +177,8 @@ void EditorApp::renderMenuBar()
     if (ImGui::BeginMenu("Moduli"))
     {
         if (ImGui::MenuItem("Free Camera Viewport"))    m_active = ActiveModule::FreeCameraViewport;
-        if (ImGui::MenuItem("Hitbox Editor (presto)"))  {}
-        if (ImGui::MenuItem("Balance Editor (presto)")) {}
+        if (ImGui::MenuItem("Hitbox Editor"))   m_active = ActiveModule::HitboxEditor;
+        if (ImGui::MenuItem("Balance Editor"))  m_active = ActiveModule::BalanceEditor;
         if (ImGui::MenuItem("Asset Manager (presto)"))  {}
         if (ImGui::MenuItem("AI Editor (presto)"))      {}
         ImGui::EndMenu();
@@ -188,6 +192,8 @@ void EditorApp::renderMenuBar()
     // Modulo attivo al centro
     const char* modName = "Home";
     if (m_active == ActiveModule::FreeCameraViewport) modName = "Free Camera Viewport";
+    if (m_active == ActiveModule::HitboxEditor)      modName = "Hitbox Editor";
+    if (m_active == ActiveModule::BalanceEditor)     modName = "Balance Editor";
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 20);
     ImGui::TextDisabled("| %s", modName);
 
@@ -255,10 +261,28 @@ void EditorApp::render()
         m_viewport->draw();
         ImGui::End();
     }
+    else if (m_active == ActiveModule::BalanceEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Balance Editor", nullptr);
+        m_balanceEditor->draw();
+        ImGui::End();
+    }
+    else if (m_active == ActiveModule::HitboxEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Hitbox Editor", nullptr);
+        m_hitboxEditor->draw();
+        ImGui::End();
+    }
     else
     {
         ImGui::Begin("Modulo");
-        ImGui::TextDisabled("Questo modulo sara' disponibile in una prossima milestone.");
+        ImGui::TextDisabled("Questo modulo sarà disponibile in una prossima milestone.");
         if (ImGui::Button("Torna alla Home")) m_active = ActiveModule::Home;
         ImGui::End();
     }

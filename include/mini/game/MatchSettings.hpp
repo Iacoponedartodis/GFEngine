@@ -1,9 +1,18 @@
 #pragma once
+
+// NOMINMAX impedisce a windows.h di definire le macro min/max
+// che confliggono con std::min/std::max nel resto del codice
+#ifdef _WIN32
+  #define NOMINMAX
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+#endif
+
 #include <string>
 #include <vector>
 #include <fstream>
-#include <cstdio>
 #include <iostream>
+#include <cstdio>
 
 namespace mini
 {
@@ -24,11 +33,7 @@ struct UserPresets
     static constexpr int MAX = 8;
     std::vector<MatchSettings> list;
 
-    UserPresets()
-    {
-        list.resize(MAX);
-        loadFromFile(); // carica all'avvio
-    }
+    UserPresets() { list.resize(MAX); loadFromFile(); }
 
     void save(const MatchSettings& s, int slot)
     {
@@ -58,64 +63,113 @@ struct UserPresets
         return &list[slot];
     }
 
-    // ── Persistenza su file ──────────────────────────────────────────
-    static constexpr const char* FILENAME = "presets.cfg";
+    // ── Persistenza JSON in data/presets/match/ ──────────────────────────
+    static constexpr const char* PRESET_DIR = "data/presets/match";
+
+    static void ensureDir()
+    {
+#ifdef _WIN32
+        CreateDirectoryA("data",              nullptr);
+        CreateDirectoryA("data\\presets",     nullptr);
+        CreateDirectoryA("data\\presets\\match", nullptr);
+#else
+        ::mkdir("data",               0755);
+        ::mkdir("data/presets",       0755);
+        ::mkdir("data/presets/match", 0755);
+#endif
+    }
+
+    static std::string slotPath(int slot)
+    {
+        return std::string(PRESET_DIR) + "/slot_" + std::to_string(slot) + ".json";
+    }
 
     void saveToFile() const
     {
-        std::ofstream f(FILENAME);
-        if (!f.is_open()) return;
+        ensureDir();
         for (int i = 0; i < MAX; ++i)
         {
-            const auto& s = list[i];
-            if (s.presetName.empty())
+            std::string path = slotPath(i);
+            if (list[i].presetName.empty())
             {
-                f << "---\n"; // slot vuoto
+                std::remove(path.c_str());
+                continue;
             }
-            else
+            std::ofstream f(path);
+            if (!f.is_open())
             {
-                f << s.presetName << "\n"
-                  << s.team1Tickets << " " << s.team2Tickets << " "
-                  << s.team1AiCount << " " << s.team2AiCount << " "
-                  << s.playerHp << " " << s.respawnDelay << "\n";
+                std::cerr << "[Presets] Impossibile scrivere: " << path << "\n";
+                continue;
             }
+            f << "{\n"
+              << "  \"name\": \"" << list[i].presetName << "\",\n"
+              << "  \"team1_tickets\": " << list[i].team1Tickets << ",\n"
+              << "  \"team2_tickets\": " << list[i].team2Tickets << ",\n"
+              << "  \"team1_ai_count\": " << list[i].team1AiCount << ",\n"
+              << "  \"team2_ai_count\": " << list[i].team2AiCount << ",\n"
+              << "  \"player_hp\": " << list[i].playerHp << ",\n"
+              << "  \"respawn_delay\": " << list[i].respawnDelay << "\n"
+              << "}\n";
+            std::cout << "[Presets] Salvato slot " << i << ": "
+                      << list[i].presetName << "\n";
         }
-        f.close();
-        std::cout << "[Presets] Salvati su " << FILENAME << std::endl;
     }
 
     void loadFromFile()
     {
         list.resize(MAX);
-        std::ifstream f(FILENAME);
-        if (!f.is_open()) return;
+        ensureDir();
 
+        // Helper: estrae valore da JSON minimale
+        auto val = [](const std::string& content, const std::string& key) -> std::string
+        {
+            auto pos = content.find("\"" + key + "\"");
+            if (pos == std::string::npos) return "";
+            pos = content.find(':', pos);
+            if (pos == std::string::npos) return "";
+            ++pos;
+            while (pos < content.size() &&
+                   (content[pos] == ' ' || content[pos] == '\t')) ++pos;
+            if (pos < content.size() && content[pos] == '"')
+            {
+                ++pos;
+                auto end = content.find('"', pos);
+                return content.substr(pos, end - pos);
+            }
+            auto end = pos;
+            while (end < content.size() &&
+                   content[end] != ',' && content[end] != '\n' &&
+                   content[end] != '}') ++end;
+            return content.substr(pos, end - pos);
+        };
+
+        int loaded = 0;
         for (int i = 0; i < MAX; ++i)
         {
-            std::string line;
-            if (!std::getline(f, line)) break;
+            std::ifstream f(slotPath(i));
+            if (!f.is_open()) { list[i] = {}; continue; }
 
-            // Rimuovi \r se presente
-            if (!line.empty() && line.back() == '\r') line.pop_back();
+            std::string content((std::istreambuf_iterator<char>(f)),
+                                 std::istreambuf_iterator<char>());
 
-            if (line == "---" || line.empty())
+            list[i].presetName = val(content, "name");
+            if (list[i].presetName.empty()) { list[i] = {}; continue; }
+
+            try
             {
-                list[i] = {};
-                continue;
+                list[i].team1Tickets = std::stoi(val(content, "team1_tickets"));
+                list[i].team2Tickets = std::stoi(val(content, "team2_tickets"));
+                list[i].team1AiCount = std::stoi(val(content, "team1_ai_count"));
+                list[i].team2AiCount = std::stoi(val(content, "team2_ai_count"));
+                list[i].playerHp     = std::stof(val(content, "player_hp"));
+                list[i].respawnDelay = std::stof(val(content, "respawn_delay"));
             }
-
-            list[i].presetName = line;
-            std::string vals;
-            if (std::getline(f, vals))
-            {
-                if (!vals.empty() && vals.back() == '\r') vals.pop_back();
-                std::sscanf(vals.c_str(), "%d %d %d %d %f %f",
-                    &list[i].team1Tickets, &list[i].team2Tickets,
-                    &list[i].team1AiCount, &list[i].team2AiCount,
-                    &list[i].playerHp, &list[i].respawnDelay);
-            }
+            catch (...) { list[i] = {}; continue; }
+            ++loaded;
         }
-        std::cout << "[Presets] Caricati da " << FILENAME << std::endl;
+        if (loaded > 0)
+            std::cout << "[Presets] Caricati " << loaded << " preset da "
+                      << PRESET_DIR << "\n";
     }
 };
 

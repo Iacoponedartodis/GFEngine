@@ -1,15 +1,19 @@
 {
-    "id": "blaster_rifle",
-    "name": "DC-15A Blaster",
+    "bullet_color": [
+        0.30000001192092896,
+        0.6499999761581421,
+        1.0
+    ],
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.0949999988079071,
+    "bullet_speed": 25.0,
+    "cooldown_rate": 0.30000001192092896,
     "damage": 25.0,
     "fire_rate": 4.5,
-    "bullet_speed": 25.0,
-    "bullet_lifetime": 3.0,
-    "bullet_scale": 0.12,
-    "bullet_color": [0.3, 0.65, 1.0],
-    "heat_per_shot": 0.12,
-    "cooldown_rate": 0.30,
-    "overheat_penalty": 2.0,
+    "heat_per_shot": 0.11999999731779099,
+    "id": "blaster_rifle",
     "mesh": "assets/models/blaster_rifle.obj",
+    "name": "DC-15A Blaster",
+    "overheat_penalty": 2.0,
     "projectile_mesh": "assets/models/laser_bolt.obj"
 }

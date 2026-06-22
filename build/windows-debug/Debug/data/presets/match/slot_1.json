@@ -1,0 +1,9 @@
+{
+  "name": "Squad",
+  "team1_tickets": 15,
+  "team2_tickets": 20,
+  "team1_ai_count": 10,
+  "team2_ai_count": 10,
+  "player_hp": 100,
+  "respawn_delay": 1.5
+}

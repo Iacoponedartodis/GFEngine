@@ -10,13 +10,14 @@ namespace editor
 
 class HomeScreen;
 class FreeCameraViewport;
+class BalanceEditor;
+class HitboxEditor;
 
 // Modulo attivo
 enum class ActiveModule
 {
     Home,
     FreeCameraViewport,
-    // Stub per future milestone
     HitboxEditor,
     BalanceEditor,
     AssetManager,
@@ -43,6 +44,8 @@ private:
 
     std::unique_ptr<HomeScreen>          m_homeScreen;
     std::unique_ptr<FreeCameraViewport>  m_viewport;
+    std::unique_ptr<BalanceEditor>       m_balanceEditor;
+    std::unique_ptr<HitboxEditor>        m_hitboxEditor;
 
     void init();
     void shutdown();

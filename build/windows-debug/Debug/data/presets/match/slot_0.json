@@ -1,0 +1,9 @@
+{
+  "name": "Solo",
+  "team1_tickets": 3,
+  "team2_tickets": 15,
+  "team1_ai_count": 0,
+  "team2_ai_count": 9,
+  "player_hp": 150,
+  "respawn_delay": 2
+}

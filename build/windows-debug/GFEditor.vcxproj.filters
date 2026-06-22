@@ -13,6 +13,15 @@
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\viewport\FreeCameraViewport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\BalanceEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\HitboxEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\platform\OpenGL.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -348,7 +348,7 @@ void PreMatchMenu::renderRoot() const
 
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.80f);
 
-    m_ui.text(cx - 138.0f, cy - 120.0f, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
+    m_ui.textCentered(cx, cy - 120.0f, 3.5f, "MENU PARTITA", 0.95f, 0.85f, 0.3f);
 
     struct Item { const char* label; float r, g, b; };
     const Item items[] = {
@@ -385,12 +385,7 @@ void PreMatchMenu::renderRoot() const
         float ig = sel ? items[i].g : items[i].g * 0.65f;
         float ib = sel ? items[i].b : items[i].b * 0.65f;
 
-        float tx = 0.0f;
-        if (i == 0) tx = cx - 110.0f;
-        if (i == 1) tx = cx - 122.0f;
-        if (i == 2) tx = cx - 102.0f;
-
-        m_ui.text(tx, y + 10, scale, items[i].label, ir, ig, ib);
+        m_ui.textCentered(cx, y + 10, scale, items[i].label, ir, ig, ib);
     }
 
     m_ui.text(cx - 187.0f, startY + N * rowH + 24.0f, 1.7f,
@@ -405,7 +400,7 @@ void PreMatchMenu::renderLoadout() const
     const float cx = W * 0.5f;
 
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
-    m_ui.text(cx - 85, 30, 3.0f, "LOADOUT", 0.95f, 0.85f, 0.3f);
+    m_ui.textCentered(cx, 30, 3.0f, "LOADOUT", 0.95f, 0.85f, 0.3f);
 
     const char* weapons[4] = {
         "Blaster Rifle",
@@ -442,7 +437,7 @@ void PreMatchMenu::renderRules() const
     const float cx = W * 0.5f;
 
     m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.82f);
-    m_ui.text(cx - 115, 28, 3.0f, "REGOLE DI GIOCO", 0.95f, 0.85f, 0.3f);
+    m_ui.textCentered(cx, 28, 3.0f, "REGOLE DI GIOCO", 0.95f, 0.85f, 0.3f);
 
     const float startY = 95.0f;
     const float rowH = 40.0f;
@@ -501,7 +496,7 @@ void PreMatchMenu::renderSavePreset() const
     const float cx = W * 0.5f;
 
     m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.88f);
-    m_ui.text(cx - 80, 28, 2.8f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
+    m_ui.textCentered(cx, 28, 2.8f, "SALVA PRESET", 0.3f, 1.0f, 0.5f);
     m_ui.text(cx - 190, 68, 1.6f,
               "SU/GIU = slot   Scrivi nome   INVIO = salva   ESC = annulla",
               0.6f, 0.6f, 0.6f);
@@ -533,7 +528,7 @@ void PreMatchMenu::renderManagePresets() const
     const float cx = W * 0.5f;
 
     m_ui.rect(0, 0, W, (float)m_ui.height(), 0.0f, 0.0f, 0.0f, 0.88f);
-    m_ui.text(cx - 95, 28, 2.8f, "GESTIONE PRESET", 0.8f, 0.6f, 1.0f);
+    m_ui.textCentered(cx, 28, 2.8f, "GESTIONE PRESET", 0.8f, 0.6f, 1.0f);
 
     const float startY = 80.0f, rowH = 44.0f;
     for (int i = 0; i < UserPresets::MAX; ++i)
@@ -575,7 +570,7 @@ void PreMatchMenu::renderRenamePreset() const
     const float cx = W * 0.5f;
 
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
-    m_ui.text(cx - 95, H * 0.35f - 40, 2.8f, "RINOMINA PRESET", 1.0f, 0.7f, 0.3f);
+    m_ui.textCentered(cx, H * 0.35f - 40, 2.8f, "RINOMINA PRESET", 1.0f, 0.7f, 0.3f);
 
     const MatchSettings* p = m_presets.get(m_presetSlot);
     if (p)
