@@ -52,6 +52,15 @@ inline Weapon weaponFromDef(const WeaponDef& def)
     w.overheatPenalty = def.overheatPenalty;
     return w;
 }
+
+// Restituisce il percorso assoluto alla cartella data/ accanto all'exe
+static std::string getDataPath()
+{
+    char* base = SDL_GetBasePath();
+    std::string path = (base ? base : "./");
+    SDL_free(base);
+    return path + "data";
+}
 } // namespace mini
 
 
@@ -91,19 +100,17 @@ void Application::run(bool directPreMatch)
     initialize();
 
     // ── Definition Registry ──────────────────────────────────────────
+    // Usa percorso assoluto basato sull'exe, non CWD
     DefinitionRegistry registry;
-    registry.loadAll("data");
+    const std::string dataPath = getDataPath();
+    registry.loadAll(dataPath);
 
     // Popola la lista armi del PreMatchMenu dal registry (armi ordinate per nome)
-    {
-        std::vector<PreMatchMenu::WeaponEntry> wList;
-        for (auto& [id, def] : registry.weapons())
-            wList.push_back({id, def.name});
-        // Ordina per nome per consistenza UI
-        std::sort(wList.begin(), wList.end(),
-            [](const auto& a, const auto& b){ return a.name < b.name; });
-        preMatchMenu.setWeaponList(wList);
-    }
+    std::vector<PreMatchMenu::WeaponEntry> wList;
+    for (auto& [id, def] : registry.weapons())
+        wList.push_back({id, def.name});
+    std::sort(wList.begin(), wList.end(),
+        [](const auto& a, const auto& b){ return a.name < b.name; });
 
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
@@ -140,6 +147,7 @@ void Application::run(bool directPreMatch)
     HUD              hud(W, H);
     OptionsMenu      optMenu(W, H);
     PreMatchMenu     preMatchMenu(W, H);
+    preMatchMenu.setWeaponList(wList);
 
     // ── Game mode ────────────────────────────────────────────────────
     MatchSettings currentSettings;
@@ -178,7 +186,6 @@ void Application::run(bool directPreMatch)
 
     auto startGame = [&]()
     {
-        // Usa l'ID dell'arma selezionata dal menu (lista dinamica dal registry)
         const std::string& selectedId = preMatchMenu.getSelectedWeaponId();
         const auto* wDef = registry.getWeapon(selectedId);
         if (wDef)
@@ -203,14 +210,12 @@ void Application::run(bool directPreMatch)
         window.setMouseCaptured(false);
     };
 
-    // Respawn volontario: consuma un ticket e avvia il timer come se il giocatore fosse morto
     auto doVoluntaryRespawn = [&]()
     {
-        if (player.isDead) return; // già morto, respawn già in corso
+        if (player.isDead) return;
         int t1 = conquestMode.getTeam1Tickets();
         if (t1 <= 0)
         {
-            // Nessun ticket: game over immediato
             state = GameState::Lose;
             stateChanged = true;
             window.setMouseCaptured(false);
@@ -221,7 +226,6 @@ void Application::run(bool directPreMatch)
         player.isDead = true;
         player.prevHp = 0.0f;
         player.respawnTimer = currentSettings.respawnDelay;
-        // Invalida l'entità corrente per simulare la morte
         if (world.isValidEntity(player.entity))
         {
             auto* hp = world.getHealth(player.entity);
@@ -257,9 +261,8 @@ void Application::run(bool directPreMatch)
             {
                 const int sc = ev.key.keysym.scancode;
 
-                // F11 globale
                 if (sc == SDL_SCANCODE_F11) window.toggleFullscreen();
-                // ── Launcher ─────────────────────────────────────────
+
                 if (state == GameState::Launcher)
                 {
                     auto res = launcher.handleKey(sc);
@@ -268,7 +271,6 @@ void Application::run(bool directPreMatch)
                     else if (res == LauncherScreen::Result::Quit)
                         window.close();
                 }
-                // ── Main Menu ────────────────────────────────────────
                 else if (state == GameState::MainMenu)
                 {
                     auto res = mainMenu.handleKey(sc);
@@ -285,7 +287,6 @@ void Application::run(bool directPreMatch)
                     else if (res == MainMenuScreen::Result::Quit)
                         window.close();
                 }
-                // ── PreMatch ─────────────────────────────────────────
                 else if (state == GameState::PreMatch)
                 {
                     auto res = preMatchMenu.handleKey(sc);
@@ -294,7 +295,6 @@ void Application::run(bool directPreMatch)
                     else if (res == PreMatchMenu::Result::Back)
                     { goMainMenu(); }
                 }
-                // ── Options ──────────────────────────────────────────
                 else if (state == GameState::Options)
                 {
                     auto res = optMenu.handleKey(sc, input);
@@ -304,7 +304,6 @@ void Application::run(bool directPreMatch)
                         if (state == GameState::Playing) window.setMouseCaptured(true);
                     }
                 }
-                // ── Paused: K = respawn volontario ───────────────────
                 else if (state == GameState::Paused)
                 {
                     if (sc == SDL_SCANCODE_K && !stateChanged)

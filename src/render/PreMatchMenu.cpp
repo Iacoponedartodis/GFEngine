@@ -12,7 +12,6 @@ namespace mini
 void PreMatchMenu::setWeaponList(const std::vector<WeaponEntry>& weapons)
 {
     m_weaponList = weapons;
-    // Clamp index in case list changed
     if (!m_weaponList.empty() && m_weaponIdx >= (int)m_weaponList.size())
         m_weaponIdx = 0;
 }
@@ -157,7 +156,7 @@ PreMatchMenu::Result PreMatchMenu::handleRules(int sc)
     };
 
     if (sc == SDL_SCANCODE_RIGHT || sc == SDL_SCANCODE_D) clampApply(+1.0f);
-    if (sc == SDL_SCANCODE_LEFT || sc == SDL_SCANCODE_A) clampApply(-1.0f);
+    if (sc == SDL_SCANCODE_LEFT  || sc == SDL_SCANCODE_A) clampApply(-1.0f);
 
     if (sc == SDL_SCANCODE_F5)
     {
@@ -419,22 +418,33 @@ void PreMatchMenu::renderLoadout() const
     m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.88f);
     m_ui.textCentered(cx, 30, 3.0f, "LOADOUT", 0.95f, 0.85f, 0.3f);
 
-    // Lista dinamica da DefinitionRegistry (fallback a nomi hardcoded se vuota)
     const int nWeapons = m_weaponList.empty() ? 4 : (int)m_weaponList.size();
     static const char* fallbackNames[4] = {
         "Blaster Rifle", "Blaster Pistol", "Heavy Blaster", "Sniper Rifle"
     };
 
-    const float startY = 120.0f;
-    const float rowH   = 50.0f;
+    const float startY = 100.0f;
+    const float rowH   = 46.0f;
 
-    for (int i = 0; i < nWeapons; ++i)
+    // Finestra scorrevole: mostra al massimo 10 armi alla volta
+    constexpr int MAX_VISIBLE = 10;
+    const int visibleCount = std::min(nWeapons, MAX_VISIBLE);
+    // Calcola l'offset di scroll in modo che l'arma selezionata sia sempre visibile
+    int scrollOffset = 0;
+    if (nWeapons > MAX_VISIBLE)
     {
-        const float y   = startY + i * rowH;
-        const bool  sel = (i == m_weaponIdx);
+        scrollOffset = m_weaponIdx - MAX_VISIBLE / 2;
+        scrollOffset = std::max(0, std::min(scrollOffset, nWeapons - MAX_VISIBLE));
+    }
+
+    for (int i = 0; i < visibleCount; ++i)
+    {
+        const int wi  = i + scrollOffset;
+        const float y = startY + i * rowH;
+        const bool sel = (wi == m_weaponIdx);
         const char* label = m_weaponList.empty()
-            ? fallbackNames[i]
-            : m_weaponList[i].name.c_str();
+            ? (wi < 4 ? fallbackNames[wi] : "???")
+            : m_weaponList[wi].name.c_str();
 
         if (sel)
             m_ui.rect(cx - 220, y - 4, 440, 40, 0.15f, 0.30f, 0.55f, 0.60f);
@@ -445,7 +455,19 @@ void PreMatchMenu::renderLoadout() const
                   sel ? 0.4f : 0.75f);
     }
 
-    m_ui.text(cx - 170, startY + 4 * rowH + 30, 1.6f,
+    // Indicatore scroll se ci sono più armi di quelle visibili
+    if (nWeapons > MAX_VISIBLE)
+    {
+        char scrollInfo[32];
+        std::snprintf(scrollInfo, sizeof(scrollInfo), "%d / %d", m_weaponIdx + 1, nWeapons);
+        m_ui.textCentered(cx, startY + visibleCount * rowH + 8, 1.6f, scrollInfo,
+                          0.5f, 0.8f, 1.0f);
+    }
+
+    // Hint comandi sempre in fondo, sotto la lista (con margine fisso dal basso)
+    const float hintY = H - 48.0f;
+    m_ui.rect(0, hintY - 8, W, 56, 0.0f, 0.0f, 0.0f, 0.55f);
+    m_ui.text(cx - 170, hintY, 1.6f,
               "SU/GIU = cambia arma   INVIO/ESC = torna",
               0.6f, 0.6f, 0.6f);
 }

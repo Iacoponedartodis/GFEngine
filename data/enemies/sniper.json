@@ -1,24 +1,24 @@
 {
-  "id": "sniper",
-  "name": "BX Commando Droid",
-  "mesh": "assets/models/bx_droid.obj",
-  "texture": "assets/textures/bx_droid.png",
-  "hitbox_profile": "sniper",
-  "ai_profile": "sniper_ai",
-  "weapon": "sniper_rifle",
-  "team": 2,
-  "color": [
-    0.25,
-    0.35,
-    0.3
-  ],
-  "bullet_color": [
-    0.2,
-    0.8,
-    1
-  ],
-  "stats": {
-    "hp": 55,
-    "move_speed": 5.5
-  }
+    "ai_profile": "sniper_ai",
+    "bullet_color": [
+        0.20000000298023224,
+        0.800000011920929,
+        1.0
+    ],
+    "color": [
+        0.37254899740219116,
+        0.37254899740219116,
+        0.37254899740219116
+    ],
+    "hitbox_profile": "sniper",
+    "id": "sniper",
+    "mesh": "assets/models/bx_droid.obj",
+    "name": "BX Commando Droid",
+    "stats": {
+        "hp": 120.0,
+        "move_speed": 5.5
+    },
+    "team": 2,
+    "texture": "assets/textures/bx_droid.png",
+    "weapon": "sniper_rifle"
 }

@@ -1,0 +1,19 @@
+{
+    "bullet_color": [
+        0.0,
+        0.4411764144897461,
+        1.0
+    ],
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.029999999329447746,
+    "bullet_speed": 100.0,
+    "cooldown_rate": 0.5,
+    "damage": 20.0,
+    "fire_rate": 20.0,
+    "heat_per_shot": 0.05000000074505806,
+    "id": "Z-6 Rotary Blaster",
+    "mesh": "assets/models/z6_rotary.obj",
+    "name": "Z-6 Rotary Blaster",
+    "overheat_penalty": 2.5,
+    "projectile_mesh": "assets/models/laser_bolt.obj"
+}
