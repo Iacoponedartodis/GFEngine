@@ -1,0 +1,20 @@
+{
+    "profile_id": "B1 Battle Droid",
+    "zones": [
+        {
+            "damage_multiplier": 1.0,
+            "debug_visible": true,
+            "half_extents": [
+                0.5,
+                0.5,
+                0.5
+            ],
+            "name": "Head",
+            "offset": [
+                0.0,
+                0.5,
+                0.0
+            ]
+        }
+    ]
+}

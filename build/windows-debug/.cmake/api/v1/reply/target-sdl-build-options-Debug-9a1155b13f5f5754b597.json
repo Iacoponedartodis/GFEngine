@@ -1,0 +1,41 @@
+{
+	"abstract" : true,
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_library"
+		],
+		"files" : 
+		[
+			"build/windows-debug/_deps/sdl2-src/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 33,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	},
+	"id" : "sdl-build-options::@45bd952f1071c035638d",
+	"name" : "sdl-build-options",
+	"paths" : 
+	{
+		"build" : "_deps/sdl2-build",
+		"source" : "build/windows-debug/_deps/sdl2-src"
+	},
+	"sources" : [],
+	"type" : "INTERFACE_LIBRARY"
+}

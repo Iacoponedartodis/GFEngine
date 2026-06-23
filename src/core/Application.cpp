@@ -105,10 +105,11 @@ void Application::run(bool directPreMatch)
     const std::string dataPath = getDataPath();
     registry.loadAll(dataPath);
 
-    // Popola la lista armi del PreMatchMenu dal registry (armi ordinate per nome)
+    // Popola la lista armi del PreMatchMenu — solo Republic e Neutral (non Separatist)
     std::vector<PreMatchMenu::WeaponEntry> wList;
     for (auto& [id, def] : registry.weapons())
-        wList.push_back({id, def.name});
+        if (def.faction != mini::Faction::Separatist)
+            wList.push_back({id, def.name});
     std::sort(wList.begin(), wList.end(),
         [](const auto& a, const auto& b){ return a.name < b.name; });
 

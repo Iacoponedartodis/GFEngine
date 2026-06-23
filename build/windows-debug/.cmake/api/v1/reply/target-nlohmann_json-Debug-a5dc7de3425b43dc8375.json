@@ -1,0 +1,59 @@
+{
+	"abstract" : true,
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_library"
+		],
+		"files" : 
+		[
+			"build/windows-debug/_deps/nlohmann_json-src/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 103,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	},
+	"id" : "nlohmann_json::@7ad6b70f65d238af1bcf",
+	"interfaceSources" : 
+	[
+		{
+			"path" : "build/windows-debug/_deps/nlohmann_json-src/nlohmann_json.natvis",
+			"sourceGroupIndex" : 0
+		}
+	],
+	"name" : "nlohmann_json",
+	"paths" : 
+	{
+		"build" : "_deps/nlohmann_json-build",
+		"source" : "build/windows-debug/_deps/nlohmann_json-src"
+	},
+	"sourceGroups" : 
+	[
+		{
+			"interfaceSourceIndexes" : 
+			[
+				0
+			],
+			"name" : "",
+			"sourceIndexes" : []
+		}
+	],
+	"sources" : [],
+	"type" : "INTERFACE_LIBRARY"
+}

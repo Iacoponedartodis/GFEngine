@@ -1,0 +1,22 @@
+{
+    "bullet_color": [
+        0.0,
+        1.0,
+        0.02941155433654785
+    ],
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.10000000149011612,
+    "bullet_speed": 24.0,
+    "cooldown_rate": 0.30000001192092896,
+    "damage": 25.0,
+    "effective_range": 18.0,
+    "faction": "separatist",
+    "fire_rate": 7.0,
+    "heat_per_shot": 0.25,
+    "id": "E5 Blaster Rifle",
+    "mesh": "",
+    "min_range": 0.0,
+    "name": "E5 Blaster Rifle",
+    "overheat_penalty": 1.75,
+    "projectile_mesh": ""
+}

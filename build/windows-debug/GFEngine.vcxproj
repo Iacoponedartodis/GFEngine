@@ -8,18 +8,6 @@
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x64">
-      <Configuration>Release</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="MinSizeRel|x64">
-      <Configuration>MinSizeRel</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="RelWithDebInfo|x64">
-      <Configuration>RelWithDebInfo</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{73EDA93D-1703-32BD-B8AA-0DEA1C763F20}</ProjectGuid>
@@ -31,21 +19,6 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
-    <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
-    <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
-    <ConfigurationType>Application</ConfigurationType>
-    <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>MultiByte</CharacterSet>
     <PlatformToolset>v143</PlatformToolset>
@@ -65,24 +38,6 @@
     <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\Release\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">GFEngine.dir\Release\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">GFEngine</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
-    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\MinSizeRel\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">GFEngine.dir\MinSizeRel\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">GFEngine</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
-    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
-    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\RelWithDebInfo\</OutDir>
-    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">GFEngine.dir\RelWithDebInfo\</IntDir>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">GFEngine</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
-    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -126,8 +81,10 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copia data/ -^&gt; GFEngine output dir</Message>
+      <Message>Copia data/ -^&gt; GFEngine output dir (pulizia preventiva)</Message>
       <Command>setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E remove_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Debug/data
+if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/data C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Debug/data
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
@@ -155,221 +112,6 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-release\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
-      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
-      <BufferSecurityCheck></BufferSecurityCheck>
-      <CallingConvention></CallingConvention>
-      <ConformanceMode>true</ConformanceMode>
-      <ExceptionHandling>Sync</ExceptionHandling>
-      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
-      <FloatingPointModel></FloatingPointModel>
-      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
-      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <MinimalRebuild></MinimalRebuild>
-      <Optimization>MaxSpeed</Optimization>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <SupportJustMyCode></SupportJustMyCode>
-      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
-      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
-      <UseFullPaths>false</UseFullPaths>
-      <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
-      <ObjectFileName>$(IntDir)</ObjectFileName>
-      <DebugInformationFormat>
-      </DebugInformationFormat>
-      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
-    </ClCompile>
-    <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-release\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ResourceCompile>
-    <Midl>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-release\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
-      <HeaderFileName>%(Filename).h</HeaderFileName>
-      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
-      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
-      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
-    </Midl>
-    <PostBuildEvent>
-      <Message>Copia data/ -^&gt; GFEngine output dir</Message>
-      <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/data C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Release/data
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-    </PostBuildEvent>
-    <Link>
-      <AdditionalDependencies>_deps\sdl2-build\Release\SDL2-static.lib;opengl32.lib;gdi32.lib;kernel32.lib;user32.lib;winmm.lib;imm32.lib;ole32.lib;oleaut32.lib;version.lib;uuid.lib;advapi32.lib;setupapi.lib;shell32.lib;dinput8.lib;gdi32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <DataExecutionPrevention></DataExecutionPrevention>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
-      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Release/GFEngine.lib</ImportLibrary>
-      <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Release/GFEngine.pdb</ProgramDataBaseFile>
-      <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
-    </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
-    <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-minsizerel\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
-      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
-      <BufferSecurityCheck></BufferSecurityCheck>
-      <CallingConvention></CallingConvention>
-      <ConformanceMode>true</ConformanceMode>
-      <ExceptionHandling>Sync</ExceptionHandling>
-      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
-      <FloatingPointModel></FloatingPointModel>
-      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
-      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <MinimalRebuild></MinimalRebuild>
-      <Optimization>MinSpace</Optimization>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <SupportJustMyCode></SupportJustMyCode>
-      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
-      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
-      <UseFullPaths>false</UseFullPaths>
-      <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
-      <ObjectFileName>$(IntDir)</ObjectFileName>
-      <DebugInformationFormat>
-      </DebugInformationFormat>
-      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
-    </ClCompile>
-    <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-minsizerel\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ResourceCompile>
-    <Midl>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-minsizerel\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
-      <HeaderFileName>%(Filename).h</HeaderFileName>
-      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
-      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
-      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
-    </Midl>
-    <PostBuildEvent>
-      <Message>Copia data/ -^&gt; GFEngine output dir</Message>
-      <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/data C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/MinSizeRel/data
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-    </PostBuildEvent>
-    <Link>
-      <AdditionalDependencies>_deps\sdl2-build\MinSizeRel\SDL2-static.lib;opengl32.lib;gdi32.lib;kernel32.lib;user32.lib;winmm.lib;imm32.lib;ole32.lib;oleaut32.lib;version.lib;uuid.lib;advapi32.lib;setupapi.lib;shell32.lib;dinput8.lib;gdi32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <DataExecutionPrevention></DataExecutionPrevention>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
-      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/MinSizeRel/GFEngine.lib</ImportLibrary>
-      <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/MinSizeRel/GFEngine.pdb</ProgramDataBaseFile>
-      <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
-    </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
-    <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-relwithdebinfo\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
-      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
-      <BufferSecurityCheck></BufferSecurityCheck>
-      <CallingConvention></CallingConvention>
-      <ConformanceMode>true</ConformanceMode>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <ExceptionHandling>Sync</ExceptionHandling>
-      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
-      <FloatingPointModel></FloatingPointModel>
-      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
-      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <MinimalRebuild></MinimalRebuild>
-      <Optimization>MaxSpeed</Optimization>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <SupportJustMyCode></SupportJustMyCode>
-      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
-      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
-      <UseFullPaths>false</UseFullPaths>
-      <WarningLevel>Level4</WarningLevel>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
-      <ObjectFileName>$(IntDir)</ObjectFileName>
-      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
-    </ClCompile>
-    <ResourceCompile>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;SDL_MAIN_HANDLED;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-relwithdebinfo\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ResourceCompile>
-    <Midl>
-      <AdditionalIncludeDirectories>C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\external\glm;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\stb-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinyobjloader-src;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\sdl2-build\include-config-relwithdebinfo\SDL2;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\nlohmann_json-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
-      <HeaderFileName>%(Filename).h</HeaderFileName>
-      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
-      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
-      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
-    </Midl>
-    <PostBuildEvent>
-      <Message>Copia data/ -^&gt; GFEngine output dir</Message>
-      <Command>setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/data C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/RelWithDebInfo/data
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-    </PostBuildEvent>
-    <Link>
-      <AdditionalDependencies>_deps\sdl2-build\RelWithDebInfo\SDL2-static.lib;opengl32.lib;gdi32.lib;kernel32.lib;user32.lib;winmm.lib;imm32.lib;ole32.lib;oleaut32.lib;version.lib;uuid.lib;advapi32.lib;setupapi.lib;shell32.lib;dinput8.lib;gdi32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <DataExecutionPrevention></DataExecutionPrevention>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
-      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
-      <ImportLibrary>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/RelWithDebInfo/GFEngine.lib</ImportLibrary>
-      <LinkErrorReporting></LinkErrorReporting>
-      <ProgramDataBaseFile>C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/RelWithDebInfo/GFEngine.pdb</ProgramDataBaseFile>
-      <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
-    </Link>
-    <ProjectReference>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
-  </ItemDefinitionGroup>
   <ItemGroup>
     <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\CMakeLists.txt">
       <UseUtf8Encoding>Always</UseUtf8Encoding>
@@ -386,45 +128,6 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.3\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeCXXCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeRCCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\generate.stamp</Outputs>
       <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/CMakeLists.txt</Message>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug --check-stamp-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/CMakeFiles/generate.stamp
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.3\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeCXXCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeRCCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\generate.stamp</Outputs>
-      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/CMakeLists.txt</Message>
-      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug --check-stamp-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/CMakeFiles/generate.stamp
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.3\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeCXXCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeRCCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\generate.stamp</Outputs>
-      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
-      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/CMakeLists.txt</Message>
-      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug --check-stamp-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/CMakeFiles/generate.stamp
-if %errorlevel% neq 0 goto :cmEnd
-:cmEnd
-endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
-:cmErrorLevel
-exit /b %1
-:cmDone
-if %errorlevel% neq 0 goto :VCEnd</Command>
-      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCXXInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeCommonLanguageInclude.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeGenericSystem.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeInitializeConfigs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeLanguageInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeRCInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\CMakeSystemSpecificInitialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Compiler\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\ExternalProject\shared_internal_commands.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FetchContent\CMakeLists.cmake.in;C:\Program Files\CMake\share\cmake-4.3\Modules\FindGit.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageHandleStandardArgs.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\FindPackageMessage.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Linker\MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-Initialize.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows-MSVC.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\Windows.cmake;C:\Program Files\CMake\share\cmake-4.3\Modules\Platform\WindowsPaths.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeCXXCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeRCCompiler.cmake;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\4.3.3\CMakeSystem.cmake;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\CMakeFiles\generate.stamp</Outputs>
-      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>

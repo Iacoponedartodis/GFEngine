@@ -1,19 +1,22 @@
 {
     "bullet_color": [
-        0.30000001192092896,
-        0.6499999761581421,
+        0.0,
+        0.6470589637756348,
         1.0
     ],
-    "bullet_lifetime": 2.5,
-    "bullet_scale": 0.06499999761581421,
-    "bullet_speed": 100.0,
-    "cooldown_rate": 0.4000000059604645,
-    "damage": 25.0,
-    "fire_rate": 7.0,
-    "heat_per_shot": 0.20000000298023224,
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.10000000149011612,
+    "bullet_speed": 24.0,
+    "cooldown_rate": 0.30000001192092896,
+    "damage": 30.0,
+    "effective_range": 18.0,
+    "faction": "republic",
+    "fire_rate": 4.0,
+    "heat_per_shot": 0.30000001192092896,
     "id": "DC-17 Blaster Pistol",
-    "mesh": "assets/models/blaster_pistol.obj",
+    "mesh": "",
+    "min_range": 0.0,
     "name": "DC-17 Blaster Pistol",
-    "overheat_penalty": 1.2000000476837158,
-    "projectile_mesh": "assets/models/laser_bolt.obj"
+    "overheat_penalty": 2.0,
+    "projectile_mesh": ""
 }

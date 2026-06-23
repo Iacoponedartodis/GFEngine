@@ -1,0 +1,47 @@
+{
+	"backtrace" : 0,
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : 
+		[
+			"build/windows-debug/_deps/tinyobjloader-src/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	},
+	"dependencies" : 
+	[
+		{
+			"id" : "tinyobjloader::@504dab42fa214d3d2823"
+		},
+		{
+			"id" : "ZERO_CHECK::@6890427a1f51a3e7e1df"
+		}
+	],
+	"id" : "ALL_BUILD::@504dab42fa214d3d2823",
+	"isGeneratorProvided" : true,
+	"name" : "ALL_BUILD",
+	"orderDependencies" : 
+	[
+		{
+			"id" : "tinyobjloader::@504dab42fa214d3d2823"
+		}
+	],
+	"paths" : 
+	{
+		"build" : "_deps/tinyobjloader-build",
+		"source" : "build/windows-debug/_deps/tinyobjloader-src"
+	},
+	"sources" : [],
+	"type" : "UTILITY"
+}

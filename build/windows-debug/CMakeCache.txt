@@ -20,10 +20,8 @@ CCACHE_BINARY:FILEPATH=CCACHE_BINARY-NOTFOUND
 //Path to a program.
 CMAKE_AR:FILEPATH=C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lib.exe
 
-//Semicolon separated list of supported configuration types, only
-// supports Debug, Release, MinSizeRel, and RelWithDebInfo, anything
-// else will be ignored.
-CMAKE_CONFIGURATION_TYPES:STRING=Debug;Release;MinSizeRel;RelWithDebInfo
+//No help, variable specified on the command line.
+CMAKE_CONFIGURATION_TYPES:UNINITIALIZED=Debug
 
 //Flags used by the CXX compiler during all build types.
 CMAKE_CXX_FLAGS:STRING=/DWIN32 /D_WINDOWS /EHsc
@@ -75,6 +73,9 @@ CMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=/INCREMENTAL:NO
 
 //Flags used by the linker during RELWITHDEBINFO builds.
 CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO:STRING=/debug /INCREMENTAL
+
+//No help, variable specified on the command line.
+CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=TRUE
 
 //Value Computed by CMake.
 CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/CMakeFiles/pkgRedirects

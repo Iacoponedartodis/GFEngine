@@ -1,0 +1,19 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "_deps/nlohmann_json-build",
+		"source" : "build/windows-debug/_deps/nlohmann_json-src"
+	}
+}

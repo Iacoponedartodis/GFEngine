@@ -6,6 +6,8 @@
 
 #include <iostream>
 #include <algorithm>
+#include <vector>
+#include <string>
 
 namespace mini
 {
@@ -15,30 +17,142 @@ static constexpr float AI_GND_Y = 0.50f;
 static constexpr float AI_PLT_Y = 2.50f;
 static constexpr float SPAWN_Z  = 8.0f;
 
+namespace
+{
+struct ResolvedEnemyArchetype
+{
+    std::string enemyId;
+    std::string hitboxProfileId;
+
+    float hp        = 80.0f;
+    float moveSpeed = 2.5f;
+    float interval  = 2.2f;
+    float range     = 18.0f;
+
+    float mr = 0.70f, mg = 0.10f, mb = 0.10f;
+    float br = 1.00f, bg = 0.50f, bb = 0.00f;
+};
+
+static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* registry,
+                                                    const std::string& enemyId)
+{
+    ResolvedEnemyArchetype out;
+    out.enemyId = enemyId;
+
+    const EnemyDef* enemy = registry ? registry->getEnemy(enemyId) : nullptr;
+    if (!enemy)
+    {
+        std::cerr << "[ConquestMode] Enemy '" << enemyId
+                  << "' non trovato nel registry. Uso fallback.\n";
+        out.hitboxProfileId = enemyId;
+        return out;
+    }
+
+    out.hp = enemy->hp;
+    out.moveSpeed = enemy->moveSpeed;
+    // Colore direttamente dall'EnemyDef
+    out.mr = enemy->color[0];
+    out.mg = enemy->color[1];
+    out.mb = enemy->color[2];
+    out.br = enemy->bulletColor[0];
+    out.bg = enemy->bulletColor[1];
+    out.bb = enemy->bulletColor[2];
+    out.hitboxProfileId = enemy->hitboxProfileId.empty() ? enemy->id : enemy->hitboxProfileId;
+
+    if (registry)
+    {
+        const AiProfileDef* ai = registry->getAiProfile(enemy->aiProfileId);
+        if (ai)
+        {
+            out.moveSpeed = ai->patrolSpeed;
+            out.interval  = ai->shootInterval;
+            out.range     = ai->sightRange;
+        }
+        else
+        {
+            std::cerr << "[ConquestMode] AI profile '" << enemy->aiProfileId
+                      << "' non trovato per enemy '" << enemy->id
+                      << "'. Uso fallback AI.\n";
+        }
+    }
+
+    std::cout << "[ConquestMode] Enemy resolved: " << enemy->id
+              << " hp=" << out.hp
+              << " move=" << out.moveSpeed
+              << " interval=" << out.interval
+              << " range=" << out.range
+              << " color=(" << out.mr << ", " << out.mg << ", " << out.mb << ")\n";
+
+    return out;
+}
+
+static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* registry, int count)
+{
+    std::vector<std::string> result;
+    if (count <= 0) return result;
+
+    std::vector<std::string> preferredIds;
+
+    if (registry)
+    {
+        const MapDef* map = registry->getMap("default");
+        if (map && !map->enemyTypes.empty())
+        {
+            preferredIds = map->enemyTypes;
+            std::cout << "[ConquestMode] Uso enemy_types da map 'default' ("
+                      << preferredIds.size() << " tipi).\n";
+        }
+    }
+
+    if (preferredIds.empty())
+    {
+        preferredIds = {"grunt", "heavy", "sniper"};
+        std::cout << "[ConquestMode] enemy_types non trovati: uso fallback grunt/heavy/sniper.\n";
+    }
+
+    for (int i = 0; i < count; ++i)
+        result.push_back(preferredIds[i % (int)preferredIds.size()]);
+
+    return result;
+}
+} // namespace
+
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
     EntityId e = world.createEntity();
     float yPos = info.stationary ? AI_PLT_Y : AI_GND_Y;
+
     world.addTransform(e, {info.x, yPos, info.z});
     world.addTeam(e, {info.teamId});
     world.addHealth(e, {info.hp, info.hp});
     world.addMeshRenderer(e, {m_mesh, m_tex, info.mr, info.mg, info.mb});
+
     world.addAi(e, AiComponent{
-        .shootInterval = info.interval, .aggroRange = info.range,
-        .bulletMesh = m_mesh, .bulletR = info.br, .bulletG = info.bg, .bulletB = info.bb,
-        .patrolAx = info.pax, .patrolAz = info.paz,
-        .patrolBx = info.pbx, .patrolBz = info.pbz,
-        .patrolSpeed = info.patSpd, .seekSpeed = info.patSpd + 1.5f,
-        .strafeTimer = 1.4f, .strafeSign = 1.0f,
+        .shootInterval = info.interval,
+        .aggroRange = info.range,
+        .bulletMesh = m_mesh,
+        .bulletR = info.br,
+        .bulletG = info.bg,
+        .bulletB = info.bb,
+        .patrolAx = info.pax,
+        .patrolAz = info.paz,
+        .patrolBx = info.pbx,
+        .patrolBz = info.pbz,
+        .patrolSpeed = info.patSpd,
+        .seekSpeed = info.patSpd + 1.5f,
+        .strafeTimer = 1.4f,
+        .strafeSign = 1.0f,
         .stationary = info.stationary
     });
 
-    UnitTemplate tpl = {info.x, info.z, yPos, info.teamId,
-                        info.mr, info.mg, info.mb,
-                        info.br, info.bg, info.bb,
-                        info.hp, info.pax, info.paz, info.pbx, info.pbz,
-                        info.patSpd, info.interval, info.range, info.stationary,
-                        info.hitboxProfileId};
+    UnitTemplate tpl = {
+        info.x, info.z, yPos, info.teamId,
+        info.mr, info.mg, info.mb,
+        info.br, info.bg, info.bb,
+        info.hp, info.pax, info.paz, info.pbx, info.pbz,
+        info.patSpd, info.interval, info.range, info.stationary,
+        info.hitboxProfileId
+    };
 
     if (m_registry)
     {
@@ -69,20 +183,20 @@ void ConquestMode::checkDeaths(World& world)
             {
                 --tickets;
                 RespawnEntry entry;
-                entry.timer            = respawnDelay;
-                entry.x                = tpl.x;
-                entry.z                = tpl.z;
-                entry.teamId           = tpl.teamId;
-                entry.mr=tpl.mr; entry.mg=tpl.mg; entry.mb=tpl.mb;
-                entry.br=tpl.br; entry.bg=tpl.bg; entry.bb=tpl.bb;
-                entry.hp               = tpl.hp;
-                entry.pax=tpl.pax; entry.paz=tpl.paz;
-                entry.pbx=tpl.pbx; entry.pbz=tpl.pbz;
-                entry.patSpd           = tpl.patSpd;
-                entry.interval         = tpl.interval;
-                entry.range            = tpl.range;
-                entry.stationary       = tpl.stationary;
-                entry.hitboxProfileId  = tpl.hitboxProfileId;
+                entry.timer           = respawnDelay;
+                entry.x               = tpl.x;
+                entry.z               = tpl.z;
+                entry.teamId          = tpl.teamId;
+                entry.mr = tpl.mr; entry.mg = tpl.mg; entry.mb = tpl.mb;
+                entry.br = tpl.br; entry.bg = tpl.bg; entry.bb = tpl.bb;
+                entry.hp              = tpl.hp;
+                entry.pax = tpl.pax; entry.paz = tpl.paz;
+                entry.pbx = tpl.pbx; entry.pbz = tpl.pbz;
+                entry.patSpd          = tpl.patSpd;
+                entry.interval        = tpl.interval;
+                entry.range           = tpl.range;
+                entry.stationary      = tpl.stationary;
+                entry.hitboxProfileId = tpl.hitboxProfileId;
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
@@ -113,7 +227,7 @@ void ConquestMode::applySettings(const MatchSettings& s)
 }
 
 void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
-                          const DefinitionRegistry* registry)
+                         const DefinitionRegistry* registry)
 {
     std::cout << "[ConquestMode] Firebase — caricamento...\n";
     world.initialize();
@@ -133,71 +247,9 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     world.addTeam(m_playerEntity, {1});
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
-    // ── Legge parametri grunt dal registry (fallback ai valori hardcoded) ─
-    float enemyHp       = 80.0f;
-    float enemyMoveSpd  = 2.5f;
-    float enemyInterval = 2.2f;
-    float enemyRange    = 18.0f;
-    float enemyMR=0.70f, enemyMG=0.65f, enemyMB=0.50f;
-    float enemyBR=1.00f, enemyBG=0.50f, enemyBB=0.00f;
-    std::string enemyHitboxProfile = "grunt";
-
-    if (registry)
-    {
-        const EnemyDef* grunt = registry->getEnemy("grunt");
-        if (grunt)
-        {
-            enemyHp    = grunt->hp;
-            enemyMoveSpd = grunt->moveSpeed;
-            enemyMR=grunt->color[0]; enemyMG=grunt->color[1]; enemyMB=grunt->color[2];
-            enemyBR=grunt->bulletColor[0]; enemyBG=grunt->bulletColor[1]; enemyBB=grunt->bulletColor[2];
-            enemyHitboxProfile = grunt->hitboxProfileId;
-            const AiProfileDef* ai = registry->getAiProfile(grunt->aiProfileId);
-            if (ai) { enemyMoveSpd=ai->patrolSpeed; enemyInterval=ai->shootInterval; enemyRange=ai->sightRange; }
-            std::cout << "[ConquestMode] Grunt dal registry: hp=" << enemyHp
-                      << " spd=" << enemyMoveSpd << " interval=" << enemyInterval << "\n";
-        }
-    }
-
-    // ── Legge parametri heavy dal registry ────────────────────────────────
-    float heavyHp=140.0f, heavyMoveSpd=2.0f, heavyInterval=1.5f, heavyRange=16.0f;
-    float heavyMR=0.50f, heavyMG=0.45f, heavyMB=0.35f;
-    float heavyBR=1.00f, heavyBG=0.40f, heavyBB=0.00f;
-    std::string heavyHitboxProfile = "heavy";
-
-    if (registry)
-    {
-        const EnemyDef* heavy = registry->getEnemy("heavy");
-        if (heavy)
-        {
-            heavyHp=heavy->hp; heavyMoveSpd=heavy->moveSpeed;
-            heavyMR=heavy->color[0]; heavyMG=heavy->color[1]; heavyMB=heavy->color[2];
-            heavyBR=heavy->bulletColor[0]; heavyBG=heavy->bulletColor[1]; heavyBB=heavy->bulletColor[2];
-            heavyHitboxProfile=heavy->hitboxProfileId;
-            const AiProfileDef* ai = registry->getAiProfile(heavy->aiProfileId);
-            if (ai) { heavyMoveSpd=ai->patrolSpeed; heavyInterval=ai->shootInterval; heavyRange=ai->sightRange; }
-        }
-    }
-
-    // ── Legge parametri sniper dal registry ───────────────────────────────
-    float sniperHp=55.0f, sniperMoveSpd=1.8f, sniperInterval=4.0f, sniperRange=30.0f;
-    float sniperMR=0.35f, sniperMG=0.30f, sniperMB=0.25f;
-    float sniperBR=0.20f, sniperBG=0.50f, sniperBB=1.00f;
-    std::string sniperHitboxProfile = "sniper";
-
-    if (registry)
-    {
-        const EnemyDef* sniper = registry->getEnemy("sniper");
-        if (sniper)
-        {
-            sniperHp=sniper->hp; sniperMoveSpd=sniper->moveSpeed;
-            sniperMR=sniper->color[0]; sniperMG=sniper->color[1]; sniperMB=sniper->color[2];
-            sniperBR=sniper->bulletColor[0]; sniperBG=sniper->bulletColor[1]; sniperBB=sniper->bulletColor[2];
-            sniperHitboxProfile=sniper->hitboxProfileId;
-            const AiProfileDef* ai = registry->getAiProfile(sniper->aiProfileId);
-            if (ai) { sniperMoveSpd=ai->patrolSpeed; sniperInterval=ai->shootInterval; sniperRange=ai->sightRange; }
-        }
-    }
+    // ── Lista nemici da mappa/registry ───────────────────────────────────
+    const int nEnemies = std::min(team2AiCount, 20);
+    std::vector<std::string> enemyIds = buildEnemySpawnList(registry, nEnemies);
 
     // ── Lambda helper spawn ───────────────────────────────────────────────
     auto mkUnit = [&](float x, float z, int team,
@@ -211,12 +263,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     {
         RespawnEntry info;
         info.timer           = 0;
-        info.x=x; info.z=z;
+        info.x = x; info.z = z;
         info.teamId          = team;
-        info.mr=mr; info.mg=mg; info.mb=mb;
-        info.br=br; info.bg=bg; info.bb=bb;
+        info.mr = mr; info.mg = mg; info.mb = mb;
+        info.br = br; info.bg = bg; info.bb = bb;
         info.hp              = hp;
-        info.pax=pax; info.paz=paz; info.pbx=pbx; info.pbz=pbz;
+        info.pax = pax; info.paz = paz; info.pbx = pbx; info.pbz = pbz;
         info.patSpd          = pspd;
         info.interval        = intv;
         info.range           = range;
@@ -264,31 +316,20 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         {  0, 3,  0, 1,  0, 5, false },
     };
 
-    // ── Spawn nemici ──────────────────────────────────────────────────────
-    int nEnemies = std::min(team2AiCount, 20);
+    // ── Spawn nemici dai JSON realmente selezionati ──────────────────────
     for (int i = 0; i < nEnemies; ++i)
     {
         const auto& p = enemyPos[i];
-        if (i == 4 || i == 5)
-        {
-            mkUnit(p.x, p.z, 2,
-                   sniperMR, sniperMG, sniperMB,
-                   sniperBR, sniperBG, sniperBB,
-                   sniperHp,
-                   p.pax, p.paz, p.pbx, p.pbz,
-                   sniperMoveSpd, sniperInterval, sniperRange,
-                   sniperHitboxProfile, true);
-        }
-        else
-        {
-            mkUnit(p.x, p.z, 2,
-                   enemyMR, enemyMG, enemyMB,
-                   enemyBR, enemyBG, enemyBB,
-                   enemyHp,
-                   p.pax, p.paz, p.pbx, p.pbz,
-                   enemyMoveSpd, enemyInterval, enemyRange,
-                   enemyHitboxProfile, p.stat);
-        }
+        const std::string enemyId = enemyIds[i];
+        const ResolvedEnemyArchetype resolved = resolveEnemyArchetype(registry, enemyId);
+
+        mkUnit(p.x, p.z, 2,
+               resolved.mr, resolved.mg, resolved.mb,
+               resolved.br, resolved.bg, resolved.bb,
+               resolved.hp,
+               p.pax, p.paz, p.pbx, p.pbz,
+               resolved.moveSpeed, resolved.interval, resolved.range,
+               resolved.hitboxProfileId, p.stat);
     }
 
     // ── Spawn alleati AI ──────────────────────────────────────────────────
@@ -313,7 +354,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         EntityId c = world.createEntity();
         world.addTransform(c, {x, yc, z, 0, ry, 0, sx, sy, sz});
         world.addMeshRenderer(c, {mesh, tex, cr, cg, cb});
-        world.addCollider(c, {sx*0.5f, sy*0.5f, sz*0.5f});
+        world.addCollider(c, {sx * 0.5f, sy * 0.5f, sz * 0.5f});
     };
 
     addBox(0,-0.1f,-1, 0, 24,0.2f,20, 0.42f,0.38f,0.32f);
@@ -326,8 +367,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     addBox(-8,1.0f,-8, 0, 4,2,5, 0.28f,0.25f,0.22f);
     for (int i = 1; i <= 5; ++i)
     {
-        float top = i*0.4f, yc = top*0.5f;
-        float zc  = -3.575f - (i-1)*0.55f;
+        float top = i * 0.4f, yc = top * 0.5f;
+        float zc  = -3.575f - (i - 1) * 0.55f;
         addBox( 8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
         addBox(-8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
     }
@@ -343,7 +384,6 @@ void ConquestMode::update(World& world, float dt)
 {
     checkDeaths(world);
 
-    // Processa la coda di respawn: ogni entry ha il suo timer interno
     for (auto it = m_respawnQueue.begin(); it != m_respawnQueue.end(); )
     {
         it->timer -= dt;

@@ -1,0 +1,29 @@
+{
+    "abilities": [],
+    "ai_profile": "B1 Battle Droid",
+    "bullet_color": [
+        1.0,
+        0.550000011920929,
+        0.0
+    ],
+    "color": [
+        0.970588207244873,
+        1.0,
+        0.0
+    ],
+    "faction": "separatist",
+    "hitbox_profile": "B1 Battle Droid",
+    "id": "B1 Battle Droid",
+    "mesh": "",
+    "name": "B1 Battle Droid",
+    "stats": {
+        "damage_scale": 1.0,
+        "hp": 80.0,
+        "move_speed": 4.0
+    },
+    "team": 2,
+    "texture": "",
+    "weapons": [
+        "E5 Blaster Rifle"
+    ]
+}

@@ -60,27 +60,6 @@ set_target_properties(tinyobjloader PROPERTIES
   IMPORTED_LOCATION_DEBUG "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/Debug/tinyobjloader.lib"
   )
 
-# Import target "tinyobjloader" for configuration "Release"
-set_property(TARGET tinyobjloader APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)
-set_target_properties(tinyobjloader PROPERTIES
-  IMPORTED_LINK_INTERFACE_LANGUAGES_RELEASE "CXX"
-  IMPORTED_LOCATION_RELEASE "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/Release/tinyobjloader.lib"
-  )
-
-# Import target "tinyobjloader" for configuration "MinSizeRel"
-set_property(TARGET tinyobjloader APPEND PROPERTY IMPORTED_CONFIGURATIONS MINSIZEREL)
-set_target_properties(tinyobjloader PROPERTIES
-  IMPORTED_LINK_INTERFACE_LANGUAGES_MINSIZEREL "CXX"
-  IMPORTED_LOCATION_MINSIZEREL "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/MinSizeRel/tinyobjloader.lib"
-  )
-
-# Import target "tinyobjloader" for configuration "RelWithDebInfo"
-set_property(TARGET tinyobjloader APPEND PROPERTY IMPORTED_CONFIGURATIONS RELWITHDEBINFO)
-set_target_properties(tinyobjloader PROPERTIES
-  IMPORTED_LINK_INTERFACE_LANGUAGES_RELWITHDEBINFO "CXX"
-  IMPORTED_LOCATION_RELWITHDEBINFO "C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/RelWithDebInfo/tinyobjloader.lib"
-  )
-
 # This file does not depend on other imported targets which have
 # been exported from the same project but in a separate export set.
 
