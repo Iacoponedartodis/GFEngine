@@ -1,0 +1,41 @@
+{
+	"abstract" : true,
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_library"
+		],
+		"files" : 
+		[
+			"build/windows-debug/_deps/tinygltf-src/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 43,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 10
+	},
+	"id" : "tinygltf::@cf7fec98cfc62fa92173",
+	"name" : "tinygltf",
+	"paths" : 
+	{
+		"build" : "_deps/tinygltf-build",
+		"source" : "build/windows-debug/_deps/tinygltf-src"
+	},
+	"sources" : [],
+	"type" : "INTERFACE_LIBRARY"
+}

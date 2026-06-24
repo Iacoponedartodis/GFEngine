@@ -1,0 +1,14 @@
+# Target labels
+ tinygltf-populate
+# Source files and their labels
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/tinygltf-populate
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/fd5335308b465c01981c736078823d6e/tinygltf-populate.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/059e6aa0b40239a52d1ef53253ebcdbe/tinygltf-populate-complete.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-build.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-configure.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-download.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-install.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-mkdir.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-patch.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-test.rule
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/CMakeFiles/5e273e1c9bb50594be4b5b74f0c52579/tinygltf-populate-update.rule

@@ -15,6 +15,7 @@ public:
     void lookAt(const glm::vec3& target, const glm::vec3& up = {0.0f, 1.0f, 0.0f});
     void setAspect(float aspect);
     void setSpeed(float speed);
+    void setFov(float fovDeg);
 
     void processKeyboard(bool fwd, bool bwd, bool lft, bool rgt,
                          bool moveUp, bool moveDown, float dt);
@@ -25,7 +26,9 @@ public:
     [[nodiscard]] glm::mat4 getViewProjection() const;
 
     [[nodiscard]] const glm::vec3& getPosition() const;
-    [[nodiscard]] glm::vec3        getForward()  const;  // direzione sguardo normalizzata
+    [[nodiscard]] glm::vec3        getForward()  const;
+    [[nodiscard]] float            getYaw()      const { return m_yaw; }
+    [[nodiscard]] float            getPitch()    const { return m_pitch; }
     [[nodiscard]] float            getFov()      const;
 
 private:

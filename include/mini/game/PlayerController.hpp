@@ -14,8 +14,6 @@ class InputManager;
 class Audio;
 class Mesh;
 
-// Gestisce il movimento del giocatore, la gravità, il salto,
-// l'air control e lo sparo. Estratto da Application.cpp.
 class PlayerController
 {
 public:
@@ -29,28 +27,48 @@ public:
     bool     isDead     = false;
     float    respawnTimer = -1.0f;
 
-    // ── Arma ─────────────────────────────────────────────────────────
-    Weapon   weapon;
+    // ── Armi (0=primaria, 1=secondaria) ──────────────────────────────
+    Weapon   weapon;          // arma attiva (punta a weapons[activeWeapon])
+    Weapon   weapons[2];      // slot primaria e secondaria
+
+    // ── Terza persona ─────────────────────────────────────────────────
+    bool      thirdPerson  = false;
+    float     tpsYaw       = 0.0f;
+    float     tpsPitch     = -10.0f;
+    float     tpsDistance  = 5.0f;
+    float     tpsHeight    = 2.2f;
+    glm::vec3 tpsPlayerPos = {0, 0.86f, 0};
+
+    // ── Stato di gameplay ─────────────────────────────────────────────
+    bool  isSprinting    = false;   // read-only (aggiornato da updateMovement)
+    bool  isCrouching    = false;   // toggle su Crouch pressed
+    bool  isAiming       = false;   // mouse destro tenuto
+    bool  isRolling      = false;   // true durante schivata
+    float rollTimer      = 0.0f;    // timer interno roll (secondi rimanenti)
+    float rollVelX       = 0.0f;
+    float rollVelZ       = 0.0f;
+    int   activeWeapon   = 0;       // 0=primaria, 1=secondaria
 
     // ── Init ─────────────────────────────────────────────────────────
     void reset(EntityId playerEntity, float hp, const glm::vec3& spawnPos, Camera& cam);
 
-    // ── Update (chiamato ogni frame in Playing) ──────────────────────
+    // ── Toggle TPS/FPS ────────────────────────────────────────────────
+    // Sincronizza yaw/pitch con la camera corrente al momento del toggle.
+    void toggleThirdPerson(Camera& cam);
 
-    // Movimento + gravità + salto. Aggiorna la posizione della camera.
+    // ── Update (chiamato ogni frame in Playing) ───────────────────────
     void updateMovement(Camera& cam, const InputManager& input,
                         World& world, float elapsed);
 
-    // Sincronizza la posizione della camera con l'entità giocatore
-    // e controlla se il giocatore è stato colpito/ucciso.
-    // Ritorna true se il giocatore è appena morto QUESTO frame.
+    // Mouse in TPS: ruota l'orbita, non la camera FPS.
+    // In FPS: delega a cam.processMouse().
+    void processMouse(Camera& cam, float dx, float dy, float sensitivity = 0.1f);
+
     bool updateHealth(World& world, Audio& audio);
 
-    // Spara creando entità proiettile. Ritorna true se ha sparato.
     bool updateShooting(World& world, Camera& cam, const InputManager& input,
                         Audio& audio, Mesh* bulletMesh, bool mouseCaptured);
 
-    // Aggiorna il timer di respawn. Ritorna true se il giocatore è appena rinato.
     bool updateRespawn(World& world, Camera& cam,
                        float respawnDelay, const glm::vec3& spawnPos, float maxHp);
 };

@@ -1,0 +1,29 @@
+{
+    "abilities": [],
+    "ai_profile": "B1 Heavy Droid",
+    "bullet_color": [
+        1.0,
+        0.550000011920929,
+        0.0
+    ],
+    "color": [
+        1.0,
+        0.5882352590560913,
+        0.0
+    ],
+    "faction": "separatist",
+    "hitbox_profile": "",
+    "id": "B1 Heavy Droid",
+    "mesh": "",
+    "name": "B1 Heavy Droid",
+    "stats": {
+        "damage_scale": 1.0,
+        "hp": 90.0,
+        "move_speed": 4.0
+    },
+    "team": 2,
+    "texture": "",
+    "weapons": [
+        "E-5C Heavy Blaster"
+    ]
+}

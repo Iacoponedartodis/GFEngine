@@ -3,12 +3,17 @@
 #include "mini/ecs/Entity.hpp"
 #include "mini/game/MatchSettings.hpp"
 #include <glm/glm.hpp>
+#include <unordered_map>
+#include <string>
 #include <vector>
 
-namespace mini { class World; class Mesh; class Texture; }
+namespace mini { class World; class Mesh; class Texture; class DefinitionRegistry; }
 
 namespace mini
 {
+
+// Mappa path OBJ → puntatore Mesh (non-owning, vive in Application)
+using MeshCache = std::unordered_map<std::string, Mesh*>;
 
 struct RespawnEntry
 {
@@ -22,31 +27,37 @@ struct RespawnEntry
     float patSpd, interval, range;
     bool  stationary;
     std::string hitboxProfileId;
+
+    // Stats proiettile dall'arma primaria (WeaponDef)
+    float bulletSpeed    = 8.0f;
+    float bulletDamage   = 20.0f;
+    float bulletLifetime = 5.0f;
+
+    // Mesh specifica dell'entità (nullptr = usa default)
+    Mesh* entityMesh = nullptr;
 };
 
 class ConquestMode
 {
 public:
     void applySettings(const MatchSettings& s);
-    void start(World& world, Mesh* mesh, Texture* texture,
-              const class DefinitionRegistry* registry = nullptr);
+    void start(World& world, Mesh* defaultMesh, Texture* texture,
+               const DefinitionRegistry* registry = nullptr,
+               const MeshCache* meshCache = nullptr);
     void update(World& world, float deltaTime);
 
-    [[nodiscard]] EntityId  getPlayerEntity() const { return m_playerEntity; }
-    [[nodiscard]] glm::vec3 getSpawnPos()     const { return m_spawnPos; }
+    [[nodiscard]] EntityId  getPlayerEntity()  const { return m_playerEntity; }
+    [[nodiscard]] glm::vec3 getSpawnPos()      const { return m_spawnPos; }
+    [[nodiscard]] int getTeam1Tickets()        const { return m_team1Tickets; }
+    [[nodiscard]] int getTeam2Tickets()        const { return m_team2Tickets; }
+    [[nodiscard]] Mesh*    getDefaultMesh()    const { return m_mesh; }
+    [[nodiscard]] Texture* getDefaultTexture() const { return m_tex; }
 
-    [[nodiscard]] int getTeam1Tickets() const { return m_team1Tickets; }
-    [[nodiscard]] int getTeam2Tickets() const { return m_team2Tickets; }
-
-    // Scala un ticket del team 1 (chiamato da Application quando il giocatore muore)
-    // Restituisce il numero di ticket rimasti DOPO la scalata
     int consumeTeam1Ticket()
     {
         if (m_team1Tickets > 0) --m_team1Tickets;
         return m_team1Tickets;
     }
-
-    // Permette ad Application di aggiornare l'entità giocatore dopo un respawn
     void overridePlayerEntity(EntityId e) { m_playerEntity = e; }
 
     int   initialTeam1Tickets = 5;
@@ -60,16 +71,16 @@ private:
     EntityId  m_playerEntity = 0;
     glm::vec3 m_spawnPos     = {0, 0.86f, 8.0f};
 
-    Mesh*    m_mesh     = nullptr;
-    Texture* m_tex      = nullptr;
-    const class DefinitionRegistry* m_registry = nullptr;
+    Mesh*    m_mesh      = nullptr;
+    Texture* m_tex       = nullptr;
+    const DefinitionRegistry* m_registry  = nullptr;
+    const MeshCache*          m_meshCache = nullptr;
 
     int m_team1Tickets = 5;
     int m_team2Tickets = 10;
 
     std::vector<RespawnEntry> m_respawnQueue;
 
-    // Traccia le unità vive per rilevare le morti (sostituisce il static global)
     struct UnitTemplate
     {
         float x, z, yPos;
@@ -80,7 +91,11 @@ private:
         float pax, paz, pbx, pbz;
         float patSpd, interval, range;
         bool  stationary;
-    std::string hitboxProfileId;
+        std::string hitboxProfileId;
+        float bulletSpeed    = 8.0f;
+        float bulletDamage   = 20.0f;
+        float bulletLifetime = 5.0f;
+        Mesh* entityMesh     = nullptr;
     };
     std::vector<std::pair<EntityId, UnitTemplate>> m_trackedUnits;
 

@@ -1,0 +1,27 @@
+{
+    "bullet_color": [
+        0.30000001192092896,
+        0.6499999761581421,
+        1.0
+    ],
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.05000000074505806,
+    "bullet_speed": 24.0,
+    "cooldown_rate": 0.30000001192092896,
+    "damage": 15.0,
+    "effective_range": 18.0,
+    "faction": "republic",
+    "fire_rate": 10.0,
+    "heat_per_shot": 0.75,
+    "id": "Z-6 Rotary Blaster",
+    "mesh": "",
+    "min_range": 0.0,
+    "name": "Z-6 Rotary Blaster",
+    "overheat_penalty": 2.0,
+    "projectile_mesh": "",
+    "spread_ads": 0.004999999888241291,
+    "spread_base": 0.019999999552965164,
+    "spread_jump": 0.20000000298023224,
+    "spread_move": 0.05999999865889549,
+    "spread_sprint": 0.14000000059604645
+}

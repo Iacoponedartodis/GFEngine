@@ -23,6 +23,7 @@ struct ResolvedEnemyArchetype
 {
     std::string enemyId;
     std::string hitboxProfileId;
+    std::string meshPath;
 
     float hp        = 80.0f;
     float moveSpeed = 2.5f;
@@ -31,6 +32,11 @@ struct ResolvedEnemyArchetype
 
     float mr = 0.70f, mg = 0.10f, mb = 0.10f;
     float br = 1.00f, bg = 0.50f, bb = 0.00f;
+
+    // Stats arma primaria (da WeaponDef)
+    float bulletSpeed    = 8.0f;
+    float bulletDamage   = 20.0f;
+    float bulletLifetime = 5.0f;
 };
 
 static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* registry,
@@ -58,6 +64,7 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
     out.bg = enemy->bulletColor[1];
     out.bb = enemy->bulletColor[2];
     out.hitboxProfileId = enemy->hitboxProfileId.empty() ? enemy->id : enemy->hitboxProfileId;
+    out.meshPath = enemy->meshPath;
 
     if (registry)
     {
@@ -73,6 +80,18 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
             std::cerr << "[ConquestMode] AI profile '" << enemy->aiProfileId
                       << "' non trovato per enemy '" << enemy->id
                       << "'. Uso fallback AI.\n";
+        }
+
+        // Bullet stats dall'arma primaria
+        const WeaponDef* wpn = registry->getWeapon(enemy->primaryWeaponId());
+        if (wpn)
+        {
+            out.bulletSpeed    = wpn->bulletSpeed;
+            out.bulletDamage   = wpn->damage;
+            out.bulletLifetime = wpn->bulletLifetime;
+            out.br = wpn->bulletColor[0];
+            out.bg = wpn->bulletColor[1];
+            out.bb = wpn->bulletColor[2];
         }
     }
 
@@ -95,11 +114,11 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
 
     if (registry)
     {
-        const MapDef* map = registry->getMap("default");
+        const MapDef* map = registry->getMap("firebase");
         if (map && !map->enemyTypes.empty())
         {
             preferredIds = map->enemyTypes;
-            std::cout << "[ConquestMode] Uso enemy_types da map 'default' ("
+            std::cout << "[ConquestMode] Uso enemy_types da map 'firebase' ("
                       << preferredIds.size() << " tipi).\n";
         }
     }
@@ -125,24 +144,28 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     world.addTransform(e, {info.x, yPos, info.z});
     world.addTeam(e, {info.teamId});
     world.addHealth(e, {info.hp, info.hp});
-    world.addMeshRenderer(e, {m_mesh, m_tex, info.mr, info.mg, info.mb});
+    Mesh* useMesh = (info.entityMesh ? info.entityMesh : m_mesh);
+    world.addMeshRenderer(e, {useMesh, m_tex, info.mr, info.mg, info.mb});
 
     world.addAi(e, AiComponent{
-        .shootInterval = info.interval,
-        .aggroRange = info.range,
-        .bulletMesh = m_mesh,
-        .bulletR = info.br,
-        .bulletG = info.bg,
-        .bulletB = info.bb,
-        .patrolAx = info.pax,
-        .patrolAz = info.paz,
-        .patrolBx = info.pbx,
-        .patrolBz = info.pbz,
-        .patrolSpeed = info.patSpd,
-        .seekSpeed = info.patSpd + 1.5f,
-        .strafeTimer = 1.4f,
-        .strafeSign = 1.0f,
-        .stationary = info.stationary
+        .shootInterval  = info.interval,
+        .aggroRange     = info.range,
+        .bulletMesh     = m_mesh,
+        .bulletR        = info.br,
+        .bulletG        = info.bg,
+        .bulletB        = info.bb,
+        .bulletSpeed    = info.bulletSpeed,
+        .bulletDamage   = info.bulletDamage,
+        .bulletLifetime = info.bulletLifetime,
+        .patrolAx       = info.pax,
+        .patrolAz       = info.paz,
+        .patrolBx       = info.pbx,
+        .patrolBz       = info.pbz,
+        .patrolSpeed    = info.patSpd,
+        .seekSpeed      = info.patSpd + 1.5f,
+        .strafeTimer    = 1.4f,
+        .strafeSign     = 1.0f,
+        .stationary     = info.stationary
     });
 
     UnitTemplate tpl = {
@@ -227,14 +250,16 @@ void ConquestMode::applySettings(const MatchSettings& s)
 }
 
 void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
-                         const DefinitionRegistry* registry)
+                         const DefinitionRegistry* registry,
+                         const MeshCache* meshCache)
 {
     std::cout << "[ConquestMode] Firebase — caricamento...\n";
     world.initialize();
-    m_spawnPos = {0, SPAWN_Y, SPAWN_Z};
-    m_mesh     = mesh;
-    m_tex      = tex;
-    m_registry = registry;
+    m_spawnPos  = {0, SPAWN_Y, SPAWN_Z};
+    m_mesh      = mesh;
+    m_tex       = tex;
+    m_registry  = registry;
+    m_meshCache = meshCache;
 
     m_team1Tickets = initialTeam1Tickets;
     m_team2Tickets = initialTeam2Tickets;
@@ -259,7 +284,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                       float pax, float paz, float pbx, float pbz,
                       float pspd, float intv, float range,
                       const std::string& hitboxProfile = "",
-                      bool stat = false)
+                      bool stat = false,
+                      float bspd = 8.0f, float bdmg = 20.0f, float blife = 5.0f)
     {
         RespawnEntry info;
         info.timer           = 0;
@@ -274,6 +300,50 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         info.range           = range;
         info.hitboxProfileId = hitboxProfile;
         info.stationary      = stat;
+        info.bulletSpeed     = bspd;
+        info.bulletDamage    = bdmg;
+        info.bulletLifetime  = blife;
+        info.entityMesh      = nullptr;
+        spawnUnit(world, info);
+    };
+
+    // Versione con mesh custom (per nemici con meshPath)
+    auto mkUnitWithMesh = [&](float x, float z, int team,
+                              float mr, float mg, float mb,
+                              float br, float bg, float bb,
+                              float hp,
+                              float pax, float paz, float pbx, float pbz,
+                              float pspd, float intv, float range,
+                              const std::string& hitboxProfile,
+                              bool stat,
+                              float bspd, float bdmg, float blife,
+                              const std::string& meshPath)
+    {
+        RespawnEntry info;
+        info.timer           = 0;
+        info.x = x; info.z = z;
+        info.teamId          = team;
+        info.mr = mr; info.mg = mg; info.mb = mb;
+        info.br = br; info.bg = bg; info.bb = bb;
+        info.hp              = hp;
+        info.pax = pax; info.paz = paz; info.pbx = pbx; info.pbz = pbz;
+        info.patSpd          = pspd;
+        info.interval        = intv;
+        info.range           = range;
+        info.hitboxProfileId = hitboxProfile;
+        info.stationary      = stat;
+        info.bulletSpeed     = bspd;
+        info.bulletDamage    = bdmg;
+        info.bulletLifetime  = blife;
+
+        // Risolve mesh dal cache se disponibile
+        info.entityMesh = nullptr;
+        if (m_meshCache && !meshPath.empty())
+        {
+            auto it = m_meshCache->find(meshPath);
+            if (it != m_meshCache->end())
+                info.entityMesh = it->second;
+        }
         spawnUnit(world, info);
     };
 
@@ -323,27 +393,69 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         const std::string enemyId = enemyIds[i];
         const ResolvedEnemyArchetype resolved = resolveEnemyArchetype(registry, enemyId);
 
-        mkUnit(p.x, p.z, 2,
+        mkUnitWithMesh(p.x, p.z, 2,
                resolved.mr, resolved.mg, resolved.mb,
                resolved.br, resolved.bg, resolved.bb,
                resolved.hp,
                p.pax, p.paz, p.pbx, p.pbz,
                resolved.moveSpeed, resolved.interval, resolved.range,
-               resolved.hitboxProfileId, p.stat);
+               resolved.hitboxProfileId, p.stat,
+               resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
+               resolved.meshPath);
     }
 
-    // ── Spawn alleati AI ──────────────────────────────────────────────────
+    // ── Lista alleati da mappa/registry ─────────────────────────────────────
+    std::vector<std::string> allyIds;
+    if (registry)
+    {
+        const MapDef* map = registry->getMap("firebase");
+        if (map && !map->allyTypes.empty())
+            allyIds = map->allyTypes;
+    }
+    if (allyIds.empty())
+        allyIds = {"clone_trooper"};
+
+    // ── Spawn alleati AI (data-driven) ───────────────────────────────────────
     int nAllies = std::min(team1AiCount, 10);
     for (int i = 0; i < nAllies; ++i)
     {
         const auto& p = allyPos[i];
-        mkUnit(p.x, p.z, 1,
-               0.25f, 0.45f, 1.0f,
-               0.30f, 0.60f, 1.0f,
-               60.0f,
-               p.pax, p.paz, p.pbx, p.pbz,
-               1.8f, 3.5f, 14.0f,
-               "", p.stat);
+        const std::string allyId = allyIds[i % (int)allyIds.size()];
+
+        // Cerca nel registry allies
+        const EnemyDef* allyDef = registry ? registry->getAlly(allyId) : nullptr;
+
+        float mr=0.25f, mg=0.45f, mb=1.0f;
+        float br=0.30f, bg=0.60f, bb=1.0f;
+        float hp=60.0f, pspd=1.8f, intv=3.5f, rng=14.0f;
+        std::string hitboxId;
+        std::string meshPath;
+
+        if (allyDef)
+        {
+            mr = allyDef->color[0]; mg = allyDef->color[1]; mb = allyDef->color[2];
+            hp = allyDef->hp;
+            hitboxId = allyDef->hitboxProfileId;
+            meshPath = allyDef->meshPath;
+
+            if (registry)
+            {
+                const AiProfileDef* ai = registry->getAiProfile(allyDef->aiProfileId);
+                if (ai) { pspd = ai->patrolSpeed; intv = ai->shootInterval; rng = ai->sightRange; }
+
+                const WeaponDef* wpn = registry->getWeapon(allyDef->primaryWeaponId());
+                if (wpn) { br = wpn->bulletColor[0]; bg = wpn->bulletColor[1]; bb = wpn->bulletColor[2]; }
+                else { br = allyDef->bulletColor[0]; bg = allyDef->bulletColor[1]; bb = allyDef->bulletColor[2]; }
+            }
+        }
+
+        mkUnitWithMesh(p.x, p.z, 1,
+                       mr, mg, mb, br, bg, bb, hp,
+                       p.pax, p.paz, p.pbx, p.pbz,
+                       pspd, intv, rng,
+                       hitboxId, p.stat,
+                       8.0f, 20.0f, 5.0f,
+                       meshPath);
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────

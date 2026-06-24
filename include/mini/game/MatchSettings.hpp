@@ -20,6 +20,7 @@ namespace mini
 
 struct MatchSettings
 {
+    // ── Regole partita ────────────────────────────────────────────────
     int   team1Tickets  = 5;
     int   team2Tickets  = 10;
     int   team1AiCount  = 1;
@@ -27,6 +28,12 @@ struct MatchSettings
     float playerHp      = 100.0f;
     float respawnDelay  = 4.0f;
     std::string presetName;
+
+    // ── Loadout giocatore ─────────────────────────────────────────────
+    std::string primaryWeaponId;           // ID arma primaria (da registry)
+    std::string secondaryWeaponId;         // ID arma secondaria (vuoto = nessuna)
+    std::vector<std::string> abilityIds;   // abilità attive scelte (max 2)
+    std::string gadgetId;                  // gadget passivo scelto (max 1)
 };
 
 struct UserPresets

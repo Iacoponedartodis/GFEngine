@@ -36,6 +36,17 @@ FetchContent_Declare(tinyobjloader
 set(TINYOBJLOADER_BUILD_TEST_LOADER OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(tinyobjloader)
 
+# ── tinygltf ──────────────────────────────────────────────────────────────────
+FetchContent_Declare(tinygltf
+    GIT_REPOSITORY https://github.com/syoyo/tinygltf.git
+    GIT_TAG        v2.9.3
+    GIT_SHALLOW    TRUE
+)
+set(TINYGLTF_BUILD_LOADER_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(TINYGLTF_INSTALL              OFF CACHE BOOL "" FORCE)
+set(TINYGLTF_HEADER_ONLY          ON  CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tinygltf)
+
 # ── nlohmann/json ─────────────────────────────────────────────────────────────
 FetchContent_Declare(nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -110,12 +121,14 @@ add_executable(GFEngine
     src/render/PreMatchMenu.cpp
     src/render/LauncherScreen.cpp
     src/render/MainMenuScreen.cpp
+    src/vendor/tinygltf_impl.cpp
 )
 target_include_directories(GFEngine PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/external/glm
     ${stb_SOURCE_DIR}
     ${tinyobjloader_SOURCE_DIR}
+    ${tinygltf_SOURCE_DIR}
 )
 target_compile_features(GFEngine PRIVATE cxx_std_20)
 target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED)
@@ -150,6 +163,7 @@ add_executable(GFEditor
     src/render/Model.cpp
     src/vendor/stb_image_impl.cpp
     src/vendor/tinyobj_impl.cpp
+    src/vendor/tinygltf_impl.cpp
 )
 target_include_directories(GFEditor PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -158,6 +172,7 @@ target_include_directories(GFEditor PRIVATE
     ${CMAKE_SOURCE_DIR}/external/glm
     ${stb_SOURCE_DIR}
     ${tinyobjloader_SOURCE_DIR}
+    ${tinygltf_SOURCE_DIR}
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )

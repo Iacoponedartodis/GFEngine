@@ -46,6 +46,9 @@
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\vendor\tinyobj_impl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\vendor\tinygltf_impl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\CMakeLists.txt" />

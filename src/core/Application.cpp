@@ -29,6 +29,7 @@
 #include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <filesystem>
 #include <iostream>
 #include <algorithm>
 #include <memory>
@@ -53,13 +54,22 @@ inline Weapon weaponFromDef(const WeaponDef& def)
     return w;
 }
 
-// Restituisce il percorso assoluto alla cartella data/ accanto all'exe
+// Restituisce il percorso alla cartella data/ sorgente del progetto.
+// Prima prova 3 livelli su dall'exe (build/config/Debug -> project root),
+// identico alla logica usata dal Balance Editor.
+// Fallback: data/ accanto all'exe (copia da CMake).
 static std::string getDataPath()
 {
     char* base = SDL_GetBasePath();
-    std::string path = (base ? base : "./");
+    std::filesystem::path exeDir = base ? base : ".";
     SDL_free(base);
-    return path + "data";
+
+    std::error_code ec;
+    std::filesystem::path sourceData = std::filesystem::canonical(exeDir / "../../../data", ec);
+    if (!ec && std::filesystem::exists(sourceData / "enemies", ec))
+        return sourceData.string();
+
+    return (exeDir / "data").string();
 }
 } // namespace mini
 
@@ -113,6 +123,12 @@ void Application::run(bool directPreMatch)
     std::sort(wList.begin(), wList.end(),
         [](const auto& a, const auto& b){ return a.name < b.name; });
 
+    std::vector<PreMatchMenu::AbilityEntry> aList;
+    for (auto& [id, def] : registry.abilities())
+        aList.push_back({id, def.name, def.type});
+    std::sort(aList.begin(), aList.end(),
+        [](const auto& a, const auto& b){ return a.name < b.name; });
+
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
     Renderer renderer(window);
@@ -136,6 +152,38 @@ void Application::run(bool directPreMatch)
         std::cout << "[Application] Mesh cubo." << std::endl;
     }
 
+    // ── Mesh cache per modelli nemici/alleati ────────────────────────
+    // Supporta .obj, .gltf e .glb — sceglie il loader in base all'estensione.
+    // I puntatori sono stabili per tutta la vita di Application::run().
+    std::unordered_map<std::string, std::unique_ptr<Mesh>> meshStore;
+    MeshCache meshCache;
+
+    auto loadMeshIntoCache = [&](const std::string& path)
+    {
+        if (path.empty() || meshCache.count(path)) return;
+        std::optional<Model> mOpt;
+        const bool isGltf = (path.size() >= 5 && path.substr(path.size()-5) == ".gltf")
+                          || (path.size() >= 4 && path.substr(path.size()-4) == ".glb");
+        if (isGltf)
+            mOpt = Model::loadFromGltf(path.c_str());
+        else
+            mOpt = Model::loadFromObj(path.c_str());
+
+        if (mOpt && !mOpt->isEmpty())
+        {
+            auto m = std::make_unique<Mesh>(mOpt->getMeshes()[0]);
+            meshCache[path] = m.get();
+            meshStore[path] = std::move(m);
+        }
+        else
+        {
+            std::cerr << "[MeshCache] Impossibile caricare: " << path << "\n";
+        }
+    };
+
+    for (auto& [id, enemy] : registry.enemies()) loadMeshIntoCache(enemy.meshPath);
+    for (auto& [id, ally]  : registry.allies())  loadMeshIntoCache(ally.meshPath);
+
     // ── ECS ──────────────────────────────────────────────────────────
     World world;
     world.registerSystem(std::make_unique<MovementSystem>());
@@ -149,6 +197,7 @@ void Application::run(bool directPreMatch)
     OptionsMenu      optMenu(W, H);
     PreMatchMenu     preMatchMenu(W, H);
     preMatchMenu.setWeaponList(wList);
+    preMatchMenu.setAbilityList(aList);
 
     // ── Game mode ────────────────────────────────────────────────────
     MatchSettings currentSettings;
@@ -179,7 +228,7 @@ void Application::run(bool directPreMatch)
     auto initWorld = [&]()
     {
         conquestMode.applySettings(currentSettings);
-        conquestMode.start(world, mesh.get(), albedo.get(), &registry);
+        conquestMode.start(world, mesh.get(), albedo.get(), &registry, &meshCache);
         player.reset(conquestMode.getPlayerEntity(), currentSettings.playerHp,
                      conquestMode.getSpawnPos(), cam);
         worldReady = true;
@@ -187,16 +236,21 @@ void Application::run(bool directPreMatch)
 
     auto startGame = [&]()
     {
-        const std::string& selectedId = preMatchMenu.getSelectedWeaponId();
-        const auto* wDef = registry.getWeapon(selectedId);
-        if (wDef)
-            player.weapon = weaponFromDef(*wDef);
-        else
-        {
-            std::cerr << "[Game] Arma non trovata nel registry: " << selectedId
-                      << " -- fallback blaster rifle\n";
-            player.weapon = makeBlasterRifle();
-        }
+        // ── Arma primaria ─────────────────────────────────────────────
+        const std::string& primaryId = preMatchMenu.getSelectedWeaponId();
+        const auto* wDef = registry.getWeapon(primaryId);
+        player.weapons[0] = wDef ? weaponFromDef(*wDef) : makeBlasterRifle();
+        if (!wDef)
+            std::cerr << "[Game] Arma primaria non trovata: " << primaryId << " — fallback\n";
+
+        // ── Arma secondaria ───────────────────────────────────────────
+        const std::string& secId = preMatchMenu.getSettings().secondaryWeaponId;
+        const auto* wDef2 = secId.empty() ? nullptr : registry.getWeapon(secId);
+        player.weapons[1] = wDef2 ? weaponFromDef(*wDef2) : Weapon{};
+
+        player.activeWeapon = 0;
+        player.weapon = player.weapons[0];
+
         initWorld();
         state = GameState::Playing;
         stateChanged = true;
@@ -310,6 +364,11 @@ void Application::run(bool directPreMatch)
                     if (sc == SDL_SCANCODE_K && !stateChanged)
                         doVoluntaryRespawn();
                 }
+                else if (state == GameState::Playing)
+                {
+                    if (sc == SDL_SCANCODE_V)
+                        player.toggleThirdPerson(cam);
+                }
             }
         }
 
@@ -372,7 +431,7 @@ void Application::run(bool directPreMatch)
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
         if (state == GameState::Playing && window.isMouseCaptured())
-            cam.processMouse((float)input.mouseDX(), (float)input.mouseDY());
+            player.processMouse(cam, (float)input.mouseDX(), (float)input.mouseDY());
 
         if (state == GameState::Playing)
             player.updateMovement(cam, input, world, elapsed);
@@ -384,7 +443,13 @@ void Application::run(bool directPreMatch)
             {
                 auto* pt = world.getTransform(player.entity);
                 if (pt)
-                { const glm::vec3& p = cam.getPosition(); pt->x=p.x; pt->y=p.y; pt->z=p.z; }
+                {
+                    // In TPS la posizione del player è in tpsPlayerPos, non nella camera
+                    const glm::vec3& p = player.thirdPerson
+                                         ? player.tpsPlayerPos
+                                         : cam.getPosition();
+                    pt->x = p.x; pt->y = p.y; pt->z = p.z;
+                }
             }
 
             if (!player.isDead && !world.isValidEntity(player.entity))

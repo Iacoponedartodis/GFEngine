@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\5e273e1c9bb50594be4b5b74f0c52579\tinygltf-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\059e6aa0b40239a52d1ef53253ebcdbe\tinygltf-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\fd5335308b465c01981c736078823d6e\tinygltf-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\tinygltf-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F688FDBE-95A3-319C-82F4-554102475505}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

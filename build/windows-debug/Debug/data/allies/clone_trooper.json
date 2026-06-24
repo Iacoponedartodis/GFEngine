@@ -1,0 +1,26 @@
+{
+    "abilities": [],
+    "ai_profile": "grunt",
+    "bullet_color": [
+        0.30000001192092896,
+        0.6000000238418579,
+        1.0
+    ],
+    "color": [
+        0.8500000238418579,
+        0.8500000238418579,
+        0.8500000238418579
+    ],
+    "faction": "republic",
+    "hitbox_profile": "",
+    "id": "Clone Trooper",
+    "mesh": "",
+    "name": "Clone Trooper",
+    "stats": {
+        "damage_scale": 1.0,
+        "hp": 100.0,
+        "move_speed": 1.7999999523162842
+    },
+    "texture": "",
+    "weapons": []
+}

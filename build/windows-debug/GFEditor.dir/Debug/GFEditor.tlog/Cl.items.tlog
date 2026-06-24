@@ -13,3 +13,4 @@ C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\Texture.cpp;C:\Users\HP
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\Model.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\Model.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\vendor\stb_image_impl.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\stb_image_impl.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\vendor\tinyobj_impl.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\tinyobj_impl.obj
+C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\vendor\tinygltf_impl.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEditor.dir\Debug\tinygltf_impl.obj

@@ -12,6 +12,11 @@ enum class Action : int
 {
     MoveForward, MoveBack, MoveLeft, MoveRight,
     Jump, Shoot, Reload,
+    Aim,             // mira (ADS) — tasto sinistro mouse destro
+    Sprint,          // corsa
+    Crouch,          // accovacciato
+    Roll,            // schivata rapida
+    SwitchWeapon,    // cambia arma primaria/secondaria
     Pause,           // toggle pausa
     Restart,         // riavvia partita
     StartGame,       // ENTER per iniziare
@@ -39,6 +44,7 @@ public:
 
     // Mouse
     [[nodiscard]] bool isShootClicked() const { return m_shootClicked; }
+    [[nodiscard]] bool isAimHeld()      const { return m_aimHeld; }   // tasto destro
     [[nodiscard]] int  mouseDX() const { return m_mdx; }
     [[nodiscard]] int  mouseDY() const { return m_mdy; }
 
@@ -68,6 +74,7 @@ private:
 
     bool m_shootClicked = false;
     bool m_mouseHeld    = false;
+    bool m_aimHeld      = false;   // tasto destro tenuto
     int  m_mdx = 0, m_mdy = 0;
 };
 

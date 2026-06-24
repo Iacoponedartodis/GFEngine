@@ -21,6 +21,11 @@ struct AiComponent
     Texture* bulletTexture  = nullptr;
     float    bulletR = 1.0f, bulletG = 0.25f, bulletB = 0.1f;
 
+    // Statistiche proiettile — popolate da WeaponDef al momento dello spawn
+    float    bulletSpeed    = 8.0f;
+    float    bulletDamage   = 20.0f;
+    float    bulletLifetime = 5.0f;
+
     float patrolAx = 0, patrolAz = 0;
     float patrolBx = 0, patrolBz = 0;
     float patrolSpeed = 2.0f;

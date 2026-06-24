@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\_deps\tinygltf-subbuild\CMakeFiles\fd5335308b465c01981c736078823d6e\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F688FDBE-95A3-319C-82F4-554102475505}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

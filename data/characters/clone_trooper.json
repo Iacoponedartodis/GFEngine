@@ -1,0 +1,12 @@
+{
+    "id": "clone_trooper",
+    "name": "Clone Trooper CT-7567",
+    "description": "Soldato della Repubblica Galattica. Stats base — equipaggiamento scelto nel loadout.",
+    "stats": {
+        "hp": 100.0,
+        "move_speed": 5.0,
+        "jump_height": 1.0,
+        "sprint_mult": 1.5,
+        "armor_rating": 1.0
+    }
+}

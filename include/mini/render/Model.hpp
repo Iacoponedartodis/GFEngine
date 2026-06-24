@@ -9,15 +9,17 @@
 namespace mini
 {
 
-// Modello 3D caricato da file OBJ.
-// Puo' contenere piu' sub-mesh (uno per shape/material nel file OBJ).
-// Usa tinyobjloader internamente.
+// Modello 3D. Supporta OBJ (tinyobjloader) e glTF/GLB (tinygltf).
+// Puo' contenere piu' sub-mesh.
 class Model
 {
 public:
     // Carica un file .obj (con eventuale .mtl nella stessa cartella).
-    // Ritorna nullopt se il file non esiste o non e' parsabile.
     static std::optional<Model> loadFromObj(const char* path);
+
+    // Carica un file .gltf (ASCII) o .glb (binario).
+    // Blender: File > Esporta > glTF 2.0 (con opzione "GLB" per file unico).
+    static std::optional<Model> loadFromGltf(const char* path);
 
     // Disegna tutti i sub-mesh
     void draw() const;

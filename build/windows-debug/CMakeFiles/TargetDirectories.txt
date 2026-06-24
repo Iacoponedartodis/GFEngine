@@ -13,5 +13,7 @@ C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/sdl2-bui
 C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/CMakeFiles/tinyobjloader.dir
 C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/CMakeFiles/INSTALL.dir
 C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build/CMakeFiles/ALL_BUILD.dir
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-build/CMakeFiles/INSTALL.dir
+C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-build/CMakeFiles/ALL_BUILD.dir
 C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-build/CMakeFiles/INSTALL.dir
 C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-build/CMakeFiles/ALL_BUILD.dir

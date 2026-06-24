@@ -2,8 +2,16 @@
 
 #include <tiny_obj_loader.h>
 
+// tinygltf: solo dichiarazioni (implementazione in tinygltf_impl.cpp)
+#include <stb_image.h>
+#include <stb_image_write.h>
+#define TINYGLTF_NO_INCLUDE_STB_IMAGE
+#define TINYGLTF_NO_INCLUDE_STB_IMAGE_WRITE
+#include <tiny_gltf.h>
+
 #include <cmath>
 #include <iostream>
+#include <string_view>
 #include <unordered_map>
 
 namespace mini
@@ -144,6 +152,128 @@ namespace mini
               << shapes.size() << " shape(s), "
               << materials.size() << " materiale(i)" << std::endl;
 
+    return model;
+}
+
+// ============================================================
+// Caricamento glTF / GLB con tinygltf
+// ============================================================
+
+/*static*/ std::optional<Model> Model::loadFromGltf(const char* path)
+{
+    tinygltf::TinyGLTF loader;
+    tinygltf::Model gltf;
+    std::string err, warn;
+
+    const std::string_view sv(path);
+    const bool isBinary = sv.size() >= 4 && sv.substr(sv.size() - 4) == ".glb";
+
+    bool ok = isBinary
+        ? loader.LoadBinaryFromFile(&gltf, &err, &warn, path)
+        : loader.LoadASCIIFromFile (&gltf, &err, &warn, path);
+
+    if (!warn.empty()) std::cout << "[Model] glTF warning: " << warn << "\n";
+    if (!ok)
+    {
+        std::cerr << "[Model] Errore caricamento glTF '" << path << "': " << err << "\n";
+        return std::nullopt;
+    }
+
+    Model model;
+    model.m_path = path;
+
+    // Helper: legge il buffer raw di un accessor come span di float
+    auto accessorData = [&](int accIdx) -> std::pair<const float*, size_t>
+    {
+        if (accIdx < 0) return {nullptr, 0};
+        const auto& acc  = gltf.accessors[accIdx];
+        const auto& bv   = gltf.bufferViews[acc.bufferView];
+        const auto& buf  = gltf.buffers[bv.buffer];
+        const float* ptr = reinterpret_cast<const float*>(
+            buf.data.data() + bv.byteOffset + acc.byteOffset);
+        return {ptr, acc.count};
+    };
+
+    for (const auto& mesh : gltf.meshes)
+    {
+        for (const auto& prim : mesh.primitives)
+        {
+            if (prim.mode != TINYGLTF_MODE_TRIANGLES) continue;
+
+            auto [posPtr, posCount] = accessorData(
+                prim.attributes.count("POSITION") ? prim.attributes.at("POSITION") : -1);
+            if (!posPtr || posCount == 0) continue;
+
+            auto [normPtr, normCount] = accessorData(
+                prim.attributes.count("NORMAL") ? prim.attributes.at("NORMAL") : -1);
+            auto [uvPtr,   uvCount  ] = accessorData(
+                prim.attributes.count("TEXCOORD_0") ? prim.attributes.at("TEXCOORD_0") : -1);
+
+            // Colore base dal materiale glTF
+            glm::vec3 matColor{1.0f, 1.0f, 1.0f};
+            if (prim.material >= 0)
+            {
+                const auto& mat = gltf.materials[prim.material];
+                const auto& bf  = mat.pbrMetallicRoughness.baseColorFactor;
+                if (bf.size() >= 3)
+                    matColor = { (float)bf[0], (float)bf[1], (float)bf[2] };
+            }
+
+            std::vector<Mesh::Vertex> verts;
+
+            // Indici (se presenti)
+            if (prim.indices >= 0)
+            {
+                const auto& idxAcc = gltf.accessors[prim.indices];
+                const auto& idxBv  = gltf.bufferViews[idxAcc.bufferView];
+                const auto& idxBuf = gltf.buffers[idxBv.buffer];
+                const uint8_t* idxBase = idxBuf.data.data() + idxBv.byteOffset + idxAcc.byteOffset;
+
+                verts.reserve(idxAcc.count);
+                for (size_t i = 0; i < idxAcc.count; ++i)
+                {
+                    uint32_t vi = 0;
+                    if      (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                        vi = reinterpret_cast<const uint16_t*>(idxBase)[i];
+                    else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+                        vi = reinterpret_cast<const uint32_t*>(idxBase)[i];
+                    else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+                        vi = idxBase[i];
+
+                    glm::vec3 pos  = { posPtr[vi*3], posPtr[vi*3+1], posPtr[vi*3+2] };
+                    glm::vec3 norm = (normPtr && vi < normCount)
+                        ? glm::vec3{ normPtr[vi*3], normPtr[vi*3+1], normPtr[vi*3+2] }
+                        : glm::vec3{ 0, 1, 0 };
+                    glm::vec2 uv   = (uvPtr && vi < uvCount)
+                        ? glm::vec2{ uvPtr[vi*2], uvPtr[vi*2+1] }
+                        : glm::vec2{ 0, 0 };
+                    verts.push_back({ pos, norm, matColor, uv });
+                }
+            }
+            else
+            {
+                // Non-indexed
+                verts.reserve(posCount);
+                for (size_t vi = 0; vi < posCount; ++vi)
+                {
+                    glm::vec3 pos  = { posPtr[vi*3], posPtr[vi*3+1], posPtr[vi*3+2] };
+                    glm::vec3 norm = (normPtr && vi < normCount)
+                        ? glm::vec3{ normPtr[vi*3], normPtr[vi*3+1], normPtr[vi*3+2] }
+                        : glm::vec3{ 0, 1, 0 };
+                    glm::vec2 uv   = (uvPtr && vi < uvCount)
+                        ? glm::vec2{ uvPtr[vi*2], uvPtr[vi*2+1] }
+                        : glm::vec2{ 0, 0 };
+                    verts.push_back({ pos, norm, matColor, uv });
+                }
+            }
+
+            if (!verts.empty())
+                model.m_meshes.emplace_back(verts);
+        }
+    }
+
+    std::cout << "[Model] Caricato glTF: '" << path << "' — "
+              << model.m_meshes.size() << " primitive(s)\n";
     return model;
 }
 

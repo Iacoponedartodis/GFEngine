@@ -186,15 +186,23 @@ void OptionsMenu::renderControls(const InputManager& input) const
         }
     }
 
-    // Voce fissa: sparo (mouse, non rimappabile)
-    const float shootY = startY + count * rowH;
-    m_ui.rect(labelX - 12, shootY - 5, W - (labelX - 12) * 2, rowH - 4,
-              0.08f, 0.08f, 0.10f, 0.35f);
-    m_ui.text(labelX, shootY + 6, 1.9f, "Sparo", 0.5f, 0.5f, 0.5f);
-    m_ui.rect(keyX - 8, shootY - 2, 230, 30, 0.12f, 0.12f, 0.15f, 0.5f);
-    m_ui.text(keyX, shootY + 6, 1.8f, "Mouse Sinistro", 0.5f, 0.5f, 0.5f);
+    // Voci fisse: sparo e mira (mouse, non rimappabili)
+    struct FixedRow { const char* label; const char* key; };
+    const FixedRow fixed[] = {
+        { "Sparo",       "Mouse Sinistro" },
+        { "Mira (ADS)",  "Mouse Destro"   },
+    };
+    for (int i = 0; i < 2; ++i)
+    {
+        const float fy = startY + (count + i) * rowH;
+        m_ui.rect(labelX - 12, fy - 5, W - (labelX - 12) * 2, rowH - 4,
+                  0.08f, 0.08f, 0.10f, 0.35f);
+        m_ui.text(labelX, fy + 6, 1.9f, fixed[i].label, 0.5f, 0.5f, 0.5f);
+        m_ui.rect(keyX - 8, fy - 2, 230, 30, 0.12f, 0.12f, 0.15f, 0.5f);
+        m_ui.text(keyX, fy + 6, 1.8f, fixed[i].key, 0.5f, 0.5f, 0.5f);
+    }
 
-    const float ly = shootY + rowH + 12;
+    const float ly = startY + (count + 2) * rowH + 12;
     m_ui.rect(0, ly - 8, W, 64, 0, 0, 0, 0.55f);
     if (m_awaitingKey)
     {

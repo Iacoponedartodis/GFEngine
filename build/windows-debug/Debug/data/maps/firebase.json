@@ -8,5 +8,7 @@
     "spawn_team2": [0.0, 0.86, -8.0],
     "max_tickets": 10,
     "enemy_count": 6,
-    "enemy_types": ["grunt", "grunt", "grunt", "grunt", "sniper", "sniper"]
+    "enemy_types": ["B1 Battle Droid", "B1 Battle Droid", "B1 Battle Droid", "B1 Battle Droid", "B1 Heavy Droid", "B1 Heavy Droid"],
+    "ally_count": 1,
+    "ally_types": ["clone_trooper"]
 }

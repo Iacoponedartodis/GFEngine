@@ -1,0 +1,10 @@
+^C:\USERS\HP\DESKTOP\IACOPO\GFPROJECT\GFENGINE\BUILD\WINDOWS-DEBUG\_DEPS\TINYGLTF-SUBBUILD\CMAKEFILES\FD5335308B465C01981C736078823D6E\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild -BC:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-subbuild/tinygltf-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

@@ -285,6 +285,10 @@ FETCHCONTENT_SOURCE_DIR_SDL2:PATH=
 FETCHCONTENT_SOURCE_DIR_STB:PATH=
 
 //When not empty, overrides where to find pre-populated content
+// for tinygltf
+FETCHCONTENT_SOURCE_DIR_TINYGLTF:PATH=
+
+//When not empty, overrides where to find pre-populated content
 // for tinyobjloader
 FETCHCONTENT_SOURCE_DIR_TINYOBJLOADER:PATH=
 
@@ -302,6 +306,9 @@ FETCHCONTENT_UPDATES_DISCONNECTED_SDL2:BOOL=OFF
 
 //Enables UPDATE_DISCONNECTED behavior just for population of stb
 FETCHCONTENT_UPDATES_DISCONNECTED_STB:BOOL=OFF
+
+//Enables UPDATE_DISCONNECTED behavior just for population of tinygltf
+FETCHCONTENT_UPDATES_DISCONNECTED_TINYGLTF:BOOL=OFF
 
 //Enables UPDATE_DISCONNECTED behavior just for population of tinyobjloader
 FETCHCONTENT_UPDATES_DISCONNECTED_TINYOBJLOADER:BOOL=OFF
@@ -636,6 +643,26 @@ SDL_X11:BOOL=OFF
 //Use Xinput for Windows
 SDL_XINPUT:BOOL=ON
 
+//Build glTF builder example
+TINYGLTF_BUILD_BUILDER_EXAMPLE:BOOL=OFF
+
+//Build GL exampels(requires glfw, OpenGL, etc)
+TINYGLTF_BUILD_GL_EXAMPLES:BOOL=OFF
+
+//Build loader_example(load glTF and dump infos)
+TINYGLTF_BUILD_LOADER_EXAMPLE:BOOL=OFF
+
+//Build validator exampe
+TINYGLTF_BUILD_VALIDATOR_EXAMPLE:BOOL=OFF
+
+//On: header-only mode. Off: create tinygltf library(No TINYGLTF_IMPLEMENTATION
+// required in your project)
+TINYGLTF_HEADER_ONLY:BOOL=ON
+
+//Install tinygltf files during install step. Usually set to OFF
+// if you include tinygltf through add_subdirectory()
+TINYGLTF_INSTALL:BOOL=OFF
+
 //Build OBJ Sticher Application
 TINYOBJLOADER_BUILD_OBJ_STICHER:BOOL=OFF
 
@@ -665,6 +692,15 @@ nlohmann_json_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
 nlohmann_json_SOURCE_DIR:STATIC=C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/nlohmann_json-src
+
+//Value Computed by CMake
+tinygltf_BINARY_DIR:STATIC=C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-build
+
+//Value Computed by CMake
+tinygltf_IS_TOP_LEVEL:STATIC=OFF
+
+//Value Computed by CMake
+tinygltf_SOURCE_DIR:STATIC=C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinygltf-src
 
 //Value Computed by CMake
 tinyobjloader_BINARY_DIR:STATIC=C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/_deps/tinyobjloader-build
@@ -804,7 +840,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_MT
 CMAKE_MT-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=4
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=5
 //Platform information initialized
 CMAKE_PLATFORM_INFO_INITIALIZED:INTERNAL=1
 //noop for ranlib

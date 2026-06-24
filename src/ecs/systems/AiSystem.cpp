@@ -139,7 +139,8 @@ void AiSystem::update(World& world, float dt)
         {
             // LOS diretto: Alert (spara)
             const auto* tt = world.getTransform(nearest);
-            ai->lastKnownX = tt->x; ai->lastKnownZ = tt->z;
+            if (!tt) { nearest = 0; }
+            else { ai->lastKnownX = tt->x; ai->lastKnownZ = tt->z; }
             ai->hasLastKnown = true;
             ai->state = AiState::Alert;
             ai->alertTimer = 3.0f;
@@ -179,22 +180,26 @@ void AiSystem::update(World& world, float dt)
             {
                 // Ingaggio diretto: strafing + avanzamento
                 const auto* tt = world.getTransform(nearest);
-                float advX = tt->x - et->x, advZ = tt->z - et->z;
-                float dist = norm2D(advX, advZ);
-
-                ai->strafeTimer -= dt;
-                if (ai->strafeTimer <= 0.0f || isStuck)
-                { ai->strafeSign = -ai->strafeSign; ai->strafeTimer = 1.4f; ai->stuckTimer = 0; }
-
-                const float perpX = -advZ * ai->strafeSign;
-                const float perpZ =  advX * ai->strafeSign;
-
-                if (dist > 2.5f)
-                { moveDX = advX*0.45f + perpX*0.65f; moveDZ = advZ*0.45f + perpZ*0.65f; moveSpeed = ai->seekSpeed*0.75f; }
+                if (!tt) { nearest = 0; }
                 else
-                { moveDX = perpX; moveDZ = perpZ; moveSpeed = ai->seekSpeed*0.55f; }
+                {
+                    float advX = tt->x - et->x, advZ = tt->z - et->z;
+                    float dist = norm2D(advX, advZ);
 
-                et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+                    ai->strafeTimer -= dt;
+                    if (ai->strafeTimer <= 0.0f || isStuck)
+                    { ai->strafeSign = -ai->strafeSign; ai->strafeTimer = 1.4f; ai->stuckTimer = 0; }
+
+                    const float perpX = -advZ * ai->strafeSign;
+                    const float perpZ =  advX * ai->strafeSign;
+
+                    if (dist > 2.5f)
+                    { moveDX = advX*0.45f + perpX*0.65f; moveDZ = advZ*0.45f + perpZ*0.65f; moveSpeed = ai->seekSpeed*0.75f; }
+                    else
+                    { moveDX = perpX; moveDZ = perpZ; moveSpeed = ai->seekSpeed*0.55f; }
+
+                    et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+                }
             }
             else if (ai->state == AiState::Hunt && ai->hasLastKnown)
             {
@@ -258,7 +263,8 @@ void AiSystem::update(World& world, float dt)
         else if (nearest != 0)
         {
             const auto* tt = world.getTransform(nearest);
-            et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+            if (tt)
+                et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
         }
 
         const float nx = et->x + moveDX * moveSpeed * dt;
@@ -275,12 +281,12 @@ void AiSystem::update(World& world, float dt)
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;
 
-        float inv = k_bulletSpeed / len;
+        float inv = ai->bulletSpeed / len;
         EntityId b = world.createEntity();
         world.addTransform(b, TransformComponent{.x=et->x,.y=et->y,.z=et->z,.sx=0.10f,.sy=0.10f,.sz=0.10f});
         world.addVelocity(b, {dx*inv, dy*inv, dz*inv});
         world.addTeam(b, {myTeam});
-        world.addBullet(b, {k_bulletDmg, k_bulletLife, myTeam});
+        world.addBullet(b, {ai->bulletDamage, ai->bulletLifetime, myTeam});
         if (ai->bulletMesh)
             world.addMeshRenderer(b, {ai->bulletMesh, ai->bulletTexture, ai->bulletR, ai->bulletG, ai->bulletB});
 

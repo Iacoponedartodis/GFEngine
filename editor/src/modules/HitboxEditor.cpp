@@ -200,58 +200,111 @@ void HitboxEditor::drawZoneProperties()
     ImGui::TextColored({0.6f,0.6f,1,1}, "  < 1.0  = ridotto (braccia/gambe)");
 }
 
-void HitboxEditor::drawVisualPreview()
+// Disegna una singola vista 2D dell'hitbox.
+// ax/ay = assi dello spazio 3D proiettati sullo schermo (0=X, 1=Y, 2=Z).
+// ox/ay = asse verticale (Y sullo schermo = -ay nell'asse scelto).
+static void drawHitboxView(ImDrawList* dl, ImVec2 origin,
+                            float scale, float viewH,
+                            int axH, int axV, // assi 3D → orizzontale/verticale schermo
+                            const mini::HitboxProfile& prof,
+                            int selZone,
+                            int& outSel)
 {
-    const float scale = 120.0f;
-    const float pivotX = 100.0f;
-    const float pivotY = 200.0f;
+    // Silhouette corpo: rettangolo 0.5m largo, 2m alto
+    const float bw = 0.25f * scale;
+    const float bh = 2.0f  * scale;
+    const float cx = origin.x;
+    const float cy = origin.y;
+    dl->AddRect({cx - bw, cy - bh}, {cx + bw, cy}, IM_COL32(80,80,80,100), 0, 0, 1.5f);
 
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-
-    dl->AddRect(
-        {p.x + pivotX - 0.25f*scale, p.y + pivotY - 2.0f*scale},
-        {p.x + pivotX + 0.25f*scale, p.y + pivotY},
-        IM_COL32(80,80,80,120), 0, 0, 1.5f);
-
-    for (int i = 0; i < (int)m_edit.zones.size(); ++i)
+    // Asse verticale (griglia)
+    dl->AddLine({cx, cy - viewH}, {cx, cy + 10}, IM_COL32(80,200,80,120), 1.0f);
+    for (int m = 0; m <= 2; ++m)
     {
-        auto& z = m_edit.zones[i];
-        float cx = p.x + pivotX + z.offset.x * scale;
-        float cy = p.y + pivotY - z.offset.y * scale;
-        float hw = z.halfExtents.x * scale;
-        float hh = z.halfExtents.y * scale;
+        float py = cy - m * scale;
+        dl->AddLine({cx - 6, py}, {cx + 6, py}, IM_COL32(80,200,80,80));
+        char buf[8]; std::snprintf(buf, 8, "%dm", m);
+        dl->AddText({cx + 10, py - 7}, IM_COL32(80,200,80,160), buf);
+    }
 
-        bool sel = (i == m_selZone);
+    // Zone
+    const glm::vec3 axH_v = (axH == 0) ? glm::vec3{1,0,0} :
+                             (axH == 2) ? glm::vec3{0,0,1} : glm::vec3{0,1,0};
+    const glm::vec3 axV_v = (axV == 1) ? glm::vec3{0,1,0} :
+                             (axV == 0) ? glm::vec3{1,0,0} : glm::vec3{0,0,1};
+    (void)axH_v; (void)axV_v;
+
+    for (int i = 0; i < (int)prof.zones.size(); ++i)
+    {
+        const auto& z = prof.zones[i];
+        float offH = (axH == 0) ? z.offset.x : (axH == 2) ? z.offset.z : z.offset.y;
+        float offV = (axV == 1) ? z.offset.y : (axV == 0) ? z.offset.x : z.offset.z;
+        float heH  = (axH == 0) ? z.halfExtents.x : (axH == 2) ? z.halfExtents.z : z.halfExtents.y;
+        float heV  = (axV == 1) ? z.halfExtents.y : (axV == 0) ? z.halfExtents.x : z.halfExtents.z;
+
+        float sx = cx + offH * scale;
+        float sy = cy - offV * scale;
+        float hw = heH * scale;
+        float hh = heV * scale;
+
+        bool sel = (i == selZone);
         float mult = z.damageMultiplier;
         ImU32 fill = (mult >= 2.0f) ? IM_COL32(220,60,60,sel?180:90) :
                      (mult >= 1.0f) ? IM_COL32(220,180,60,sel?180:90) :
                                       IM_COL32(80,120,220,sel?180:90);
         ImU32 border = sel ? IM_COL32(255,255,255,255) : IM_COL32(180,180,180,160);
 
-        dl->AddRectFilled({cx-hw, cy-hh}, {cx+hw, cy+hh}, fill);
-        dl->AddRect      ({cx-hw, cy-hh}, {cx+hw, cy+hh}, border, 0, 0, sel?2.0f:1.0f);
-        dl->AddText({cx-hw+2, cy-8}, IM_COL32(255,255,255,200), z.name.c_str());
+        dl->AddRectFilled({sx-hw, sy-hh}, {sx+hw, sy+hh}, fill);
+        dl->AddRect      ({sx-hw, sy-hh}, {sx+hw, sy+hh}, border, 0, 0, sel?2.0f:1.0f);
+        if (sel) dl->AddText({sx-hw+2, sy-8}, IM_COL32(255,255,255,220), z.name.c_str());
 
         if (ImGui::IsMouseClicked(0))
         {
             ImVec2 mp = ImGui::GetMousePos();
-            if (mp.x>=cx-hw && mp.x<=cx+hw && mp.y>=cy-hh && mp.y<=cy+hh)
-                m_selZone = i;
+            if (mp.x >= sx-hw && mp.x <= sx+hw && mp.y >= sy-hh && mp.y <= sy+hh)
+                outSel = i;
         }
     }
+}
 
-    dl->AddLine({p.x+pivotX, p.y+pivotY-2.2f*scale},
-                {p.x+pivotX, p.y+pivotY+0.1f*scale},
-                IM_COL32(80,200,80,160), 1.0f);
-    for (int y = 0; y <= 2; ++y) {
-        float py = p.y + pivotY - y * scale;
-        dl->AddLine({p.x+pivotX-8, py}, {p.x+pivotX+8, py}, IM_COL32(80,200,80,100));
-        char buf[8]; std::snprintf(buf,8,"%dm",y);
-        dl->AddText({p.x+pivotX+12, py-8}, IM_COL32(80,200,80,180), buf);
+void HitboxEditor::drawVisualPreview()
+{
+    const float scale  = 90.0f;
+    const float viewH  = 2.2f * scale;
+    const float panelW = 160.0f;
+    const float panelH = viewH + 20.0f;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 base = ImGui::GetCursorScreenPos();
+
+    struct ViewDef { const char* label; int axH, axV; float offX; };
+    const ViewDef views[3] = {
+        { "Frontale (X/Y)",   0, 1,  0.0f  },
+        { "Laterale (Z/Y)",   2, 1,  panelW + 8.0f },
+        { "Superiore (X/Z)",  0, 2,  (panelW + 8.0f) * 2.0f }
+    };
+
+    for (auto& v : views)
+    {
+        float ox = base.x + v.offX + panelW * 0.5f;
+        float oy = base.y + viewH;
+        ImGui::GetWindowDrawList(); // assicura draw list valida
+
+        // Label
+        ImVec2 lblPos = {base.x + v.offX + 4, base.y + 2};
+        dl->AddText(lblPos, IM_COL32(180,180,180,200), v.label);
+
+        // Bordo pannello
+        dl->AddRect({base.x + v.offX, base.y},
+                    {base.x + v.offX + panelW, base.y + panelH},
+                    IM_COL32(60,60,60,180), 3.0f);
+
+        // Vista
+        drawHitboxView(dl, {ox, oy}, scale, viewH,
+                       v.axH, v.axV, m_edit, m_selZone, m_selZone);
     }
 
-    ImGui::Dummy(ImVec2(pivotX*2, pivotY+20));
+    ImGui::Dummy(ImVec2((panelW + 8.0f) * 3.0f, panelH + 8.0f));
 }
 
 void HitboxEditor::draw()
@@ -273,8 +326,8 @@ void HitboxEditor::draw()
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("##hpreview", ImVec2(230, 0), true);
-    ImGui::Text("Vista frontale");
+    ImGui::BeginChild("##hpreview", ImVec2(520, 0), true);
+    ImGui::Text("Anteprima 3 viste");
     ImGui::Separator();
     drawVisualPreview();
     ImGui::EndChild();

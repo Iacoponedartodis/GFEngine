@@ -13,6 +13,7 @@ Camera::Camera(float fovDeg, float aspect, float nearPlane, float farPlane)
 void Camera::setPosition(const glm::vec3& pos) { m_position = pos; }
 void Camera::setAspect(float a)                 { m_aspect = a; }
 void Camera::setSpeed(float s)                  { m_speed = s; }
+void Camera::setFov(float f)                    { m_fov = f; }
 
 void Camera::lookAt(const glm::vec3& target, const glm::vec3& up)
 {

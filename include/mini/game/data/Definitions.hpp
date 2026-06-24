@@ -63,6 +63,15 @@ struct WeaponDef
     float overheatPenalty     = 2.0f;
     float effectiveRange      = 20.0f;
     float minRange            = 0.0f;
+
+    // Precisione: 0=sempre al centro, 1=massima dispersione
+    // Rappresenta il raggio di dispersione base (in gradi o unità angolari)
+    float baseSpread          = 0.02f;  // fermo, non in mira
+    float adsSpread           = 0.005f; // in mira (ADS)
+    float moveSpread          = 0.06f;  // in movimento
+    float sprintSpread        = 0.14f;  // in corsa
+    float jumpSpread          = 0.20f;  // in aria
+
     std::string meshPath;
     std::string projectileMeshPath;
 };
@@ -149,7 +158,27 @@ struct MapDef
     std::array<float,3> spawnTeam2 = {0.f, 0.86f, -8.f};
     int maxTickets = 10;
     int enemyCount = 6;
+    int allyCount  = 1;
     std::vector<std::string> enemyTypes;
+    std::vector<std::string> allyTypes;
+};
+
+// ── PlayerDef ─────────────────────────────────────────────────────────────
+// Stat BASE del personaggio giocabile. Non contiene equipaggiamento né
+// visuale: armi, armatura e colori vengono scelti nel PreMatch/loadout.
+// data/characters/<id>.json
+struct PlayerDef
+{
+    std::string id;
+    std::string name;
+    std::string description;
+
+    // Stat base (modificabili dall'editor, indipendenti dall'equipaggiamento)
+    float hp          = 100.0f;
+    float moveSpeed   = 5.0f;
+    float jumpHeight  = 1.0f;   // moltiplicatore impulso base
+    float sprintMult  = 1.5f;   // moltiplicatore velocità scatto
+    float armorRating = 1.0f;   // riduzione danni passiva (1=standard)
 };
 
 } // namespace mini

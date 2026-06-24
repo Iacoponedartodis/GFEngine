@@ -1,29 +1,29 @@
 {
-    "id": "B1 Battle Droid",
-    "name": "B1 Battle Droid",
-    "faction": "separatist",
-    "team": 2,
-    "mesh": "",
-    "texture": "",
-    "color": [
-        0.72,
-        0.62,
-        0.4
-    ],
-    "ai_profile": "grunt_ai",
-    "hitbox_profile": "grunt",
-    "weapons": [
-        "e5_blaster"
-    ],
     "abilities": [],
+    "ai_profile": "B1 Battle Droid",
     "bullet_color": [
         1.0,
-        0.55,
+        0.550000011920929,
         0.0
     ],
+    "color": [
+        0.970588207244873,
+        1.0,
+        0.0
+    ],
+    "faction": "separatist",
+    "hitbox_profile": "B1 Battle Droid",
+    "id": "B1 Battle Droid",
+    "mesh": "",
+    "name": "B1 Battle Droid",
     "stats": {
+        "damage_scale": 1.0,
         "hp": 80.0,
-        "move_speed": 4.0,
-        "damage_scale": 1.0
-    }
+        "move_speed": 4.0
+    },
+    "team": 2,
+    "texture": "",
+    "weapons": [
+        "E5 Blaster Rifle"
+    ]
 }

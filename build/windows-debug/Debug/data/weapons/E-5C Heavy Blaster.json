@@ -1,0 +1,22 @@
+{
+    "bullet_color": [
+        0.08823537826538086,
+        1.0,
+        0.0
+    ],
+    "bullet_lifetime": 3.0,
+    "bullet_scale": 0.11999999731779099,
+    "bullet_speed": 24.0,
+    "cooldown_rate": 0.2750000059604645,
+    "damage": 35.0,
+    "effective_range": 18.0,
+    "faction": "separatist",
+    "fire_rate": 4.0,
+    "heat_per_shot": 0.30000001192092896,
+    "id": "E-5C Heavy Blaster",
+    "mesh": "",
+    "min_range": 0.0,
+    "name": "E-5C Heavy Blaster",
+    "overheat_penalty": 2.75,
+    "projectile_mesh": ""
+}

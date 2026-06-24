@@ -89,6 +89,11 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         w.overheatPenalty    = getf(*j, "overheat_penalty", 2);
         w.effectiveRange     = getf(*j, "effective_range", 20);
         w.minRange           = getf(*j, "min_range", 0);
+        w.baseSpread         = getf(*j, "spread_base",   0.02f);
+        w.adsSpread          = getf(*j, "spread_ads",    0.005f);
+        w.moveSpread         = getf(*j, "spread_move",   0.06f);
+        w.sprintSpread       = getf(*j, "spread_sprint", 0.14f);
+        w.jumpSpread         = getf(*j, "spread_jump",   0.20f);
         w.meshPath           = gets(*j, "mesh");
         w.projectileMeshPath = gets(*j, "projectile_mesh");
         std::cout << "[Registry] Weapon: " << w.id
@@ -183,11 +188,13 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         m.metadataPath = gets(*j, "metadata");
         m.maxTickets   = geti(*j, "max_tickets", 10);
         m.enemyCount   = geti(*j, "enemy_count", 6);
+        m.allyCount    = geti(*j, "ally_count",  1);
         if ((*j).contains("spawn_team1") && (*j)["spawn_team1"].size() >= 3)
             m.spawnTeam1 = {(*j)["spawn_team1"][0],(*j)["spawn_team1"][1],(*j)["spawn_team1"][2]};
         if ((*j).contains("spawn_team2") && (*j)["spawn_team2"].size() >= 3)
             m.spawnTeam2 = {(*j)["spawn_team2"][0],(*j)["spawn_team2"][1],(*j)["spawn_team2"][2]};
         m.enemyTypes   = getStrArray(*j, "enemy_types");
+        m.allyTypes    = getStrArray(*j, "ally_types");
         std::cout << "[Registry] Map: " << m.id << "\n";
         m_maps[m.id] = std::move(m);
     }
@@ -222,14 +229,76 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
     }
 }
 
+// Carica alleati da data/allies/ — stessa struttura EnemyDef ma team=1
+void DefinitionRegistry::loadAllies(const std::string& dir)
+{
+    fs::path folder = dir + "/allies";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        EnemyDef e;
+        e.id              = gets(*j, "id", entry.path().stem().string());
+        e.name            = gets(*j, "name", e.id);
+        e.faction         = factionFromString(gets(*j, "faction", "republic"));
+        e.team            = 1; // sempre alleati
+        e.meshPath        = gets(*j, "mesh");
+        e.texturePath     = gets(*j, "texture");
+        e.color           = getColor(*j, "color", {0.25f,0.45f,1.0f});
+        e.aiProfileId     = gets(*j, "ai_profile");
+        e.hitboxProfileId = gets(*j, "hitbox_profile");
+        e.weaponIds       = getStrArray(*j, "weapons");
+        e.abilityIds      = getStrArray(*j, "abilities");
+        e.bulletColor     = getColor(*j, "bullet_color", {0.30f,0.60f,1.0f});
+        if ((*j).contains("stats")) {
+            auto& s = (*j)["stats"];
+            e.hp          = getf(s, "hp", 60);
+            e.moveSpeed   = getf(s, "move_speed", 1.8f);
+            e.damageScale = getf(s, "damage_scale", 1);
+        }
+        if (e.weaponIds.empty() && (*j).contains("weapon"))
+            e.weaponIds.push_back((*j)["weapon"].get<std::string>());
+        std::cout << "[Registry] Ally: " << e.id << "\n";
+        m_allies[e.id] = std::move(e);
+    }
+}
+
+void DefinitionRegistry::loadPlayerDefs(const std::string& dir)
+{
+    fs::path folder = dir + "/characters";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        PlayerDef p;
+        p.id          = gets(*j, "id", entry.path().stem().string());
+        p.name        = gets(*j, "name", p.id);
+        p.description = gets(*j, "description");
+        if ((*j).contains("stats")) {
+            auto& s = (*j)["stats"];
+            p.hp          = getf(s, "hp",           100.0f);
+            p.moveSpeed   = getf(s, "move_speed",     5.0f);
+            p.jumpHeight  = getf(s, "jump_height",    1.0f);
+            p.sprintMult  = getf(s, "sprint_mult",    1.5f);
+            p.armorRating = getf(s, "armor_rating",   1.0f);
+        }
+        std::cout << "[Registry] PlayerDef: " << p.id << "\n";
+        m_playerDefs[p.id] = std::move(p);
+    }
+}
+
 void DefinitionRegistry::loadAll(const std::string& dataRoot)
 {
     m_abilities.clear();
     m_weapons.clear();
     m_aiProfiles.clear();
     m_enemies.clear();
+    m_allies.clear();
     m_maps.clear();
     m_hitboxProfiles.clear();
+    m_playerDefs.clear();
     m_loaded = false;
 
     std::cout << "[Registry] Caricamento definizioni da '" << dataRoot << "'...\n";
@@ -239,15 +308,18 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadAiProfiles(dataRoot);
     loadHitboxProfiles(dataRoot);
     loadEnemies(dataRoot);
+    loadAllies(dataRoot);
     loadMaps(dataRoot);
+    loadPlayerDefs(dataRoot);
 
     m_loaded = true;
     std::cout << "[Registry] " << m_weapons.size() << " armi, "
               << m_enemies.size() << " nemici, "
-
+              << m_allies.size() << " alleati, "
               << m_abilities.size() << " abilità, "
               << m_aiProfiles.size() << " profili AI, "
-              << m_hitboxProfiles.size() << " hitbox.\n";
+              << m_hitboxProfiles.size() << " hitbox, "
+              << m_playerDefs.size() << " preset personaggio.\n";
 }
 
 // ── Getters ───────────────────────────────────────────────────────────────
@@ -261,8 +333,10 @@ GETTER(m_abilities,      AbilityDef,       getAbility)
 GETTER(m_weapons,        WeaponDef,        getWeapon)
 GETTER(m_aiProfiles,     AiProfileDef,     getAiProfile)
 GETTER(m_enemies,        EnemyDef,         getEnemy)
+GETTER(m_allies,         EnemyDef,         getAlly)
 GETTER(m_maps,           MapDef,           getMap)
 GETTER(m_hitboxProfiles, HitboxProfile,    getHitboxProfile)
+GETTER(m_playerDefs,     PlayerDef,        getPlayerDef)
 #undef GETTER
 
 } // namespace mini
