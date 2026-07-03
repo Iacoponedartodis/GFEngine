@@ -14,7 +14,7 @@
     "faction": "separatist",
     "hitbox_profile": "",
     "id": "B1 Heavy Droid",
-    "mesh": "",
+    "mesh": "assets/models/enemies/star_wars_b1_battle_droid.glb",
     "name": "B1 Heavy Droid",
     "stats": {
         "damage_scale": 1.0,

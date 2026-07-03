@@ -39,7 +39,7 @@
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 135,
+				"line" : 136,
 				"parent" : 0
 			},
 			{
@@ -54,25 +54,25 @@
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 141,
+				"line" : 142,
 				"parent" : 0
 			},
 			{
 				"command" : 3,
 				"file" : 0,
-				"line" : 134,
+				"line" : 135,
 				"parent" : 0
 			},
 			{
 				"command" : 4,
 				"file" : 0,
-				"line" : 126,
+				"line" : 127,
 				"parent" : 0
 			},
 			{
 				"command" : 5,
 				"file" : 0,
-				"line" : 133,
+				"line" : 134,
 				"parent" : 0
 			}
 		]
@@ -209,7 +209,8 @@
 				26,
 				27,
 				28,
-				29
+				29,
+				30
 			]
 		}
 	],
@@ -388,14 +389,15 @@
 				26,
 				27,
 				28,
-				29
+				29,
+				30
 			]
 		},
 		{
 			"name" : "",
 			"sourceIndexes" : 
 			[
-				30
+				31
 			]
 		}
 	],
@@ -537,6 +539,12 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "src/game/game_modes/ConquestMode.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/game/game_modes/SandboxMode.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{

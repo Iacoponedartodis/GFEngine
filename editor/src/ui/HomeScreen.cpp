@@ -16,35 +16,44 @@ struct ModuleCard
 };
 
 static const ModuleCard k_modules[] = {
-    {"cam",     "Free Camera\nViewport",
-     "Naviga la mappa in 3D con\ncamera libera. Posiziona e\nmodifica metadata tattici.",
-     ActiveModule::FreeCameraViewport, true,  0.25f, 0.65f, 1.0f},
+    {"entity",  "Entity\nEditor",
+     "Modifica nemici e alleati:\nmesh, scale, attach points,\nhitbox e statistiche.",
+     ActiveModule::EntityEditor,       true,  0.55f, 0.80f, 0.35f},
 
-    {"hitbox",  "Hitbox\nEditor",
-     "Modifica le zone di hitbox\nper ogni tipo di personaggio.\nSalva come JSON.",
-     ActiveModule::HitboxEditor,       true,  1.0f,  0.55f, 0.2f},  // <-- era false
+    {"weapon",  "Weapon\nEditor",
+     "Configura armi: mesh, scala,\npunti di attacco, bilanciamento\ne parametri di fuoco.",
+     ActiveModule::WeaponEditor,       true,  1.0f,  0.45f, 0.15f},
 
     {"balance", "Balance\nEditor",
-     "Regola parametri di armi,\nnemici e AI con slider.\nSalva preset.",
-     ActiveModule::BalanceEditor,      true,  0.4f,  0.9f,  0.4f},  // <-- era false
+     "Regola armi, AI e mappe\ncon slider. Nemici e alleati\nsi editano in Entity Editor.",
+     ActiveModule::BalanceEditor,      true,  0.4f,  0.9f,  0.4f},
 
-    {"assets",  "Asset\nManager",
-     "Esplora e assegna modelli,\ntexture e materiali alle\ndefinizioni entità.",
-     ActiveModule::AssetManager,       false, 0.9f,  0.75f, 0.2f},
+    {"map",     "Map\nEditor",
+     "Posiziona box di geometria,\nspawn e zone tattiche.\nSalva come JSON.",
+     ActiveModule::MapEditor,          true,  1.0f,  0.35f, 0.35f},
+
+    {"hitbox",  "Hitbox\nEditor",
+     "Modifica profili hitbox\nstandalone. Per hitbox inline\nusa l'Entity Editor.",
+     ActiveModule::HitboxEditor,       true,  1.0f,  0.55f, 0.2f},
+
+    {"cam",     "Free Camera\nViewport",
+     "Naviga la scena in 3D con\ncamera libera. Anteprima\nmodelli e animazioni.",
+     ActiveModule::FreeCameraViewport, true,  0.25f, 0.65f, 1.0f},
 
     {"ai",      "AI Editor /\nDebugger",
      "Visualizza e modifica profili\nAI. Debug stati, cover, target\ne percorsi in real-time.",
      ActiveModule::AiEditor,           false, 0.85f, 0.3f,  0.9f},
 
-    {"meta",    "Map Metadata\nEditor",
-     "Posiziona spawn, cover, patrol\ne zone tattiche sulla mappa.\nSalva come JSON.",
-     ActiveModule::MapMetadataEditor,  false, 1.0f,  0.35f, 0.35f},
+    {"assets",  "Asset\nManager",
+     "Esplora e assegna modelli,\ntexture e materiali alle\ndefinizioni entità.",
+     ActiveModule::AssetManager,       false, 0.9f,  0.75f, 0.2f},
 };
-static constexpr int k_moduleCount = 6;
+static constexpr int k_moduleCount = 8;
 
-ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
+ActiveModule HomeScreen::draw(bool& wantsLaunchGame, bool& wantsLaunchSandbox)
 {
     wantsLaunchGame = false;
+    wantsLaunchSandbox = false;
     ActiveModule selected = ActiveModule::Home;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -74,22 +83,34 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame)
     ImGui::SetCursorPos({W * 0.5f - 60.0f, H * 0.06f + 34.0f});
     ImGui::TextDisabled("v0.1 — Stage 1");
 
-    // ── Pulsante avvia gioco ──────────────────────────────────────────
-    const float btnW = 220, btnH = 44;
-    ImGui::SetCursorPos({W * 0.5f - btnW * 0.5f, H * 0.14f});
+    // ── Pulsanti avvia ────────────────────────────────────────────────
+    const float btnW = 200, btnH = 44;
+    const float gapBtn = 16.0f;
+    const float totalBtnW = btnW * 2 + gapBtn;
+    float bx = W * 0.5f - totalBtnW * 0.5f;
+    float by = H * 0.14f;
+
+    ImGui::SetCursorPos({bx, by});
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.12f, 0.50f, 0.20f, 0.90f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.70f, 0.30f, 1.0f));
-    if (ImGui::Button("▶  Avvia GFEngine", ImVec2(btnW, btnH)))
+    if (ImGui::Button("▶  Avvia Partita", ImVec2(btnW, btnH)))
         wantsLaunchGame = true;
     ImGui::PopStyleColor(2);
 
-    ImGui::SetCursorPos({W * 0.5f - 110.0f, H * 0.14f + btnH + 4});
-    ImGui::TextDisabled("(apre la partita con --direct-prematch)");
+    ImGui::SetCursorPos({bx + btnW + gapBtn, by});
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.35f, 0.60f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.50f, 0.85f, 1.0f));
+    if (ImGui::Button("▶  Sandbox", ImVec2(btnW, btnH)))
+        wantsLaunchSandbox = true;
+    ImGui::PopStyleColor(2);
+
+    ImGui::SetCursorPos({W * 0.5f - 130.0f, by + btnH + 4});
+    ImGui::TextDisabled("Partita: --direct-prematch          Sandbox: modalita' libera");
 
     // ── Griglia moduli ────────────────────────────────────────────────
-    const float cardW  = 220, cardH = 160;
-    const float gapX   = 24,  gapY  = 20;
-    const int   cols   = 3;
+    const float cardW  = 200, cardH = 160;
+    const float gapX   = 18,  gapY  = 20;
+    const int   cols   = 4;
     const float gridW  = cols * cardW + (cols - 1) * gapX;
     const float startX = (W - gridW) * 0.5f;
     const float startY = H * 0.28f;

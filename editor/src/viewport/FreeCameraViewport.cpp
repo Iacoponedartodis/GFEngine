@@ -1,10 +1,31 @@
-#include "viewport/FreeCameraViewport.hpp"
+// FreeCameraViewport.cpp
+// Renderizza una scena 3D (griglia + modello + hitbox + bones + markers + gizmo)
+// in un FBO mostrato via ImGui::Image.
+//
+// IMPORTANTE: usa CLIENT-SIDE ARRAYS senza VAO/VBO, identico a mini::Mesh::draw().
 
-// OpenGL.hpp PRIMA: definisce GLuint, GLenum, ecc.
-#include <mini/platform/OpenGL.hpp>
+#include "viewport/FreeCameraViewport.hpp"
+#include "util/FileDialog.hpp"
+#include "mini/platform/OpenGL.hpp"
+#include "mini/render/Shader.hpp"
+#include "mini/render/Camera.hpp"
+#include "mini/render/Model.hpp"
+#include "mini/render/Mesh.hpp"
+
+#include <imgui.h>
 #include <SDL2/SDL.h>
 
-// ── Costanti FBO ─────────────────────────────────────────────────────────
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <vector>
+#include <string>
+#include <cstdio>
+#include <cmath>
+#include <algorithm>
+
+// ── Costanti FBO ──────────────────────────────────────────────────────────────
 #ifndef GL_FRAMEBUFFER
   #define GL_FRAMEBUFFER              0x8D40
 #endif
@@ -23,340 +44,966 @@
 #ifndef GL_FRAMEBUFFER_COMPLETE
   #define GL_FRAMEBUFFER_COMPLETE     0x8CD5
 #endif
-#ifndef GL_VERTEX_SHADER
-  #define GL_VERTEX_SHADER            0x8B31
-#endif
-#ifndef GL_FRAGMENT_SHADER
-  #define GL_FRAGMENT_SHADER          0x8B30
-#endif
-#ifndef GL_COMPILE_STATUS
-  #define GL_COMPILE_STATUS           0x8B81
-#endif
-#ifndef GL_LINK_STATUS
-  #define GL_LINK_STATUS              0x8B82
-#endif
-#ifndef GL_INFO_LOG_LENGTH
-  #define GL_INFO_LOG_LENGTH          0x8B84
-#endif
-#ifndef GL_ARRAY_BUFFER
-  #define GL_ARRAY_BUFFER             0x8892
-#endif
-#ifndef GL_STATIC_DRAW
-  #define GL_STATIC_DRAW              0x88B4
+#ifndef GL_FRAMEBUFFER_BINDING
+  #define GL_FRAMEBUFFER_BINDING      0x8CA6
 #endif
 
-// ── Tutti i puntatori FBO + Shader caricati localmente ───────────────────
-typedef void   (*PFN_GenFBO)   (GLsizei,GLuint*);
-typedef void   (*PFN_BindFBO)  (GLenum,GLuint);
-typedef void   (*PFN_DelFBO)   (GLsizei,const GLuint*);
-typedef void   (*PFN_FBOTex)   (GLenum,GLenum,GLenum,GLuint,GLint);
-typedef void   (*PFN_FBORBO)   (GLenum,GLenum,GLenum,GLuint);
-typedef GLenum (*PFN_CheckFBO) (GLenum);
-typedef void   (*PFN_GenRBO)   (GLsizei,GLuint*);
-typedef void   (*PFN_BindRBO)  (GLenum,GLuint);
-typedef void   (*PFN_DelRBO)   (GLsizei,const GLuint*);
-typedef void   (*PFN_RBOStore) (GLenum,GLenum,GLsizei,GLsizei);
+typedef void   (*FN_GenFBO)   (GLsizei, GLuint*);
+typedef void   (*FN_BindFBO)  (GLenum,  GLuint);
+typedef void   (*FN_DelFBO)   (GLsizei, const GLuint*);
+typedef void   (*FN_FBOTex)   (GLenum,  GLenum, GLenum, GLuint, GLint);
+typedef void   (*FN_FBORBO)   (GLenum,  GLenum, GLenum, GLuint);
+typedef GLenum (*FN_ChkFBO)   (GLenum);
+typedef void   (*FN_GenRBO)   (GLsizei, GLuint*);
+typedef void   (*FN_BindRBO)  (GLenum,  GLuint);
+typedef void   (*FN_DelRBO)   (GLsizei, const GLuint*);
+typedef void   (*FN_RBOSt)    (GLenum,  GLenum, GLsizei, GLsizei);
 
-typedef GLuint (*PFN_CreateShader)  (GLenum);
-typedef void   (*PFN_ShaderSource)  (GLuint,GLsizei,const char**,const GLint*);
-typedef void   (*PFN_CompileShader) (GLuint);
-typedef void   (*PFN_GetShaderiv)   (GLuint,GLenum,GLint*);
-typedef void   (*PFN_GetShaderLog)  (GLuint,GLsizei,GLsizei*,char*);
-typedef GLuint (*PFN_CreateProgram) ();
-typedef void   (*PFN_AttachShader)  (GLuint,GLuint);
-typedef void   (*PFN_BindAttribLoc) (GLuint,GLuint,const char*);
-typedef void   (*PFN_LinkProgram)   (GLuint);
-typedef void   (*PFN_GetProgramiv)  (GLuint,GLenum,GLint*);
-typedef void   (*PFN_GetProgramLog) (GLuint,GLsizei,GLsizei*,char*);
-typedef void   (*PFN_UseProgram)    (GLuint);
-typedef void   (*PFN_DeleteShader)  (GLuint);
-typedef void   (*PFN_DeleteProgram) (GLuint);
-typedef GLint  (*PFN_GetUniformLoc) (GLuint,const char*);
-typedef void   (*PFN_Uniform4fv)    (GLint,GLsizei,const GLfloat*);
-typedef void   (*PFN_UniformMat4)   (GLint,GLsizei,GLboolean,const GLfloat*);
-typedef void   (*PFN_GenVAO)        (GLsizei,GLuint*);
-typedef void   (*PFN_BindVAO)       (GLuint);
-typedef void   (*PFN_DelVAO)        (GLsizei,const GLuint*);
-typedef void   (*PFN_GenBuf)        (GLsizei,GLuint*);
-typedef void   (*PFN_BindBuf)       (GLenum,GLuint);
-typedef void   (*PFN_DelBuf)        (GLsizei,const GLuint*);
-typedef void   (*PFN_BufData)       (GLenum,GLsizeiptr,const void*,GLenum);
-typedef void   (*PFN_EnableVAttrib) (GLuint);
-typedef void   (*PFN_VAttribPtr)    (GLuint,GLint,GLenum,GLboolean,GLsizei,const void*);
+static FN_GenFBO  s_genFBO  = nullptr;
+static FN_BindFBO s_bindFBO = nullptr;
+static FN_DelFBO  s_delFBO  = nullptr;
+static FN_FBOTex  s_fboTex  = nullptr;
+static FN_FBORBO  s_fboRBO  = nullptr;
+static FN_ChkFBO  s_chkFBO  = nullptr;
+static FN_GenRBO  s_genRBO  = nullptr;
+static FN_BindRBO s_bindRBO = nullptr;
+static FN_DelRBO  s_delRBO  = nullptr;
+static FN_RBOSt   s_rboSt   = nullptr;
+static bool       s_fboLoaded = false;
 
-static PFN_GenFBO       s_genFBO    = nullptr; static PFN_BindFBO  s_bindFBO = nullptr;
-static PFN_DelFBO       s_delFBO    = nullptr; static PFN_FBOTex   s_fboTex  = nullptr;
-static PFN_FBORBO       s_fboRBO    = nullptr; static PFN_CheckFBO s_chkFBO  = nullptr;
-static PFN_GenRBO       s_genRBO    = nullptr; static PFN_BindRBO  s_bindRBO = nullptr;
-static PFN_DelRBO       s_delRBO    = nullptr; static PFN_RBOStore s_rboSt   = nullptr;
-static PFN_CreateShader s_crSh      = nullptr; static PFN_ShaderSource s_shSrc= nullptr;
-static PFN_CompileShader s_compSh   = nullptr; static PFN_GetShaderiv s_gShiv = nullptr;
-static PFN_GetShaderLog s_gShLog    = nullptr; static PFN_CreateProgram s_crPr= nullptr;
-static PFN_AttachShader s_attSh     = nullptr; static PFN_BindAttribLoc s_bAL = nullptr;
-static PFN_LinkProgram  s_lnkPr     = nullptr; static PFN_GetProgramiv s_gPiv = nullptr;
-static PFN_GetProgramLog s_gPLog    = nullptr; static PFN_UseProgram  s_usePr = nullptr;
-static PFN_DeleteShader s_delSh     = nullptr; static PFN_DeleteProgram s_delPr= nullptr;
-static PFN_GetUniformLoc s_gULoc    = nullptr; static PFN_UniformMat4 s_uMat4 = nullptr;
-static PFN_GenVAO       s_genVAO    = nullptr; static PFN_BindVAO  s_bindVAO  = nullptr;
-static PFN_DelVAO       s_delVAO    = nullptr; static PFN_GenBuf   s_genBuf   = nullptr;
-static PFN_BindBuf      s_bindBuf   = nullptr; static PFN_DelBuf   s_delBuf   = nullptr;
-static PFN_BufData      s_bufData   = nullptr;
-static PFN_EnableVAttrib s_enVA     = nullptr; static PFN_VAttribPtr s_vAPtr   = nullptr;
+typedef void (*FN_BindVAO)(GLuint);
+static FN_BindVAO s_bindVAO = nullptr;
 
-#define GETGL(T, N) T N = (T)SDL_GL_GetProcAddress(#N)
-
-static bool s_glLoaded = false;
-static void loadAllGLFuncs()
+static void loadFBOFuncs()
 {
-    if (s_glLoaded) return; s_glLoaded = true;
-    s_genFBO  = (PFN_GenFBO)  SDL_GL_GetProcAddress("glGenFramebuffers");
-    s_bindFBO = (PFN_BindFBO) SDL_GL_GetProcAddress("glBindFramebuffer");
-    s_delFBO  = (PFN_DelFBO)  SDL_GL_GetProcAddress("glDeleteFramebuffers");
-    s_fboTex  = (PFN_FBOTex)  SDL_GL_GetProcAddress("glFramebufferTexture2D");
-    s_fboRBO  = (PFN_FBORBO)  SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
-    s_chkFBO  = (PFN_CheckFBO)SDL_GL_GetProcAddress("glCheckFramebufferStatus");
-    s_genRBO  = (PFN_GenRBO)  SDL_GL_GetProcAddress("glGenRenderbuffers");
-    s_bindRBO = (PFN_BindRBO) SDL_GL_GetProcAddress("glBindRenderbuffer");
-    s_delRBO  = (PFN_DelRBO)  SDL_GL_GetProcAddress("glDeleteRenderbuffers");
-    s_rboSt   = (PFN_RBOStore)SDL_GL_GetProcAddress("glRenderbufferStorage");
-    s_crSh    = (PFN_CreateShader)  SDL_GL_GetProcAddress("glCreateShader");
-    s_shSrc   = (PFN_ShaderSource)  SDL_GL_GetProcAddress("glShaderSource");
-    s_compSh  = (PFN_CompileShader) SDL_GL_GetProcAddress("glCompileShader");
-    s_gShiv   = (PFN_GetShaderiv)   SDL_GL_GetProcAddress("glGetShaderiv");
-    s_gShLog  = (PFN_GetShaderLog)  SDL_GL_GetProcAddress("glGetShaderInfoLog");
-    s_crPr    = (PFN_CreateProgram) SDL_GL_GetProcAddress("glCreateProgram");
-    s_attSh   = (PFN_AttachShader)  SDL_GL_GetProcAddress("glAttachShader");
-    s_bAL     = (PFN_BindAttribLoc) SDL_GL_GetProcAddress("glBindAttribLocation");
-    s_lnkPr   = (PFN_LinkProgram)   SDL_GL_GetProcAddress("glLinkProgram");
-    s_gPiv    = (PFN_GetProgramiv)  SDL_GL_GetProcAddress("glGetProgramiv");
-    s_gPLog   = (PFN_GetProgramLog) SDL_GL_GetProcAddress("glGetProgramInfoLog");
-    s_usePr   = (PFN_UseProgram)    SDL_GL_GetProcAddress("glUseProgram");
-    s_delSh   = (PFN_DeleteShader)  SDL_GL_GetProcAddress("glDeleteShader");
-    s_delPr   = (PFN_DeleteProgram) SDL_GL_GetProcAddress("glDeleteProgram");
-    s_gULoc   = (PFN_GetUniformLoc) SDL_GL_GetProcAddress("glGetUniformLocation");
-    s_uMat4   = (PFN_UniformMat4)   SDL_GL_GetProcAddress("glUniformMatrix4fv");
-    s_genVAO  = (PFN_GenVAO)        SDL_GL_GetProcAddress("glGenVertexArrays");
-    s_bindVAO = (PFN_BindVAO)       SDL_GL_GetProcAddress("glBindVertexArray");
-    s_delVAO  = (PFN_DelVAO)        SDL_GL_GetProcAddress("glDeleteVertexArrays");
-    s_genBuf  = (PFN_GenBuf)        SDL_GL_GetProcAddress("glGenBuffers");
-    s_bindBuf = (PFN_BindBuf)       SDL_GL_GetProcAddress("glBindBuffer");
-    s_delBuf  = (PFN_DelBuf)        SDL_GL_GetProcAddress("glDeleteBuffers");
-    s_bufData = (PFN_BufData)       SDL_GL_GetProcAddress("glBufferData");
-    s_enVA    = (PFN_EnableVAttrib) SDL_GL_GetProcAddress("glEnableVertexAttribArray");
-    s_vAPtr   = (PFN_VAttribPtr)    SDL_GL_GetProcAddress("glVertexAttribPointer");
-
-    SDL_Log("[Viewport] GL functions loaded: FBO=%s Shader=%s VAO=%s",
-        s_genFBO?"OK":"FAIL", s_crSh?"OK":"FAIL", s_genVAO?"OK":"FAIL");
+    if (s_fboLoaded) return;
+    s_fboLoaded = true;
+    s_genFBO  = (FN_GenFBO)  SDL_GL_GetProcAddress("glGenFramebuffers");
+    s_bindFBO = (FN_BindFBO) SDL_GL_GetProcAddress("glBindFramebuffer");
+    s_delFBO  = (FN_DelFBO)  SDL_GL_GetProcAddress("glDeleteFramebuffers");
+    s_fboTex  = (FN_FBOTex)  SDL_GL_GetProcAddress("glFramebufferTexture2D");
+    s_fboRBO  = (FN_FBORBO)  SDL_GL_GetProcAddress("glFramebufferRenderbuffer");
+    s_chkFBO  = (FN_ChkFBO)  SDL_GL_GetProcAddress("glCheckFramebufferStatus");
+    s_genRBO  = (FN_GenRBO)  SDL_GL_GetProcAddress("glGenRenderbuffers");
+    s_bindRBO = (FN_BindRBO) SDL_GL_GetProcAddress("glBindRenderbuffer");
+    s_delRBO  = (FN_DelRBO)  SDL_GL_GetProcAddress("glDeleteRenderbuffers");
+    s_rboSt   = (FN_RBOSt)   SDL_GL_GetProcAddress("glRenderbufferStorage");
+    s_bindVAO = (FN_BindVAO) SDL_GL_GetProcAddress("glBindVertexArray");
 }
 
-// ── Compile shader con error log ─────────────────────────────────────────
-static GLuint compileShader(GLenum type, const char* src)
-{
-    if (!s_crSh || !s_shSrc || !s_compSh || !s_gShiv) return 0;
-    GLuint sh = s_crSh(type);
-    s_shSrc(sh, 1, &src, nullptr);
-    s_compSh(sh);
-    GLint ok = 0; s_gShiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok && s_gShLog) {
-        GLint len=0; s_gShiv(sh, GL_INFO_LOG_LENGTH, &len);
-        if (len>0) { char* log=new char[len]; s_gShLog(sh,len,nullptr,log);
-            SDL_Log("[Viewport] Shader error: %s", log); delete[] log; }
-        return 0;
-    }
-    return sh;
-}
-
-static GLuint buildProgram(const char* vs, const char* fs)
-{
-    GLuint v = compileShader(GL_VERTEX_SHADER, vs);
-    GLuint f = compileShader(GL_FRAGMENT_SHADER, fs);
-    if (!v || !f || !s_crPr) return 0;
-    GLuint p = s_crPr();
-    // Bind attrib locations BEFORE link
-    if (s_bAL) { s_bAL(p, 0, "aPos"); s_bAL(p, 1, "aCol"); }
-    s_attSh(p, v); s_attSh(p, f);
-    if (s_lnkPr) s_lnkPr(p);
-    GLint ok=0; if (s_gPiv) s_gPiv(p, GL_LINK_STATUS, &ok);
-    if (!ok && s_gPLog) {
-        GLint len=0; s_gPiv(p, GL_INFO_LOG_LENGTH, &len);
-        if (len>0) { char* log=new char[len]; s_gPLog(p,len,nullptr,log);
-            SDL_Log("[Viewport] Program link error: %s", log); delete[] log; }
-        if (s_delPr) s_delPr(p); return 0;
-    }
-    if (s_delSh) { s_delSh(v); s_delSh(f); }
-    SDL_Log("[Viewport] Shader program %u OK", p);
-    return p;
-}
-
-// ── includes standard ─────────────────────────────────────────────────────
-#include "viewport/FreeCameraViewport.hpp"
-#include <mini/render/Camera.hpp>
-#include <imgui.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <vector>
-#include <iostream>
-
-namespace editor
-{
-
+// ── Shader sorgenti ───────────────────────────────────────────────────────────
 static const char* k_vert = R"(
-#version 130
-attribute vec3 aPos;
-attribute vec3 aCol;
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aCol;
 uniform mat4 uVP;
-varying vec3 vCol;
+out vec3 vCol;
 void main() { gl_Position = uVP * vec4(aPos, 1.0); vCol = aCol; }
 )";
 
 static const char* k_frag = R"(
-#version 130
-varying vec3 vCol;
-void main() { gl_FragColor = vec4(vCol, 1.0); }
+#version 330 core
+in vec3 vCol;
+out vec4 FragColor;
+void main() { FragColor = vec4(vCol, 1.0); }
 )";
 
+namespace editor
+{
+
+// ── Costruttore / Distruttore ─────────────────────────────────────────────────
 FreeCameraViewport::FreeCameraViewport()
 {
-    loadAllGLFuncs();
+    loadFBOFuncs();
+
+    m_shader = std::make_unique<mini::Shader>(k_vert, k_frag);
+    if (!m_shader->isValid())
+    {
+        m_lastError = "Shader non compilato (vedi log SDL).";
+        SDL_Log("[Viewport] Shader FALLITO");
+    }
+    else
+    {
+        SDL_Log("[Viewport] Shader OK (id=%u)", m_shader->getId());
+    }
 
     m_camera = std::make_unique<mini::Camera>(60.0f, 16.0f/9.0f, 0.1f, 500.0f);
     m_camera->setPosition({0.0f, 8.0f, 14.0f});
     m_camera->lookAt({0.0f, 0.0f, 0.0f});
     m_camera->setSpeed(m_camSpeed);
 
-    m_shaderProgram = buildProgram(k_vert, k_frag);
     buildGrid(40.0f, 20);
+    SDL_Log("[Viewport] Grid vertici=%d", m_gridVertCount);
+
     resizeFBO(4, 4);
 }
 
 FreeCameraViewport::~FreeCameraViewport()
 {
-    if (m_fbo && s_delFBO)      s_delFBO(1, &m_fbo);
-    if (m_depthRbo && s_delRBO) s_delRBO(1, &m_depthRbo);
-    if (m_colorTex)             glDeleteTextures(1, &m_colorTex);
-    if (m_gridVAO && s_delVAO)  s_delVAO(1, &m_gridVAO);
-    if (m_gridVBO && s_delBuf)  s_delBuf(1, &m_gridVBO);
-    if (m_shaderProgram && s_delPr) s_delPr(m_shaderProgram);
+    if (s_delFBO && m_fbo)      s_delFBO(1, &m_fbo);
+    if (s_delRBO && m_depthRbo) s_delRBO(1, &m_depthRbo);
+    if (m_colorTex) glDeleteTextures(1, &m_colorTex);
 }
 
+bool FreeCameraViewport::isReady() const
+{
+    return m_shader && m_shader->isValid() && m_fboOk;
+}
+
+// ── Grid ─────────────────────────────────────────────────────────────────────
+void FreeCameraViewport::buildGrid(float size, int div)
+{
+    m_gridData.clear();
+    float step = size / div, half = size * 0.5f;
+
+    auto ln = [&](float x0,float y0,float z0,
+                  float x1,float y1,float z1,
+                  float r, float g, float b)
+    {
+        m_gridData.insert(m_gridData.end(),
+            {x0,y0,z0, r,g,b, x1,y1,z1, r,g,b});
+    };
+
+    for (int i = 0; i <= div; ++i)
+    {
+        float t = -half + i * step;
+        float c = (i == div/2) ? 0.55f : 0.30f;
+        ln(-half, 0, t,  half, 0, t,  c, c, c);
+        ln(t, 0, -half,  t, 0, half, c, c, c);
+    }
+    ln(-half, 0.02f, 0, half, 0.02f, 0,  0.95f, 0.25f, 0.25f);
+    ln(0, 0.02f,-half, 0, 0.02f, half,  0.25f, 0.55f, 1.00f);
+
+    m_gridVertCount = (int)(m_gridData.size() / 6);
+}
+
+// ── Draw generico (client-side arrays) ────────────────────────────────────────
+void FreeCameraViewport::drawArray(const std::vector<float>& data, int count,
+                                   unsigned int glMode, const glm::mat4& vp)
+{
+    if (count <= 0 || data.empty() || !m_shader || !m_shader->isValid()) return;
+
+    m_shader->use();
+    m_shader->setMat4("uVP", glm::value_ptr(vp));
+
+    constexpr GLsizei stride = (GLsizei)(6 * sizeof(float));
+    const float* base = data.data();
+
+    glEnableVertexAttribArray(0u);
+    glEnableVertexAttribArray(1u);
+    glVertexAttribPointer(0u, 3, GL_FLOAT, GL_FALSE, stride, (const void*)(base + 0));
+    glVertexAttribPointer(1u, 3, GL_FLOAT, GL_FALSE, stride, (const void*)(base + 3));
+
+    glDrawArrays(glMode, 0, count);
+
+    glDisableVertexAttribArray(1u);
+    glDisableVertexAttribArray(0u);
+}
+
+// ── FBO ──────────────────────────────────────────────────────────────────────
 void FreeCameraViewport::resizeFBO(int w, int h)
 {
     if (w == m_fbWidth && h == m_fbHeight) return;
-    if (!s_genFBO) return;
-    m_fbWidth = w; m_fbHeight = h;
-    if (m_fbo)      { s_delFBO(1,&m_fbo);     m_fbo=0; }
-    if (m_depthRbo) { s_delRBO(1,&m_depthRbo); m_depthRbo=0; }
-    if (m_colorTex) { glDeleteTextures(1,&m_colorTex); m_colorTex=0; }
-    s_genFBO(1,&m_fbo); s_bindFBO(GL_FRAMEBUFFER, m_fbo);
-    glGenTextures(1,&m_colorTex); glBindTexture(GL_TEXTURE_2D, m_colorTex);
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-    s_fboTex(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,m_colorTex,0);
-    s_genRBO(1,&m_depthRbo); s_bindRBO(GL_RENDERBUFFER,m_depthRbo);
-    s_rboSt(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,w,h);
-    s_fboRBO(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,m_depthRbo);
-    if (s_chkFBO(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        SDL_Log("[Viewport] FBO incompleto!");
-    s_bindFBO(GL_FRAMEBUFFER,0); glBindTexture(GL_TEXTURE_2D,0);
-}
-
-void FreeCameraViewport::buildGrid(float size, int div)
-{
-    std::vector<float> verts;
-    float step=size/div, half=size*0.5f;
-    auto ln=[&](float x0,float y0,float z0,float x1,float y1,float z1,float r,float g,float b)
-    { verts.insert(verts.end(),{x0,y0,z0,r,g,b,x1,y1,z1,r,g,b}); };
-    for(int i=0;i<=div;++i){
-        float t=-half+i*step; float c=(i==div/2)?0.6f:0.28f;
-        ln(-half,0,t,half,0,t,c,c,c); ln(t,0,-half,t,0,half,c,c,c);
+    if (!s_genFBO || !s_bindFBO || !s_fboTex || !s_genRBO ||
+        !s_bindRBO || !s_rboSt  || !s_fboRBO || !s_chkFBO)
+    {
+        m_lastError = "FBO non disponibile.";
+        return;
     }
-    ln(-half,0.02f,0,half,0.02f,0, 0.90f,0.20f,0.20f); // X rosso
-    ln(0,0.02f,-half,0,0.02f,half, 0.20f,0.45f,0.95f); // Z blu
-    m_gridVertCount=(int)(verts.size()/6);
-    if(!s_genVAO||!s_genBuf) return;
-    s_genVAO(1,&m_gridVAO); s_genBuf(1,&m_gridVBO);
-    s_bindVAO(m_gridVAO);
-    s_bindBuf(GL_ARRAY_BUFFER,m_gridVBO);
-    s_bufData(GL_ARRAY_BUFFER,verts.size()*sizeof(float),verts.data(),GL_STATIC_DRAW);
-    s_enVA(0); s_vAPtr(0,3,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)0);
-    s_enVA(1); s_vAPtr(1,3,GL_FLOAT,GL_FALSE,6*sizeof(float),(void*)(3*sizeof(float)));
-    s_bindVAO(0);
+
+    m_fbWidth = w; m_fbHeight = h; m_fboOk = false;
+
+    if (m_fbo)      { s_delFBO(1, &m_fbo);      m_fbo      = 0; }
+    if (m_depthRbo) { s_delRBO(1, &m_depthRbo); m_depthRbo = 0; }
+    if (m_colorTex) { glDeleteTextures(1, &m_colorTex); m_colorTex = 0; }
+
+    s_genFBO(1, &m_fbo);
+    s_bindFBO(GL_FRAMEBUFFER, m_fbo);
+
+    glGenTextures(1, &m_colorTex);
+    glBindTexture(GL_TEXTURE_2D, m_colorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    s_fboTex(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorTex, 0);
+
+    s_genRBO(1, &m_depthRbo);
+    s_bindRBO(GL_RENDERBUFFER, m_depthRbo);
+    s_rboSt(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+    s_bindRBO(GL_RENDERBUFFER, 0);
+    s_fboRBO(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+             GL_RENDERBUFFER, m_depthRbo);
+
+    GLenum status = s_chkFBO(GL_FRAMEBUFFER);
+    if (status == GL_FRAMEBUFFER_COMPLETE)
+    {
+        m_fboOk = true;
+        m_lastError.clear();
+    }
+    else
+    {
+        m_lastError = "FBO incompleto (status=" + std::to_string(status) + ").";
+    }
+
+    s_bindFBO(GL_FRAMEBUFFER, 0);
 }
 
-void FreeCameraViewport::drawGrid(const glm::mat4& vp)
-{
-    if (!m_shaderProgram || !m_gridVAO || !s_usePr) return;
-    s_usePr(m_shaderProgram);
-    GLint loc = s_gULoc ? s_gULoc(m_shaderProgram,"uVP") : -1;
-    if (loc>=0 && s_uMat4) s_uMat4(loc,1,GL_FALSE,glm::value_ptr(vp));
-    s_bindVAO(m_gridVAO);
-    glDrawArrays(GL_LINES,0,m_gridVertCount);
-    s_bindVAO(0);
-    s_usePr(0);
-}
-
+// ── Render scene nell'FBO ─────────────────────────────────────────────────────
 void FreeCameraViewport::renderScene()
 {
-    if (!m_fbo || !s_bindFBO) return;
-    GLint oldVP[4]; glGetIntegerv(GL_VIEWPORT,oldVP);
-    s_bindFBO(GL_FRAMEBUFFER,m_fbo);
-    glViewport(0,0,m_fbWidth,m_fbHeight);
-    glDisable(GL_DEPTH_TEST);
-    glClearColor(0.08f,0.10f,0.16f,1.0f);
-    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
-    drawGrid(m_camera->getViewProjection());
-    s_bindFBO(GL_FRAMEBUFFER,0);
-    glViewport(oldVP[0],oldVP[1],oldVP[2],oldVP[3]);
+    if (!m_fboOk || !s_bindFBO) return;
+
+    GLint oldFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFBO);
+    GLint oldVP[4];
+    glGetIntegerv(GL_VIEWPORT, oldVP);
+    GLboolean blendOn = glIsEnabled(GL_BLEND);
+    GLboolean depthOn = glIsEnabled(GL_DEPTH_TEST);
+
+    if (s_bindVAO) s_bindVAO(0);
+
+    s_bindFBO(GL_FRAMEBUFFER, m_fbo);
+    glViewport(0, 0, m_fbWidth, m_fbHeight);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glClearColor(0.10f, 0.12f, 0.17f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    const glm::mat4 vp = m_camera->getViewProjection();
+
+    drawArray(m_gridData, m_gridVertCount, GL_LINES, vp);
+
+    if (m_modelVertCount > 0)
+        drawArray(m_modelData, m_modelVertCount, GL_TRIANGLES, vp);
+
+    if (m_attachVertCount > 0)
+        drawArray(m_attachData, m_attachVertCount, GL_TRIANGLES, vp);
+
+    glDepthFunc(GL_LEQUAL);
+    drawArray(m_mapBoxData, m_mapBoxVertCount, GL_LINES, vp);
+
+    // Bone lines (rispettano la profondità)
+    if (m_boneLineCount > 0)
+        drawArray(m_boneLineData, m_boneLineCount, GL_LINES, vp);
+
+    // Elementi di editing SEMPRE visibili (anche attraverso i modelli):
+    // hitbox, marker attach point, bone dots, foot marker.
+    glDepthFunc(GL_ALWAYS);
+    drawArray(m_boxData, m_boxVertCount, GL_LINES, vp);
+    if (m_showFootMarker && !m_footMarkerData.empty())
+        drawArray(m_footMarkerData, (int)(m_footMarkerData.size() / 6), GL_LINES, vp);
+    if (m_boneDotCount > 0)
+        drawArray(m_boneDotData, m_boneDotCount, GL_LINES, vp);
+    if (m_markerCount > 0)
+        drawArray(m_markerData, m_markerCount, GL_LINES, vp);
+
+    glDepthFunc(GL_LESS);
+
+    s_bindFBO(GL_FRAMEBUFFER, (GLuint)oldFBO);
+    glViewport(oldVP[0], oldVP[1], oldVP[2], oldVP[3]);
+    if (!depthOn) glDisable(GL_DEPTH_TEST);
+    if (blendOn)  glEnable(GL_BLEND);
 }
 
-void FreeCameraViewport::tick(float dt)
+// ── Foot marker ───────────────────────────────────────────────────────────────
+void FreeCameraViewport::setFootMarker(float y, bool show)
 {
-    if (!m_focused) return;
-    const Uint8* ks = SDL_GetKeyboardState(nullptr);
-    bool tabNow = ks[SDL_SCANCODE_TAB]!=0;
-    if (tabNow && !m_tabWasDown) {
-        m_mouseCapture=!m_mouseCapture;
-        SDL_SetRelativeMouseMode(m_mouseCapture?SDL_TRUE:SDL_FALSE);
+    m_showFootMarker = show;
+    if (show && y != m_footMarkerY)
+    {
+        m_footMarkerY = y;
+        buildFootMarker(y);
     }
-    m_tabWasDown=tabNow;
-    m_camera->setSpeed(ks[SDL_SCANCODE_LSHIFT]?m_camSpeed*3.0f:m_camSpeed);
-    m_camera->processKeyboard(
-        ks[SDL_SCANCODE_W]!=0, ks[SDL_SCANCODE_S]!=0,
-        ks[SDL_SCANCODE_A]!=0, ks[SDL_SCANCODE_D]!=0,
-        ks[SDL_SCANCODE_E]||ks[SDL_SCANCODE_SPACE],
-        ks[SDL_SCANCODE_Q]||ks[SDL_SCANCODE_LCTRL], dt);
-    if (m_mouseCapture) {
-        int dx=0,dy=0; SDL_GetRelativeMouseState(&dx,&dy);
-        if (dx||dy) m_camera->processMouse((float)dx,(float)dy,0.15f);
+    else if (!show)
+    {
+        m_footMarkerData.clear();
     }
 }
 
-void FreeCameraViewport::draw()
+void FreeCameraViewport::buildFootMarker(float y)
 {
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    m_footMarkerData.clear();
+    constexpr int   SEGS = 32;
+    constexpr float R    = 0.18f;
+    constexpr float PI2  = 6.28318530f;
+    constexpr float cr = 0.20f, cg = 1.00f, cb = 0.40f;
+
+    for (int i = 0; i < SEGS; ++i)
+    {
+        float a0 = PI2 * i       / SEGS;
+        float a1 = PI2 * (i + 1) / SEGS;
+        float x0 = R * std::cos(a0), z0 = R * std::sin(a0);
+        float x1 = R * std::cos(a1), z1 = R * std::sin(a1);
+        m_footMarkerData.insert(m_footMarkerData.end(),
+            {x0, y, z0, cr, cg, cb,
+             x1, y, z1, cr, cg, cb});
+    }
+    float cross = R * 0.35f;
+    m_footMarkerData.insert(m_footMarkerData.end(), {
+        -cross, y, 0,  cr,cg,cb,  cross, y, 0,  cr,cg,cb,
+        0, y, -cross,  cr,cg,cb,  0, y,  cross, cr,cg,cb,
+    });
+}
+
+// ── Bones ─────────────────────────────────────────────────────────────────────
+void FreeCameraViewport::setBoneData(const std::vector<JointData>& joints,
+                                     float meshRotX, float meshScale)
+{
+    m_joints     = joints;
+    m_jointRotX  = meshRotX;
+    m_jointScale = meshScale;
+    buildBoneData();
+}
+
+void FreeCameraViewport::clearBones()
+{
+    m_joints.clear();
+    m_boneLineData.clear(); m_boneLineCount = 0;
+    m_boneDotData.clear();  m_boneDotCount  = 0;
+}
+
+void FreeCameraViewport::setSelectedBone(const std::string& name)
+{
+    m_selBone = name;
+    buildBoneData(); // rebuild to update colors
+}
+
+void FreeCameraViewport::buildBoneData()
+{
+    m_boneLineData.clear();
+    m_boneDotData.clear();
+
+    if (m_joints.empty()) { m_boneLineCount = 0; m_boneDotCount = 0; return; }
+
+    glm::mat4 M = glm::rotate(glm::mat4(1.0f), glm::radians(m_jointRotX), {1,0,0})
+                * glm::scale(glm::mat4(1.0f), {m_jointScale, m_jointScale, m_jointScale});
+
+    auto addLine = [&](std::vector<float>& buf,
+                       glm::vec3 a, glm::vec3 b,
+                       float r, float g, float bv)
+    {
+        buf.insert(buf.end(), {a.x,a.y,a.z, r,g,bv,
+                               b.x,b.y,b.z, r,g,bv});
+    };
+
+    constexpr float CR = 0.9f, CG = 0.8f, CB = 0.1f; // bone yellow
+    constexpr float dot = 0.03f; // cross arm length
+
+    for (int ji = 0; ji < (int)m_joints.size(); ++ji)
+    {
+        const auto& jd = m_joints[ji];
+        bool sel = (jd.name == m_selBone);
+        float r = sel ? 1.0f : CR;
+        float g = sel ? 1.0f : CG;
+        float b = sel ? 1.0f : CB;
+
+        glm::vec3 wp = glm::vec3(M * glm::vec4(jd.modelPos, 1.0f));
+
+        // Bone line to parent
+        if (jd.parentIdx >= 0 && jd.parentIdx < (int)m_joints.size())
+        {
+            glm::vec3 pp = glm::vec3(M * glm::vec4(m_joints[jd.parentIdx].modelPos, 1.0f));
+            addLine(m_boneLineData, pp, wp, r, g, b);
+        }
+
+        // Dot cross (3 axes)
+        addLine(m_boneDotData, wp - glm::vec3(dot,0,0), wp + glm::vec3(dot,0,0), r, g, b);
+        addLine(m_boneDotData, wp - glm::vec3(0,dot,0), wp + glm::vec3(0,dot,0), r, g, b);
+        addLine(m_boneDotData, wp - glm::vec3(0,0,dot), wp + glm::vec3(0,0,dot), r, g, b);
+    }
+
+    m_boneLineCount = (int)(m_boneLineData.size() / 6);
+    m_boneDotCount  = (int)(m_boneDotData.size()  / 6);
+}
+
+// ── Markers ──────────────────────────────────────────────────────────────────
+void FreeCameraViewport::setMarkers(const std::vector<ViewportMarker>& markers)
+{
+    m_markers = markers;
+    buildMarkerData();
+}
+
+void FreeCameraViewport::clearMarkers()
+{
+    m_markers.clear();
+    m_markerData.clear();
+    m_markerCount = 0;
+}
+
+void FreeCameraViewport::buildMarkerData()
+{
+    m_markerData.clear();
+
+    auto addLine = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv) {
+        m_markerData.insert(m_markerData.end(),
+            {a.x,a.y,a.z, r,g,bv,  b.x,b.y,b.z, r,g,bv});
+    };
+
+    for (const auto& mk : m_markers)
+    {
+        float r = mk.r, g = mk.g, b = mk.b;
+        const float arm = mk.selected ? 0.14f : 0.10f;
+        const float h   = mk.selected ? 0.10f : 0.07f; // mezzo lato del cubetto
+        if (mk.selected) { r = (r+0.3f<1.0f)?r+0.3f:1.0f; g=(g+0.3f<1.0f)?g+0.3f:1.0f; b=(b+0.3f<1.0f)?b+0.3f:1.0f; }
+        glm::vec3 p = mk.pos;
+
+        // Croce a 3 assi
+        addLine({p.x-arm,p.y,p.z}, {p.x+arm,p.y,p.z}, r,g,b);
+        addLine({p.x,p.y-arm,p.z}, {p.x,p.y+arm,p.z}, r,g,b);
+        addLine({p.x,p.y,p.z-arm}, {p.x,p.y,p.z+arm}, r,g,b);
+
+        // Cubetto wireframe attorno al punto → si legge come "oggetto"
+        glm::vec3 c[8] = {
+            {p.x-h,p.y-h,p.z-h},{p.x+h,p.y-h,p.z-h},{p.x+h,p.y+h,p.z-h},{p.x-h,p.y+h,p.z-h},
+            {p.x-h,p.y-h,p.z+h},{p.x+h,p.y-h,p.z+h},{p.x+h,p.y+h,p.z+h},{p.x-h,p.y+h,p.z+h},
+        };
+        const int e[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+        for (auto& ed : e) addLine(c[ed[0]], c[ed[1]], r,g,b);
+    }
+    m_markerCount = (int)(m_markerData.size() / 6);
+}
+
+// ── Gizmo ─────────────────────────────────────────────────────────────────────
+void FreeCameraViewport::setGizmoTarget(glm::vec3 pos, bool enabled)
+{
+    m_gizmoPos     = pos;
+    m_gizmoEnabled = enabled;
+}
+
+bool FreeCameraViewport::popGizmoDelta(glm::vec3& outDelta)
+{
+    if (!m_gizmoDragged) return false;
+    outDelta      = m_gizmoDelta;
+    m_gizmoDelta  = {0,0,0};
+    m_gizmoDragged = false;
+    return true;
+}
+
+// ── Pan ───────────────────────────────────────────────────────────────────────
+void FreeCameraViewport::panCamera(float rightDelta, float upDelta)
+{
+    glm::vec3 fwd   = m_camera->getForward();
+    glm::vec3 right = glm::normalize(glm::cross(fwd, {0,1,0}));
+    glm::vec3 pos   = m_camera->getPosition();
+    pos += right * rightDelta + glm::vec3(0,1,0) * upDelta;
+    m_camera->setPosition(pos);
+}
+
+// ── Click selection ───────────────────────────────────────────────────────────
+std::string FreeCameraViewport::popClickedItem()
+{
+    std::string s = m_lastClickedItem;
+    m_lastClickedItem.clear();
+    return s;
+}
+
+// ── handleViewportClick ───────────────────────────────────────────────────────
+void FreeCameraViewport::handleViewportClick()
+{
+    if (!m_imgClicked) return;
+    m_imgClicked = false;
+
+    glm::mat4 vp = m_camera->getViewProjection();
+    float cx = m_imgClickPos.x;
+    float cy = m_imgClickPos.y;
+
+    auto projectToScreen = [&](glm::vec3 worldPos) -> ImVec2 {
+        glm::vec4 clip = vp * glm::vec4(worldPos, 1.0f);
+        if (clip.w <= 0.0f) return {-9999, -9999};
+        float nx = clip.x / clip.w;
+        float ny = clip.y / clip.w;
+        float sx = m_imgMin.x + (nx * 0.5f + 0.5f) * m_imgSize.x;
+        float sy = m_imgMin.y + (1.0f - (ny * 0.5f + 0.5f)) * m_imgSize.y;
+        return {sx, sy};
+    };
+
+    std::string bestName;
+    float bestDist = 15.0f; // threshold in pixels
+
+    glm::mat4 M = glm::rotate(glm::mat4(1.0f), glm::radians(m_jointRotX), {1,0,0})
+                * glm::scale(glm::mat4(1.0f), {m_jointScale, m_jointScale, m_jointScale});
+
+    for (const auto& jd : m_joints)
+    {
+        glm::vec3 wp = glm::vec3(M * glm::vec4(jd.modelPos, 1.0f));
+        ImVec2 sp = projectToScreen(wp);
+        float dx = sp.x - cx, dy = sp.y - cy;
+        float d = std::sqrt(dx*dx + dy*dy);
+        if (d < bestDist) { bestDist = d; bestName = jd.name; }
+    }
+
+    for (const auto& mk : m_markers)
+    {
+        ImVec2 sp = projectToScreen(mk.pos);
+        float dx = sp.x - cx, dy = sp.y - cy;
+        float d = std::sqrt(dx*dx + dy*dy);
+        if (d < bestDist) { bestDist = d; bestName = mk.name; }
+    }
+
+    if (!bestName.empty())
+    {
+        // Check if it's a bone
+        for (const auto& jd : m_joints)
+            if (jd.name == bestName) { m_selBone = bestName; break; }
+        m_lastClickedItem = bestName;
+    }
+}
+
+// ── drawMarkerLabels ──────────────────────────────────────────────────────────
+// Disegna il nome di ogni marker (attach point) come testo nel viewport.
+void FreeCameraViewport::drawMarkerLabels()
+{
+    if (m_markers.empty()) return;
+    glm::mat4 vp = m_camera->getViewProjection();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (const auto& mk : m_markers)
+    {
+        glm::vec4 clip = vp * glm::vec4(mk.pos, 1.0f);
+        if (clip.w <= 0.0f) continue;
+        float nx = clip.x / clip.w, ny = clip.y / clip.w;
+        if (nx < -1.1f || nx > 1.1f || ny < -1.1f || ny > 1.1f) continue;
+        float sx = m_imgMin.x + (nx * 0.5f + 0.5f) * m_imgSize.x;
+        float sy = m_imgMin.y + (1.0f - (ny * 0.5f + 0.5f)) * m_imgSize.y;
+        ImU32 col = mk.selected ? IM_COL32(255,255,160,255)
+                                : IM_COL32(210,210,210,210);
+        dl->AddText({sx + 8.0f, sy - 7.0f}, col, mk.name.c_str());
+    }
+}
+
+// ── drawGizmoOverlay ──────────────────────────────────────────────────────────
+void FreeCameraViewport::drawGizmoOverlay()
+{
+    if (!m_gizmoEnabled) return;
+
+    glm::mat4 vp = m_camera->getViewProjection();
+    glm::vec4 clip = vp * glm::vec4(m_gizmoPos, 1.0f);
+    if (clip.w <= 0.0f) return;
+
+    float ndcX = clip.x / clip.w;
+    float ndcY = clip.y / clip.w;
+    if (ndcX < -1.1f || ndcX > 1.1f || ndcY < -1.1f || ndcY > 1.1f) return;
+
+    float cx = m_imgMin.x + (ndcX * 0.5f + 0.5f) * m_imgSize.x;
+    float cy = m_imgMin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * m_imgSize.y;
+
+    auto projectAxis = [&](glm::vec3 dir) -> ImVec2 {
+        glm::vec4 c1 = vp * glm::vec4(m_gizmoPos + dir * 0.3f, 1.0f);
+        if (c1.w <= 0.0f) return {0,0};
+        float n1x = c1.x / c1.w, n1y = c1.y / c1.w;
+        float sx = (n1x * 0.5f + 0.5f) * m_imgSize.x + m_imgMin.x;
+        float sy = (1.0f - (n1y * 0.5f + 0.5f)) * m_imgSize.y + m_imgMin.y;
+        float dx = sx - cx, dy = sy - cy;
+        float len = std::sqrt(dx*dx + dy*dy);
+        if (len > 0.001f) { dx /= len; dy /= len; }
+        return {dx, dy};
+    };
+
+    ImVec2 axX = projectAxis({1,0,0});
+    ImVec2 axY = projectAxis({0,1,0});
+    ImVec2 axZ = projectAxis({0,0,1});
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    constexpr float GL_ARM = 60.0f;
+    constexpr float TH = 8.0f;
+
+    static const ImU32 axColors[3] = {
+        IM_COL32(255,60,60,220),
+        IM_COL32(60,220,60,220),
+        IM_COL32(60,120,255,220),
+    };
+    ImVec2 axes[3] = {axX, axY, axZ};
+    ImVec2 tips[3];
+
+    for (int a = 0; a < 3; ++a)
+    {
+        tips[a] = {cx + axes[a].x * GL_ARM, cy + axes[a].y * GL_ARM};
+        ImU32 col = (m_gizmoActiveAxis == a) ? IM_COL32(255,255,0,255) : axColors[a];
+        dl->AddLine({cx,cy}, tips[a], col, 2.5f);
+        ImVec2 perp = {-axes[a].y * TH, axes[a].x * TH};
+        dl->AddTriangleFilled(tips[a],
+            {tips[a].x - axes[a].x*TH + perp.x, tips[a].y - axes[a].y*TH + perp.y},
+            {tips[a].x - axes[a].x*TH - perp.x, tips[a].y - axes[a].y*TH - perp.y},
+            col);
+    }
+    dl->AddCircleFilled({cx,cy}, 4.0f, IM_COL32(220,220,220,220));
+
+    // Drag interaction
+    ImVec2 mp = ImGui::GetMousePos();
+    for (int a = 0; a < 3; ++a)
+    {
+        float d = std::hypot(mp.x - tips[a].x, mp.y - tips[a].y);
+        if (d < 12.0f)
+        {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (ImGui::IsMouseClicked(0)) m_gizmoActiveAxis = a;
+        }
+    }
+
+    if (m_gizmoActiveAxis >= 0)
+    {
+        if (ImGui::IsMouseDown(0))
+        {
+            ImVec2 md = ImGui::GetIO().MouseDelta;
+            float distToCamera = glm::length(m_gizmoPos - m_camera->getPosition());
+            float pixelToWorld = 2.0f * std::tan(glm::radians(30.0f))
+                               * distToCamera / m_imgSize.y;
+            float proj = md.x * axes[m_gizmoActiveAxis].x
+                       - md.y * axes[m_gizmoActiveAxis].y;
+            glm::vec3 axisWorld[3] = {{1,0,0},{0,1,0},{0,0,1}};
+            m_gizmoDelta   += axisWorld[m_gizmoActiveAxis] * proj * pixelToWorld;
+            m_gizmoDragged  = true;
+        }
+        else
+        {
+            m_gizmoActiveAxis = -1;
+        }
+    }
+}
+
+// ── Barra di caricamento modello (modulo standalone) ──────────────────────────
+void FreeCameraViewport::drawLoadBar()
+{
+    if (ImGui::Button("Sfoglia modello/mappa..."))
+    {
+        std::string picked = openFileDialog(
+            "Modelli 3D\0*.glb;*.gltf;*.obj\0Tutti i file\0*.*\0\0",
+            "assets/models");
+        if (!picked.empty())
+        {
+            std::snprintf(m_loadPathBuf, sizeof(m_loadPathBuf), "%s", picked.c_str());
+            loadModel(m_loadPathBuf, m_loadRotX, m_loadScale);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Pulisci"))
+    { clearModel(); m_loadPathBuf[0] = '\0'; }
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70);
+    if (ImGui::DragFloat("RotX", &m_loadRotX, 1.0f, -180.0f, 180.0f, "%.0f")
+        && m_loadPathBuf[0])
+        loadModel(m_loadPathBuf, m_loadRotX, m_loadScale);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70);
+    if (ImGui::DragFloat("Scala", &m_loadScale, 0.01f, 0.01f, 50.0f, "%.2f")
+        && m_loadPathBuf[0])
+        loadModel(m_loadPathBuf, m_loadRotX, m_loadScale);
+
+    if (m_loadPathBuf[0])
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", m_loadPathBuf);
+    }
+    ImGui::Separator();
+}
+
+// ── draw() ───────────────────────────────────────────────────────────────────
+void FreeCameraViewport::draw(bool showLoadBar)
+{
+    if (showLoadBar) drawLoadBar();
+
     ImGui::TextDisabled(m_mouseCapture
         ? "TAB = rilascia mouse  |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce"
         : "TAB = cattura mouse   |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce");
+
+    // Pan controls
+    {
+        float dummy = 0.0f;
+        ImGui::SetNextItemWidth(80);
+        ImGui::DragFloat("Pan H", &dummy, 0.1f, -1e6f, 1e6f);
+        if (ImGui::IsItemActive())
+            panCamera(-ImGui::GetIO().MouseDelta.x * 0.02f, 0.0f);
+        ImGui::SameLine();
+        dummy = 0.0f;
+        ImGui::SetNextItemWidth(80);
+        ImGui::DragFloat("Pan V", &dummy, 0.1f, -1e6f, 1e6f);
+        if (ImGui::IsItemActive())
+            panCamera(0.0f, ImGui::GetIO().MouseDelta.y * 0.02f);
+    }
+
     ImGui::Separator();
 
     m_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-    const ImVec2 avail2 = ImGui::GetContentRegionAvail();
-    const int w = (int)avail2.x;
-    const int h = (int)avail2.y;
+    if (!m_lastError.empty())
+        ImGui::TextColored({1.0f, 0.3f, 0.3f, 1.0f}, "ERRORE: %s", m_lastError.c_str());
+    if (!m_lastModelStatus.empty())
+        ImGui::TextColored({0.5f, 0.9f, 0.5f, 1.0f}, "%s", m_lastModelStatus.c_str());
 
-    if (w>8 && h>8) {
-        m_camera->setAspect((float)w/(float)h);
-        resizeFBO(w,h);
-        renderScene();
-        if (m_colorTex)
-            ImGui::Image((ImTextureID)(uintptr_t)m_colorTex,
-                ImVec2((float)w,(float)h),ImVec2(0,1),ImVec2(1,0));
-        else
-            ImGui::TextColored({1,0.4f,0.4f,1},"FBO non disponibile.");
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const int w = (int)avail.x;
+    const int h = (int)avail.y;
+    if (w < 8 || h < 8) return;
+
+    m_camera->setAspect((float)w / (float)h);
+    resizeFBO(w, h);
+
+    if (!m_fboOk)
+    {
+        ImGui::TextColored({1,0.4f,0.4f,1}, "FBO non valido.");
+        return;
     }
+
+    renderScene();
+
+    ImGui::Image(
+        (ImTextureID)(uintptr_t)m_colorTex,
+        ImVec2((float)w, (float)h),
+        ImVec2(0, 1), ImVec2(1, 0)
+    );
+
+    // Record image rect for picking
+    m_imgMin  = ImGui::GetItemRectMin();
+    m_imgSize = ImGui::GetItemRectSize();
+
+    // Check click
+    if (ImGui::IsItemClicked(0) && !m_mouseCapture)
+    {
+        m_imgClicked  = true;
+        m_imgClickPos = ImGui::GetMousePos();
+    }
+
+    handleViewportClick();
+    drawMarkerLabels();
+    drawGizmoOverlay();
+}
+
+// ── tick() ────────────────────────────────────────────────────────────────────
+void FreeCameraViewport::tick(float dt)
+{
+    if (!m_focused) return;
+    const Uint8* ks = SDL_GetKeyboardState(nullptr);
+    bool tabNow = ks[SDL_SCANCODE_TAB] != 0;
+    if (tabNow && !m_tabWasDown)
+    {
+        m_mouseCapture = !m_mouseCapture;
+        SDL_SetRelativeMouseMode(m_mouseCapture ? SDL_TRUE : SDL_FALSE);
+    }
+    m_tabWasDown = tabNow;
+    m_camera->setSpeed(ks[SDL_SCANCODE_LSHIFT] ? m_camSpeed*3.0f : m_camSpeed);
+    m_camera->processKeyboard(
+        ks[SDL_SCANCODE_W]!=0, ks[SDL_SCANCODE_S]!=0,
+        ks[SDL_SCANCODE_A]!=0, ks[SDL_SCANCODE_D]!=0,
+        ks[SDL_SCANCODE_E] || ks[SDL_SCANCODE_SPACE],
+        ks[SDL_SCANCODE_Q] || ks[SDL_SCANCODE_LCTRL], dt);
+    if (m_mouseCapture)
+    {
+        int dx=0, dy=0;
+        SDL_GetRelativeMouseState(&dx, &dy);
+        if (dx || dy) m_camera->processMouse((float)dx, (float)dy, 0.15f);
+    }
+}
+
+// ── loadModel() ───────────────────────────────────────────────────────────────
+void FreeCameraViewport::loadModel(const std::string& path,
+                                   float meshRotX, float meshScale)
+{
+    m_modelData.clear();
+    m_modelVertCount = 0;
+    m_lastModelStatus.clear();
+
+    if (path.empty())
+    {
+        m_lastModelStatus = "Nessun percorso specificato.";
+        return;
+    }
+
+    std::optional<mini::Model> mdl;
+    const size_t len = path.size();
+    bool isGltf = (len >= 4 &&
+        (path.substr(len-4)==".glb" || (len>=5 && path.substr(len-5)==".gltf")));
+    if (isGltf)
+        mdl = mini::Model::loadFromGltf(path.c_str());
+    else
+        mdl = mini::Model::loadFromObj(path.c_str());
+
+    if (!mdl || mdl->isEmpty())
+    {
+        m_lastModelStatus = "Modello non trovato: " + path;
+        return;
+    }
+
+    glm::mat4 correction = glm::rotate(glm::mat4(1.0f),
+                                        glm::radians(meshRotX), {1,0,0});
+    correction = glm::scale(correction, glm::vec3(meshScale));
+
+    for (const auto& mesh : mdl->getMeshes())
+    {
+        const auto& raw   = mesh.getVertexData();
+        const int   count = mesh.getVertexCount();
+        m_modelData.reserve(m_modelData.size() + (size_t)count * 6);
+        for (int i = 0; i < count; ++i)
+        {
+            const float* v = raw.data() + i * 11;
+            glm::vec4 wp = correction * glm::vec4(v[0], v[1], v[2], 1.0f);
+            float cr = v[6], cg = v[7], cb = v[8];
+            if (cr > 0.99f && cg > 0.99f && cb > 0.99f)
+            { cr = 0.75f; cg = 0.75f; cb = 0.78f; }
+            m_modelData.insert(m_modelData.end(), {wp.x, wp.y, wp.z, cr, cg, cb});
+        }
+    }
+
+    m_modelVertCount = (int)(m_modelData.size() / 6);
+    if (m_modelVertCount > 0)
+        m_lastModelStatus = "Modello caricato: " + std::to_string(m_modelVertCount) + " vertici";
+    else
+        m_lastModelStatus = "Modello vuoto (0 vertici): " + path;
+}
+
+void FreeCameraViewport::clearModel()
+{
+    m_modelData.clear();
+    m_modelVertCount = 0;
+    m_lastModelStatus.clear();
+}
+
+// ── setAttachmentModel() ───────────────────────────────────────────────────────
+void FreeCameraViewport::setAttachmentModel(const std::string& path,
+                                            const glm::mat4& transform)
+{
+    m_attachData.clear();
+    m_attachVertCount = 0;
+    if (path.empty()) return;
+
+    std::optional<mini::Model> mdl;
+    const size_t len = path.size();
+    bool isGltf = (len >= 4 &&
+        (path.substr(len-4)==".glb" || (len>=5 && path.substr(len-5)==".gltf")));
+    if (isGltf) mdl = mini::Model::loadFromGltf(path.c_str());
+    else        mdl = mini::Model::loadFromObj(path.c_str());
+
+    if (!mdl || mdl->isEmpty()) return;
+
+    const glm::mat3 nrm = glm::transpose(glm::inverse(glm::mat3(transform)));
+    (void)nrm;
+
+    for (const auto& mesh : mdl->getMeshes())
+    {
+        const auto& raw   = mesh.getVertexData();
+        const int   count = mesh.getVertexCount();
+        m_attachData.reserve(m_attachData.size() + (size_t)count * 6);
+        for (int i = 0; i < count; ++i)
+        {
+            const float* v = raw.data() + i * 11;
+            glm::vec4 wp = transform * glm::vec4(v[0], v[1], v[2], 1.0f);
+            // Colore arma: grigio metallico leggermente caldo
+            float cr = 0.55f, cg = 0.55f, cb = 0.58f;
+            m_attachData.insert(m_attachData.end(), {wp.x, wp.y, wp.z, cr, cg, cb});
+        }
+    }
+    m_attachVertCount = (int)(m_attachData.size() / 6);
+}
+
+void FreeCameraViewport::clearAttachmentModel()
+{
+    m_attachData.clear();
+    m_attachVertCount = 0;
+}
+
+// ── setHitboxes() ─────────────────────────────────────────────────────────────
+void FreeCameraViewport::setHitboxes(const std::vector<mini::HitZone>& zones,
+                                     int selZone)
+{
+    m_boxData.clear();
+    m_boxData.reserve(zones.size() * 24 * 6);
+
+    auto addEdge = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv)
+    {
+        m_boxData.insert(m_boxData.end(), {a.x,a.y,a.z, r,g,bv,
+                                           b.x,b.y,b.z, r,g,bv});
+    };
+
+    for (int zi = 0; zi < (int)zones.size(); ++zi)
+    {
+        const auto& z   = zones[zi];
+        const bool  sel = (zi == selZone);
+        const float mult = z.damageMultiplier;
+
+        float r, g, b;
+        if      (mult >= 2.0f) { r=1.0f;  g=0.30f; b=0.30f; }
+        else if (mult >= 1.0f) { r=1.0f;  g=0.85f; b=0.30f; }
+        else                   { r=0.40f; g=0.50f; b=1.00f; }
+
+        if (sel) {
+            r = (r + 0.25f > 1.0f) ? 1.0f : r + 0.25f;
+            g = (g + 0.25f > 1.0f) ? 1.0f : g + 0.25f;
+            b = (b + 0.25f > 1.0f) ? 1.0f : b + 0.25f;
+        }
+
+        glm::vec3 c = {z.offset.x,      z.offset.y,      z.offset.z};
+        glm::vec3 e = {z.halfExtents.x, z.halfExtents.y, z.halfExtents.z};
+
+        glm::vec3 corners[8] = {
+            {c.x-e.x, c.y-e.y, c.z-e.z}, {c.x+e.x, c.y-e.y, c.z-e.z},
+            {c.x+e.x, c.y+e.y, c.z-e.z}, {c.x-e.x, c.y+e.y, c.z-e.z},
+            {c.x-e.x, c.y-e.y, c.z+e.z}, {c.x+e.x, c.y-e.y, c.z+e.z},
+            {c.x+e.x, c.y+e.y, c.z+e.z}, {c.x-e.x, c.y+e.y, c.z+e.z},
+        };
+        const int edges[12][2] = {
+            {0,1},{1,2},{2,3},{3,0},
+            {4,5},{5,6},{6,7},{7,4},
+            {0,4},{1,5},{2,6},{3,7}
+        };
+        for (auto& edge : edges)
+            addEdge(corners[edge[0]], corners[edge[1]], r, g, b);
+    }
+
+    m_boxVertCount = (int)(m_boxData.size() / 6);
+}
+
+// ── setMapBoxes() ─────────────────────────────────────────────────────────────
+void FreeCameraViewport::setMapBoxes(const std::vector<MapBoxDraw>& boxes)
+{
+    m_mapBoxData.clear();
+    m_mapBoxData.reserve(boxes.size() * 24 * 6);
+
+    auto pushEdge = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv) {
+        m_mapBoxData.insert(m_mapBoxData.end(), {a.x,a.y,a.z,r,g,bv, b.x,b.y,b.z,r,g,bv});
+    };
+
+    for (const auto& box : boxes)
+    {
+        float r = box.r, g = box.g, bv = box.b;
+        if (box.selected) {
+            r  = (r  * 1.8f + 0.25f) < 1.0f ? (r  * 1.8f + 0.25f) : 1.0f;
+            g  = (g  * 1.8f + 0.25f) < 1.0f ? (g  * 1.8f + 0.25f) : 1.0f;
+            bv = (bv * 1.8f + 0.25f) < 1.0f ? (bv * 1.8f + 0.25f) : 1.0f;
+        }
+
+        float hx = box.sx * 0.5f, hy = box.sy * 0.5f, hz = box.sz * 0.5f;
+        float cosR = std::cos(glm::radians(box.ry));
+        float sinR = std::sin(glm::radians(box.ry));
+
+        auto corner = [&](float lx, float ly, float lz) -> glm::vec3 {
+            float wx = cosR * lx + sinR * lz + box.x;
+            float wz =-sinR * lx + cosR * lz + box.z;
+            return {wx, ly + box.y, wz};
+        };
+
+        glm::vec3 c[8] = {
+            corner(-hx,-hy,-hz), corner( hx,-hy,-hz),
+            corner( hx, hy,-hz), corner(-hx, hy,-hz),
+            corner(-hx,-hy, hz), corner( hx,-hy, hz),
+            corner( hx, hy, hz), corner(-hx, hy, hz),
+        };
+        const int edges[12][2] = {
+            {0,1},{1,2},{2,3},{3,0},
+            {4,5},{5,6},{6,7},{7,4},
+            {0,4},{1,5},{2,6},{3,7}
+        };
+        for (auto& e : edges) pushEdge(c[e[0]], c[e[1]], r, g, bv);
+    }
+
+    m_mapBoxVertCount = (int)(m_mapBoxData.size() / 6);
+}
+
+void FreeCameraViewport::clearMapBoxes()
+{
+    m_mapBoxData.clear();
+    m_mapBoxVertCount = 0;
 }
 
 } // namespace editor

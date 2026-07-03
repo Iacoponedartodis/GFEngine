@@ -3,6 +3,9 @@
 #include "viewport/FreeCameraViewport.hpp"
 #include "modules/BalanceEditor.hpp"
 #include "modules/HitboxEditor.hpp"
+#include "modules/EntityEditor.hpp"
+#include "modules/MapEditor.hpp"
+#include "modules/WeaponEditor.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
@@ -86,6 +89,9 @@ void EditorApp::init()
     m_viewport      = std::make_unique<FreeCameraViewport>();
     m_balanceEditor = std::make_unique<BalanceEditor>();
     m_hitboxEditor  = std::make_unique<HitboxEditor>();
+    m_entityEditor  = std::make_unique<EntityEditor>();
+    m_mapEditor     = std::make_unique<MapEditor>();
+    m_weaponEditor  = std::make_unique<WeaponEditor>();
 
     m_running = true;
     std::cout << "[GFEditor] Avviato." << std::endl;
@@ -143,6 +149,28 @@ void EditorApp::launchGame()
     std::cout << "[GFEditor] GFEngine avviato: " << exePath << "\n";
 }
 
+void EditorApp::launchSandbox()
+{
+    char* base = SDL_GetBasePath();
+    std::string dir = base ? base : "./";
+    SDL_free(base);
+    std::string exePath = dir + "GFEngine.exe";
+    FILE* f = fopen(exePath.c_str(), "rb");
+    if (!f) { std::cerr << "[GFEditor] GFEngine.exe non trovato: " << exePath << "\n"; return; }
+    fclose(f);
+#ifdef _WIN32
+    HINSTANCE result = ShellExecuteA(nullptr, "open", exePath.c_str(),
+                                     "--sandbox", dir.c_str(), SW_SHOWNORMAL);
+    if ((intptr_t)result <= 32)
+        std::cerr << "[GFEditor] ShellExecute sandbox fallito: " << (intptr_t)result << "\n";
+    else
+        std::cout << "[GFEditor] Sandbox avviata: " << exePath << "\n";
+#else
+    std::string cmd = "\"" + exePath + "\" --sandbox &";
+    std::system(cmd.c_str());
+#endif
+}
+
 void EditorApp::processEvents()
 {
     SDL_Event ev;
@@ -161,6 +189,14 @@ void EditorApp::tick(float dt)
 {
     if (m_active == ActiveModule::FreeCameraViewport)
         m_viewport->tick(dt);
+    else if (m_active == ActiveModule::EntityEditor)
+        m_entityEditor->tick(dt);
+    else if (m_active == ActiveModule::HitboxEditor)
+        m_hitboxEditor->tick(dt);
+    else if (m_active == ActiveModule::MapEditor)
+        m_mapEditor->tick(dt);
+    else if (m_active == ActiveModule::WeaponEditor)
+        m_weaponEditor->tick(dt);
 }
 
 void EditorApp::renderMenuBar()
@@ -179,13 +215,17 @@ void EditorApp::renderMenuBar()
         if (ImGui::MenuItem("Free Camera Viewport"))    m_active = ActiveModule::FreeCameraViewport;
         if (ImGui::MenuItem("Hitbox Editor"))   m_active = ActiveModule::HitboxEditor;
         if (ImGui::MenuItem("Balance Editor"))  m_active = ActiveModule::BalanceEditor;
+        if (ImGui::MenuItem("Entity Editor"))   m_active = ActiveModule::EntityEditor;
+        if (ImGui::MenuItem("Map Editor"))      m_active = ActiveModule::MapEditor;
+        if (ImGui::MenuItem("Weapon Editor"))   m_active = ActiveModule::WeaponEditor;
         if (ImGui::MenuItem("Asset Manager (presto)"))  {}
         if (ImGui::MenuItem("AI Editor (presto)"))      {}
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Gioco"))
     {
-        if (ImGui::MenuItem("Avvia GFEngine")) launchGame();
+        if (ImGui::MenuItem("Avvia GFEngine"))  launchGame();
+        if (ImGui::MenuItem("Avvia Sandbox"))   launchSandbox();
         ImGui::EndMenu();
     }
 
@@ -194,6 +234,9 @@ void EditorApp::renderMenuBar()
     if (m_active == ActiveModule::FreeCameraViewport) modName = "Free Camera Viewport";
     if (m_active == ActiveModule::HitboxEditor)      modName = "Hitbox Editor";
     if (m_active == ActiveModule::BalanceEditor)     modName = "Balance Editor";
+    if (m_active == ActiveModule::EntityEditor)      modName = "Entity Editor";
+    if (m_active == ActiveModule::MapEditor)         modName = "Map Editor";
+    if (m_active == ActiveModule::WeaponEditor)      modName = "Weapon Editor";
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 20);
     ImGui::TextDisabled("| %s", modName);
 
@@ -242,9 +285,10 @@ void EditorApp::render()
 
     if (m_active == ActiveModule::Home)
     {
-        bool wantsLaunch = false;
-        ActiveModule next = m_homeScreen->draw(wantsLaunch);
-        if (wantsLaunch) launchGame();
+        bool wantsLaunch = false, wantsSandbox = false;
+        ActiveModule next = m_homeScreen->draw(wantsLaunch, wantsSandbox);
+        if (wantsLaunch)   launchGame();
+        if (wantsSandbox)  launchSandbox();
         if (next != ActiveModule::Home) m_active = next;
     }
     else if (m_active == ActiveModule::FreeCameraViewport)
@@ -258,7 +302,7 @@ void EditorApp::render()
             ImGuiCond_FirstUseEver);
         ImGui::Begin("Free Camera Viewport", nullptr,
                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        m_viewport->draw();
+        m_viewport->draw(true); // mostra barra di caricamento modello/mappa
         ImGui::End();
     }
     else if (m_active == ActiveModule::BalanceEditor)
@@ -277,6 +321,33 @@ void EditorApp::render()
         ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
         ImGui::Begin("Hitbox Editor", nullptr);
         m_hitboxEditor->draw();
+        ImGui::End();
+    }
+    else if (m_active == ActiveModule::EntityEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Entity Editor", nullptr);
+        m_entityEditor->draw();
+        ImGui::End();
+    }
+    else if (m_active == ActiveModule::MapEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Map Editor", nullptr);
+        m_mapEditor->draw();
+        ImGui::End();
+    }
+    else if (m_active == ActiveModule::WeaponEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Weapon Editor", nullptr);
+        m_weaponEditor->draw();
         ImGui::End();
     }
     else

@@ -9,7 +9,7 @@ class HomeScreen
 {
 public:
     // Ritorna il modulo su cui l'utente ha cliccato, oppure Home se nessuno
-    ActiveModule draw(bool& wantsLaunchGame);
+    ActiveModule draw(bool& wantsLaunchGame, bool& wantsLaunchSandbox);
 };
 
 } // namespace editor

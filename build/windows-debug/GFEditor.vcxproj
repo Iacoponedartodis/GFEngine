@@ -95,7 +95,7 @@ exit /b %1
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>_deps\sdl2-build\Debug\SDL2-staticd.lib;opengl32.lib;gdi32.lib;Debug\imgui.lib;_deps\sdl2-build\Debug\SDL2-staticd.lib;kernel32.lib;user32.lib;winmm.lib;imm32.lib;ole32.lib;oleaut32.lib;version.lib;uuid.lib;advapi32.lib;setupapi.lib;shell32.lib;dinput8.lib;opengl32.lib;gdi32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>_deps\sdl2-build\Debug\SDL2-staticd.lib;opengl32.lib;gdi32.lib;Debug\imgui.lib;comdlg32.lib;_deps\sdl2-build\Debug\SDL2-staticd.lib;kernel32.lib;user32.lib;winmm.lib;imm32.lib;ole32.lib;oleaut32.lib;version.lib;uuid.lib;advapi32.lib;setupapi.lib;shell32.lib;dinput8.lib;opengl32.lib;gdi32.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <DataExecutionPrevention></DataExecutionPrevention>
@@ -135,8 +135,13 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\EditorApp.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\ui\HomeScreen.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\viewport\FreeCameraViewport.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\util\FileDialog.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\util\RigReader.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\BalanceEditor.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\HitboxEditor.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\EntityEditor.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\MapEditor.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\WeaponEditor.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\platform\OpenGL.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\Shader.cpp" />

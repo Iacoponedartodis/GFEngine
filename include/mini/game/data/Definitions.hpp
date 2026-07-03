@@ -118,6 +118,13 @@ struct EnemyDef
     std::string meshPath;
     std::string texturePath;
     std::array<float,3> color = {0.70f, 0.60f, 0.45f};
+    float meshRotX  = 0.0f;
+    float meshRotY  = 0.0f;
+    float meshScale = 1.0f;
+
+    // Punto piede nel model space (usato per posizionamento su suolo)
+    std::array<float,3> footAttach = {0.0f, 0.0f, 0.0f};
+    [[nodiscard]] float footY() const { return footAttach[1]; }
 
     // Composizione comportamentale
     std::string aiProfileId;
@@ -145,6 +152,18 @@ struct EnemyDef
     }
 };
 
+// ── MapGeometryBox ──────────────────────────────────────────────────────────
+// Un box di geometria della mappa, autorato nel Map Editor.
+// Posizione = centro; dimensioni = estensione totale (full size).
+struct MapGeometryBox
+{
+    float x = 0, y = 0, z = 0;     // centro
+    float ry = 0;                  // rotazione attorno a Y (gradi)
+    float sx = 2, sy = 2, sz = 2;  // dimensioni totali
+    float r = 0.35f, g = 0.32f, b = 0.28f;
+    bool  collider = true;
+};
+
 // ── MapDef ────────────────────────────────────────────────────────────────
 // data/maps/<id>.json
 struct MapDef
@@ -161,6 +180,7 @@ struct MapDef
     int allyCount  = 1;
     std::vector<std::string> enemyTypes;
     std::vector<std::string> allyTypes;
+    std::vector<MapGeometryBox> geometry;
 };
 
 // ── PlayerDef ─────────────────────────────────────────────────────────────

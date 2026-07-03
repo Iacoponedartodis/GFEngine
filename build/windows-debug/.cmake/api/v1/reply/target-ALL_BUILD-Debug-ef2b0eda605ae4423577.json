@@ -25,9 +25,6 @@
 			"id" : "GFEditor::@6890427a1f51a3e7e1df"
 		},
 		{
-			"id" : "imgui::@6890427a1f51a3e7e1df"
-		},
-		{
 			"id" : "GFEngine::@6890427a1f51a3e7e1df"
 		},
 		{
@@ -37,10 +34,13 @@
 			"id" : "SDL2-static::@45bd952f1071c035638d"
 		},
 		{
-			"id" : "tinyobjloader::@504dab42fa214d3d2823"
+			"id" : "imgui::@6890427a1f51a3e7e1df"
 		},
 		{
 			"id" : "ZERO_CHECK::@6890427a1f51a3e7e1df"
+		},
+		{
+			"id" : "tinyobjloader::@504dab42fa214d3d2823"
 		}
 	],
 	"id" : "ALL_BUILD::@6890427a1f51a3e7e1df",
@@ -52,9 +52,6 @@
 			"id" : "GFEditor::@6890427a1f51a3e7e1df"
 		},
 		{
-			"id" : "imgui::@6890427a1f51a3e7e1df"
-		},
-		{
 			"id" : "GFEngine::@6890427a1f51a3e7e1df"
 		},
 		{
@@ -62,6 +59,9 @@
 		},
 		{
 			"id" : "SDL2-static::@45bd952f1071c035638d"
+		},
+		{
+			"id" : "imgui::@6890427a1f51a3e7e1df"
 		},
 		{
 			"id" : "tinyobjloader::@504dab42fa214d3d2823"

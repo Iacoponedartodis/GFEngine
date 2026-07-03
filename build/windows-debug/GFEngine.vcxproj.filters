@@ -70,6 +70,9 @@
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\ConquestMode.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\SandboxMode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\PlayerController.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

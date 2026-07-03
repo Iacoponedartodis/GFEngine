@@ -14,7 +14,7 @@
     "fire_rate": 4.0,
     "heat_per_shot": 0.25,
     "id": "DC-17 Blaster Pistol",
-    "mesh": "",
+    "mesh": "assets/models/weapons/dc-17.glb",
     "min_range": 0.0,
     "name": "DC-17 Blaster Pistol",
     "overheat_penalty": 1.5,

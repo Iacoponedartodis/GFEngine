@@ -13,10 +13,25 @@
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\viewport\FreeCameraViewport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\util\FileDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\util\RigReader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\BalanceEditor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\HitboxEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\EntityEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\MapEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\editor\src\modules\WeaponEditor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp">

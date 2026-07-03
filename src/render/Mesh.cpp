@@ -28,6 +28,12 @@ Mesh::Mesh(const std::vector<Vertex>& vertices)
     }
 }
 
+Mesh::Mesh(std::vector<float> interleavedData, int vertexCount)
+    : m_data(std::move(interleavedData))
+    , m_vertexCount(vertexCount)
+{
+}
+
 // ============================================================
 // Draw — client-side arrays, stride 44 byte (11 float)
 // ============================================================

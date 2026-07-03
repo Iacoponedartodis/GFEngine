@@ -14,7 +14,7 @@
     "faction": "republic",
     "hitbox_profile": "",
     "id": "Clone Trooper",
-    "mesh": "",
+    "mesh": "assets/models/allies/clone_trooper_phase_2_shiny_updated.glb",
     "name": "Clone Trooper",
     "stats": {
         "damage_scale": 1.0,

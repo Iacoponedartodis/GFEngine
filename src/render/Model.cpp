@@ -9,13 +9,43 @@
 #define TINYGLTF_NO_INCLUDE_STB_IMAGE_WRITE
 #include <tiny_gltf.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <iostream>
 #include <string_view>
 #include <unordered_map>
 
 namespace mini
 {
+
+// Trasformazione locale di un nodo glTF (matrice esplicita oppure TRS).
+static glm::mat4 gltfNodeLocal(const tinygltf::Node& node)
+{
+    if (node.matrix.size() == 16)
+    {
+        glm::mat4 m(1.0f);
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                m[col][row] = (float)node.matrix[col * 4 + row];
+        return m;
+    }
+    glm::mat4 T(1.0f), R(1.0f), S(1.0f);
+    if (node.translation.size() == 3)
+        T = glm::translate(glm::mat4(1.0f),
+            glm::vec3((float)node.translation[0], (float)node.translation[1],
+                      (float)node.translation[2]));
+    if (node.rotation.size() == 4)
+        R = glm::mat4_cast(glm::quat((float)node.rotation[3], (float)node.rotation[0],
+                                     (float)node.rotation[1], (float)node.rotation[2]));
+    if (node.scale.size() == 3)
+        S = glm::scale(glm::mat4(1.0f),
+            glm::vec3((float)node.scale[0], (float)node.scale[1], (float)node.scale[2]));
+    return T * R * S;
+}
 
 // ============================================================
 // Caricamento OBJ con tinyobjloader
@@ -182,94 +212,154 @@ namespace mini
     Model model;
     model.m_path = path;
 
-    // Helper: legge il buffer raw di un accessor come span di float
-    auto accessorData = [&](int accIdx) -> std::pair<const float*, size_t>
+    // Helper: legge un float dal buffer di un accessor rispettando byteStride.
+    // floatsPerElem = 3 per VEC3, 2 per VEC2. elemIdx = indice del vertice.
+    // compIdx = indice del componente (0=x, 1=y, 2=z).
+    auto readFloat = [&](int accIdx, size_t elemIdx, int compIdx) -> float
     {
-        if (accIdx < 0) return {nullptr, 0};
-        const auto& acc  = gltf.accessors[accIdx];
-        const auto& bv   = gltf.bufferViews[acc.bufferView];
-        const auto& buf  = gltf.buffers[bv.buffer];
-        const float* ptr = reinterpret_cast<const float*>(
-            buf.data.data() + bv.byteOffset + acc.byteOffset);
-        return {ptr, acc.count};
+        if (accIdx < 0) return 0.0f;
+        const auto& acc = gltf.accessors[accIdx];
+        const auto& bv  = gltf.bufferViews[acc.bufferView];
+        const auto& buf = gltf.buffers[bv.buffer];
+        // byteStride == 0 significa dense (stride = dimensione elemento)
+        // Per VEC3 float: 12 byte. Per VEC2 float: 8 byte.
+        int typeComp = (acc.type == TINYGLTF_TYPE_VEC3) ? 3 :
+                       (acc.type == TINYGLTF_TYPE_VEC2) ? 2 : 4;
+        size_t defaultStride = (size_t)(typeComp * sizeof(float));
+        size_t stride = (bv.byteStride > 0) ? bv.byteStride : defaultStride;
+        size_t byteOff = bv.byteOffset + acc.byteOffset + elemIdx * stride
+                       + (size_t)compIdx * sizeof(float);
+        if (byteOff + sizeof(float) > buf.data.size()) return 0.0f;
+        float v; std::memcpy(&v, buf.data.data() + byteOff, sizeof(float)); return v;
     };
 
-    for (const auto& mesh : gltf.meshes)
+    // Helper mantenuto per compatibilità: restituisce count di un accessor
+    auto accessorCount = [&](int accIdx) -> size_t {
+        if (accIdx < 0) return 0;
+        return gltf.accessors[accIdx].count;
+    };
+
+    // Processa una primitiva applicando la trasformazione world del nodo.
+    // Le posizioni vengono trasformate dalla matrice; le normali dalla
+    // normal matrix (inverse-transpose della parte 3x3).
+    auto processPrimitive = [&](const tinygltf::Primitive& prim, const glm::mat4& world)
     {
-        for (const auto& prim : mesh.primitives)
+        if (prim.mode != TINYGLTF_MODE_TRIANGLES) return;
+
+        int posAcc  = prim.attributes.count("POSITION")   ? prim.attributes.at("POSITION")   : -1;
+        int normAcc = prim.attributes.count("NORMAL")     ? prim.attributes.at("NORMAL")     : -1;
+        int uvAcc   = prim.attributes.count("TEXCOORD_0") ? prim.attributes.at("TEXCOORD_0") : -1;
+
+        size_t posCount = accessorCount(posAcc);
+        if (posCount == 0) return;
+
+        const glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(world)));
+
+        // Colore base dal materiale glTF
+        glm::vec3 matColor{1.0f, 1.0f, 1.0f};
+        if (prim.material >= 0)
         {
-            if (prim.mode != TINYGLTF_MODE_TRIANGLES) continue;
-
-            auto [posPtr, posCount] = accessorData(
-                prim.attributes.count("POSITION") ? prim.attributes.at("POSITION") : -1);
-            if (!posPtr || posCount == 0) continue;
-
-            auto [normPtr, normCount] = accessorData(
-                prim.attributes.count("NORMAL") ? prim.attributes.at("NORMAL") : -1);
-            auto [uvPtr,   uvCount  ] = accessorData(
-                prim.attributes.count("TEXCOORD_0") ? prim.attributes.at("TEXCOORD_0") : -1);
-
-            // Colore base dal materiale glTF
-            glm::vec3 matColor{1.0f, 1.0f, 1.0f};
-            if (prim.material >= 0)
-            {
-                const auto& mat = gltf.materials[prim.material];
-                const auto& bf  = mat.pbrMetallicRoughness.baseColorFactor;
-                if (bf.size() >= 3)
-                    matColor = { (float)bf[0], (float)bf[1], (float)bf[2] };
-            }
-
-            std::vector<Mesh::Vertex> verts;
-
-            // Indici (se presenti)
-            if (prim.indices >= 0)
-            {
-                const auto& idxAcc = gltf.accessors[prim.indices];
-                const auto& idxBv  = gltf.bufferViews[idxAcc.bufferView];
-                const auto& idxBuf = gltf.buffers[idxBv.buffer];
-                const uint8_t* idxBase = idxBuf.data.data() + idxBv.byteOffset + idxAcc.byteOffset;
-
-                verts.reserve(idxAcc.count);
-                for (size_t i = 0; i < idxAcc.count; ++i)
-                {
-                    uint32_t vi = 0;
-                    if      (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
-                        vi = reinterpret_cast<const uint16_t*>(idxBase)[i];
-                    else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
-                        vi = reinterpret_cast<const uint32_t*>(idxBase)[i];
-                    else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
-                        vi = idxBase[i];
-
-                    glm::vec3 pos  = { posPtr[vi*3], posPtr[vi*3+1], posPtr[vi*3+2] };
-                    glm::vec3 norm = (normPtr && vi < normCount)
-                        ? glm::vec3{ normPtr[vi*3], normPtr[vi*3+1], normPtr[vi*3+2] }
-                        : glm::vec3{ 0, 1, 0 };
-                    glm::vec2 uv   = (uvPtr && vi < uvCount)
-                        ? glm::vec2{ uvPtr[vi*2], uvPtr[vi*2+1] }
-                        : glm::vec2{ 0, 0 };
-                    verts.push_back({ pos, norm, matColor, uv });
-                }
-            }
-            else
-            {
-                // Non-indexed
-                verts.reserve(posCount);
-                for (size_t vi = 0; vi < posCount; ++vi)
-                {
-                    glm::vec3 pos  = { posPtr[vi*3], posPtr[vi*3+1], posPtr[vi*3+2] };
-                    glm::vec3 norm = (normPtr && vi < normCount)
-                        ? glm::vec3{ normPtr[vi*3], normPtr[vi*3+1], normPtr[vi*3+2] }
-                        : glm::vec3{ 0, 1, 0 };
-                    glm::vec2 uv   = (uvPtr && vi < uvCount)
-                        ? glm::vec2{ uvPtr[vi*2], uvPtr[vi*2+1] }
-                        : glm::vec2{ 0, 0 };
-                    verts.push_back({ pos, norm, matColor, uv });
-                }
-            }
-
-            if (!verts.empty())
-                model.m_meshes.emplace_back(verts);
+            const auto& mat = gltf.materials[prim.material];
+            const auto& bf  = mat.pbrMetallicRoughness.baseColorFactor;
+            if (bf.size() >= 3)
+                matColor = { (float)bf[0], (float)bf[1], (float)bf[2] };
         }
+
+        auto readPos  = [&](size_t vi) {
+            glm::vec4 p = world * glm::vec4(readFloat(posAcc, vi, 0),
+                                            readFloat(posAcc, vi, 1),
+                                            readFloat(posAcc, vi, 2), 1.0f);
+            return glm::vec3(p);
+        };
+        auto readNorm = [&](size_t vi) -> glm::vec3 {
+            if (normAcc < 0) return {0,1,0};
+            glm::vec3 n = normalMat * glm::vec3(readFloat(normAcc, vi, 0),
+                                                readFloat(normAcc, vi, 1),
+                                                readFloat(normAcc, vi, 2));
+            float len = glm::length(n);
+            return len > 1e-6f ? n / len : glm::vec3(0,1,0);
+        };
+        auto readUV   = [&](size_t vi) -> glm::vec2 {
+            if (uvAcc < 0) return {0,0};
+            return { readFloat(uvAcc, vi, 0), readFloat(uvAcc, vi, 1) };
+        };
+
+        std::vector<Mesh::Vertex> verts;
+
+        if (prim.indices >= 0)
+        {
+            const auto& idxAcc = gltf.accessors[prim.indices];
+            const auto& idxBv  = gltf.bufferViews[idxAcc.bufferView];
+            const auto& idxBuf = gltf.buffers[idxBv.buffer];
+            const uint8_t* idxBase = idxBuf.data.data() + idxBv.byteOffset + idxAcc.byteOffset;
+
+            verts.reserve(idxAcc.count);
+            for (size_t i = 0; i < idxAcc.count; ++i)
+            {
+                uint32_t vi = 0;
+                if      (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                    vi = reinterpret_cast<const uint16_t*>(idxBase)[i];
+                else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+                    vi = reinterpret_cast<const uint32_t*>(idxBase)[i];
+                else if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+                    vi = idxBase[i];
+
+                verts.push_back({ readPos(vi), readNorm(vi), matColor, readUV(vi) });
+            }
+        }
+        else
+        {
+            verts.reserve(posCount);
+            for (size_t vi = 0; vi < posCount; ++vi)
+                verts.push_back({ readPos(vi), readNorm(vi), matColor, readUV(vi) });
+        }
+
+        if (!verts.empty())
+            model.m_meshes.emplace_back(verts);
+    };
+
+    // Traversa la gerarchia dei nodi accumulando le trasformazioni.
+    std::function<void(int, const glm::mat4&)> traverse =
+        [&](int nodeIdx, const glm::mat4& parent)
+    {
+        if (nodeIdx < 0 || nodeIdx >= (int)gltf.nodes.size()) return;
+        const auto& node = gltf.nodes[nodeIdx];
+        glm::mat4 world = parent * gltfNodeLocal(node);
+        if (node.mesh >= 0 && node.mesh < (int)gltf.meshes.size())
+        {
+            // glTF: per le mesh skinnate i vertici sono già nello spazio di
+            // bind (world); la trasformazione del nodo NON va applicata.
+            // Per le mesh statiche, invece, la posizione è data dalla gerarchia.
+            const glm::mat4 meshXf = (node.skin >= 0) ? glm::mat4(1.0f) : world;
+            for (const auto& prim : gltf.meshes[node.mesh].primitives)
+                processPrimitive(prim, meshXf);
+        }
+        for (int child : node.children)
+            traverse(child, world);
+    };
+
+    // Radici: dalla scena di default se valida, altrimenti tutti i nodi root.
+    bool traversed = false;
+    if (gltf.defaultScene >= 0 && gltf.defaultScene < (int)gltf.scenes.size())
+    {
+        for (int root : gltf.scenes[gltf.defaultScene].nodes)
+            traverse(root, glm::mat4(1.0f));
+        traversed = true;
+    }
+    else if (!gltf.scenes.empty())
+    {
+        for (int root : gltf.scenes[0].nodes)
+            traverse(root, glm::mat4(1.0f));
+        traversed = true;
+    }
+
+    // Fallback: nessuna scena → processa tutte le mesh senza trasformazione.
+    if (!traversed || model.m_meshes.empty())
+    {
+        model.m_meshes.clear();
+        for (const auto& mesh : gltf.meshes)
+            for (const auto& prim : mesh.primitives)
+                processPrimitive(prim, glm::mat4(1.0f));
     }
 
     std::cout << "[Model] Caricato glTF: '" << path << "' — "
@@ -291,5 +381,21 @@ bool        Model::isEmpty()      const { return m_meshes.empty(); }
 std::size_t Model::getMeshCount() const { return m_meshes.size(); }
 const std::string& Model::getPath() const { return m_path; }
 const std::vector<Mesh>& Model::getMeshes() const { return m_meshes; }
+
+std::optional<Mesh> Model::merged() const
+{
+    if (m_meshes.empty()) return std::nullopt;
+    if (m_meshes.size() == 1) return m_meshes.front();
+
+    std::vector<float> data;
+    int totalVerts = 0;
+    for (const auto& m : m_meshes)
+    {
+        const auto& d = m.getVertexData();
+        data.insert(data.end(), d.begin(), d.end());
+        totalVerts += m.getVertexCount();
+    }
+    return Mesh(std::move(data), totalVerts);
+}
 
 } // namespace mini

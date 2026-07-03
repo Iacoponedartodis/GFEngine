@@ -7,7 +7,7 @@ class Window;
 class Application
 {
 public:
-    void run(bool directPreMatch = false);
+    void run(bool directPreMatch = false, bool sandbox = false);
 
     void initialize();
     void shutdown();

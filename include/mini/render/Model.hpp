@@ -31,6 +31,10 @@ public:
     // Accesso diretto ai sub-mesh (utile per assegnare materiali diversi)
     [[nodiscard]] const std::vector<Mesh>& getMeshes() const;
 
+    // Unisce tutte le primitive in una sola mesh (per pipeline single-mesh).
+    // Restituisce nullopt se il modello è vuoto.
+    [[nodiscard]] std::optional<Mesh> merged() const;
+
 private:
     std::vector<Mesh> m_meshes;
     std::string       m_path;

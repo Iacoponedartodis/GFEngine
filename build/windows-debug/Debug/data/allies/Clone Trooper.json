@@ -14,7 +14,7 @@
     "faction": "republic",
     "hitbox_profile": "",
     "id": "Clone Trooper",
-    "mesh": "",
+    "mesh": "assets/models/allies/clone_trooper_phase_2_shiny_updated.glb",
     "name": "Clone Trooper",
     "stats": {
         "damage_scale": 1.0,
@@ -22,5 +22,7 @@
         "move_speed": 1.7999999523162842
     },
     "texture": "",
-    "weapons": []
+    "weapons": [
+        "DC-15A"
+    ]
 }

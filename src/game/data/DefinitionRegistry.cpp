@@ -152,6 +152,14 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
         e.meshPath        = gets(*j, "mesh");
         e.texturePath     = gets(*j, "texture");
         e.color           = getColor(*j, "color", {0.70f,0.60f,0.45f});
+        e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
+        e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
+        e.meshScale       = getf(*j, "mesh_scale",  1.0f);
+        if ((*j).contains("attach_points") && (*j)["attach_points"].contains("foot")) {
+            auto& fp = (*j)["attach_points"]["foot"];
+            if (fp.is_array() && fp.size() >= 3)
+                e.footAttach = {fp[0].get<float>(), fp[1].get<float>(), fp[2].get<float>()};
+        }
         e.aiProfileId     = gets(*j, "ai_profile");
         e.hitboxProfileId = gets(*j, "hitbox_profile");
         e.weaponIds       = getStrArray(*j, "weapons");
@@ -195,7 +203,27 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             m.spawnTeam2 = {(*j)["spawn_team2"][0],(*j)["spawn_team2"][1],(*j)["spawn_team2"][2]};
         m.enemyTypes   = getStrArray(*j, "enemy_types");
         m.allyTypes    = getStrArray(*j, "ally_types");
-        std::cout << "[Registry] Map: " << m.id << "\n";
+        if ((*j).contains("geometry") && (*j)["geometry"].is_array())
+        {
+            for (auto& gb : (*j)["geometry"])
+            {
+                MapGeometryBox box;
+                box.x  = getf(gb, "x",  0.0f);
+                box.y  = getf(gb, "y",  0.0f);
+                box.z  = getf(gb, "z",  0.0f);
+                box.ry = getf(gb, "ry", 0.0f);
+                box.sx = getf(gb, "sx", 2.0f);
+                box.sy = getf(gb, "sy", 2.0f);
+                box.sz = getf(gb, "sz", 2.0f);
+                box.r  = getf(gb, "r",  0.35f);
+                box.g  = getf(gb, "g",  0.32f);
+                box.b  = getf(gb, "b",  0.28f);
+                box.collider = getb(gb, "collider", true);
+                m.geometry.push_back(box);
+            }
+        }
+        std::cout << "[Registry] Map: " << m.id
+                  << " (geometry: " << m.geometry.size() << " box)\n";
         m_maps[m.id] = std::move(m);
     }
 }
@@ -221,6 +249,9 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
                     hz.offset = {z["offset"][0], z["offset"][1], z["offset"][2]};
                 if (z.contains("half_extents") && z["half_extents"].size() >= 3)
                     hz.halfExtents = {z["half_extents"][0], z["half_extents"][1], z["half_extents"][2]};
+                hz.boneName = z.value("bone", std::string(""));
+                if (z.contains("rotation") && z["rotation"].size() >= 3)
+                    hz.eulerDeg = {z["rotation"][0], z["rotation"][1], z["rotation"][2]};
                 p.zones.push_back(std::move(hz));
             }
         std::cout << "[Registry] Hitbox: " << p.profileId
@@ -246,6 +277,14 @@ void DefinitionRegistry::loadAllies(const std::string& dir)
         e.meshPath        = gets(*j, "mesh");
         e.texturePath     = gets(*j, "texture");
         e.color           = getColor(*j, "color", {0.25f,0.45f,1.0f});
+        e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
+        e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
+        e.meshScale       = getf(*j, "mesh_scale",  1.0f);
+        if ((*j).contains("attach_points") && (*j)["attach_points"].contains("foot")) {
+            auto& fp = (*j)["attach_points"]["foot"];
+            if (fp.is_array() && fp.size() >= 3)
+                e.footAttach = {fp[0].get<float>(), fp[1].get<float>(), fp[2].get<float>()};
+        }
         e.aiProfileId     = gets(*j, "ai_profile");
         e.hitboxProfileId = gets(*j, "hitbox_profile");
         e.weaponIds       = getStrArray(*j, "weapons");

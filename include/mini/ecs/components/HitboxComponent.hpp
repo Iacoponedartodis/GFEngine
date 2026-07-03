@@ -14,6 +14,8 @@ struct HitZone
     glm::vec3   halfExtents = {0.2f, 0.3f, 0.2f};
     float       damageMultiplier = 1.0f;
     bool        debugVisible     = true;
+    std::string boneName         = "";           // osso a cui è attaccata (vuoto = pivot entità)
+    glm::vec3   eulerDeg         = {0,0,0};     // rotazione locale in gradi (X,Y,Z Euler)
 };
 
 // Profilo hitbox completo per un tipo di entità.

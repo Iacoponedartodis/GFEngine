@@ -81,11 +81,20 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copia data/ -^&gt; GFEngine output dir (pulizia preventiva)</Message>
+      <Message>Copia data/ -^&gt; GFEngine output dir (pulizia preventiva)	Copia assets/ -^&gt; GFEngine output dir</Message>
       <Command>setlocal
 "C:\Program Files\CMake\bin\cmake.exe" -E remove_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Debug/data
 if %errorlevel% neq 0 goto :cmEnd
 "C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/data C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Debug/data
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -E copy_directory C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/assets C:/Users/HP/Desktop/iacopo/GFProject/GFEngine/build/windows-debug/Debug/assets
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
@@ -154,6 +163,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\ecs\systems\CombatSystem.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\ecs\systems\AiSystem.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\ConquestMode.cpp" />
+    <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\SandboxMode.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\PlayerController.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp" />
     <ClCompile Include="C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\OptionsMenu.cpp" />

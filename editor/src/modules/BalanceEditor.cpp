@@ -274,122 +274,17 @@ void BalanceEditor::drawWeaponsTab()
 
 void BalanceEditor::drawEnemiesTab()
 {
+    ImGui::TextColored({1.0f, 0.8f, 0.2f, 1.0f}, "Usa l'Entity Editor per modificare i nemici.");
+    ImGui::TextDisabled("Qui puoi solo consultare la lista dei file presenti.");
+    ImGui::Separator();
+    ImGui::Spacing();
+
     const auto& enemies = m_registry.enemies();
     if (enemies.empty()) { ImGui::TextDisabled("Nessun file in data/enemies/"); return; }
 
-    ImGui::BeginChild("##elist", ImVec2(180, 0), true);
+    ImGui::BeginChild("##elist_ro", ImVec2(0, 0), true);
     for (auto& [id, e] : enemies)
-    {
-        bool sel = (id == m_selEnemy);
-        if (ImGui::Selectable(e.name.c_str(), sel)) m_selEnemy = id;
-    }
-    ImGui::EndChild();
-    ImGui::SameLine();
-
-    static mini::EnemyDef edit;
-    static std::string editId;
-    static char newEId[64] = "";
-
-    ImGui::BeginChild("##eedit", ImVec2(0, 0), false);
-
-    ImGui::TextDisabled("Nome nemico:");
-    ImGui::SetNextItemWidth(160); ImGui::InputText("##neweid", newEId, 64); ImGui::SameLine();
-    if (ImGui::Button("+ Crea") && newEId[0] != '\0')
-    {
-        std::string path = getSourceDataDir() + "enemies/" + newEId + ".json";
-        if (!fs::exists(path))
-        { mini::EnemyDef def;
-            def.id=newEId; def.name=newEId;
-            def.faction=mini::Faction::Separatist; def.team=2;
-            def.color={0.70f,0.60f,0.45f};
-            def.bulletColor={1.0f,0.55f,0.0f};
-            def.hp=80.0f; def.moveSpeed=4.0f; def.damageScale=1.0f;
-            saveEnemy(def); m_selEnemy=newEId; }
-        newEId[0] = '\0';
-    }
-    ImGui::Separator();
-
-    auto it = enemies.find(m_selEnemy);
-    if (it == enemies.end())
-    { ImGui::TextDisabled("Seleziona un nemico."); ImGui::EndChild(); return; }
-
-    if (editId != m_selEnemy) { edit = it->second; editId = m_selEnemy; }
-    ImGui::Text("Nemico: %s  [%s]", edit.name.c_str(), edit.id.c_str());
-    ImGui::Separator();
-
-    // Fazione
-    {
-        int fi = mini::factionToIndex(edit.faction);
-        const char* const* fnames = mini::factionNames();
-        if (ImGui::Combo("Fazione##e", &fi, fnames, 3)) edit.faction = mini::factionFromIndex(fi);
-    }
-    ImGui::Separator();
-
-    ImGui::DragFloat("HP",             &edit.hp,          1.0f, 1.0f, 2000.0f, "%.0f");
-    ImGui::DragFloat("Velocità",       &edit.moveSpeed,   0.1f, 0.5f,   20.0f, "%.2f");
-    ImGui::DragFloat("Danno Scale",    &edit.damageScale, 0.05f,0.1f,    5.0f, "%.2f");
-    // Colore visivo entità
-    ImGui::ColorEdit3("Colore entità", edit.color.data());
-    // Nota: il colore dei proiettili è definito nell'arma assegnata
-    ImGui::Separator();
-    // ── Armi assegnate (lista multipla) ─────────────────────────────────
-    ImGui::Text("Armi:");
-    for (int i = 0; i < (int)edit.weaponIds.size(); ++i)
-    {
-        ImGui::PushID(i);
-        std::string label = "##w" + std::to_string(i);
-        char wbuf[64]; std::strncpy(wbuf, edit.weaponIds[i].c_str(), 63);
-        ImGui::SetNextItemWidth(140);
-        if (ImGui::BeginCombo(label.c_str(), edit.weaponIds[i].c_str()))
-        {
-            for (auto& [id, w] : m_registry.weapons())
-                if (ImGui::Selectable(w.name.c_str(), edit.weaponIds[i] == id)) edit.weaponIds[i] = id;
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) { edit.weaponIds.erase(edit.weaponIds.begin()+i); ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Aggiungi arma")) edit.weaponIds.push_back("");
-    // ── Abilità assegnate ────────────────────────────────────────────────
-    ImGui::Text("Abilità:");
-    for (int i = 0; i < (int)edit.abilityIds.size(); ++i)
-    {
-        ImGui::PushID(100+i);
-        std::string label = "##a" + std::to_string(i);
-        ImGui::SetNextItemWidth(140);
-        if (ImGui::BeginCombo(label.c_str(), edit.abilityIds[i].c_str()))
-        {
-            for (auto& [id, a] : m_registry.abilities())
-                if (ImGui::Selectable(a.name.c_str(), edit.abilityIds[i] == id)) edit.abilityIds[i] = id;
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) { edit.abilityIds.erase(edit.abilityIds.begin()+i); ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Aggiungi abilità")) edit.abilityIds.push_back("");
-    // ── Dropdown: AI Profile ─────────────────────────────────────────────
-    if (ImGui::BeginCombo("AI Profile", edit.aiProfileId.empty() ? "-- nessuno --" : edit.aiProfileId.c_str()))
-    {
-        for (auto& [id, a] : m_registry.aiProfiles())
-            if (ImGui::Selectable(id.c_str(), edit.aiProfileId == id)) edit.aiProfileId = id;
-        ImGui::EndCombo();
-    }
-    // ── Dropdown: Hitbox Profile ─────────────────────────────────────────
-    if (ImGui::BeginCombo("Hitbox Profile", edit.hitboxProfileId.empty() ? "-- nessuno --" : edit.hitboxProfileId.c_str()))
-    {
-        for (auto& [id, h] : m_registry.hitboxProfiles())
-            if (ImGui::Selectable(id.c_str(), edit.hitboxProfileId == id)) edit.hitboxProfileId = id;
-        ImGui::EndCombo();
-    }
-
-    ImGui::Separator();
-    if (ImGui::Button("Salva", {120,0}))     saveEnemy(edit);
-    ImGui::SameLine();
-    if (ImGui::Button("Ripristina",{120,0})) edit = it->second;
-    ImGui::SameLine();
-    if (ImGui::Button("Ricarica tutto",{120,0})) reload();
+        ImGui::Text("  %s   [%s]", e.name.c_str(), id.c_str());
     ImGui::EndChild();
 }
 
@@ -674,144 +569,17 @@ void BalanceEditor::saveAlly(const mini::EnemyDef& e)
 
 void BalanceEditor::drawAlliesTab()
 {
+    ImGui::TextColored({0.3f, 0.8f, 1.0f, 1.0f}, "Usa l'Entity Editor per modificare gli alleati.");
+    ImGui::TextDisabled("Qui puoi solo consultare la lista dei file presenti.");
+    ImGui::Separator();
+    ImGui::Spacing();
+
     const auto& allies = m_registry.allies();
+    if (allies.empty()) { ImGui::TextDisabled("Nessun file in data/allies/"); return; }
 
-    // ── Lista + crea (sinistra) ───────────────────────────────────────
-    ImGui::BeginChild("##allylist", ImVec2(180, 0), true);
+    ImGui::BeginChild("##allylist_ro", ImVec2(0, 0), true);
     for (auto& [id, a] : allies)
-    {
-        bool sel = (id == m_selAlly);
-        if (ImGui::Selectable(a.name.c_str(), sel))
-        {
-            m_selAlly = id;
-            m_editAlly = a;   // aggiorna buffer immediatamente al click
-        }
-    }
-    ImGui::EndChild();
-    ImGui::SameLine();
-
-    static char newAllyId[64] = "";
-    static std::string editId;   // traccia quale id è nel buffer
-
-    ImGui::BeginChild("##allyedit", ImVec2(0, 0), false);
-
-    ImGui::TextDisabled("Nuovo alleato (ID file):");
-    ImGui::SetNextItemWidth(160); ImGui::InputText("##newallyid", newAllyId, 64); ImGui::SameLine();
-    if (ImGui::Button("+ Crea") && newAllyId[0] != '\0')
-    {
-        std::string path = getSourceDataDir() + "allies/" + newAllyId + ".json";
-        if (!fs::exists(path))
-        {
-            mini::EnemyDef e;
-            e.id = newAllyId; e.name = newAllyId; e.team = 1;
-            e.faction = mini::Faction::Republic;
-            e.color = {0.85f, 0.85f, 0.85f};
-            e.bulletColor = {0.30f, 0.60f, 1.0f};
-            e.hp = 60.0f; e.moveSpeed = 1.8f; e.damageScale = 1.0f;
-            saveAlly(e);
-            m_selAlly = newAllyId;
-            m_editAlly = e;
-            editId = newAllyId;
-        }
-        newAllyId[0] = '\0';
-    }
-    ImGui::Separator();
-
-    // Aggiorna buffer solo quando la selezione cambia
-    auto it = allies.find(m_selAlly);
-    if (it == allies.end())
-    { ImGui::TextDisabled("Seleziona o crea un alleato."); ImGui::EndChild(); return; }
-
-    if (editId != m_selAlly) { m_editAlly = it->second; editId = m_selAlly; }
-    mini::EnemyDef& edit = m_editAlly;
-
-    ImGui::Text("Alleato: %s  [%s]", edit.name.c_str(), edit.id.c_str());
-    ImGui::Separator();
-
-    char buf[256];
-    std::strncpy(buf, edit.name.c_str(), 255);
-    if (ImGui::InputText("Nome", buf, 255)) edit.name = buf;
-
-    {
-        int fi = mini::factionToIndex(edit.faction);
-        if (ImGui::Combo("Fazione##al", &fi, mini::factionNames(), 3))
-            edit.faction = mini::factionFromIndex(fi);
-    }
-
-    ImGui::DragFloat("HP",           &edit.hp,          1.0f,  1.0f, 2000.0f, "%.0f");
-    ImGui::DragFloat("Velocità",     &edit.moveSpeed,   0.1f,  0.5f,   20.0f, "%.2f");
-    ImGui::DragFloat("Danno Scale",  &edit.damageScale, 0.05f, 0.1f,    5.0f, "%.2f");
-    ImGui::ColorEdit3("Colore entità", edit.color.data());
-
-    ImGui::Separator();
-
-    // ── Armi ─────────────────────────────────────────────────────────
-    ImGui::Text("Armi:");
-    for (int i = 0; i < (int)edit.weaponIds.size(); ++i)
-    {
-        ImGui::PushID(i);
-        ImGui::SetNextItemWidth(140);
-        if (ImGui::BeginCombo(("##aw"+std::to_string(i)).c_str(), edit.weaponIds[i].c_str()))
-        {
-            for (auto& [wid, w] : m_registry.weapons())
-                if (ImGui::Selectable(w.name.c_str(), edit.weaponIds[i] == wid)) edit.weaponIds[i] = wid;
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X##aw")) { edit.weaponIds.erase(edit.weaponIds.begin()+i); ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Aggiungi arma")) edit.weaponIds.push_back("");
-
-    // ── Abilità ───────────────────────────────────────────────────────
-    ImGui::Text("Abilità:");
-    for (int i = 0; i < (int)edit.abilityIds.size(); ++i)
-    {
-        ImGui::PushID(100+i);
-        ImGui::SetNextItemWidth(140);
-        if (ImGui::BeginCombo(("##aa"+std::to_string(i)).c_str(), edit.abilityIds[i].c_str()))
-        {
-            for (auto& [aid, a] : m_registry.abilities())
-                if (ImGui::Selectable(a.name.c_str(), edit.abilityIds[i] == aid)) edit.abilityIds[i] = aid;
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X##aa")) { edit.abilityIds.erase(edit.abilityIds.begin()+i); ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Aggiungi abilità")) edit.abilityIds.push_back("");
-
-    // ── AI Profile ────────────────────────────────────────────────────
-    if (ImGui::BeginCombo("AI Profile", edit.aiProfileId.empty() ? "-- nessuno --" : edit.aiProfileId.c_str()))
-    {
-        for (auto& [id, a] : m_registry.aiProfiles())
-            if (ImGui::Selectable(id.c_str(), edit.aiProfileId == id)) edit.aiProfileId = id;
-        ImGui::EndCombo();
-    }
-    // ── Hitbox Profile ────────────────────────────────────────────────
-    if (ImGui::BeginCombo("Hitbox Profile", edit.hitboxProfileId.empty() ? "-- nessuno --" : edit.hitboxProfileId.c_str()))
-    {
-        for (auto& [id, h] : m_registry.hitboxProfiles())
-            if (ImGui::Selectable(id.c_str(), edit.hitboxProfileId == id)) edit.hitboxProfileId = id;
-        ImGui::EndCombo();
-    }
-
-    ImGui::Separator();
-    ImGui::Text("Visuale");
-    std::strncpy(buf, edit.meshPath.c_str(), 255);
-    if (ImGui::InputText("Mesh OBJ", buf, 255)) edit.meshPath = buf;
-    ImGui::SameLine(); ImGui::TextDisabled("assets/models/allies/...");
-    std::strncpy(buf, edit.texturePath.c_str(), 255);
-    if (ImGui::InputText("Texture", buf, 255)) edit.texturePath = buf;
-    ImGui::ColorEdit3("Colore proiettile", edit.bulletColor.data());
-
-    ImGui::Separator();
-    if (ImGui::Button("Salva", {120,0}))      { saveAlly(edit); editId = edit.id; }
-    ImGui::SameLine();
-    if (ImGui::Button("Ripristina", {120,0})) { edit = it->second; }
-    ImGui::SameLine();
-    if (ImGui::Button("Ricarica tutto", {120,0})) { reload(); editId.clear(); }
-
+        ImGui::Text("  %s   [%s]", a.name.c_str(), id.c_str());
     ImGui::EndChild();
 }
 

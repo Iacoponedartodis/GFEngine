@@ -21,6 +21,7 @@ C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\ecs\systems\MovementSystem.cpp
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\ecs\systems\CombatSystem.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\CombatSystem.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\ecs\systems\AiSystem.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\AiSystem.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\ConquestMode.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\ConquestMode.obj
+C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\game_modes\SandboxMode.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\SandboxMode.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\PlayerController.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\PlayerController.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\game\data\DefinitionRegistry.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\DefinitionRegistry.obj
 C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\src\render\OptionsMenu.cpp;C:\Users\HP\Desktop\iacopo\GFProject\GFEngine\build\windows-debug\GFEngine.dir\Debug\OptionsMenu.obj

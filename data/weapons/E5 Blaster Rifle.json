@@ -14,7 +14,7 @@
     "fire_rate": 7.0,
     "heat_per_shot": 0.25,
     "id": "E5 Blaster Rifle",
-    "mesh": "",
+    "mesh": "assets/models/weapons/e-5_blaster_rifle.glb",
     "min_range": 0.0,
     "name": "E5 Blaster Rifle",
     "overheat_penalty": 1.75,

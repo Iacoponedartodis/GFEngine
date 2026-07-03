@@ -139,13 +139,21 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
     EntityId e = world.createEntity();
-    float yPos = info.stationary ? AI_PLT_Y : AI_GND_Y;
+    // Sempre a livello del suolo: niente unità sospese in aria.
+    float yPos = AI_GND_Y;
 
     world.addTransform(e, {info.x, yPos, info.z});
     world.addTeam(e, {info.teamId});
     world.addHealth(e, {info.hp, info.hp});
     Mesh* useMesh = (info.entityMesh ? info.entityMesh : m_mesh);
-    world.addMeshRenderer(e, {useMesh, m_tex, info.mr, info.mg, info.mb});
+    MeshRendererComponent mrc;
+    mrc.mesh    = useMesh;
+    mrc.texture = m_tex;
+    mrc.r = info.mr; mrc.g = info.mg; mrc.b = info.mb;
+    // I modelli GLB hanno i piedi a Y=0: abbassa la mesh fino al suolo.
+    // Il cubo placeholder è centrato sull'origine: nessun offset.
+    mrc.meshOffsetY = (info.entityMesh ? -yPos : 0.0f);
+    world.addMeshRenderer(e, mrc);
 
     world.addAi(e, AiComponent{
         .shootInterval  = info.interval,
@@ -255,11 +263,16 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 {
     std::cout << "[ConquestMode] Firebase — caricamento...\n";
     world.initialize();
-    m_spawnPos  = {0, SPAWN_Y, SPAWN_Z};
     m_mesh      = mesh;
     m_tex       = tex;
     m_registry  = registry;
     m_meshCache = meshCache;
+
+    // Spawn del giocatore dal MapDef (team1), altrimenti default.
+    float playerX = 0.0f, playerZ = SPAWN_Z;
+    if (const MapDef* md = registry ? registry->getMap("firebase") : nullptr)
+    { playerX = md->spawnTeam1[0]; playerZ = md->spawnTeam1[2]; }
+    m_spawnPos  = {playerX, SPAWN_Y, playerZ};
 
     m_team1Tickets = initialTeam1Tickets;
     m_team2Tickets = initialTeam2Tickets;
@@ -268,7 +281,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Giocatore ────────────────────────────────────────────────────────
     m_playerEntity = world.createEntity();
-    world.addTransform(m_playerEntity, {0, SPAWN_Y, SPAWN_Z});
+    world.addTransform(m_playerEntity, {playerX, SPAWN_Y, playerZ});
     world.addTeam(m_playerEntity, {1});
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
@@ -347,44 +360,41 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         spawnUnit(world, info);
     };
 
-    // ── Posizioni predefinite ─────────────────────────────────────────────
+    // ── Posizioni generate attorno agli spawn point della mappa ───────────
     struct UnitPos { float x, z, pax, paz, pbx, pbz; bool stat; };
 
-    static const UnitPos enemyPos[20] = {
-        {  7,-2,   5,-2,   9,-2, false },
-        { -7,-2,  -9,-2,  -5,-2, false },
-        {  3,-2,   1,-2,   5,-2, false },
-        { -3,-2,  -5,-2,  -1,-2, false },
-        {  8,-8,   0, 0,   0, 0, true  },
-        { -8,-8,   0, 0,   0, 0, true  },
-        {  0,-5,  -2,-5,   2,-5, false },
-        {  4,-4,   3,-3,   5,-5, false },
-        { -4,-4,  -5,-3,  -3,-5, false },
-        {  2,-6,   1,-5,   3,-7, false },
-        { -2,-6,  -3,-5,  -1,-7, false },
-        {  0,-9,  -1,-8,   1,-9.5f, false },
-        {  4,-9,   3,-8,   5,-9.5f, false },
-        { -4,-9,  -5,-8,  -3,-9.5f, false },
-        {  9,-2,   8,-1,  10,-3, false },
-        { -9,-2, -10,-1,  -8,-3, false },
-        {  9,-6,   8,-5,  10,-7, false },
-        { -9,-6, -10,-5,  -8,-7, false },
-        {  6,-1,   5, 0,   7,-2, false },
-        { -6,-1,  -7, 0,  -5,-2, false },
+    // Base spawn: dal MapDef se disponibile, altrimenti default.
+    float enemyBaseX = 0.0f, enemyBaseZ = -SPAWN_Z;
+    float allyBaseX  = 0.0f, allyBaseZ  =  SPAWN_Z;
+    if (const MapDef* md = registry ? registry->getMap("firebase") : nullptr)
+    {
+        enemyBaseX = md->spawnTeam2[0]; enemyBaseZ = md->spawnTeam2[2];
+        allyBaseX  = md->spawnTeam1[0]; allyBaseZ  = md->spawnTeam1[2];
+    }
+
+    // Genera N posizioni a livello del suolo, in file davanti allo spawn,
+    // avanzando verso il centro (dirZ). Patrol point laterali per il movimento.
+    auto genPositions = [](float baseX, float baseZ, float dirZ, int count)
+    {
+        std::vector<UnitPos> out;
+        const int   perRow = 5;
+        const float dx = 3.5f, dz = 3.0f;
+        for (int i = 0; i < count; ++i)
+        {
+            int row = i / perRow, col = i % perRow;
+            float x = baseX + (col - (perRow - 1) * 0.5f) * dx;
+            float z = baseZ + dirZ * (3.0f + row * dz);
+            UnitPos p;
+            p.x = x;  p.z = z;
+            p.pax = x - 1.5f; p.paz = z;
+            p.pbx = x + 1.5f; p.pbz = z;
+            p.stat = false;
+            out.push_back(p);
+        }
+        return out;
     };
 
-    static const UnitPos allyPos[10] = {
-        { -7, 4, -7, 2, -7, 6, false },
-        {  7, 4,  7, 2,  7, 6, false },
-        { -4, 5, -4, 3, -4, 7, false },
-        {  4, 5,  4, 3,  4, 7, false },
-        {  0, 6,  0, 4,  0, 8, false },
-        { -6, 6, -6, 4, -6, 8, false },
-        {  6, 6,  6, 4,  6, 8, false },
-        { -2, 7, -2, 5, -2, 9, false },
-        {  2, 7,  2, 5,  2, 9, false },
-        {  0, 3,  0, 1,  0, 5, false },
-    };
+    std::vector<UnitPos> enemyPos = genPositions(enemyBaseX, enemyBaseZ, +1.0f, nEnemies);
 
     // ── Spawn nemici dai JSON realmente selezionati ──────────────────────
     for (int i = 0; i < nEnemies; ++i)
@@ -417,6 +427,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Spawn alleati AI (data-driven) ───────────────────────────────────────
     int nAllies = std::min(team1AiCount, 10);
+    std::vector<UnitPos> allyPos = genPositions(allyBaseX, allyBaseZ, -1.0f, nAllies);
     for (int i = 0; i < nAllies; ++i)
     {
         const auto& p = allyPos[i];
@@ -461,32 +472,48 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Geometria ─────────────────────────────────────────────────────────
     auto addBox = [&](float x, float yc, float z, float ry,
                       float sx, float sy, float sz,
-                      float cr, float cg, float cb)
+                      float cr, float cg, float cb, bool collider = true)
     {
         EntityId c = world.createEntity();
         world.addTransform(c, {x, yc, z, 0, ry, 0, sx, sy, sz});
         world.addMeshRenderer(c, {mesh, tex, cr, cg, cb});
-        world.addCollider(c, {sx * 0.5f, sy * 0.5f, sz * 0.5f});
+        if (collider)
+            world.addCollider(c, {sx * 0.5f, sy * 0.5f, sz * 0.5f});
     };
 
-    addBox(0,-0.1f,-1, 0, 24,0.2f,20, 0.42f,0.38f,0.32f);
-    addBox( 0,0.7f,-10.5f, 0, 24,1.4f,0.4f, 0.30f,0.28f,0.26f);
-    addBox(-11.2f,0.7f,-5.5f, 0, 0.4f,1.4f,10, 0.28f,0.26f,0.24f);
-    addBox( 11.2f,0.7f,-5.5f, 0, 0.4f,1.4f,10, 0.28f,0.26f,0.24f);
-    addBox(-5.5f,0.7f,-3, 0, 5,1.4f,0.4f, 0.35f,0.33f,0.30f);
-    addBox( 5.5f,0.7f,-3, 0, 5,1.4f,0.4f, 0.35f,0.33f,0.30f);
-    addBox( 8,1.0f,-8, 0, 4,2,5, 0.28f,0.25f,0.22f);
-    addBox(-8,1.0f,-8, 0, 4,2,5, 0.28f,0.25f,0.22f);
-    for (int i = 1; i <= 5; ++i)
+    // Geometria autorata nel Map Editor (data/maps/firebase.json "geometry").
+    // Se presente, ha priorità sulla geometria hardcoded di fallback.
+    const MapDef* map = registry ? registry->getMap("firebase") : nullptr;
+    if (map && !map->geometry.empty())
     {
-        float top = i * 0.4f, yc = top * 0.5f;
-        float zc  = -3.575f - (i - 1) * 0.55f;
-        addBox( 8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
-        addBox(-8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
+        for (const auto& gb : map->geometry)
+            addBox(gb.x, gb.y, gb.z, gb.ry, gb.sx, gb.sy, gb.sz,
+                   gb.r, gb.g, gb.b, gb.collider);
+        std::cout << "[ConquestMode] Geometria da JSON: "
+                  << map->geometry.size() << " box.\n";
     }
-    addBox(  6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
-    addBox( -6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
-    addBox(  0,0.7f,-5,    0, 3.5f,1.4f,0.4f, 0.32f,0.30f,0.28f);
+    else
+    {
+        addBox(0,-0.1f,-1, 0, 24,0.2f,20, 0.42f,0.38f,0.32f);
+        addBox( 0,0.7f,-10.5f, 0, 24,1.4f,0.4f, 0.30f,0.28f,0.26f);
+        addBox(-11.2f,0.7f,-5.5f, 0, 0.4f,1.4f,10, 0.28f,0.26f,0.24f);
+        addBox( 11.2f,0.7f,-5.5f, 0, 0.4f,1.4f,10, 0.28f,0.26f,0.24f);
+        addBox(-5.5f,0.7f,-3, 0, 5,1.4f,0.4f, 0.35f,0.33f,0.30f);
+        addBox( 5.5f,0.7f,-3, 0, 5,1.4f,0.4f, 0.35f,0.33f,0.30f);
+        addBox( 8,1.0f,-8, 0, 4,2,5, 0.28f,0.25f,0.22f);
+        addBox(-8,1.0f,-8, 0, 4,2,5, 0.28f,0.25f,0.22f);
+        for (int i = 1; i <= 5; ++i)
+        {
+            float top = i * 0.4f, yc = top * 0.5f;
+            float zc  = -3.575f - (i - 1) * 0.55f;
+            addBox( 8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
+            addBox(-8, yc, zc, 0, 3, top, 0.5f, 0.36f,0.32f,0.28f);
+        }
+        addBox(  6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
+        addBox( -6,0.7f,-3.5f, 0, 0.4f,1.4f,2.5f, 0.30f,0.28f,0.26f);
+        addBox(  0,0.7f,-5,    0, 3.5f,1.4f,0.4f, 0.32f,0.30f,0.28f);
+        std::cout << "[ConquestMode] Geometria hardcoded (nessuna geometry nel JSON).\n";
+    }
 
     std::cout << "[ConquestMode] Spawn completato: "
               << nEnemies << " nemici, " << nAllies << " alleati AI.\n";

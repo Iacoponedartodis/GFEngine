@@ -115,6 +115,7 @@ add_executable(GFEngine
     src/ecs/systems/CombatSystem.cpp
     src/ecs/systems/AiSystem.cpp
     src/game/game_modes/ConquestMode.cpp
+    src/game/game_modes/SandboxMode.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp
     src/render/OptionsMenu.cpp
@@ -152,8 +153,13 @@ add_executable(GFEditor
     editor/src/EditorApp.cpp
     editor/src/ui/HomeScreen.cpp
     editor/src/viewport/FreeCameraViewport.cpp
+    editor/src/util/FileDialog.cpp
+    editor/src/util/RigReader.cpp
     editor/src/modules/BalanceEditor.cpp
     editor/src/modules/HitboxEditor.cpp
+    editor/src/modules/EntityEditor.cpp
+    editor/src/modules/MapEditor.cpp
+    editor/src/modules/WeaponEditor.cpp
     src/game/data/DefinitionRegistry.cpp
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
@@ -184,6 +190,9 @@ target_link_libraries(GFEditor PRIVATE
     imgui
     nlohmann_json::nlohmann_json
 )
+if(WIN32)
+    target_link_libraries(GFEditor PRIVATE comdlg32)
+endif()
 if(MSVC)
     target_compile_options(GFEditor PRIVATE
         /W4 /permissive- /EHsc
@@ -203,4 +212,12 @@ add_custom_command(TARGET GFEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:GFEditor>/data"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data" "$<TARGET_FILE_DIR:GFEditor>/data"
     COMMENT "Copia data/ -> GFEditor output dir (pulizia preventiva)"
+)
+
+# ── Copia cartella assets nella directory di output ───────────────────────────
+# Il gioco carica i modelli (.glb/.obj) con percorsi relativi "assets/..."
+# risolti rispetto alla cartella dell'eseguibile.
+add_custom_command(TARGET GFEngine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:GFEngine>/assets"
+    COMMENT "Copia assets/ -> GFEngine output dir"
 )

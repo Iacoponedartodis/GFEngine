@@ -22,8 +22,16 @@ public:
 
     explicit Mesh(const std::vector<Vertex>& vertices);
 
+    // Costruisce direttamente da dati interleaved grezzi (11 float/vertice).
+    // Usato per unire più primitive in una sola mesh.
+    Mesh(std::vector<float> interleavedData, int vertexCount);
+
     // Disegna la mesh con gli attributi correnti
     void draw() const;
+
+    // Accesso ai dati grezzi (11 float/vertice: pos + normal + color + uv)
+    const std::vector<float>& getVertexData()  const { return m_data; }
+    int                       getVertexCount() const { return m_vertexCount; }
 
     // Factory: cubo unitario [-0.5, 0.5]^3 con normali e UV per faccia
     static Mesh createCube(const glm::vec3& color = {1.0f, 1.0f, 1.0f});

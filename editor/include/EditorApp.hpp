@@ -12,6 +12,9 @@ class HomeScreen;
 class FreeCameraViewport;
 class BalanceEditor;
 class HitboxEditor;
+class EntityEditor;
+class MapEditor;
+class WeaponEditor;
 
 // Modulo attivo
 enum class ActiveModule
@@ -20,9 +23,11 @@ enum class ActiveModule
     FreeCameraViewport,
     HitboxEditor,
     BalanceEditor,
+    EntityEditor,
+    MapEditor,
+    WeaponEditor,
     AssetManager,
     AiEditor,
-    MapMetadataEditor,
 };
 
 // Applicazione principale di GFEditor.
@@ -46,6 +51,9 @@ private:
     std::unique_ptr<FreeCameraViewport>  m_viewport;
     std::unique_ptr<BalanceEditor>       m_balanceEditor;
     std::unique_ptr<HitboxEditor>        m_hitboxEditor;
+    std::unique_ptr<EntityEditor>        m_entityEditor;
+    std::unique_ptr<MapEditor>           m_mapEditor;
+    std::unique_ptr<WeaponEditor>        m_weaponEditor;
 
     void init();
     void shutdown();
@@ -56,8 +64,8 @@ private:
     void renderMenuBar();
     void renderDockSpace();
 
-    // Lancia GFEngine.exe con --direct-prematch
-    void launchGame();
+    void launchGame();    // Lancia GFEngine.exe con --direct-prematch
+    void launchSandbox(); // Lancia GFEngine.exe con --sandbox
 };
 
 } // namespace editor
