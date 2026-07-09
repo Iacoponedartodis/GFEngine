@@ -35,6 +35,20 @@ public:
                   const glm::mat4& modelMatrix,
                   const glm::vec3& colorTint = {1.0f, 1.0f, 1.0f});
 
+    // ── Multi-vista (spike split-screen, ADR-011) ─────────────────────
+    // Come drawMesh ma con una camera esterna (seconda vista locale).
+    void drawMeshFrom(const Camera&  cam,
+                      const Mesh&    mesh,
+                      const Texture* texture,
+                      const glm::mat4& modelMatrix,
+                      const glm::vec3& colorTint = {1.0f, 1.0f, 1.0f});
+
+    // Restringe il rendering a un rettangolo dello schermo (viewport GL).
+    void setViewportRect(int x, int y, int w, int h);
+
+    // Dimensioni drawable correnti (per calcolare le metà split).
+    void getDrawableSize(int& w, int& h) const;
+
     // Fine frame: swap buffer
     void endFrame();
 

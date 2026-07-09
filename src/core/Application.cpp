@@ -1,4 +1,5 @@
 #include "mini/core/Application.hpp"
+#include "mini/core/Telemetry.hpp"
 #include "mini/core/Audio.hpp"
 #include "mini/core/Clock.hpp"
 #include "mini/core/GameConfig.hpp"
@@ -11,6 +12,7 @@
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/systems/AiSystem.hpp"
 #include "mini/game/game_modes/IGameMode.hpp"
+#include "mini/game/CommandPosts.hpp"
 #include "mini/game/MatchSettings.hpp"
 #include "mini/game/PlayerController.hpp"
 #include "mini/game/Weapon.hpp"
@@ -29,6 +31,7 @@
 #include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <nlohmann/json.hpp>
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
@@ -93,27 +96,53 @@ static glm::mat4 toModelMatrix(const TransformComponent& t)
     return glm::scale(m, {t.sx, t.sy, t.sz});
 }
 
-static bool anyEnemyAlive(World& w)
+// Ray vs AABB (slab test) per il feedback di mira sul mirino.
+static bool rayAABB(const glm::vec3& o, const glm::vec3& d,
+                    const glm::vec3& mn, const glm::vec3& mx, float maxT)
 {
-    for (EntityId id : w.getEntities())
+    float tmin = 0.0f, tmax = maxT;
+    for (int i = 0; i < 3; ++i)
     {
-        const auto* tm = w.getTeam(id);
-        const auto* hp = w.getHealth(id);
-        if (tm && tm->teamId == 2 && hp && hp->current > 0.0f) return true;
+        if (std::abs(d[i]) < 1e-6f)
+        {
+            if (o[i] < mn[i] || o[i] > mx[i]) return false;
+        }
+        else
+        {
+            float inv = 1.0f / d[i];
+            float t0 = (mn[i] - o[i]) * inv;
+            float t1 = (mx[i] - o[i]) * inv;
+            if (t0 > t1) std::swap(t0, t1);
+            tmin = std::max(tmin, t0);
+            tmax = std::min(tmax, t1);
+            if (tmin > tmax) return false;
+        }
     }
-    return false;
+    return true;
 }
+
+// (la verifica "nemici vivi" ora vive nelle regole dei mode — ADR-014)
 
 void Application::run(bool directPreMatch, bool sandbox)
 {
     using namespace config;
     initialize();
 
+    // ── Telemetria (ADR-013): logger + crash net + input recorder ─────
+    telemetry::init("GFEngine");
+    telemetry::logInfo(std::string("flag avvio: directPreMatch=")
+        + (directPreMatch ? "si" : "no") + " sandbox=" + (sandbox ? "si" : "no"));
+
     // ── Definition Registry ──────────────────────────────────────────
     // Usa percorso assoluto basato sull'exe, non CWD
     DefinitionRegistry registry;
     const std::string dataPath = getDataPath();
     registry.loadAll(dataPath);
+    telemetry::logInfo("registry caricato da '" + dataPath + "': "
+        + std::to_string(registry.weapons().size()) + " armi, "
+        + std::to_string(registry.enemies().size()) + " nemici, "
+        + std::to_string(registry.allies().size()) + " alleati, "
+        + std::to_string(registry.maps().size()) + " mappe");
 
     // Popola la lista armi del PreMatchMenu — solo Republic e Neutral (non Separatist)
     std::vector<PreMatchMenu::WeaponEntry> wList;
@@ -122,6 +151,14 @@ void Application::run(bool directPreMatch, bool sandbox)
             wList.push_back({id, def.name});
     std::sort(wList.begin(), wList.end(),
         [](const auto& a, const auto& b){ return a.name < b.name; });
+
+    // Sandbox: lista COMPLETA delle armi (anche separatiste) per il banco di
+    // prova — tasti 1-9 in gioco (Todo #0).
+    std::vector<std::pair<std::string, std::string>> testWeapons; // id, name
+    for (auto& [id, def] : registry.weapons())
+        testWeapons.push_back({id, def.name});
+    std::sort(testWeapons.begin(), testWeapons.end(),
+        [](const auto& a, const auto& b){ return a.second < b.second; });
 
     std::vector<PreMatchMenu::AbilityEntry> aList;
     for (auto& [id, def] : registry.abilities())
@@ -204,7 +241,13 @@ void Application::run(bool directPreMatch, bool sandbox)
     MatchSettings currentSettings;
     std::unique_ptr<IGameMode> mode =
         createGameMode(sandbox ? "sandbox" : "conquest");
+    telemetry::logInfo(std::string("game mode creato: ")
+        + (sandbox ? "sandbox" : "conquest"));
     bool worldReady = false;
+
+    // Spike ADR-011: F9 attiva una seconda vista della stessa scena
+    // (metà destra, camera offset). Solo verifica di fattibilità.
+    bool splitSpike = false;
 
     // ── Player controller ────────────────────────────────────────────
     PlayerController player;
@@ -240,6 +283,12 @@ void Application::run(bool directPreMatch, bool sandbox)
 
     auto startGame = [&]()
     {
+        // Modalità scelta nel PreMatch (ADR-014): Conquista/Assalto/Difesa.
+        // Ricreata SEMPRE qui (il mode del processo può essere sandbox).
+        const char* modeId = matchModeId(currentSettings.modeIndex);
+        mode = createGameMode(modeId);
+        telemetry::logInfo(std::string("game mode da PreMatch: ") + modeId);
+
         // ── Arma primaria ─────────────────────────────────────────────
         const std::string& primaryId = preMatchMenu.getSelectedWeaponId();
         const auto* wDef = registry.getWeapon(primaryId);
@@ -311,6 +360,7 @@ void Application::run(bool directPreMatch, bool sandbox)
 
         initWorld();
         window.setMouseCaptured(true);
+        hud.toast("Sandbox: tasti 1-9 per provare le armi", 5.0f);
         std::cout << "[Game] Sandbox avviata — " << player.weapon.name << std::endl;
     }
 
@@ -319,6 +369,7 @@ void Application::run(bool directPreMatch, bool sandbox)
     // ═════════════════════════════════════════════════════════════════
     while (m_running && window.isOpen())
     {
+        telemetry::beginFrame();
         stateChanged = false;
         input.update();
 
@@ -337,6 +388,40 @@ void Application::run(bool directPreMatch, bool sandbox)
                 const int sc = ev.key.keysym.scancode;
 
                 if (sc == SDL_SCANCODE_F11) window.toggleFullscreen();
+
+                // ── F12: dump completo dello stato (ADR-013) ──────────
+                if (sc == SDL_SCANCODE_F12)
+                {
+                    const glm::vec3 cp = cam.getPosition();
+                    const glm::vec3 cf = cam.getForward();
+                    nlohmann::json js;
+                    js["app"]            = "GFEngine";
+                    js["game_state"]     = (int)state;
+                    js["world_ready"]    = worldReady;
+                    js["entity_count"]   = worldReady
+                                           ? (int)world.getEntities().size() : 0;
+                    js["camera"]["pos"]     = {cp.x, cp.y, cp.z};
+                    js["camera"]["forward"] = {cf.x, cf.y, cf.z};
+                    js["player"]["hp"]      = player.prevHp;
+                    js["player"]["dead"]    = player.isDead;
+                    js["player"]["weapon"]  = player.weapon.name;
+                    js["player"]["heat"]    = player.weapon.heat;
+                    js["tickets"]["team1"]  = mode->getTeam1Tickets();
+                    js["tickets"]["team2"]  = mode->getTeam2Tickets();
+                    js["mouse_captured"]    = window.isMouseCaptured();
+                    telemetry::dumpGameState(js);
+                    hud.toast("F12: stato salvato in _telemetry_data/game_state.json");
+                }
+
+                // ── F9: spike split-screen (ADR-011, solo verifica) ───
+                if (sc == SDL_SCANCODE_F9 && state == GameState::Playing)
+                {
+                    splitSpike = !splitSpike;
+                    hud.toast(splitSpike ? "Split-screen spike: ON (F9)"
+                                         : "Split-screen spike: OFF");
+                    telemetry::logInfo(std::string("split spike: ")
+                                       + (splitSpike ? "ON" : "OFF"));
+                }
 
                 if (state == GameState::Launcher)
                 {
@@ -388,6 +473,27 @@ void Application::run(bool directPreMatch, bool sandbox)
                 {
                     if (sc == SDL_SCANCODE_V)
                         player.toggleThirdPerson(cam);
+
+                    // ── Sandbox: 1-9 = equipaggia arma dal registry ────
+                    if (sandbox
+                        && sc >= SDL_SCANCODE_1 && sc <= SDL_SCANCODE_9)
+                    {
+                        const int idx = sc - SDL_SCANCODE_1;
+                        if (idx < (int)testWeapons.size())
+                        {
+                            const auto* wd = registry.getWeapon(testWeapons[idx].first);
+                            if (wd)
+                            {
+                                player.weapons[0]   = weaponFromDef(*wd);
+                                player.activeWeapon = 0;
+                                player.weapon       = player.weapons[0];
+                                hud.toast("Arma " + std::to_string(idx + 1) + ": "
+                                          + wd->name);
+                                telemetry::logInfo("sandbox: arma cambiata -> "
+                                                   + wd->name);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -426,12 +532,18 @@ void Application::run(bool directPreMatch, bool sandbox)
         // ── 3. FIXED UPDATE ──────────────────────────────────────────
         float elapsed = clock.restart();
         if (elapsed > 0.25f) elapsed = 0.25f;
+        hud.tick(elapsed);
 
         if (state == GameState::Playing)
         {
             accumulator += elapsed;
             while (accumulator >= fixedDt)
             { mode->update(world, fixedDt); world.tick(fixedDt); accumulator -= fixedDt; }
+
+            // Feedback colpi a segno del giocatore → hitmarker sul mirino
+            if (world.combatFeedback.team1Kill)     hud.hitmarker(true);
+            else if (world.combatFeedback.team1Hit) hud.hitmarker(false);
+            world.combatFeedback.reset();
 
             player.weapon.update(elapsed);
             if (player.weapon.overheated && !wasOverheated) audio.playOverheat();
@@ -510,15 +622,80 @@ void Application::run(bool directPreMatch, bool sandbox)
             player.updateShooting(world, cam, input, audio,
                                    mesh.get(), window.isMouseCaptured());
 
-            if (mode->hasVictoryCondition()
-                && world.getTickCount() > 10
-                && mode->getTeam2Tickets() <= 0
-                && !anyEnemyAlive(world))
+            // ── Feedback di mira: il mirino diventa rosso se punta una
+            //    hitbox nemica reale (stesse trasformazioni del CombatSystem:
+            //    scala, yaw, offset mesh). Fallback: sfera sul corpo. ───────
+            {
+                bool aimOn = false;
+                const glm::vec3 ro = cam.getPosition();
+                const glm::vec3 rd = cam.getForward();
+                for (EntityId id : world.getEntities())
+                {
+                    const auto* tm2 = world.getTeam(id);
+                    const auto* eh2 = world.getHealth(id);
+                    const auto* tr2 = world.getTransform(id);
+                    if (!tm2 || tm2->teamId == 1 || !eh2 || eh2->current <= 0.0f
+                        || !tr2 || world.getBullet(id)) continue;
+
+                    const auto* hb2 = world.getHitbox(id);
+                    const auto* mr2 = world.getMeshRenderer(id);
+                    const float sc  = (tr2->sx > 0.0001f) ? tr2->sx : 1.0f;
+                    const float mo  = mr2 ? mr2->meshOffsetY : 0.0f;
+                    const glm::vec3 ep{tr2->x, tr2->y, tr2->z};
+
+                    if (hb2 && hb2->profile && !hb2->profile->zones.empty())
+                    {
+                        const float cy2 = std::cos(glm::radians(tr2->ry));
+                        const float sy2 = std::sin(glm::radians(tr2->ry));
+                        for (const auto& z : hb2->profile->zones)
+                        {
+                            glm::vec3 off = z.offset * sc;
+                            glm::vec3 roff{ cy2*off.x + sy2*off.z, off.y,
+                                           -sy2*off.x + cy2*off.z };
+                            const glm::vec3 ctr = ep + glm::vec3(0, mo, 0) + roff;
+                            const glm::vec3 he  = z.halfExtents * sc;
+                            if (rayAABB(ro, rd, ctr - he, ctr + he, 80.0f))
+                            { aimOn = true; break; }
+                        }
+                    }
+                    else
+                    {
+                        const glm::vec3 to = ep - ro;
+                        const float t = glm::dot(to, rd);
+                        if (t > 0.0f && t < 80.0f
+                            && glm::length(ep - (ro + rd * t)) < 0.7f)
+                            aimOn = true;
+                    }
+                    if (aimOn) break;
+                }
+                hud.setAimOnTarget(aimOn);
+            }
+
+            // ── Stato command post → HUD (ADR-014/#6) ─────────────────
+            if (const CommandPosts* cps = mode->commandPosts())
+            {
+                std::vector<HUD::PostStatus> ps;
+                for (const auto& s : cps->status())
+                    ps.push_back({s.label, s.owner, s.capturingTeam, s.progress01});
+                hud.setPosts(ps);
+            }
+
+            // ── Esito: deciso dal MODE (ADR-014) ─────────────────────
+            const MatchOutcome oc = mode->outcome(world);
+            if (oc == MatchOutcome::Team1Win)
             {
                 state = GameState::Win; stateChanged = true;
                 window.setMouseCaptured(false);
                 audio.playVictory();
+                telemetry::logInfo("esito: VITTORIA (regole della modalita')");
                 std::cout << "\n[Game] VITTORIA!" << std::endl;
+            }
+            else if (oc == MatchOutcome::Team2Win)
+            {
+                state = GameState::Lose; stateChanged = true;
+                window.setMouseCaptured(false);
+                telemetry::logInfo("esito: SCONFITTA (regole della modalita')");
+                std::cout << "\n[Game] SCONFITTA (obiettivo perso)!" << std::endl;
             }
         }
 
@@ -527,25 +704,60 @@ void Application::run(bool directPreMatch, bool sandbox)
 
         if (worldReady && state == GameState::Playing)
         {
-            for (EntityId id : world.getEntities())
+            auto drawScene = [&](const Camera& viewCam)
             {
-                const auto* tr = world.getTransform(id);
-                const auto* mr = world.getMeshRenderer(id);
-                if (!tr || !mr || !mr->visible || !mr->mesh) continue;
-                // meshOffsetY sposta verticalmente la mesh rispetto al centro
-                // fisico dell'entità (es. per appoggiare i piedi a terra).
-                glm::mat4 model = toModelMatrix(*tr);
-                if (mr->meshOffsetY != 0.0f)
-                    model = glm::translate(glm::mat4(1.0f),
-                                glm::vec3(0.0f, mr->meshOffsetY, 0.0f)) * model;
-                renderer.drawMesh(*mr->mesh, mr->texture, model,
-                                  {mr->r, mr->g, mr->b});
+                for (EntityId id : world.getEntities())
+                {
+                    const auto* tr = world.getTransform(id);
+                    const auto* mr = world.getMeshRenderer(id);
+                    if (!tr || !mr || !mr->visible || !mr->mesh) continue;
+                    // meshOffsetY sposta verticalmente la mesh rispetto al centro
+                    // fisico dell'entità (es. per appoggiare i piedi a terra).
+                    glm::mat4 model = toModelMatrix(*tr);
+                    if (mr->meshOffsetY != 0.0f)
+                        model = glm::translate(glm::mat4(1.0f),
+                                    glm::vec3(0.0f, mr->meshOffsetY, 0.0f)) * model;
+                    renderer.drawMeshFrom(viewCam, *mr->mesh, mr->texture, model,
+                                          {mr->r, mr->g, mr->b});
 
-                // Arma in mano (o altro modello agganciato)
-                if (mr->attachMesh)
-                    renderer.drawMesh(*mr->attachMesh, mr->texture,
-                                      model * mr->attachLocal,
-                                      {0.55f, 0.55f, 0.58f});
+                    // Arma in mano (o altro modello agganciato)
+                    if (mr->attachMesh)
+                        renderer.drawMeshFrom(viewCam, *mr->attachMesh, mr->texture,
+                                              model * mr->attachLocal,
+                                              {0.55f, 0.55f, 0.58f});
+                }
+            };
+
+            if (!splitSpike)
+            {
+                drawScene(cam);
+            }
+            else
+            {
+                // Spike ADR-011: stessa scena in due viewport affiancati.
+                int dw = 0, dh = 0;
+                renderer.getDrawableSize(dw, dh);
+                const float halfAspect = (dh > 0)
+                    ? (float)(dw / 2) / (float)dh : 1.0f;
+
+                // Sinistra: vista del giocatore
+                Camera camL = cam;
+                camL.setAspect(halfAspect);
+                renderer.setViewportRect(0, 0, dw / 2, dh);
+                drawScene(camL);
+
+                // Destra: seconda camera (offset laterale, stessa direzione)
+                Camera camR = cam;
+                camR.setAspect(halfAspect);
+                const glm::vec3 right =
+                    glm::normalize(glm::cross(cam.getForward(), {0, 1, 0}));
+                camR.setPosition(cam.getPosition() + right * 2.5f
+                                 + glm::vec3(0, 0.5f, 0));
+                renderer.setViewportRect(dw / 2, 0, dw - dw / 2, dh);
+                drawScene(camR);
+
+                // Ripristina il viewport pieno per HUD/menu
+                renderer.setViewportRect(0, 0, dw, dh);
             }
         }
 
@@ -579,6 +791,8 @@ void Application::run(bool directPreMatch, bool sandbox)
 
         renderer.endFrame();
     }
+
+    telemetry::shutdown();
 }
 
 } // namespace mini

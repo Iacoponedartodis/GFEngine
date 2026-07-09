@@ -38,7 +38,15 @@ One entry per structural decision. Newest last.
 - **Consequence:** Zones authored in EntityEditor now reach the game. HitboxEditor and
   EntityEditor edit the same file — last save wins; both write the runtime schema
   (`damage_multiplier`, `bone`, `rotation`). Rationale for (a) over (b): zero runtime changes,
-  one store instead of two.
+  one store instead of two. Status: **in force.**
+
+## ADR-007 — Game-mode fallback ids come from the registry (2026-07-04)
+- **Decision:** `ConquestMode::buildEnemySpawnList` no longer hardcodes archetype ids. When
+  `MapDef.enemyTypes` is empty it falls back to the sorted list of ids actually registered in
+  `data/enemies/`; if that is also empty, it spawns nothing and logs an error (no blind ids).
+- **Consequence:** Renaming enemy files can no longer silently break spawning via dead
+  hardcoded strings (KnownIssues #2 closed). Maps should still declare `enemyTypes` for
+  intentional composition. Status: **in force.**
 
 ## ADR-008 — IGameMode interface + factory (2026-07-04)
 - **Decision:** Tutte le modalità implementano `IGameMode`
@@ -50,7 +58,7 @@ One entry per structural decision. Newest last.
 - **Consequence:** Assalto/Difesa (Fase 1) = nuova classe + una riga nella factory; la
   logica win/lose usa `hasVictoryCondition()` invece di flag di modalità. `MeshCache` è
   definito una sola volta in IGameMode.hpp. Prossima evoluzione naturale: id modalità
-  scelto da MapDef/PreMatch invece che dal flag CLI.
+  scelto da MapDef/PreMatch invece che dal flag CLI. Status: **in force.**
 
 ## ADR-009 — Command post come sistema riusabile, dati nel MapDef (2026-07-04)
 - **Decision:** I punti di comando sono dati di mappa (`MapDef.commandPosts`, JSON
@@ -62,11 +70,288 @@ One entry per structural decision. Newest last.
   Conquista applica ticket bleed (maggioranza post → -1 ticket avversario ogni 6s);
   la Sandbox li rende catturabili senza conseguenze (test dal vivo). Le future
   Assalto/Difesa riusano lo stesso blocco con regole diverse. KnownIssues #9 chiuso.
+  Status: **in force.**
 
-## ADR-007 — Game-mode fallback ids come from the registry (2026-07-04)
-- **Decision:** `ConquestMode::buildEnemySpawnList` no longer hardcodes archetype ids. When
-  `MapDef.enemyTypes` is empty it falls back to the sorted list of ids actually registered in
-  `data/enemies/`; if that is also empty, it spawns nothing and logs an error (no blind ids).
-- **Consequence:** Renaming enemy files can no longer silently break spawning via dead
-  hardcoded strings (KnownIssues #2 closed). Maps should still declare `enemyTypes` for
-  intentional composition.
+## ADR-010 — In-editor rename command + centralized RMW save helper (Proposed, 2026-07-09)
+
+### Context
+`id = filename stem` (ADR-001) is a sound convention, but the tooling to change an id safely
+has never been built. Confirmed production incident (2026-07-09): renaming a weapon's
+name/id by hand (creating a new JSON file instead of renaming the existing one) produced
+duplicate near-identical entries in the loadout menu (08_KnownIssues #7, escalated to P0).
+Separately, an unrelated but structurally similar incident occurred on 2026-07-08: an editor
+module rewrote a JSON file from scratch instead of read-modify-write, destroying unrelated
+fields (08_KnownIssues #15). Both incidents share a root cause class: **destructive or
+incomplete file operations performed without a single, audited code path.**
+
+### Options Considered
+1. **Do nothing, rely on documented discipline.** (Current state.) Both incidents already
+   happened despite discipline being documented in 04_CodingStandards before ADR-010 was
+   drafted. Rejected — discipline alone has already failed twice.
+2. **Decouple id from filename** (allow arbitrary in-file `id` distinct from filename).
+   Rejected — reverses ADR-001, reintroduces the original problem ADR-001 solved (id/filename
+   drift), and is a larger, riskier change than adding tooling on top of the current
+   convention.
+3. **Add an in-editor "Rinomina" command per definition type, that renames the physical file
+   and sweeps cross-references, PLUS a centralized `saveJsonRMW` helper used by all save
+   paths.** Chosen.
+
+### Decision
+Introduce two coupled but separable pieces of tooling, both living in editor-side shared
+utility code (not the runtime):
+
+1. **Rename command** (per module: EntityEditor, WeaponEditor, HitboxEditor, MapEditor, and
+   any future AI Profile editor):
+   - UI: text field for new id (filename-safe) + "Rinomina" button, shown next to the
+     existing id/name display for the selected item.
+   - Behavior on click:
+     a. Validate new id (non-empty, filesystem-safe, not already in use in the same
+        category).
+     b. `std::filesystem::rename(oldPath, newPath)`.
+     c. Update the in-memory definition's id to the new value.
+     d. Sweep `data/` for every JSON file that references the old id in a known
+        cross-reference field for that category (`weaponIds[]`/`aiProfileId`/
+        `hitboxProfileId`/`enemyTypes[]`/`allyTypes[]`/map-level references) and rewrite
+        those fields via the RMW helper (below).
+     e. Reload the affected `DefinitionRegistry` instance(s).
+   - Cross-reference field map per category must be maintained explicitly in the
+     implementation (do not attempt a generic "find any string" sweep — false positives on
+     coincidental string matches are worse than missed references; an explicit field map is
+     auditable and matches the Migration Discipline already documented in
+     11_DevelopmentWorkflow).
+
+2. **Centralized `saveJsonRMW(path, patchFn)` helper** (e.g. in
+   `editor/include/util/JsonSave.hpp`):
+   - Reads existing file into `json j` (or `json::object()` if the file doesn't exist yet).
+   - Calls `patchFn(j)` which mutates only the fields the calling module owns.
+   - Writes `j` back.
+   - Every existing `save*()` function in every editor module (BalanceEditor, EntityEditor,
+     WeaponEditor, HitboxEditor, MapEditor) is migrated to call this helper instead of
+     hand-rolled read-modify-write, removing the possibility of a future module forgetting
+     the pattern.
+   - Optional (not required for acceptance): automatic `.bak` backup of the file immediately
+     before write, one rotation deep, as a last-resort recovery path.
+
+### Reasoning
+- Both confirmed incidents are process/tooling gaps, not architecture flaws — ADR-001
+  (id=filename) and the RMW convention are both still the right design. The fix is to make
+  the correct behavior the *only* behavior a developer (human or AI) can reach through the
+  UI/API, rather than the behavior they must remember to perform correctly by hand each time.
+- An explicit cross-reference field map (rather than a generic string-replace sweep) keeps
+  the rename operation auditable and prevents accidental corruption of unrelated string
+  fields (e.g. a `name` field that happens to contain the old id as a substring).
+- This is consistent with 09_AI_Workflow's existing "Migration discipline" step ("do a full
+  sweep in one change set... never leave dangling references after a rename") — ADR-010
+  turns that manual discipline into an automated, single code path.
+
+### Consequences
+- **Positive:** Closes 08_KnownIssues #7 (near-duplicate data files) and hardens
+  08_KnownIssues #15 (destructive saves) structurally rather than by convention. Removes a
+  recurring class of manual-process bugs before more content (weapons, enemies, maps) is
+  authored, which is the highest-leverage time to fix it.
+- **Negative / cost:** Requires touching every existing editor save path once (migration
+  cost), and requires maintaining the explicit cross-reference field map as new definition
+  types or new reference fields are added — this map must be updated in the same change set
+  as any new cross-reference field (see 04_CodingStandards, Migration Discipline).
+- **Follow-up work implied:** 06_Todo #1 (rename tooling) and #8 (save-safety helper) track
+  the implementation of this ADR. Once implemented, this ADR's Status must be updated to
+  **Accepted**, and 08_KnownIssues #7 and #15 updated to RESOLVED with a smoke-test reference
+  (per 12_TestingStrategy).
+
+### Status
+**Accepted (2026-07-09).** Implemented in code:
+- `editor/include/util/JsonSave.hpp` — `saveJsonRMW(path, patchFn)` con backup `.bak`
+  (una rotazione, best-effort) prima di ogni scrittura. patchFn ritorna false = no-op.
+- `editor/include/util/DefinitionRename.hpp` + `editor/src/util/DefinitionRename.cpp` —
+  `renameDefinition(dataDir, Category, oldId, newId)`: validazione, `fs::rename`, pulizia
+  degli `id`/`profile_id` deprecati nel file rinominato, sweep cross-reference con **mappa
+  esplicita per categoria** (Weapon → enemies/allies `weapons[]`/`weapon`/`weapon_display.id`;
+  HitboxProfile → `hitbox_profile`; AiProfile → `ai_profile`; Ability → `abilities[]`;
+  Enemy → maps `enemy_types[]`; Ally → maps `ally_types[]`; Map/Character → nessuno, con
+  warning se si rinomina "firebase" perché i game mode la caricano hardcoded — residuo
+  ADR-008).
+- **Tutti** i save path migrati all'helper: BalanceEditor (saveWeapon/saveEnemy/saveAI/
+  saveMap/saveAlly/savePlayerDef), EntityEditor::saveSelected (entità + profilo hitbox),
+  WeaponEditor::saveSelected, HitboxEditor::saveProfile, MapEditor::saveMap. Nessuna
+  scrittura JSON fuori dall'helper. In più: i campi `id`/`profile_id` deprecati vengono
+  rimossi dai file a ogni salvataggio (ADR-001).
+- UI "Rinomina" in WeaponEditor, EntityEditor (reload deferito al frame successivo per lo
+  stack ImGui), HitboxEditor, MapEditor.
+- Verifica: build pulita; smoke runtime ok (registry/mappa integri). **Smoke GUI del rename
+  (rinomina reale + verifica cross-ref) da eseguire manualmente** — il duplicato del
+  2026-07-09 era già stato ripulito a mano prima dell'implementazione.
+
+## ADR-012 — Hitbox authoring solo nell'Entity Editor (Accepted, 2026-07-09)
+
+### Context
+Dopo ADR-006 il profilo hitbox era editabile da DUE moduli (EntityEditor tab Hitbox e
+HitboxEditor standalone) sullo stesso file, con "last save wins" (KnownIssues #1 residuo)
+e duplicazione di UI. Richiesta utente: consolidare tutto nell'Entity Editor, dove il
+contesto (modello, ossa, attach point) rende l'authoring più comodo.
+
+### Decision
+- L'Entity Editor è l'UNICO luogo di authoring delle hitbox (zone, moltiplicatori danno,
+  rotazioni, bone binding, debug_visible — gap colmato prima della rimozione).
+- Il modulo HitboxEditor è RIMOSSO (file, CMake, EditorApp, HomeScreen). Il profilo
+  (`data/hitboxes/<id>.json`) resta il formato runtime (ADR-006 invariato); segue
+  la convenzione profileId = id entità.
+- Rimosso l'ultimo fallback hardcoded `"grunt"` in `ConquestMode::spawnUnit` (l'id profilo
+  è sempre risolto a monte; se assente → fallback sferico del CombatSystem).
+- Dati: eliminati i profili orfani `grunt/heavy/sniper` da data/hitboxes (nessun riferimento).
+- BalanceEditor ripulito dai tab vestigiali Nemici/Alleati (redirect-only) e dai relativi
+  saveEnemy/saveAlly.
+
+### Consequences
+- Un solo flusso di authoring: niente più "last save wins" tra moduli (KnownIssues #1
+  residuo chiuso). Perso l'editing di profili NON legati a un'entità: caso d'uso
+  inesistente oggi (ogni profilo appartiene a un'entità); se servirà, si aggiunge una
+  vista dedicata nell'Entity Editor, non un modulo separato.
+- Limitazione nota: rinominare un profilo hitbox standalone non ha più UI (il rename
+  entità non rinomina il profilo referenziato — accettato, tracciato in KnownIssues #16).
+
+## ADR-013 — Sistema di telemetria e debugging estremo (Accepted, 2026-07-09)
+
+### Context
+I bug runtime (crash, memoria, modelli non renderizzati) non erano diagnosticabili senza
+osservazione manuale: serviva un sistema che renda il motore trasparente via file di log
+passabili tra sessioni di debug.
+
+### Decision
+Modulo `mini::telemetry` (`src/core/Telemetry.{hpp,cpp}`, header leggero senza dipendenze
+esposte), linkato a ENTRAMBI i binari. Tutti gli artefatti in `_telemetry_data/` (root
+progetto, risolta come `data/`; creata automaticamente all'avvio; in .gitignore):
+1. **Logging** — spdlog v1.14.1 (FetchContent): `engine_run.log` con livelli
+   TRACE/INFO/WARN/ERROR; file sink a TRACE, console a WARN+; flush su warn + ogni 3s.
+   Strumentati: Application (avvio/flag/registry/mode), Window, Renderer, battito memoria
+   ogni 600 frame.
+2. **Dump stato** — tasto **F12** in partita → `game_state.json` (frame, timestamp,
+   memoria MB, camera pos/forward, stato gioco, entità, hp/arma/heat player, ticket).
+3. **Input recorder** — `InputManager::processEvent` → `input_history.log`
+   (KEY_DOWN/UP, MOUSE_DOWN/UP con coordinate, ognuno col numero frame).
+4. **Crash net** — cpptrace v0.7.3: `SetUnhandledExceptionFilter` (SEH, incl. access
+   violation) + `std::set_terminate` → stack trace su terminale E `crash_report.txt`
+   (con frame e motivo).
+- **Sanitizers**: opzione CMake `GF_ENABLE_ASAN` (default OFF — troppo lenti per il
+  playtest quotidiano): MSVC → `/fsanitize=address` (+ `/INCREMENTAL:NO`);
+  **UBSan non esiste su MSVC** → aggiunto solo per toolchain non-MSVC.
+
+### Consequences
+- Diagnosi post-mortem senza riprodurre a mano: log + input history + crash report.
+- Verificato: build pulita, `_telemetry_data/` creata, `engine_run.log` popolato.
+  Da verificare con evento reale: crash report (serve un crash vero) e dump F12 (serve
+  input in finestra). Il frame counter correla i tre file.
+- Costo: due dipendenze FetchContent in più (tempo di primo configure).
+
+## ADR-014 — Assalto/Difesa come configurazioni; esito partita deciso dal mode
+## (Accepted, 2026-07-09)
+
+### Context
+La Fase 1 richiede Conquista/Assalto/Difesa come configurazioni dello stesso core
+(00_Vision). ADR-008 (IGameMode) e ADR-009 (CommandPosts) erano i prerequisiti; mancavano
+le modalità e la vittoria/sconfitta era hardcoded in Application (ticket team2 + nessun
+nemico vivo), inestendibile a regole a obiettivi.
+
+### Decision
+1. **`MatchOutcome` in IGameMode**: `virtual outcome(const World&)` (default Ongoing) —
+   Application chiede l'esito al mode invece di hardcodare la regola. Il lose per morte
+   del giocatore senza ticket resta in Application (riguarda il giocatore, non gli
+   obiettivi). ConquestMode implementa la regola storica.
+2. **Hook `updateObjectiveRules(World&, float dt)`** (protected virtual in ConquestMode):
+   Conquista = maggioranza post drena i ticket avversari (invariato). Le derivate
+   sostituiscono SOLO questo + outcome + ownership iniziale dei post.
+3. **AssaultMode / DefenseMode** (`game_modes/ObjectiveModes.{hpp,cpp}`), registrate in
+   factory come "assault"/"defense":
+   - Assalto: post iniziali ai nemici (`forceAllOwners(2)` — la mappa li autora neutrali,
+     la modalità decide); i ticket alleati calano nel tempo (ogni post catturato allunga
+     l'intervallo); vittoria = TUTTI i post; sconfitta = ticket alleati a 0.
+   - Difesa: speculare (post agli alleati, ticket nemici calano; sconfitta se i nemici
+     prendono tutto; vittoria a ticket nemici 0 + campo pulito).
+4. **Selezione nel PreMatch**: `MatchSettings.modeIndex` + riga "Modalita' di gioco" nella
+   pagina Regole (Row esteso con etichette enum); `startGame` crea il mode da
+   `matchModeId(modeIndex)`. Chiude il residuo ADR-008 (mode non più solo da CLI).
+5. **HUD stato post (Todo #6)**: `CommandPosts::status()` (label/owner/capturing/progress)
+   → `IGameMode::commandPosts()` → barra in alto: quadrato colorato per proprietario con
+   lettera + barra di cattura del team che sta catturando.
+
+### Consequences
+- Fase 1 "tre modalità come configurazioni" è reale: una modalità nuova = classe che
+  overrida 2-3 hook + riga in factory. La cattura è finalmente VISIBILE in gioco.
+- Nota bilanciamento: gli intervalli di bleed derivano da m_bleedInterval (6s); tarare
+  con playtest. I preset partita NON salvano ancora modeIndex (persistenza preset da
+  estendere — minor, tracciato).
+
+## ADR-011 — Split-screen feasibility verification as a gating spike (Proposed, 2026-07-09)
+
+### Context
+Local split-screen for 2 players is stated in 00_Vision as a **non-negotiable functional
+requirement**, not an aspiration. 08_KnownIssues #12 records that no evidence has been found
+in the current camera/input/rendering pipeline that more than one active local
+viewport/input source is supported simultaneously. Development continues to build systems
+(HUD, weapon-in-hand rendering, command post UI) that implicitly assume exactly one local
+player and one local camera. The longer this assumption goes unverified, the more code will
+need retrofitting if split-screen turns out to require structural changes to
+`Camera`/`InputManager`/`Renderer`.
+
+### Options Considered
+1. **Keep deferring verification indefinitely, address split-screen "when we get there."**
+   Rejected — every new single-player-assuming system built in the meantime increases the
+   retrofit cost if split-screen requires structural change; this is explicitly against the
+   Vision's own stated risk ("da verificare prima di espandere ulteriormente sistemi che
+   assumono un solo giocatore attivo").
+2. **Design a full split-screen input/camera/render architecture now, speculatively.**
+   Rejected — violates the "Things to Avoid" principle (no generic architecture without a
+   concrete, tested need) and risks premature complexity if the actual constraint turns out
+   to be narrower than assumed (e.g. only `Camera`/viewport rect needs duplication, not the
+   full input stack).
+3. **Run a small, time-boxed feasibility spike:** a minimal second local `Camera` + second
+   viewport rect rendering the same scene simultaneously (no new gameplay), to empirically
+   determine which layers (Window/viewport, Camera, InputManager, Renderer, HUD) already
+   support duplication and which don't. Chosen.
+
+### Decision
+Before any further HUD, progression, or command-layer system is built on a single-local-
+player assumption, run a feasibility spike:
+- Add a second `Camera` instance and a second screen-space viewport rect (e.g. left/right
+  half split) rendering the same live scene.
+- Do not implement second-player input, gameplay, or UI scaling yet — the spike's only goal
+  is to determine whether the render/camera layer can produce two simultaneous views without
+  structural rework.
+- Record the outcome as a finding in this ADR's Consequences section and in 05_CurrentState,
+  explicitly as one of: (a) feasible with current architecture, minor changes only; (b)
+  feasible but requires a documented refactor (list the affected systems); (c) not feasible
+  without a significant `Renderer`/`Window` redesign.
+
+### Reasoning
+A time-boxed empirical spike is cheaper than either extreme (ignoring the risk, or designing
+a speculative full solution) and directly follows the project's stated Decision Framework
+principle: prefer value/complexity over technical complexity, and avoid building generic
+architecture "without a concrete, tested need." The spike itself produces the concrete need
+(or lack thereof).
+
+### Consequences
+- **Positive:** Converts an open, vague risk (08_KnownIssues #12) into a concrete, documented
+  finding that future work can be planned against, with minimal upfront cost.
+- **Negative / cost:** Small amount of throwaway/prototype code if the outcome is (a) or (c)
+  and the spike code doesn't survive into the real implementation.
+- **Gating effect:** Per 06_Todo #16, further systems that assume a single local player
+  should not expand significantly until this spike's finding is recorded. This is a
+  soft-gate (documented risk), not a hard build block — use judgment for low-risk additions.
+
+### Finding (spike eseguito 2026-07-09)
+**Esito: (a) — fattibile con l'architettura attuale, modifiche minori.** Lo spike (toggle
+F9 in partita) renderizza la stessa scena live in due viewport affiancati con una seconda
+`Camera` (copia della principale, offset laterale). Costo reale:
+- `Renderer`: +2 metodi (`drawMeshFrom(const Camera&, ...)` — `drawMesh` ora vi delega —
+  e `setViewportRect`; più `getDrawableSize`). Nessun cambiamento a shader, mesh o frame
+  lifecycle.
+- `Camera` è un value type copiabile: nessun refactor necessario.
+- `Application`: loop entità estratto in una lambda `drawScene(const Camera&)`, chiamata
+   1 o 2 volte. HUD/menu invariati (viewport ripristinato full prima del 2D).
+Ciò che lo spike NON copre (lavoro vero della feature, quando arriverà): secondo input
+locale (`InputManager` è single-source), secondo PlayerController/HUD scalato per metà
+schermo, split della cattura mouse. Questi sono lavoro additivo, non redesign.
+
+### Status
+**Accepted (finding registrato).** Spike build-verified 2026-07-09; conferma visiva manuale
+(F9 in partita) in carico allo sviluppatore. 08_KnownIssues #12 risolto come caso (a);
+il codice spike resta nel binario come strumento debug innocuo (F9).

@@ -1,5 +1,5 @@
 {
-    "accuracy": 0.550000011920929,
+    "accuracy": 0.47999998927116394,
     "aggression": 0.5490000247955322,
     "cover_preference": 0.75,
     "flank_chance": 0.3009999990463257,
@@ -11,7 +11,6 @@
     "patrol_speed": 2.5,
     "peek_duration_max": 1.100000023841858,
     "peek_duration_min": 0.6000000238418579,
-    "profile_id": "B1 Battle Droid",
     "reaction_time": 0.4000000059604645,
     "reposition_chance": 0.30000001192092896,
     "retreat_hp_threshold": 0.25,

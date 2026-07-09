@@ -1,4 +1,46 @@
 {
-    "profile_id": "Clone Trooper",
-    "zones": []
+    "zones": [
+        {
+            "bone": "",
+            "damage_multiplier": 1.0,
+            "debug_visible": true,
+            "half_extents": [
+                15.058972358703613,
+                22.204967498779297,
+                11.256354331970215
+            ],
+            "name": "zona_0",
+            "offset": [
+                0.0,
+                128.5675048828125,
+                1.066202163696289
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "bone": "",
+            "damage_multiplier": 2.0,
+            "debug_visible": true,
+            "half_extents": [
+                7.600133895874023,
+                10.125139236450195,
+                10.798218727111816
+            ],
+            "name": "zona_1",
+            "offset": [
+                0.0,
+                165.84674072265625,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ]
+        }
+    ]
 }

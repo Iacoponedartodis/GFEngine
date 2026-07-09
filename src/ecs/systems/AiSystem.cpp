@@ -5,6 +5,7 @@
 #include "mini/physics/Collision.hpp"
 
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -13,6 +14,15 @@ namespace mini
 {
 
 static constexpr float PI = 3.14159265f;
+
+// Pseudo-random leggero e deterministico per la dispersione dei colpi
+// (niente <random>: qualità sufficiente e zero stato globale condiviso).
+static float aiRand01()
+{
+    static unsigned s = 0x9E3779B9u;
+    s = s * 1664525u + 1013904223u;
+    return (float)(s >> 8) / 16777216.0f;
+}
 
 static void aiMove(TransformComponent& et, float nx, float nz,
                    AiComponent& ai, float dt, World& world)
@@ -142,6 +152,10 @@ void AiSystem::update(World& world, float dt)
             if (!tt) { nearest = 0; }
             else { ai->lastKnownX = tt->x; ai->lastKnownZ = tt->z; }
             ai->hasLastKnown = true;
+            // Tempo di reazione (dal profilo AI): il primo colpo dopo una
+            // nuova acquisizione arriva con ritardo, non istantaneo.
+            if (ai->state != AiState::Alert && ai->reactionTime > 0.0f)
+                ai->shootCooldown = std::max(ai->shootCooldown, ai->reactionTime);
             ai->state = AiState::Alert;
             ai->alertTimer = 3.0f;
         }
@@ -289,6 +303,17 @@ void AiSystem::update(World& world, float dt)
         const float nz = et->z + moveDZ * moveSpeed * dt;
         aiMove(*et, nx, nz, *ai, dt, world);
 
+        // ── Salto anti-ostacolo (jump_enabled dal profilo AI) ─────────
+        // Se sta provando a muoversi ma è ferma da metà del tempo anti-stuck
+        // ed è a terra, tenta un salto PRIMA che scatti l'inversione di rotta:
+        // supera casse/coperture basse invece di rimbalzare avanti-indietro.
+        if (ai->jumpEnabled && !ai->stationary && moveSpeed > 0.0f
+            && ai->velY == 0.0f
+            && ai->stuckTimer > config::AI_STUCK_TIME * 0.5f)
+        {
+            ai->velY = config::AI_JUMP_IMPULSE;
+        }
+
         // ── Raffreddamento arma (sempre, anche fuori combattimento) ───
         if (ai->heat > 0.0f)
         {
@@ -306,6 +331,18 @@ void AiSystem::update(World& world, float dt)
         float dx = tt->x-et->x, dy = tt->y-et->y, dz = tt->z-et->z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;
+
+        // Dispersione dal profilo AI: accuracy 1 = perfetto, 0 = max spread.
+        // Perturba la direzione normalizzata di un angolo casuale.
+        const float spread = (1.0f - ai->accuracy) * config::AI_SPREAD_MAX;
+        if (spread > 0.0f)
+        {
+            dx += (aiRand01() - 0.5f) * 2.0f * spread * len;
+            dy += (aiRand01() - 0.5f) * 2.0f * spread * len;
+            dz += (aiRand01() - 0.5f) * 2.0f * spread * len;
+            len = std::sqrt(dx*dx + dy*dy + dz*dz);
+            if (len < 0.001f) continue;
+        }
 
         float inv = ai->bulletSpeed / len;
         EntityId b = world.createEntity();

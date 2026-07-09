@@ -2,6 +2,8 @@
 #include "util/RigReader.hpp"
 #include "util/FileDialog.hpp"
 #include "util/UiWidgets.hpp"
+#include "util/JsonSave.hpp"
+#include "util/DefinitionRename.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -213,8 +215,9 @@ void EntityEditor::loadEntries()
                                 z.offset = {zj["offset"][0], zj["offset"][1], zj["offset"][2]};
                             if (zj.contains("half_extents") && zj["half_extents"].size() >= 3)
                                 z.halfExt = {zj["half_extents"][0], zj["half_extents"][1], zj["half_extents"][2]};
-                            z.damageMult = zj.value("damage_multiplier", 1.0f);
-                            z.boneName   = zj.value("bone", std::string(""));
+                            z.damageMult   = zj.value("damage_multiplier", 1.0f);
+                            z.boneName     = zj.value("bone", std::string(""));
+                            z.debugVisible = zj.value("debug_visible", true);
                             if (zj.contains("rotation") && zj["rotation"].size() >= 3)
                                 z.eulerDeg = {zj["rotation"][0], zj["rotation"][1], zj["rotation"][2]};
                             e.hitboxZones.push_back(z);
@@ -262,6 +265,34 @@ void EntityEditor::loadEntries()
 
     scanDir("enemies", false);
     scanDir("allies",  true);
+}
+
+void EntityEditor::loadZonesFromProfile(const std::string& profileId)
+{
+    m_hitboxZones.clear();
+    if (profileId.empty()) return;
+
+    std::ifstream pf(getDataDir() + "hitboxes/" + profileId + ".json");
+    if (!pf.is_open()) return; // profilo nuovo: si parte da zero zone
+    json pj;
+    try { pf >> pj; } catch (...) { return; }
+    if (!pj.contains("zones") || !pj["zones"].is_array()) return;
+
+    for (auto& zj : pj["zones"])
+    {
+        EntityEntry::InlineHitZone z;
+        z.name = zj.value("name", std::string("zona"));
+        if (zj.contains("offset") && zj["offset"].size() >= 3)
+            z.offset = {zj["offset"][0], zj["offset"][1], zj["offset"][2]};
+        if (zj.contains("half_extents") && zj["half_extents"].size() >= 3)
+            z.halfExt = {zj["half_extents"][0], zj["half_extents"][1], zj["half_extents"][2]};
+        z.damageMult   = zj.value("damage_multiplier", 1.0f);
+        z.boneName     = zj.value("bone", std::string(""));
+        z.debugVisible = zj.value("debug_visible", true);
+        if (zj.contains("rotation") && zj["rotation"].size() >= 3)
+            z.eulerDeg = {zj["rotation"][0], zj["rotation"][1], zj["rotation"][2]};
+        m_hitboxZones.push_back(z);
+    }
 }
 
 void EntityEditor::selectEntry(int idx)
@@ -484,12 +515,12 @@ void EntityEditor::saveSelected()
     if (m_sel < 0 || m_sel >= (int)m_entries.size()) return;
     auto& e = m_entries[m_sel];
 
-    std::ifstream fin(e.jsonPath);
-    if (!fin.is_open()) { std::cerr << "[EntityEditor] Apertura fallita: " << e.jsonPath << "\n"; return; }
-    json j;
-    try { fin >> j; } catch (...) { std::cerr << "[EntityEditor] Parsing fallito.\n"; return; }
-    fin.close();
+    // saveJsonRMW (ADR-010): unico canale di scrittura JSON dell'editor.
+    if (e.hitboxProfileId.empty())
+        e.hitboxProfileId = e.id;
 
+    editor::jsonsave::saveJsonRMW(e.jsonPath, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
     j["mesh"]       = e.meshPath;
     j["mesh_rot_x"] = m_rotX;
     j["mesh_rot_y"] = m_rotY;
@@ -510,45 +541,8 @@ void EntityEditor::saveSelected()
     j["weapons"]        = e.weaponIds;
     j["abilities"]      = e.abilityIds;
 
-    // ── Hitbox → PROFILO condiviso (ADR-006) ──────────────────────────
-    // Le zone vengono scritte in data/hitboxes/<profileId>.json (schema del
-    // runtime: damage_multiplier). Se l'entità non referenzia un profilo,
-    // ne viene creato uno con id = id entità. Le zone inline legacy vengono
-    // rimosse dal JSON entità.
-    {
-        if (e.hitboxProfileId.empty())
-            e.hitboxProfileId = e.id;
-        j["hitbox_profile"] = e.hitboxProfileId;
-
-        json pj;
-        pj["profile_id"] = e.hitboxProfileId;
-        json zonesArr = json::array();
-        for (auto& z : m_hitboxZones)
-        {
-            json zj;
-            zj["name"]              = z.name;
-            zj["offset"]            = {z.offset.x, z.offset.y, z.offset.z};
-            zj["half_extents"]      = {z.halfExt.x, z.halfExt.y, z.halfExt.z};
-            zj["damage_multiplier"] = z.damageMult;
-            zj["debug_visible"]     = true;
-            zj["bone"]              = z.boneName;
-            zj["rotation"]          = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
-            zonesArr.push_back(zj);
-        }
-        pj["zones"] = zonesArr;
-
-        std::string profPath = getDataDir() + "hitboxes/" + e.hitboxProfileId + ".json";
-        std::ofstream pout(profPath);
-        if (pout.is_open())
-        {
-            pout << pj.dump(4) << "\n";
-            std::cout << "[EntityEditor] Profilo hitbox salvato: " << profPath << "\n";
-        }
-        else
-            std::cerr << "[EntityEditor] ERRORE scrittura profilo hitbox: " << profPath << "\n";
-
-        j.erase("hitbox_zones"); // legacy inline: deprecato da ADR-006
-    }
+    j["hitbox_profile"] = e.hitboxProfileId;
+    j.erase("hitbox_zones"); // legacy inline: deprecato da ADR-006
 
     // Arma in mano (posa)
     if (m_weaponId.empty())
@@ -563,11 +557,33 @@ void EntityEditor::saveSelected()
         wd["offset"] = {m_weaponOffset.x, m_weaponOffset.y, m_weaponOffset.z};
         j["weapon_display"] = wd;
     }
+    return true;
+    });
 
-    std::ofstream fout(e.jsonPath);
-    if (!fout.is_open()) { std::cerr << "[EntityEditor] Scrittura fallita.\n"; return; }
-    fout << j.dump(4) << "\n";
-    fout.close();
+    // ── Hitbox → PROFILO condiviso (ADR-006), via saveJsonRMW ─────────
+    // Zone scritte in data/hitboxes/<profileId>.json (schema runtime).
+    {
+        std::string profPath = getDataDir() + "hitboxes/" + e.hitboxProfileId + ".json";
+        editor::jsonsave::saveJsonRMW(profPath, [&](json& pj) {
+            pj.erase("profile_id"); // deprecato: id = nome file (ADR-001)
+            json zonesArr = json::array();
+            for (auto& z : m_hitboxZones)
+            {
+                json zj;
+                zj["name"]              = z.name;
+                zj["offset"]            = {z.offset.x, z.offset.y, z.offset.z};
+                zj["half_extents"]      = {z.halfExt.x, z.halfExt.y, z.halfExt.z};
+                zj["damage_multiplier"] = z.damageMult;
+                zj["debug_visible"]     = z.debugVisible;
+                zj["bone"]              = z.boneName;
+                zj["rotation"]          = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
+                zonesArr.push_back(zj);
+            }
+            pj["zones"] = zonesArr;
+            return true;
+        });
+        std::cout << "[EntityEditor] Profilo hitbox salvato: " << profPath << "\n";
+    }
 
     e.meshRotX    = m_rotX;
     e.meshRotY    = m_rotY;
@@ -694,10 +710,22 @@ void EntityEditor::tick(float dt)
 
 void EntityEditor::draw()
 {
+    // Rinomina completata nel frame precedente: ricarica e riseleziona.
+    if (!m_pendingSelectId.empty())
+    {
+        const std::string newId = m_pendingSelectId;
+        m_pendingSelectId.clear();
+        loadEntries();
+        for (int i = 0; i < (int)m_entries.size(); ++i)
+            if (m_entries[i].id == newId) { selectEntry(i); break; }
+    }
+
     // ── Colonna sinistra: lista entità (resizable) ────────────────────────
     ImGui::BeginGroup();
     ImGui::Text("Entita':");
-    ImGui::BeginChild("##elist", ImVec2(m_listW, -50), true);
+    // ResizeX: trascina il bordo destro per allargare la lista
+    ImGui::BeginChild("##elist", ImVec2(m_listW, -50),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     for (int i = 0; i < (int)m_entries.size(); ++i)
     {
         auto& e = m_entries[i];
@@ -735,7 +763,9 @@ void EntityEditor::draw()
     auto& e = m_entries[m_sel];
 
     // ── Colonna centrale: tab Visuale / Statistiche / Hitbox ────────────
-    ImGui::BeginChild("##ecenter", ImVec2(m_centerW, 0), false);
+    // ResizeX: trascina il bordo destro per allargare il pannello
+    ImGui::BeginChild("##ecenter", ImVec2(m_centerW, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     if (ImGui::BeginTabBar("##etabs"))
     {
         if (ImGui::BeginTabItem("Visuale"))
@@ -743,6 +773,32 @@ void EntityEditor::draw()
             ImGui::Text("%s", e.id.c_str());
             ImGui::SameLine();
             ImGui::TextDisabled("%s", e.isAlly ? "(Alleato)" : "(Nemico)");
+
+            // ── Rinomina (ADR-010): file fisico + sweep cross-reference ──
+            {
+                static char renameBuf[64] = "";
+                static std::string renameErr;
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 76.f);
+                ImGui::InputText("##erename", renameBuf, sizeof(renameBuf));
+                ImGui::SameLine();
+                if (ImGui::Button("Rinomina") && renameBuf[0] != '\0')
+                {
+                    int refs = 0;
+                    renameErr = editor::rename::renameDefinition(
+                        getDataDir(),
+                        e.isAlly ? editor::rename::Category::Ally
+                                 : editor::rename::Category::Enemy,
+                        e.id, renameBuf, &refs);
+                    if (renameErr.empty())
+                    {
+                        // Reload deferito al prossimo frame (stack ImGui intatto)
+                        m_pendingSelectId = renameBuf;
+                        renameBuf[0] = '\0';
+                    }
+                }
+                if (!renameErr.empty())
+                    ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());
+            }
 
             // Mesh path con browse
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 70);
@@ -1068,14 +1124,18 @@ void EntityEditor::drawHitboxTab()
         ImGui::Separator();
     }
 
-    // Left: zone list
-    ImGui::BeginChild("##hzlist", ImVec2(150, -50), true);
+    // Layout VERTICALE: la colonna centrale è stretta — lista zone in alto,
+    // proprietà a piena larghezza sotto. (Il vecchio layout affiancato
+    // schiacciava le proprietà a ~0px: "Danno x" e il resto erano invisibili.)
+    ImGui::TextDisabled("Zone (%d)", (int)m_hitboxZones.size());
+    ImGui::BeginChild("##hzlist", ImVec2(0, 120), true);
     for (int i = 0; i < (int)m_hitboxZones.size(); ++i)
     {
         auto& z = m_hitboxZones[i];
         bool sel = (i == m_selZone);
-        char lbl[64];
-        std::snprintf(lbl, sizeof(lbl), "%s", z.name.c_str());
+        char lbl[80];
+        std::snprintf(lbl, sizeof(lbl), "%s%s  x%.1f",
+                      z.boneName.empty() ? "" : "[B] ", z.name.c_str(), z.damageMult);
         if (ImGui::Selectable(lbl, sel))
         {
             m_selZone = i;
@@ -1086,30 +1146,33 @@ void EntityEditor::drawHitboxTab()
     }
     ImGui::EndChild();
 
-    if (ImGui::Button("+ Aggiungi", {150,0}))
     {
-        EntityEntry::InlineHitZone z;
-        z.name = "zona_" + std::to_string((int)m_hitboxZones.size());
-        m_hitboxZones.push_back(z);
-        m_selZone = (int)m_hitboxZones.size() - 1;
-        m_dirty = true;
-        syncViewportMarkers();
-    }
-    if (m_selZone >= 0 && m_selZone < (int)m_hitboxZones.size())
-    {
-        if (ImGui::Button("- Rimuovi", {150,0}))
+        const float bw = (ImGui::GetContentRegionAvail().x - 4.0f) * 0.5f;
+        if (ImGui::Button("+ Aggiungi", {bw, 0}))
+        {
+            EntityEntry::InlineHitZone z;
+            z.name = "zona_" + std::to_string((int)m_hitboxZones.size());
+            m_hitboxZones.push_back(z);
+            m_selZone = (int)m_hitboxZones.size() - 1;
+            m_dirty = true;
+            syncViewportMarkers();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_selZone < 0 || m_selZone >= (int)m_hitboxZones.size());
+        if (ImGui::Button("- Rimuovi", {bw, 0}))
         {
             m_hitboxZones.erase(m_hitboxZones.begin() + m_selZone);
             m_selZone = (m_selZone > 0) ? m_selZone - 1 : ((int)m_hitboxZones.size() > 0 ? 0 : -1);
             m_dirty = true;
             syncViewportMarkers();
         }
+        ImGui::EndDisabled();
     }
+    ImGui::Separator();
 
-    ImGui::SameLine();
-
-    // Right: zone properties
-    ImGui::BeginChild("##hzprops", ImVec2(0, 0), false);
+    // Proprietà zona: piena larghezza, sotto la lista.
+    // -64 riserva lo spazio per la barra Salva/Ripristina in fondo.
+    ImGui::BeginChild("##hzprops", ImVec2(0, -64), false);
     if (m_selZone >= 0 && m_selZone < (int)m_hitboxZones.size())
     {
         auto& z = m_hitboxZones[m_selZone];
@@ -1169,6 +1232,9 @@ void EntityEditor::drawHitboxTab()
 
         // Damage multiplier
         if (editor::ui::sliderRow("Danno x", z.damageMult, 0.1f, 5.0f, 0.05f, "%.2f"))
+            changed = true;
+
+        if (ImGui::Checkbox("Debug visibile##hzdbg", &z.debugVisible))
             changed = true;
 
         if (changed) { m_dirty = true; syncViewportMarkers(); }
@@ -1236,7 +1302,18 @@ void EntityEditor::drawStatsPanel()
     {
         if (ImGui::Selectable("-- nessuno --", e.hitboxProfileId.empty())) { e.hitboxProfileId.clear(); m_dirty = true; }
         for (auto& id : m_availableHitboxes)
-            if (ImGui::Selectable(id.c_str(), e.hitboxProfileId == id)) { e.hitboxProfileId = id; m_dirty = true; }
+            if (ImGui::Selectable(id.c_str(), e.hitboxProfileId == id))
+            {
+                e.hitboxProfileId = id;
+                // CRITICO: ricarica le zone dal profilo appena selezionato.
+                // Senza questo, il salvataggio scriveva le zone del profilo
+                // PRECEDENTE (anche vuote) sul nuovo → clobber di profili
+                // condivisi (incidente 2026-07-09: B1 svuotato via Heavy).
+                loadZonesFromProfile(id);
+                m_selZone = -1;
+                syncViewportMarkers();
+                m_dirty = true;
+            }
         ImGui::EndCombo();
     }
 

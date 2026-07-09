@@ -3,6 +3,8 @@
 #include "util/FileDialog.hpp"
 #include "util/RigReader.hpp"
 #include "util/UiWidgets.hpp"
+#include "util/JsonSave.hpp"
+#include "util/DefinitionRename.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -283,13 +285,9 @@ void WeaponEditor::saveSelected()
     w.meshScale = m_scale;
     w.attachPoints = m_attachPoints;
 
-    json j;
-    {
-        std::ifstream f(w.jsonPath);
-        if (f) { try { f >> j; } catch (...) {} }
-    }
-
-    j["id"]               = w.id;
+    // saveJsonRMW (ADR-010): unico canale di scrittura JSON dell'editor.
+    editor::jsonsave::saveJsonRMW(w.jsonPath, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
     j["name"]             = w.name;
     j["faction"]          = w.faction;
     j["mesh"]             = w.meshPath;
@@ -318,9 +316,9 @@ void WeaponEditor::saveSelected()
     j["spread_move"]      = w.spreadMove;
     j["spread_sprint"]    = w.spreadSprint;
     j["spread_jump"]      = w.spreadJump;
-
-    std::ofstream out(w.jsonPath);
-    if (out) { out << j.dump(4); m_dirty = false; }
+    return true;
+    });
+    m_dirty = false;
 }
 
 // ── browseForMesh ─────────────────────────────────────────────────────────────
@@ -369,44 +367,55 @@ void WeaponEditor::draw()
     float totalW = ImGui::GetContentRegionAvail().x;
     float totalH = ImGui::GetContentRegionAvail().y;
 
-    float listW  = 180.0f;
-    float panelW = 280.0f;
-    float vpW    = totalW - listW - panelW - ImGui::GetStyle().ItemSpacing.x * 2;
+    // Larghezze ridimensionabili (persistite nell'ini di ImGui via ResizeX);
+    // il viewport prende lo spazio che resta.
+    static float s_panelW = 320.0f;
 
-    ImGui::BeginChild("##wp_panels", ImVec2(totalW, totalH), false);
+    ImGui::BeginChild("##wp_panels", ImVec2(totalW, totalH), ImGuiChildFlags_None);
 
-    // Lista
-    ImGui::BeginChild("##wlist", ImVec2(listW, 0), true);
-    drawList(listW);
+    // Lista (trascina il bordo destro per allargare)
+    ImGui::BeginChild("##wlist", ImVec2(180, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    drawList(ImGui::GetContentRegionAvail().x);
     ImGui::EndChild();
+    const float listW = ImGui::GetItemRectSize().x;
 
     ImGui::SameLine();
 
+    float vpW = totalW - listW - s_panelW - ImGui::GetStyle().ItemSpacing.x * 2;
+    if (vpW < 120.0f) vpW = 120.0f;
+
     // Viewport
-    ImGui::BeginChild("##wvp", ImVec2(vpW, 0), false,
+    ImGui::BeginChild("##wvp", ImVec2(vpW, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     drawViewport(vpW);
     ImGui::EndChild();
 
     ImGui::SameLine();
 
-    // Pannello destra con tab Mesh / Statistiche
-    ImGui::BeginChild("##wpanel", ImVec2(panelW, 0), true);
-    if (ImGui::BeginTabBar("##wtabs"))
+    // Pannello destra con tab Mesh / Statistiche (ridimensionabile: il grip
+    // è sul bordo destro; la larghezza effettiva viene riletta ogni frame)
+    ImGui::BeginChild("##wpanel", ImVec2(s_panelW, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     {
-        if (ImGui::BeginTabItem("Mesh"))
+        const float panelW = ImGui::GetContentRegionAvail().x;
+        if (ImGui::BeginTabBar("##wtabs"))
         {
-            drawMeshTab(panelW - 8.0f);
-            ImGui::EndTabItem();
+            if (ImGui::BeginTabItem("Mesh"))
+            {
+                drawMeshTab(panelW);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Statistiche"))
+            {
+                drawStatsTab(panelW);
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
-        if (ImGui::BeginTabItem("Statistiche"))
-        {
-            drawStatsTab(panelW - 8.0f);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
     }
     ImGui::EndChild();
+    s_panelW = ImGui::GetItemRectSize().x;
 
     ImGui::EndChild();
 }
@@ -444,6 +453,34 @@ void WeaponEditor::drawMeshTab(float panelW)
     bool changed = false;
 
     ImGui::TextColored({0.9f,0.7f,0.2f,1.0f}, "%s", w.name.c_str());
+    ImGui::TextDisabled("id: %s", w.id.c_str());
+
+    // ── Rinomina (ADR-010): file fisico + sweep cross-reference ─────────
+    {
+        static char renameBuf[64] = "";
+        static std::string renameErr;
+        ImGui::SetNextItemWidth(slW - 76.f);
+        ImGui::InputText("##wrename", renameBuf, sizeof(renameBuf));
+        ImGui::SameLine();
+        if (ImGui::Button("Rinomina") && renameBuf[0] != '\0')
+        {
+            int refs = 0;
+            renameErr = editor::rename::renameDefinition(
+                getDataDir(), editor::rename::Category::Weapon,
+                w.id, renameBuf, &refs);
+            if (renameErr.empty())
+            {
+                std::string newId = renameBuf;
+                renameBuf[0] = '\0';
+                loadWeapons();
+                for (int i = 0; i < (int)m_weapons.size(); ++i)
+                    if (m_weapons[i].id == newId) { selectWeapon(i); break; }
+                return; // lista rigenerata: chiudi il frame corrente
+            }
+        }
+        if (!renameErr.empty())
+            ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());
+    }
     ImGui::Separator();
 
     // ── Mesh arma ───────────────────────────────────────────────────────

@@ -89,6 +89,17 @@ public:
     [[nodiscard]] std::uint64_t                getTickCount() const;
     [[nodiscard]] const std::vector<EntityId>& getEntities()  const;
 
+    // ── Eventi combat per il feedback HUD (hitmarker) ─────────────────
+    // Scritti dal CombatSystem nel tick, consumati (e azzerati) da
+    // Application dopo world.tick(). Mailbox minimale, niente event bus.
+    struct CombatFeedback
+    {
+        bool team1Hit  = false;   // un proiettile del team 1 ha colpito
+        bool team1Kill = false;   // ...e ha eliminato il bersaglio
+        void reset() { team1Hit = false; team1Kill = false; }
+    };
+    CombatFeedback combatFeedback;
+
 private:
     std::uint64_t m_tickCount    = 0;
     EntityId      m_nextEntityId = 1;

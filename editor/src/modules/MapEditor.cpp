@@ -6,6 +6,8 @@
 #include "modules/MapEditor.hpp"
 #include "util/FileDialog.hpp"
 #include "util/UiWidgets.hpp"
+#include "util/JsonSave.hpp"
+#include "util/DefinitionRename.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -208,13 +210,9 @@ bool MapEditor::saveMap()
 {
     if (m_mapJsonPath.empty()) return false;
 
-    // Leggi JSON esistente (per preservare i campi non toccati)
-    json j;
-    {
-        std::ifstream f(m_mapJsonPath);
-        if (f) { try { f >> j; } catch (...) {} }
-    }
-
+    // saveJsonRMW (ADR-010): unico canale di scrittura JSON dell'editor.
+    return editor::jsonsave::saveJsonRMW(m_mapJsonPath, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
     j["spawn_team1"] = {m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]};
     j["spawn_team2"] = {m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]};
 
@@ -245,12 +243,9 @@ bool MapEditor::saveMap()
         postsArr.push_back(cp);
     }
     j["command_posts"] = postsArr;
-
-    std::ofstream out(m_mapJsonPath);
-    if (!out) return false;
-    out << j.dump(4);
     m_dirty = false;
     return true;
+    });
 }
 
 // ── addBox ────────────────────────────────────────────────────────────────────
@@ -401,21 +396,26 @@ void MapEditor::draw()
     float toolbarH = ImGui::GetItemRectSize().y + ImGui::GetStyle().ItemSpacing.y;
     float remaining = totalH - toolbarH - 4.0f;
 
-    float listW   = 200.0f;
-    float propW   = 220.0f;
-    float vpW     = totalW - listW - propW - ImGui::GetStyle().ItemSpacing.x * 2;
+    // Pannelli ridimensionabili: lista e proprietà con grip sul bordo destro;
+    // il viewport prende lo spazio residuo.
+    static float s_propW = 260.0f;
 
-    ImGui::BeginChild("##map_panels", ImVec2(totalW, remaining), false);
+    ImGui::BeginChild("##map_panels", ImVec2(totalW, remaining), ImGuiChildFlags_None);
 
     // ── Lista box ────────────────────────────────────────────────────────
-    ImGui::BeginChild("##box_list", ImVec2(listW, 0), true);
-    drawBoxList(listW, remaining);
+    ImGui::BeginChild("##box_list", ImVec2(200, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    drawBoxList(ImGui::GetContentRegionAvail().x, remaining);
     ImGui::EndChild();
+    const float listW = ImGui::GetItemRectSize().x;
 
     ImGui::SameLine();
 
+    float vpW = totalW - listW - s_propW - ImGui::GetStyle().ItemSpacing.x * 2;
+    if (vpW < 120.0f) vpW = 120.0f;
+
     // ── Viewport 3D ──────────────────────────────────────────────────────
-    ImGui::BeginChild("##map_vp", ImVec2(vpW, 0), false,
+    ImGui::BeginChild("##map_vp", ImVec2(vpW, 0), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     drawViewport(vpW, remaining);
     ImGui::EndChild();
@@ -423,9 +423,11 @@ void MapEditor::draw()
     ImGui::SameLine();
 
     // ── Proprietà ────────────────────────────────────────────────────────
-    ImGui::BeginChild("##box_props", ImVec2(propW, 0), true);
-    drawProperties(propW, remaining);
+    ImGui::BeginChild("##box_props", ImVec2(s_propW, 0),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    drawProperties(ImGui::GetContentRegionAvail().x, remaining);
     ImGui::EndChild();
+    s_propW = ImGui::GetItemRectSize().x;
 
     ImGui::EndChild();
 }
@@ -465,6 +467,33 @@ void MapEditor::drawToolbar()
     ImGui::SameLine();
     if (ImGui::Button("Elimina") && m_selBox >= 0) {
         ImGui::OpenPopup("##del_confirm");
+    }
+
+    // ── Rinomina mappa (ADR-010) ─────────────────────────────────────────
+    if (!m_mapId.empty())
+    {
+        ImGui::SameLine(0, 16);
+        static char renameBuf[64] = "";
+        static std::string renameErr;
+        ImGui::SetNextItemWidth(110.0f);
+        ImGui::InputText("##mrename", renameBuf, sizeof(renameBuf));
+        ImGui::SameLine();
+        if (ImGui::Button("Rinomina") && renameBuf[0] != '\0')
+        {
+            int refs = 0;
+            renameErr = editor::rename::renameDefinition(
+                getDataDir() + "/", editor::rename::Category::Map,
+                m_mapId, renameBuf, &refs);
+            if (renameErr.empty())
+            {
+                std::string newId = renameBuf;
+                renameBuf[0] = '\0';
+                loadMaps();
+                loadMap(newId);
+            }
+        }
+        if (!renameErr.empty())
+        { ImGui::SameLine(); ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str()); }
     }
 
     ImGui::SameLine(0, 16);

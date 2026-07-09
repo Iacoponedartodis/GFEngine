@@ -5,6 +5,7 @@
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/game_modes/ConquestMode.hpp"
 #include "mini/game/game_modes/SandboxMode.hpp"
+#include "mini/game/game_modes/ObjectiveModes.hpp"
 
 #include <iostream>
 
@@ -14,6 +15,8 @@ namespace mini
 std::unique_ptr<IGameMode> createGameMode(const std::string& modeId)
 {
     if (modeId == "conquest") return std::make_unique<ConquestMode>();
+    if (modeId == "assault")  return std::make_unique<AssaultMode>();
+    if (modeId == "defense")  return std::make_unique<DefenseMode>();
     if (modeId == "sandbox")  return std::make_unique<SandboxMode>();
 
     std::cerr << "[GameMode] Modalita' sconosciuta '" << modeId

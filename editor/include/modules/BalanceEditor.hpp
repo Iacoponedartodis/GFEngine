@@ -18,10 +18,8 @@ private:
 
     // Selezioni correnti per ogni tab
     std::string m_selWeapon;
-    std::string m_selEnemy;
     std::string m_selAI;
     std::string m_selMap;
-    std::string m_selAlly;
     std::string m_selPlayerDef;
 
     // Buffer persistenti (evita copia ogni frame)
@@ -30,18 +28,14 @@ private:
 
     // ── Tab draw ─────────────────────────────────────────────────────
     void drawWeaponsTab();
-    void drawEnemiesTab();
     void drawAITab();
     void drawMapsTab();
-    void drawAlliesTab();
     void drawPlayerDefTab();
 
     // ── Salvataggio ──────────────────────────────────────────────────
     void saveWeapon   (const mini::WeaponDef&     w);
-    void saveEnemy    (const mini::EnemyDef&      e);
     void saveAI       (const mini::AiProfileDef&  a);
     void saveMap      (const mini::MapDef&         m);
-    void saveAlly     (const mini::EnemyDef&      e);
     void savePlayerDef(const mini::PlayerDef&     p);
 
     void reload();

@@ -40,7 +40,6 @@
     ],
     "faction": "republic",
     "hitbox_profile": "Clone Trooper",
-    "id": "Clone Trooper",
     "mesh": "assets/models/allies/clone_trooper_sw_tcw_republic_heroes.glb",
     "mesh_rot_x": 0.0,
     "mesh_rot_y": 0.0,

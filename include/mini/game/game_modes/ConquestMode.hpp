@@ -38,6 +38,8 @@ struct RespawnEntry
 
     // Arma primaria: risolta in spawnUnit (cadenza, calore, proiettile)
     std::string weaponId;
+    // Profilo AI: risolto in spawnUnit (seekSpeed, accuracy, jump, reaction)
+    std::string aiProfileId;
 
     // Arma visibile in mano (mesh + posa nel model space del personaggio)
     Mesh*     weaponMesh  = nullptr;
@@ -58,6 +60,9 @@ public:
     [[nodiscard]] int getTeam1Tickets()        const override { return m_team1Tickets; }
     [[nodiscard]] int getTeam2Tickets()        const override { return m_team2Tickets; }
     [[nodiscard]] bool hasVictoryCondition()   const override { return true; }
+    [[nodiscard]] MatchOutcome outcome(const World& world) const override;
+    [[nodiscard]] const CommandPosts* commandPosts() const override
+    { return &m_commandPosts; }
     [[nodiscard]] Mesh*    getDefaultMesh()    const { return m_mesh; }
     [[nodiscard]] Texture* getDefaultTexture() const { return m_tex; }
 
@@ -75,7 +80,12 @@ public:
     float respawnDelay        = 4.0f;
     float playerHp            = 100.0f;
 
-private:
+protected:
+    // Hook per le modalità derivate (Assalto/Difesa, ADR-014): regole
+    // obiettivo applicate ogni update. Default Conquista: la maggioranza
+    // dei post drena i ticket avversari.
+    virtual void updateObjectiveRules(World& world, float dt);
+
     EntityId  m_playerEntity = 0;
     glm::vec3 m_spawnPos     = {0, 0.86f, 8.0f};
 
@@ -88,11 +98,12 @@ private:
     int m_team1Tickets = 5;
     int m_team2Tickets = 10;
 
-    // Command post (ADR-009): la maggioranza dei post drena i ticket avversari.
+    // Command post (ADR-009)
     CommandPosts m_commandPosts;
     float        m_bleedTimer    = 0.0f;
     float        m_bleedInterval = 6.0f;
 
+private:
     std::vector<RespawnEntry> m_respawnQueue;
 
     struct UnitTemplate
@@ -114,6 +125,7 @@ private:
         float meshRotY  = 0.0f;
         float meshScale = 1.0f;
         std::string weaponId;
+        std::string aiProfileId;
         Mesh*     weaponMesh  = nullptr;
         glm::mat4 weaponLocal = glm::mat4(1.0f);
     };

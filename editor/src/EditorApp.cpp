@@ -2,7 +2,6 @@
 #include "ui/HomeScreen.hpp"
 #include "viewport/FreeCameraViewport.hpp"
 #include "modules/BalanceEditor.hpp"
-#include "modules/HitboxEditor.hpp"
 #include "modules/EntityEditor.hpp"
 #include "modules/MapEditor.hpp"
 #include "modules/WeaponEditor.hpp"
@@ -12,6 +11,7 @@
 #include <imgui_impl_opengl3.h>
 #include <SDL2/SDL.h>
 #include <mini/platform/OpenGL.hpp>
+#include <mini/core/Telemetry.hpp>
 
 #include <iostream>
 #include <cstdio>
@@ -31,6 +31,9 @@ EditorApp::~EditorApp() { shutdown(); }
 
 void EditorApp::init()
 {
+    // Telemetria (ADR-013): logger + crash net anche per l'editor.
+    mini::telemetry::init("GFEditor");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
         throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
@@ -88,7 +91,6 @@ void EditorApp::init()
     m_homeScreen    = std::make_unique<HomeScreen>();
     m_viewport      = std::make_unique<FreeCameraViewport>();
     m_balanceEditor = std::make_unique<BalanceEditor>();
-    m_hitboxEditor  = std::make_unique<HitboxEditor>();
     m_entityEditor  = std::make_unique<EntityEditor>();
     m_mapEditor     = std::make_unique<MapEditor>();
     m_weaponEditor  = std::make_unique<WeaponEditor>();
@@ -191,8 +193,6 @@ void EditorApp::tick(float dt)
         m_viewport->tick(dt);
     else if (m_active == ActiveModule::EntityEditor)
         m_entityEditor->tick(dt);
-    else if (m_active == ActiveModule::HitboxEditor)
-        m_hitboxEditor->tick(dt);
     else if (m_active == ActiveModule::MapEditor)
         m_mapEditor->tick(dt);
     else if (m_active == ActiveModule::WeaponEditor)
@@ -213,7 +213,6 @@ void EditorApp::renderMenuBar()
     if (ImGui::BeginMenu("Moduli"))
     {
         if (ImGui::MenuItem("Free Camera Viewport"))    m_active = ActiveModule::FreeCameraViewport;
-        if (ImGui::MenuItem("Hitbox Editor"))   m_active = ActiveModule::HitboxEditor;
         if (ImGui::MenuItem("Balance Editor"))  m_active = ActiveModule::BalanceEditor;
         if (ImGui::MenuItem("Entity Editor"))   m_active = ActiveModule::EntityEditor;
         if (ImGui::MenuItem("Map Editor"))      m_active = ActiveModule::MapEditor;
@@ -232,7 +231,6 @@ void EditorApp::renderMenuBar()
     // Modulo attivo al centro
     const char* modName = "Home";
     if (m_active == ActiveModule::FreeCameraViewport) modName = "Free Camera Viewport";
-    if (m_active == ActiveModule::HitboxEditor)      modName = "Hitbox Editor";
     if (m_active == ActiveModule::BalanceEditor)     modName = "Balance Editor";
     if (m_active == ActiveModule::EntityEditor)      modName = "Entity Editor";
     if (m_active == ActiveModule::MapEditor)         modName = "Map Editor";
@@ -314,15 +312,6 @@ void EditorApp::render()
         m_balanceEditor->draw();
         ImGui::End();
     }
-    else if (m_active == ActiveModule::HitboxEditor)
-    {
-        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
-        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
-        ImGui::Begin("Hitbox Editor", nullptr);
-        m_hitboxEditor->draw();
-        ImGui::End();
-    }
     else if (m_active == ActiveModule::EntityEditor)
     {
         const ImGuiViewport* vp2 = ImGui::GetMainViewport();
@@ -384,6 +373,7 @@ void EditorApp::run()
     Uint32 lastTime = SDL_GetTicks();
     while (m_running)
     {
+        mini::telemetry::beginFrame();
         Uint32 now = SDL_GetTicks();
         float dt = (now - lastTime) / 1000.0f;
         if (dt > 0.25f) dt = 0.25f;
@@ -392,6 +382,7 @@ void EditorApp::run()
         tick(dt);
         render();
     }
+    mini::telemetry::shutdown();
 }
 
 } // namespace editor

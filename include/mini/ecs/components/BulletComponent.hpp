@@ -10,6 +10,7 @@ struct BulletComponent
     float damage    = 25.0f; // danno inflitto all'impatto
     float lifetime  =  3.0f; // secondi rimanenti prima di scomparire
     int   ownerTeam =  1;    // i proiettili NON colpiscono entita' dello stesso team
+    bool  fromPlayer = false; // true SOLO per i colpi del giocatore (hitmarker HUD)
 };
 
 } // namespace mini

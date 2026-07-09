@@ -27,6 +27,7 @@ struct ResolvedEnemyArchetype
     std::string hitboxProfileId;
     std::string meshPath;
     std::string weaponId;
+    std::string aiProfileId;
 
     float meshRotX  = 0.0f;
     float meshRotY  = 0.0f;
@@ -76,6 +77,7 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
     out.meshRotY  = enemy->meshRotY;
     out.meshScale = enemy->meshScale;
     out.weaponId  = enemy->primaryWeaponId();
+    out.aiProfileId = enemy->aiProfileId;
 
     if (registry)
     {
@@ -221,6 +223,18 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     if (m_map && !m_map->commandPosts.empty())
         aic.patrolDwell = 12.0f;
 
+    // ── Profilo AI: seekSpeed reale + salto/precisione/reazione ──────────
+    if (m_registry && !info.aiProfileId.empty())
+    {
+        if (const AiProfileDef* ap = m_registry->getAiProfile(info.aiProfileId))
+        {
+            aic.seekSpeed    = ap->seekSpeed;
+            aic.jumpEnabled  = ap->jumpEnabled;
+            aic.accuracy     = ap->accuracy;
+            aic.reactionTime = ap->reactionTime;
+        }
+    }
+
     // ── Arma reale: cadenza + surriscaldamento + proiettile dal WeaponDef ─
     // L'AI spara a una frazione della cadenza dell'arma (bilanciamento):
     // il calore la costringe comunque a raffiche + pause come il giocatore.
@@ -262,19 +276,17 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     tpl.meshRotY       = info.meshRotY;
     tpl.meshScale      = info.meshScale;
     tpl.weaponId       = info.weaponId;
+    tpl.aiProfileId    = info.aiProfileId;
     tpl.weaponMesh     = info.weaponMesh;
     tpl.weaponLocal    = info.weaponLocal;
 
-    if (m_registry)
+    // Profilo hitbox: sempre risolto a monte (id entità come fallback,
+    // ADR-006/007). Nessun id hardcoded: se manca, l'unità usa il fallback
+    // sferico del CombatSystem.
+    if (m_registry && !info.hitboxProfileId.empty())
     {
-        const std::string profileId = info.hitboxProfileId.empty()
-                                      ? (info.teamId == 2 ? "grunt" : "")
-                                      : info.hitboxProfileId;
-        if (!profileId.empty())
-        {
-            const auto* hp = m_registry->getHitboxProfile(profileId);
-            if (hp) world.addHitbox(e, HitboxComponent{hp});
-        }
+        const auto* hp = m_registry->getHitboxProfile(info.hitboxProfileId);
+        if (hp) world.addHitbox(e, HitboxComponent{hp});
     }
 
     m_trackedUnits.push_back({e, tpl});
@@ -316,6 +328,7 @@ void ConquestMode::checkDeaths(World& world)
                 entry.meshRotY        = tpl.meshRotY;
                 entry.meshScale       = tpl.meshScale;
                 entry.weaponId        = tpl.weaponId;
+                entry.aiProfileId     = tpl.aiProfileId;
                 entry.weaponMesh      = tpl.weaponMesh;
                 entry.weaponLocal     = tpl.weaponLocal;
                 m_respawnQueue.push_back(entry);
@@ -428,7 +441,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                               float meshScale = 1.0f,
                               const std::string& weaponId = "",
                               Mesh* weaponMesh = nullptr,
-                              const glm::mat4& weaponLocal = glm::mat4(1.0f))
+                              const glm::mat4& weaponLocal = glm::mat4(1.0f),
+                              const std::string& aiProfileId = "")
     {
         RespawnEntry info;
         info.timer           = 0;
@@ -461,6 +475,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         info.weaponId  = weaponId;
         info.weaponMesh  = weaponMesh;
         info.weaponLocal = weaponLocal;
+        info.aiProfileId = aiProfileId;
         spawnUnit(world, info);
     };
 
@@ -542,7 +557,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
                resolved.meshPath,
                resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
-               resolved.weaponId, wa.mesh, wa.local);
+               resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId);
     }
 
     // ── Lista alleati da mappa/registry ─────────────────────────────────────
@@ -611,7 +626,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                        8.0f, 20.0f, 5.0f,
                        meshPath, arx, ary, asc,
                        allyDef ? allyDef->primaryWeaponId() : std::string(),
-                       wa.mesh, wa.local);
+                       wa.mesh, wa.local,
+                       allyDef ? allyDef->aiProfileId : std::string());
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────
@@ -670,34 +686,59 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
               << m_commandPosts.count() << " command post.\n";
 }
 
+// Regole obiettivo di Conquista: maggioranza dei post → drena i ticket
+// avversari. Le modalità derivate (Assalto/Difesa) sostituiscono questo hook.
+void ConquestMode::updateObjectiveRules(World& /*world*/, float dt)
+{
+    if (m_commandPosts.count() == 0) return;
+
+    m_bleedTimer += dt;
+    if (m_bleedTimer < m_bleedInterval) return;
+    m_bleedTimer -= m_bleedInterval;
+
+    const int own1 = m_commandPosts.countOwnedBy(1);
+    const int own2 = m_commandPosts.countOwnedBy(2);
+    if (own1 > own2 && m_team2Tickets > 0)
+    {
+        --m_team2Tickets;
+        std::cout << "[Conquest] Maggioranza post alleata: ticket nemici -> "
+                  << m_team2Tickets << "\n";
+    }
+    else if (own2 > own1 && m_team1Tickets > 0)
+    {
+        --m_team1Tickets;
+        std::cout << "[Conquest] Maggioranza post nemica: ticket alleati -> "
+                  << m_team1Tickets << "\n";
+    }
+}
+
+// Esito Conquista: vittoria quando i nemici non hanno più ticket né unità.
+MatchOutcome ConquestMode::outcome(const World& world) const
+{
+    if (world.getTickCount() <= 10) return MatchOutcome::Ongoing;
+    if (m_team2Tickets <= 0)
+    {
+        bool enemyAlive = false;
+        for (EntityId id : world.getEntities())
+        {
+            const auto* tm = world.getTeam(id);
+            const auto* hp = world.getHealth(id);
+            if (tm && tm->teamId == 2 && hp && hp->current > 0.0f
+                && !world.getBullet(id))
+            { enemyAlive = true; break; }
+        }
+        if (!enemyAlive) return MatchOutcome::Team1Win;
+    }
+    return MatchOutcome::Ongoing;
+}
+
 void ConquestMode::update(World& world, float dt)
 {
     checkDeaths(world);
 
-    // ── Command post: cattura + ticket bleed (ADR-009) ───────────────────
+    // ── Command post: cattura + regole obiettivo della modalità ──────────
     m_commandPosts.update(world, dt);
-    if (m_commandPosts.count() > 0)
-    {
-        m_bleedTimer += dt;
-        if (m_bleedTimer >= m_bleedInterval)
-        {
-            m_bleedTimer -= m_bleedInterval;
-            const int own1 = m_commandPosts.countOwnedBy(1);
-            const int own2 = m_commandPosts.countOwnedBy(2);
-            if (own1 > own2 && m_team2Tickets > 0)
-            {
-                --m_team2Tickets;
-                std::cout << "[Conquest] Maggioranza post alleata: ticket nemici -> "
-                          << m_team2Tickets << "\n";
-            }
-            else if (own2 > own1 && m_team1Tickets > 0)
-            {
-                --m_team1Tickets;
-                std::cout << "[Conquest] Maggioranza post nemica: ticket alleati -> "
-                          << m_team1Tickets << "\n";
-            }
-        }
-    }
+    updateObjectiveRules(world, dt);
 
     for (auto it = m_respawnQueue.begin(); it != m_respawnQueue.end(); )
     {

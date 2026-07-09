@@ -18,8 +18,24 @@
 namespace mini
 {
 
+// Modalità selezionabili nel PreMatch (indici stabili per UI/preset, ADR-014)
+inline const char* const* matchModeNames()
+{
+    static const char* names[] = { "Conquista", "Assalto", "Difesa" };
+    return names;
+}
+inline const char* matchModeId(int index)
+{
+    switch (index) { case 1: return "assault"; case 2: return "defense";
+                     default: return "conquest"; }
+}
+constexpr int MATCH_MODE_COUNT = 3;
+
 struct MatchSettings
 {
+    // ── Modalità (0=Conquista, 1=Assalto, 2=Difesa) ───────────────────
+    int   modeIndex     = 0;
+
     // ── Regole partita ────────────────────────────────────────────────
     int   team1Tickets  = 5;
     int   team2Tickets  = 10;

@@ -1,6 +1,36 @@
 # 05 — Current State
 
+## 2026-07-09 (12) — Spike split-screen (ADR-011): esito (a)
+- Due viewport + seconda Camera sulla stessa scena live: funziona con sole aggiunte minori
+  al Renderer (`drawMeshFrom(const Camera&)`, `setViewportRect`). Toggle debug F9 in
+  partita. Il soft-gate ADR-011 decade; il lavoro futuro (input/HUD del secondo giocatore)
+  è additivo. Fix minore: nel PreMatch la riga "Modalità" non disegna più la barra
+  (il nome, es. "Conquista", finiva sotto la barra).
+
+## 2026-07-09 (3) — Hitbox solo in Entity Editor (ADR-012)
+- HitboxEditor rimosso; EntityEditor copre tutto (incl. debug_visible, gap colmato).
+  BalanceEditor ripulito (via tab Nemici/Alleati vestigiali). Ultimo id hardcoded
+  ("grunt" in spawnUnit) rimosso. Profili orfani eliminati. Tab Balance: Armi/AI/Mappe/
+  Personaggio.
+
+## 2026-07-09 (2) — AI dal profilo
+- L'AI ora usa dal `AiProfileDef`: `jump_enabled` (salto anti-ostacolo quando bloccata a
+  terra), `accuracy` (dispersione colpi), `reaction_time` (ritardo primo colpo),
+  `seek_speed`. Profilo `grunt` creato (Todo #7). Abilità runtime e ruoli tattici deferiti
+  a un documento Planned Feature (Todo #3).
+
+## 2026-07-09 — Messa in regola (ADR-010 Accepted)
+- `saveJsonRMW` centralizzato + `.bak`: unico canale di scrittura JSON editor (tutti i
+  moduli migrati). Comando **Rinomina** con sweep cross-ref in Weapon/Entity/Hitbox/Map
+  editor. Audit dropdown passato. `id`/`profile_id` deprecati in rimozione progressiva.
+- Pendente: smoke GUI del rename (KnownIssues #7); poi chiudere #7.
+
 _Last verified: 2026-07-04 (against live code)._
+
+## 2026-07-09 (11) — Tre modalità reali (ADR-014)
+- Conquista/Assalto/Difesa selezionabili nel PreMatch (pagina Regole); esito partita
+  deciso dal mode via `outcome()`; HUD mostra proprietario+cattura dei command post.
+  La promessa Fase 1 "modalità come configurazioni" è implementata.
 
 ## Position vs Vision roadmap (00_Vision)
 **We are mid/late-Phase 1** ("core playable"). Present: 1 map (firebase, data-driven),

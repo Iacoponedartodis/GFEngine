@@ -16,10 +16,15 @@ class World;
 class Mesh;
 class Texture;
 class DefinitionRegistry;
+class CommandPosts;
 struct MatchSettings;
 
 // Mappa path mesh → puntatore Mesh (non-owning, vive in Application)
 using MeshCache = std::unordered_map<std::string, Mesh*>;
+
+// Esito della partita, deciso dal MODE (ADR-014): Application non hardcoda
+// più le regole di vittoria — le chiede alla modalità attiva.
+enum class MatchOutcome { Ongoing, Team1Win, Team2Win };
 
 class IGameMode
 {
@@ -45,6 +50,17 @@ public:
 
     // false = modalità senza vittoria/sconfitta (es. sandbox di prova)
     [[nodiscard]] virtual bool hasVictoryCondition() const = 0;
+
+    // Esito della partita secondo le regole della modalità (ADR-014).
+    // Default: mai conclusa (sandbox). Il player-death/ticket-zero del
+    // giocatore resta gestito da Application (riguarda il giocatore, non
+    // le regole obiettivo della modalità).
+    [[nodiscard]] virtual MatchOutcome outcome(const World&) const
+    { return MatchOutcome::Ongoing; }
+
+    // Command post della modalità (per l'HUD). nullptr = nessuno.
+    [[nodiscard]] virtual const CommandPosts* commandPosts() const
+    { return nullptr; }
 };
 
 // Factory: punto unico di registrazione delle modalità.

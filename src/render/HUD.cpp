@@ -8,6 +8,24 @@ namespace mini
 
 HUD::HUD(int screenW, int screenH) : m_ui(screenW, screenH) {}
 
+void HUD::tick(float dt)
+{
+    if (m_hitTimer   > 0.0f) m_hitTimer   -= dt;
+    if (m_toastTimer > 0.0f) m_toastTimer -= dt;
+}
+
+void HUD::hitmarker(bool kill)
+{
+    m_hitTimer   = kill ? 0.45f : 0.18f;
+    m_hitWasKill = kill;
+}
+
+void HUD::toast(const std::string& msg, float seconds)
+{
+    m_toast      = msg;
+    m_toastTimer = seconds;
+}
+
 void HUD::render(float playerHp, float playerMaxHp, int state,
                  float weaponHeat, bool overheated, const char* weaponName,
                  int team1Tickets, int team2Tickets,
@@ -97,14 +115,67 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                           overheated ? 0.2f : 0.85f);
             }
 
-            // Crosshair
+            // Crosshair — ROSSA quando il mirino è su una hitbox nemica reale
             const float arm = 10, gap = 4, thick = 1.5f;
             float cr = 0.9f, cg = 0.9f, cb = 0.9f;
-            if (overheated) { cr = 1.0f; cg = 0.3f; cb = 0.2f; }
+            if (m_aimOnTarget) { cr = 1.0f; cg = 0.25f; cb = 0.2f; }
+            if (overheated)    { cr = 1.0f; cg = 0.55f; cb = 0.1f; }
             m_ui.rect(cx-thick, cy-arm-gap, thick*2, arm, cr, cg, cb);
             m_ui.rect(cx-thick, cy+gap,     thick*2, arm, cr, cg, cb);
             m_ui.rect(cx-arm-gap, cy-thick, arm, thick*2, cr, cg, cb);
             m_ui.rect(cx+gap,     cy-thick, arm, thick*2, cr, cg, cb);
+
+            // Hitmarker — 4 tacche diagonali per ~0.2s dopo un colpo a segno
+            // (giallo = colpito, rosso = eliminato)
+            if (m_hitTimer > 0.0f)
+            {
+                const float d = 9.0f, s = 4.0f;
+                float hr = 1.0f, hg = 0.85f, hb = 0.25f;
+                if (m_hitWasKill) { hg = 0.2f; hb = 0.15f; }
+                m_ui.rect(cx-d-s, cy-d-s, s, s, hr, hg, hb);
+                m_ui.rect(cx+d,   cy-d-s, s, s, hr, hg, hb);
+                m_ui.rect(cx-d-s, cy+d,   s, s, hr, hg, hb);
+                m_ui.rect(cx+d,   cy+d,   s, s, hr, hg, hb);
+            }
+        }
+
+        // ── Stato command post (alto centro): quadrato colorato per
+        //    proprietario + lettera + barra di cattura ──────────────────
+        if (!m_posts.empty() && (state == 0 || state == -1))
+        {
+            const float box = 30.0f, gapP = 10.0f;
+            const float totW = (float)m_posts.size() * box
+                             + (float)(m_posts.size() - 1) * gapP;
+            float px = cx - totW * 0.5f;
+            for (const auto& p : m_posts)
+            {
+                float r = 0.55f, g = 0.55f, b = 0.55f;          // neutrale
+                if (p.owner == 1) { r = 0.25f; g = 0.50f; b = 1.00f; }
+                if (p.owner == 2) { r = 1.00f; g = 0.25f; b = 0.25f; }
+                m_ui.rect(px, 8, box, box, r*0.35f, g*0.35f, b*0.35f, 0.85f);
+                m_ui.rect(px, 8, box, 3, r, g, b);              // bordo alto
+                const char letter[2] = { p.label.empty() ? '?' : p.label[0], 0 };
+                m_ui.text(px + 10, 14, 2.0f, letter, r, g, b);
+
+                // Barra di cattura (colore del team che sta catturando)
+                if (p.capturingTeam != 0 && p.progress01 > 0.01f)
+                {
+                    float cr2 = (p.capturingTeam == 1) ? 0.25f : 1.0f;
+                    float cb2 = (p.capturingTeam == 1) ? 1.0f  : 0.25f;
+                    m_ui.rect(px, 8 + box + 2, box, 4, 0.1f, 0.1f, 0.1f);
+                    m_ui.rect(px, 8 + box + 2, box * p.progress01, 4,
+                              cr2, 0.3f, cb2);
+                }
+                px += box + gapP;
+            }
+        }
+
+        // Toast (messaggi tipo "game_state.json salvato") — alto centro
+        if (m_toastTimer > 0.0f && !m_toast.empty())
+        {
+            const float tw = (float)m_toast.size() * 9.0f;
+            m_ui.rect(cx - tw*0.5f - 8, 52, tw + 16, 26, 0.05f, 0.05f, 0.08f, 0.8f);
+            m_ui.text(cx - tw*0.5f, 58, 1.6f, m_toast.c_str(), 0.95f, 0.9f, 0.5f);
         }
 
         // ── Overlay Win/Lose ─────────────────────────────────────────

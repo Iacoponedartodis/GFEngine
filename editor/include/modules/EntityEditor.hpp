@@ -45,6 +45,7 @@ struct EntityEntry
         float       damageMult = 1.0f;
         std::string boneName   = "";
         glm::vec3   eulerDeg   = {0,0,0};
+        bool        debugVisible = true;   // flag del profilo runtime
     };
     std::vector<InlineHitZone> hitboxZones;
 
@@ -121,6 +122,9 @@ private:
     // Gizmo target
     std::string m_gizmoTarget;
 
+    // Rinomina (ADR-010): reload deferito al frame successivo
+    std::string m_pendingSelectId;
+
     // ID disponibili per i dropdown delle statistiche
     std::vector<std::string> m_availableWeapons;
     std::vector<std::string> m_availableAI;
@@ -129,6 +133,8 @@ private:
 
     void loadEntries();
     void selectEntry(int idx);
+    // Carica m_hitboxZones dal profilo indicato (vuoto se il file non esiste).
+    void loadZonesFromProfile(const std::string& profileId);
     void saveSelected();
     void reloadPreview();
     void updateMarker();

@@ -45,6 +45,11 @@ struct AiComponent
     float patrolDwell = 0.0f;
     float waitTimer   = 0.0f;
 
+    // ── Dal profilo AI (AiProfileDef, risolto allo spawn) ─────────────
+    bool  jumpEnabled  = true;   // salto anti-ostacolo quando bloccata
+    float accuracy     = 0.55f;  // 1 = colpo perfetto; <1 = dispersione
+    float reactionTime = 0.4f;   // ritardo primo colpo all'acquisizione
+
     float seekSpeed      = 3.5f;
     float lastKnownX     = 0.0f;
     float lastKnownZ     = 0.0f;

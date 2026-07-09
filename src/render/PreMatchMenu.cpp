@@ -77,6 +77,8 @@ void PreMatchMenu::syncLoadoutToSettings()
 void PreMatchMenu::buildRows()
 {
     m_rows.clear();
+    m_rows.push_back({"Modalita' di gioco",              true,  &m_settings.modeIndex,    nullptr,   1,   0,
+                      (float)(MATCH_MODE_COUNT - 1), matchModeNames()});
     m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"Vite nemici    (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  10});
@@ -461,14 +463,22 @@ void PreMatchMenu::renderRules() const
         m_ui.text(labelX, y+5, 1.8f, row.label, lr, lg, lb);
 
         char valBuf[32]; float curF = 0.0f;
-        if (row.isInt) { std::snprintf(valBuf, sizeof(valBuf), "%d",   *row.iVal);  curF = (float)*row.iVal; }
+        if (row.names && row.isInt)
+        { std::snprintf(valBuf, sizeof(valBuf), "%s", row.names[*row.iVal]); curF = (float)*row.iVal; }
+        else if (row.isInt) { std::snprintf(valBuf, sizeof(valBuf), "%d",   *row.iVal);  curF = (float)*row.iVal; }
         else           { std::snprintf(valBuf, sizeof(valBuf), "%.1f", *row.fVal);  curF = *row.fVal; }
         m_ui.text(valueX, y+5, 1.9f, valBuf, sel?1.0f:0.9f, sel?1.0f:0.9f, sel?0.4f:0.9f);
 
-        float pct = (row.maxV > row.minV) ? std::clamp((curF - row.minV)/(row.maxV - row.minV), 0.0f, 1.0f) : 0.0f;
-        m_ui.rect(barX, y+10, barW, 10, 0.12f,0.12f,0.12f);
-        m_ui.rect(barX, y+10, barW*pct, 10, sel?0.3f:0.2f, sel?0.75f:0.5f, sel?1.0f:0.7f);
-        if (sel) { m_ui.text(valueX-24, y+5, 1.9f, "<", 1.0f,0.8f,0.2f); m_ui.text(valueX+55, y+5, 1.9f, ">", 1.0f,0.8f,0.2f); }
+        // Le righe "enum" (es. Modalità) mostrano solo il nome: niente barra
+        // (il testo lungo finiva sotto la barra di progresso).
+        if (!row.names)
+        {
+            float pct = (row.maxV > row.minV) ? std::clamp((curF - row.minV)/(row.maxV - row.minV), 0.0f, 1.0f) : 0.0f;
+            m_ui.rect(barX, y+10, barW, 10, 0.12f,0.12f,0.12f);
+            m_ui.rect(barX, y+10, barW*pct, 10, sel?0.3f:0.2f, sel?0.75f:0.5f, sel?1.0f:0.7f);
+        }
+        if (sel) { m_ui.text(valueX-24, y+5, 1.9f, "<", 1.0f,0.8f,0.2f);
+                   m_ui.text(valueX + (row.names ? 165.0f : 55.0f), y+5, 1.9f, ">", 1.0f,0.8f,0.2f); }
     }
 
     const float ly = startY + m_rows.size() * rowH + 22;

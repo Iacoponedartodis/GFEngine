@@ -1,5 +1,6 @@
 #include "mini/core/Window.hpp"
 #include "mini/platform/OpenGL.hpp"
+#include "mini/core/Telemetry.hpp"
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -63,6 +64,7 @@ Window::Window(const WindowConfig& config)
     SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &major);
     SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &minor);
 
+    telemetry::logInfo("Window aperta " + std::to_string(config.width) + "x" + std::to_string(config.height) + " OpenGL 3.3 Compatibility");
     std::cout << "[Window] Aperta " << config.width << "x" << config.height
               << " -- OpenGL " << major << "." << minor
               << " (Compatibility) -- VSync " << (config.vsync ? "ON" : "OFF")
@@ -77,6 +79,7 @@ Window::~Window()
     if (m_context) { SDL_GL_DeleteContext(m_context); m_context = nullptr; }
     if (m_window)  { SDL_DestroyWindow(m_window);     m_window  = nullptr; }
     SDL_Quit();
+    telemetry::logInfo("Window chiusa");
     std::cout << "[Window] Chiusa." << std::endl;
 }
 
@@ -109,6 +112,7 @@ void Window::setMouseCaptured(bool captured)
 {
     m_mouseCaptured = captured;
     SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
+    telemetry::logTrace(std::string("mouse ") + (captured ? "catturato" : "libero"));
     std::cout << "[Window] Mouse " << (captured ? "catturato (FPS)" : "libero") << std::endl;
 }
 

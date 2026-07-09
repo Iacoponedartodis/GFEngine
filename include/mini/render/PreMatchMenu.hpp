@@ -68,6 +68,9 @@ private:
         int*   iVal;
         float* fVal;
         float step, minV, maxV;
+        // Riga "enum": se names != nullptr mostra names[*iVal] al posto del
+        // numero (usato per la Modalita di gioco).
+        const char* const* names = nullptr;
     };
     std::vector<Row> m_rows;
     int m_rulesRow = 0;

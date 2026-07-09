@@ -1,5 +1,7 @@
 #include "mini/core/InputManager.hpp"
+#include "mini/core/Telemetry.hpp"
 #include <cstring>
+#include <string>
 
 namespace mini
 {
@@ -45,6 +47,32 @@ void InputManager::processEvent(const SDL_Event& event)
 {
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
         m_shootClicked = true;
+
+    // ── Input recorder (ADR-013): tasti e click con frame corrente ────────
+    // Serve per replicare i crash: _telemetry_data/input_history.log.
+    switch (event.type)
+    {
+    case SDL_KEYDOWN:
+        if (event.key.repeat == 0)
+            telemetry::recordInput(std::string("KEY_DOWN   ")
+                + SDL_GetScancodeName(event.key.keysym.scancode));
+        break;
+    case SDL_KEYUP:
+        telemetry::recordInput(std::string("KEY_UP     ")
+            + SDL_GetScancodeName(event.key.keysym.scancode));
+        break;
+    case SDL_MOUSEBUTTONDOWN:
+        telemetry::recordInput("MOUSE_DOWN btn=" + std::to_string(event.button.button)
+            + " x=" + std::to_string(event.button.x)
+            + " y=" + std::to_string(event.button.y));
+        break;
+    case SDL_MOUSEBUTTONUP:
+        telemetry::recordInput("MOUSE_UP   btn=" + std::to_string(event.button.button)
+            + " x=" + std::to_string(event.button.x)
+            + " y=" + std::to_string(event.button.y));
+        break;
+    default: break;
+    }
 }
 
 bool InputManager::isDown(Action a) const

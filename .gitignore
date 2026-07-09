@@ -14,3 +14,9 @@ presets.cfg
 
 # ── Claude Code worktrees ─────────────────────────────────────────────────
 .claude/worktrees/
+
+# Backup automatici saveJsonRMW (ADR-010)
+*.bak
+
+# Telemetria (ADR-013): log, dump e crash report runtime
+_telemetry_data/

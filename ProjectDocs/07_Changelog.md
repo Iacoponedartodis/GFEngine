@@ -2,6 +2,171 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-09 (12) — Spike split-screen (ADR-011 → Accepted, esito a) + fix riga Modalità
+- PreMatchMenu: le righe enum (con `names`) non disegnano la barra di progresso — il testo
+  ("Conquista" ecc.) finiva sotto la barra; freccia ">" spostata per far posto al nome.
+- Renderer: `drawMeshFrom(const Camera&, ...)` (drawMesh vi delega), `setViewportRect`,
+  `getDrawableSize`. Nessun cambio a shader/frame lifecycle (ADR-003 non toccato).
+- Application: F9 in partita attiva lo spike — scena renderizzata due volte in viewport
+  sinistro/destro con seconda Camera (copia + offset laterale); viewport ripristinato full
+  prima di HUD/menu. Loop entità estratto in lambda `drawScene(const Camera&)`.
+- Esito spike: **(a) fattibile, modifiche minori** — registrato in ADR-011 (ora Accepted),
+  KnownIssues #12 chiuso, Todo #16 done.
+- Build pulita; sandbox smoke ok (avvio, registry, mode, nessun errore GL nel log).
+- **Da verificare a mano:** F9 in partita → due viste affiancate corrette, HUD intatto al
+  ritorno; riga "Modalità" nel PreMatch senza barra e senza sovrapposizioni.
+
+## 2026-07-09 (11) — Assalto/Difesa + HUD command post (ADR-014; Todo #4 e #6)
+- `MatchOutcome` + `outcome()` nel mode (vittoria/sconfitta non più hardcoded in
+  Application); hook `updateObjectiveRules` in ConquestMode; `AssaultMode`/`DefenseMode`
+  in ObjectiveModes.{hpp,cpp} (factory: "assault"/"defense"); ownership iniziale post
+  forzata dalla modalità (`CommandPosts::forceAllOwners`); selezione modalità nel
+  PreMatch (riga "Modalita' di gioco", Row con etichette); HUD: barra post in alto
+  (colore proprietario + lettera + progresso cattura del team che cattura).
+- Dettagli e regole complete in ADR-014. Build pulita, sandbox smoke ok.
+- **Da verificare a mano:** partita Assalto (post rossi all'avvio, ticket che calano,
+  vittoria alla cattura del terzo post) e Difesa; leggibilità barra post.
+
+## 2026-07-09 (10) — Sandbox: selettore armi 1-9 (Todo #0)
+- In sandbox i tasti **1-9** equipaggiano l'arma corrispondente dal registry (lista
+  completa ordinata per nome, incluse le armi separatiste — è un banco di prova).
+  Toast col nome dell'arma, hint "tasti 1-9" all'avvio (5s), cambio loggato in telemetria.
+  Attivo SOLO in sandbox (in partita resta il loadout del PreMatch).
+
+## 2026-07-09 (9) — Anti-tunneling proiettili + hitmarker solo del giocatore
+- **Hitbox "riconosciute dal mirino ma non colpite" — causa: tunneling.** I proiettili si
+  muovono a step discreti (a 55 m/s ≈ 0.9 m per tick a 60 Hz) e il test era PUNTUALE:
+  le zone piccole (testa B1: 0.12×0.44×0.15) venivano attraversate tra un tick e l'altro
+  senza mai contenere il punto. Il mirino (raycast continuo) diceva giustamente
+  "colpibile". Ora il CombatSystem testa il **segmento percorso nel tick** (posizione
+  precedente ricavata dalla velocità → attuale): `segAABB` per le zone,
+  `segPointDistSq` per broad-phase e fallback sferici. Mirino e proiettili ora
+  concordano per costruzione.
+- **Hitmarker solo per i colpi del GIOCATORE:** era legato a ownerTeam==1, quindi
+  scattava anche per i colpi degli alleati AI. Nuovo flag `BulletComponent.fromPlayer`
+  (true solo in PlayerController); il CombatFeedback lo usa. KI #13 (rotazione zona
+  ignorata) resta valido anche per il test a segmento.
+
+## 2026-07-09 (8) — Fix mode sandbox→partita + feedback a schermo (F12, mira, hitmarker)
+- **Bug: sandbox → menu → nuova partita spawna manichini fermi.** Il game mode era creato
+  UNA volta dal flag CLI: avviando con --sandbox e poi facendo Nuova Partita, initWorld
+  riusava la SandboxMode (dummies senza AI). Ora `startGame()` ricrea SEMPRE il mode
+  "conquest" (residuo ADR-008 annotato: in futuro l'id verrà da MapDef/PreMatch).
+- **HUD feedback (nuove API `tick/setAimOnTarget/hitmarker/toast`):**
+  - **Toast a schermo**: F12 ora mostra "F12: stato salvato in _telemetry_data/..." in
+    alto al centro per 2.5s (prima il feedback era solo su terminale/log — in fullscreen
+    invisibile). Nota Fn: dai log il tasto ARRIVA come F12 liscio su questo hardware.
+  - **Mirino reattivo**: diventa ROSSO quando punta una hitbox nemica reale (ray-AABB con
+    le stesse trasformazioni del CombatSystem: scala/yaw/meshOffset; fallback sfera 0.7).
+  - **Hitmarker**: 4 tacche diagonali al colpo a segno (giallo=hit 0.18s, rosso=kill 0.45s)
+    via `World::combatFeedback` (mailbox minimale scritta dal CombatSystem, consumata da
+    Application — niente event bus).
+
+## 2026-07-09 (7) — Prima diagnosi VIA telemetria: F12, log condiviso, clobber hitbox
+- **F12 "non funziona" — smentito dai log:** input_history.log mostra 3 pressioni ricevute
+  (frame 1627/1742/2455) e game_state.json scritto 3 volte. Problema reale: zero feedback
+  visibile → ora il dump stampa "[F12] game_state.json scritto (frame N)" sul terminale.
+- **Bug trovato DAI log: file condiviso tra processi.** Editor ed engine giravano insieme
+  scrivendo lo stesso engine_run.log (truncate reciproco + righe intrecciate). Ora log
+  per-app: engine_run.log / editor_run.log (+ editor_input_history.log). Verificato con
+  entrambe le app simultanee.
+- **Osservazione dai log (KnownIssues #17):** la memoria del GFEditor cresce 73→259 MB in
+  ~1 minuto di uso. Possibile leak (sospetti: reload modelli viewport). Da profilare.
+- **Incidente dati #2 — profilo hitbox B1 svuotato (causa del "i nemici non muoiono nel
+  sandbox"):** cambiando `hitbox_profile` nel combo dell'EntityEditor, le zone in editing
+  NON venivano ricaricate dal profilo selezionato → salvando si scrivevano le zone del
+  profilo precedente (vuote, nel caso Heavy→B1) sul profilo condiviso. Con il profilo
+  vuoto, i colpi alla testa cadevano nel fallback sferico (r=0.7 dal centro) → miss.
+  **Recuperato dal `.bak` automatico (primo salvataggio reale del paracadute ADR-010)** +
+  fix: il combo ora ricarica le zone dal profilo selezionato (`loadZonesFromProfile`).
+- **CombatSystem su telemetria:** ogni hit (zona/moltiplicatore/danno/hp) a TRACE e ogni
+  kill a INFO nel log — la prossima "non muoiono" si legge dal file.
+
+## 2026-07-09 (6) — Telemetria e debugging estremo (ADR-013)
+- Nuovo modulo `mini::telemetry` in entrambi i binari; artefatti SOLO in
+  `_telemetry_data/` (auto-creata, gitignored): `engine_run.log` (spdlog, TRACE su file /
+  WARN+ su console), `game_state.json` (tasto F12: camera/stato/entità/ticket/memoria),
+  `input_history.log` (tasti+mouse col numero frame), `crash_report.txt` (cpptrace:
+  SEH + std::terminate → stack trace anche a terminale).
+- CMake: spdlog v1.14.1 + cpptrace v0.7.3 via FetchContent; opzione `GF_ENABLE_ASAN`
+  (OFF default; MSVC solo ASan — UBSan non esiste su MSVC, attivo solo su altri toolchain).
+- Strumentati: Application (flag avvio, registry, game mode, F12, shutdown), Window,
+  Renderer, InputManager (recorder), battito memoria ogni ~10s.
+- Smoke: `_telemetry_data/` creata alla root, log popolato con livelli. Da provare con
+  eventi reali: F12 (serve input in finestra) e crash report (serve un crash vero).
+
+## 2026-07-09 (5) — Fix tab Hitbox invisibile + pannelli ridimensionabili
+- **Tab Hitbox (EntityEditor):** il pannello proprietà partiva con SameLine DOPO lista e
+  bottoni → veniva schiacciato a ~0px di altezza: "Danno x", rotazioni ecc. erano
+  invisibili. Nuovo layout verticale: lista zone (120px) → bottoni → proprietà a piena
+  larghezza (con -64px riservati alla barra Salva/Ripristina). Lista con prefisso [B] e
+  moltiplicatore visibile.
+- **Pannelli ridimensionabili (`ImGuiChildFlags_ResizeX`, size persistita nell'ini):**
+  EntityEditor (lista entità + colonna centrale), BalanceEditor (4 liste), WeaponEditor
+  (lista + pannello destro, viewport ricalcolato dinamicamente, pannello default 320px),
+  MapEditor (lista + proprietà, default 260px). Trascina il bordo destro del pannello.
+  I testi tagliati si risolvono allargando; i pannelli usano la larghezza reale
+  (`GetContentRegionAvail`) invece di costanti.
+
+## 2026-07-09 (4) — Hotfix: crash all'avvio del GFEditor
+- **Regressione introdotta dal batch (3):** rimuovendo la card Hitbox dalla Home era
+  rimasto `k_moduleCount = 8` hardcoded con 7 card nell'array → lettura out-of-bounds al
+  primo frame → la finestra si apriva e chiudeva subito.
+- Fix: conteggio derivato da `sizeof(k_modules)/sizeof(k_modules[0])` — un array e il suo
+  count non possono più divergere. Editor verificato vivo dopo 8s di run.
+
+## 2026-07-09 (3) — Consolidamento hitbox in Entity Editor (ADR-012) + pulizie
+- **Gap colmato prima della rimozione:** `debug_visible` ora è nel modello InlineHitZone
+  dell'EntityEditor (load dal profilo, checkbox in UI, salvato — prima era hardcoded true).
+- **HitboxEditor RIMOSSO:** file cpp/hpp eliminati, tolto da CMake, EditorApp (enum,
+  membro, tick, render, menu) e HomeScreen (card). L'authoring hitbox vive SOLO
+  nell'Entity Editor (zone, danno, rotazioni, bone, wireframe, gizmo — tutto già presente).
+- **Hardcoded rimosso:** fallback `"grunt"` in `ConquestMode::spawnUnit` eliminato (l'id
+  profilo è sempre risolto a monte; senza profilo → fallback sferico CombatSystem).
+- **Dati:** eliminati i profili orfani `grunt/heavy/sniper` da data/hitboxes (zero
+  riferimenti); `*.bak` aggiunto a .gitignore e ripulito il .bak esistente.
+- **BalanceEditor ripulito:** rimossi i tab vestigiali Nemici/Alleati (erano redirect
+  read-only) e i relativi saveEnemy/saveAlly + membri. Tab restanti: Armi, AI, Mappe,
+  Personaggio.
+- Smoke: 3 profili hitbox validi caricati (B1 2 zone, Heavy 0, Clone 2), mappa integra.
+- Nota (KnownIssues #16): rename di profili hitbox standalone senza UI — accettato.
+
+## 2026-07-09 (2) — AI: salto, precisione, reazione dal profilo (Todo #3 parziale, #7)
+- **Salto anti-ostacolo:** se l'AI sta provando a muoversi, è a terra ed è ferma da metà
+  del tempo anti-stuck, salta (`AI_JUMP_IMPULSE` in GameConfig) PRIMA che scatti
+  l'inversione di rotta — supera casse/coperture basse. Gated su `jump_enabled` del profilo.
+- **Precisione:** i colpi AI ora hanno dispersione `(1-accuracy)*AI_SPREAD_MAX` (prima
+  erano perfetti); RNG leggero deterministico locale, niente <random>.
+- **Tempo di reazione:** primo colpo dopo una nuova acquisizione ritardato di
+  `reaction_time` del profilo.
+- **Plumbing:** `RespawnEntry/UnitTemplate.aiProfileId` risolto in `spawnUnit`
+  (seekSpeed/jumpEnabled/accuracy/reactionTime dal `AiProfileDef`; prima seekSpeed era
+  hardcoded patSpd+1.5). Il respawn conserva il profilo.
+- **Dato (Todo #7):** creato `data/ai/grunt.json` — il Clone Trooper non logga più
+  "AiProfileDef non trovato". Smoke: 3 profili caricati.
+- **Deferito con motivazione (CLAUDE.md §5):** abilità runtime (shield/roll/jetpack...) e
+  comportamento per ruolo (cover/peek/hide) sono un SISTEMA nuovo lato engine: richiedono
+  prima un documento Planned Feature (template 14/15) con scope Overview/Goal/Out-of-Scope.
+  Todo #3 aggiornato di conseguenza.
+
+## 2026-07-09 — "Messa in regola": ADR-010 implementato (Accepted)
+- **`saveJsonRMW`** (`editor/include/util/JsonSave.hpp`): helper centralizzato RMW + backup
+  `.bak`; patchFn ritorna false = no-op (nessuna scrittura).
+- **Migrati TUTTI i save path** all'helper: BalanceEditor ×6, EntityEditor (entità +
+  profilo hitbox), WeaponEditor, HitboxEditor, MapEditor. Zero scritture JSON dirette.
+- **`id`/`profile_id` deprecati**: rimossi dai JSON a ogni salvataggio (ADR-001: il nome
+  file è l'unico id).
+- **Comando Rinomina** (`util/DefinitionRename.{hpp,cpp}`, in CMake): validazione,
+  `fs::rename`, sweep cross-reference con mappa esplicita per categoria, warning per la
+  mappa "firebase" (caricata hardcoded dai mode — residuo ADR-008). UI in WeaponEditor,
+  EntityEditor (reload deferito frame-safe), HitboxEditor, MapEditor.
+- **Audit dropdown (Todo #2) PASSATO**: nessun InputText assegna id esistenti; i residui
+  sono creazione nuovi id, nomi/etichette, path mesh (legittimi).
+- Il duplicato armi del 2026-07-09 risultava già ripulito a mano (data/weapons: 7 file,
+  nessun near-duplicate).
+- Verifica: build pulita; smoke runtime ok (22 box, 3 post). **Pendente smoke GUI del
+  rename** (KnownIssues #7).
+
 ## 2026-07-08 — Incidente dati + 4 fix (clobber BalanceEditor, fallback morto, scala arma)
 - **INCIDENTE:** `BalanceEditor::saveMap` scriveva un JSON nuovo con i soli campi del vecchio
   schema → un salvataggio dal tab Mappe ha CANCELLATO geometry (22 box), command_posts e

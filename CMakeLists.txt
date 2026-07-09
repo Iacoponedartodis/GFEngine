@@ -55,6 +55,40 @@ FetchContent_Declare(nlohmann_json
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# ── spdlog (telemetria, ADR-013) ──────────────────────────────────────────────
+FetchContent_Declare(spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG        v1.14.1
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(spdlog)
+
+# ── cpptrace (stack trace nei crash report, ADR-013) ──────────────────────────
+FetchContent_Declare(cpptrace
+    GIT_REPOSITORY https://github.com/jeremy-rifkin/cpptrace.git
+    GIT_TAG        v0.7.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(cpptrace)
+
+# ── Sanitizers (opt-in: rallentano molto, non per il playtest) ────────────────
+# MSVC supporta solo ASan (/fsanitize=address); UBSan NON esiste su MSVC.
+option(GF_ENABLE_ASAN "Abilita AddressSanitizer (e UBSan dove supportato)" OFF)
+function(gf_apply_sanitizers target)
+    if(NOT GF_ENABLE_ASAN)
+        return()
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+        # /INCREMENTAL è incompatibile con ASan
+        target_link_options(${target} PRIVATE /INCREMENTAL:NO)
+    else()
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    endif()
+endfunction()
+
 # ── OpenGL — DEVE stare prima di imgui ────────────────────────────────────────
 if(WIN32)
     set(PLATFORM_GL_LIBS opengl32 gdi32)
@@ -117,7 +151,9 @@ add_executable(GFEngine
     src/game/game_modes/ConquestMode.cpp
     src/game/game_modes/SandboxMode.cpp
     src/game/game_modes/GameModeFactory.cpp
+    src/game/game_modes/ObjectiveModes.cpp
     src/game/CommandPosts.cpp
+    src/core/Telemetry.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp
     src/render/OptionsMenu.cpp
@@ -139,7 +175,10 @@ target_link_libraries(GFEngine PRIVATE
     SDL2::SDL2-static
     ${PLATFORM_GL_LIBS}
     nlohmann_json::nlohmann_json
+    spdlog::spdlog
+    cpptrace::cpptrace
 )
+gf_apply_sanitizers(GFEngine)
 if(MSVC)
     target_compile_options(GFEngine PRIVATE
         /W4 /permissive- /EHsc
@@ -157,11 +196,12 @@ add_executable(GFEditor
     editor/src/viewport/FreeCameraViewport.cpp
     editor/src/util/FileDialog.cpp
     editor/src/util/RigReader.cpp
+    editor/src/util/DefinitionRename.cpp
     editor/src/modules/BalanceEditor.cpp
-    editor/src/modules/HitboxEditor.cpp
     editor/src/modules/EntityEditor.cpp
     editor/src/modules/MapEditor.cpp
     editor/src/modules/WeaponEditor.cpp
+    src/core/Telemetry.cpp
     src/game/data/DefinitionRegistry.cpp
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
@@ -191,7 +231,10 @@ target_link_libraries(GFEditor PRIVATE
     ${PLATFORM_GL_LIBS}
     imgui
     nlohmann_json::nlohmann_json
+    spdlog::spdlog
+    cpptrace::cpptrace
 )
+gf_apply_sanitizers(GFEditor)
 if(WIN32)
     target_link_libraries(GFEditor PRIVATE comdlg32)
 endif()

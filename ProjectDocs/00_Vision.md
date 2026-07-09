@@ -13,10 +13,10 @@ produzione solo-developer mantenuto su molte sessioni, non una demo.
   cambi di *dati*, non di *codice*, ovunque sia possibile.
 - **Editor come sistema di metadata, non solo di bilanciamento.** GFEditor non serve solo a
   tarare numeri: gestisce i **metadata** che permettono l'integrazione fluida tra sistemi —
-  informazioni di mappa utili all'AI (cover point, spawn, in futuro danger zone/settori),
-  metadata sui modelli di armi e personaggi (attach point per equipaggiare armi/armature sui
-  bones corretti), rig/bones, animazioni, hitbox. È lo strumento che rende possibile aggiungere
-  contenuto senza toccare il core engine.
+  informazioni di mappa utili all'AI (cover point, spawn, in futuro danger zone/settori —
+  vedi 15_MapMetadata, Planned Feature), metadata sui modelli di armi e personaggi (attach
+  point per equipaggiare armi/armature sui bones corretti), rig/bones, animazioni, hitbox. È
+  lo strumento che rende possibile aggiungere contenuto senza toccare il core engine.
 - **Two-binary separation.** GFEngine (runtime) e GFEditor (tool) sono binari separati.
   Comunicano solo tramite file (`data/*.json`, asset per path). Il runtime non dipende mai dal
   codice dell'editor.
@@ -34,9 +34,10 @@ produzione solo-developer mantenuto su molte sessioni, non una demo.
 
 ## Requisiti funzionali dichiarati (non negoziabili)
 - **Split-screen locale a 2 giocatori** con scaling flessibile di UI/input, configurabile senza
-  codice. Stato attuale: non verificato nel codice se la pipeline camera/input regge un secondo
-  viewport locale simultaneo — da verificare prima di espandere ulteriormente sistemi che
-  assumono un solo giocatore attivo.
+  codice. Stato attuale: **feasibility spike proposto ma non eseguito** — vedi ADR-011
+  (13_ADR, Status: Proposed) e 08_KnownIssues #12. Non verificato nel codice se la pipeline
+  camera/input regge un secondo viewport locale simultaneo — da verificare prima di espandere
+  ulteriormente sistemi che assumono un solo giocatore attivo.
 
 ## Roadmap a fasi (vincolante per le priorità di sviluppo)
 1. **Fase 1 — Core playable:** 1-2 mappe, fanteria (cloni/droidi), armi funzionanti, spawn,
@@ -44,26 +45,36 @@ produzione solo-developer mantenuto su molte sessioni, non una demo.
    configurazioni condivise. Deve essere già divertente qui.
 2. **Fase 2 — Sistema tattico:** fronti multipli, obiettivi stratificati (principali/
    strategici/tattici), AI con ruolo e comportamento tattico, veicoli completi, rinforzi/spawn
-   dinamici, mappe più grandi.
+   dinamici, mappe più grandi. Dipende da 15_MapMetadata (Planned Feature) per i dati spaziali
+   che l'AI tattica consumerà.
 3. **Fase 3 — Progressione:** carriera clone (gradi Trooper -> Marshal), sblocco classi
-   avanzate, abilità di comando, ruolo comandante con gestione macro.
+   avanzate, abilità di comando, ruolo comandante con gestione macro. Dipende da 14_ClassSystem
+   (Planned Feature) come unità di composizione loadout/identità su cui costruire gli sblocchi.
 4. **Fase 4 — Modalità avanzate parallele:** Galactic Conquest RPG (strategia globale),
    Chronicles Mode (missioni scriptate), Battle Sandbox (editor di battaglie completo).
 5. **Fase 5 — Galaxy War Ecosystem:** tutte le modalità sullo stesso core, AI multi-livello
    completa, veicoli completi, sistema eroi, mappe unificate.
 
 ## Long-term direction
-- Eliminare gli id di archetipo/fallback hardcoded rimasti nei game mode (vedi KnownIssues #2).
-- Unificare l'autoring hitbox (inline vs profilo — vedi KnownIssues #1) prima di costruire
-  altri sistemi che dipendono dalle hitbox.
-- Introdurre un'astrazione di **game mode** (interfaccia + registro) prima di aggiungere
-  Assalto/Difesa, così che ogni nuova modalità sia una configurazione, non un fork di
-  ConquestMode/SandboxMode.
-- Introdurre concetti espliciti di **Obiettivo** e **Command Post** come sistemi riusabili tra
-  modalità.
-- Introdurre il concetto di **Classe** (composizione arma+equipaggiamento+ruolo) distinto
-  dalla singola arma, in preparazione della Fase 3.
+- ~~Eliminare gli id di archetipo/fallback hardcoded rimasti nei game mode~~ — RISOLTO
+  (ADR-007, 2026-07-04).
+- ~~Unificare l'autoring hitbox (inline vs profilo)~~ — RISOLTO (ADR-006, 2026-07-04).
+- ~~Introdurre un'astrazione di game mode~~ — RISOLTO (ADR-008, 2026-07-04).
+- ~~Introdurre concetti espliciti di Obiettivo e Command Post~~ — RISOLTO (ADR-009,
+  2026-07-04).
+- **Introdurre il concetto di Classe** (composizione arma+equipaggiamento+ruolo) distinto
+  dalla singola arma, in preparazione della Fase 3. Documentato come Planned Feature in
+  14_ClassSystem; non ancora implementato.
+- **Estendere le mappe con metadata tattici** (cover point/danger zone/patrol/settori) per
+  l'AI. Documentato come Planned Feature in 15_MapMetadata; non ancora implementato.
+- **Unificare naming/id e introdurre rename tooling in editor.** Un rename manuale (creazione
+  di un nuovo file invece di rinominare l'esistente) ha causato duplicati visibili in gioco
+  (08_KnownIssues #7, confermato 2026-07-09). Decisione registrata in ADR-010 (Proposed,
+  13_ADR): comando "Rinomina" per ogni tipo di definizione + helper di salvataggio RMW
+  centralizzato. Non ancora implementato — priorità P0 (06_Todo #1-#2).
 - Far crescere l'editor verso: Entity, Weapon, Hitbox, Map, **AI Editor**, **Asset Manager**,
-  **Map Metadata** (cover point/danger zone/settori per l'AI), e un futuro UI/Interface Editor.
-- Ogni workflow "assegna definizione A a definizione B" usa dropdown dal DefinitionRegistry,
-  mai id in testo libero (pattern già in uso in EntityEditor/WeaponEditor).
+  **Map Metadata** (cover point/danger zone/settori per l'AI — vedi 15_MapMetadata), e un
+  futuro UI/Interface Editor.
+- **Ogni workflow "assegna definizione A a definizione B" usa dropdown dal DefinitionRegistry,
+  mai id in testo libero.** Questo non è più solo una direzione dichiarata: è una regola
+  vincolante in 04_CodingStandards, con audit P0 tracciato in 06_Todo #2.

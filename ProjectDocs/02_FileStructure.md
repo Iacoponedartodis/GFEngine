@@ -20,6 +20,8 @@ src/                  engine/game implementation (mirrors include/mini/)
   core/ ecs/{systems}/ game/{data,game_modes}/ physics/ platform/ render/ vendor/
 tests/                test scaffolding
 ProjectDocs/          <-- this operational memory set
+_telemetry_data/      runtime-generated (ADR-013): engine_run.log, game_state.json,
+                      input_history.log, crash_report.txt — auto-creata, gitignored
 build/                generated (out of scope for architecture; should be gitignored)
 imgui.ini             runtime-generated ImGui layout (should be gitignored)
 presets.cfg           runtime-generated (should be gitignored)

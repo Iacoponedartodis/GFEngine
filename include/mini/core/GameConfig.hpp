@@ -26,6 +26,8 @@ constexpr float AI_HALF_Y     = 0.50f;
 constexpr float AI_HALF_Z     = 0.40f;
 constexpr float AI_GRAVITY    = -14.0f;
 constexpr float AI_STUCK_TIME =   1.2f;   // secondi prima di anti-stuck
+constexpr float AI_JUMP_IMPULSE = 5.5f;   // salto anti-ostacolo (se jump_enabled)
+constexpr float AI_SPREAD_MAX   = 0.12f;  // dispersione colpi AI a accuracy 0 (rad)
 
 // ── Combat ────────────────────────────────────────────────────────────────
 constexpr float HIT_RADIUS    = 0.7f;     // raggio collisione proiettile

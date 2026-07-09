@@ -380,7 +380,7 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
         fwd.z * weapon.bulletSpeed
     });
     world.addTeam(b, {1});
-    world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1});
+    world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1, /*fromPlayer=*/true});
     if (bulletMesh)
         world.addMeshRenderer(b, {bulletMesh, nullptr,
                                    weapon.bulletR, weapon.bulletG, weapon.bulletB});

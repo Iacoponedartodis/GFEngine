@@ -28,6 +28,20 @@ public:
     [[nodiscard]] int count() const { return (int)m_posts.size(); }
     [[nodiscard]] int countOwnedBy(int team) const;
 
+    // Stato leggibile per l'HUD (proprietario + progresso cattura 0..1).
+    struct Status
+    {
+        std::string label;
+        int   owner         = 0;
+        int   capturingTeam = 0;
+        float progress01    = 0.0f;
+    };
+    [[nodiscard]] std::vector<Status> status() const;
+
+    // Forza il proprietario iniziale di TUTTI i post (usato da Assalto/
+    // Difesa: la mappa li autora neutrali, la modalità decide chi li tiene).
+    void forceAllOwners(World& world, int team);
+
 private:
     struct Post
     {

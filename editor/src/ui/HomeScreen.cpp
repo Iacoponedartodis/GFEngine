@@ -32,10 +32,6 @@ static const ModuleCard k_modules[] = {
      "Posiziona box di geometria,\nspawn e zone tattiche.\nSalva come JSON.",
      ActiveModule::MapEditor,          true,  1.0f,  0.35f, 0.35f},
 
-    {"hitbox",  "Hitbox\nEditor",
-     "Modifica profili hitbox\nstandalone. Per hitbox inline\nusa l'Entity Editor.",
-     ActiveModule::HitboxEditor,       true,  1.0f,  0.55f, 0.2f},
-
     {"cam",     "Free Camera\nViewport",
      "Naviga la scena in 3D con\ncamera libera. Anteprima\nmodelli e animazioni.",
      ActiveModule::FreeCameraViewport, true,  0.25f, 0.65f, 1.0f},
@@ -48,7 +44,9 @@ static const ModuleCard k_modules[] = {
      "Esplora e assegna modelli,\ntexture e materiali alle\ndefinizioni entità.",
      ActiveModule::AssetManager,       false, 0.9f,  0.75f, 0.2f},
 };
-static constexpr int k_moduleCount = 8;
+// Conteggio derivato dall'array: mai più out-of-bounds per una card rimossa.
+static constexpr int k_moduleCount =
+    (int)(sizeof(k_modules) / sizeof(k_modules[0]));
 
 ActiveModule HomeScreen::draw(bool& wantsLaunchGame, bool& wantsLaunchSandbox)
 {

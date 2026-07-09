@@ -1,4 +1,5 @@
 #include "modules/BalanceEditor.hpp"
+#include "util/JsonSave.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -41,7 +42,6 @@ void BalanceEditor::reload()
 {
     m_registry.loadAll(getSourceDataDir());
     m_selWeapon.clear();
-    m_selEnemy.clear();
     m_selAI.clear();
     m_dirty = false;
     std::cout << "[Balance] Dati caricati da: " << getSourceDataDir() << "\n";
@@ -52,14 +52,10 @@ void BalanceEditor::reload()
 void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
 {
     std::string path = getSourceDataDir() + "weapons/" + w.id + ".json";
-    // RMW: preserva i campi autorati nel Weapon Editor (attach_points,
-    // mesh_scale, mesh_rot_x...) — scrivere un JSON nuovo li distruggerebbe.
-    json j;
-    {
-        std::ifstream fin(path);
-        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
-    }
-    j["id"]               = w.id;
+    // saveJsonRMW (ADR-010): preserva i campi degli altri moduli
+    // (attach_points, mesh_scale, mesh_rot_x...).
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
     j["name"]             = w.name;
     j["faction"]          = mini::factionToString(w.faction);
     j["damage"]           = w.damage;
@@ -80,62 +76,21 @@ void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
     j["spread_jump"]      = w.jumpSpread;
     j["mesh"]             = w.meshPath;
     j["projectile_mesh"]  = w.projectileMeshPath;
-    std::ofstream f(path);
-    if (!f.is_open())
-    {
-        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
-        return;
-    }
-    f << j.dump(4) << "\n";
-    f.close(); // flush e chiudi prima del reload
+    return true;
+    });
     std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
     m_registry.reload(getSourceDataDir());
 }
 
-void BalanceEditor::saveEnemy(const mini::EnemyDef& e)
-{
-    std::string path = getSourceDataDir() + "enemies/" + e.id + ".json";
-    // RMW: preserva i campi dell'Entity Editor (attach_points, mesh_rot_*,
-    // mesh_scale, weapon_display...).
-    json j;
-    {
-        std::ifstream fin(path);
-        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
-    }
-    j["id"]           = e.id;
-    j["name"]         = e.name;
-    j["faction"]      = mini::factionToString(e.faction);
-    j["team"]         = e.team;
-    j["mesh"]         = e.meshPath;
-    j["texture"]      = e.texturePath;
-    j["color"]        = {e.color[0], e.color[1], e.color[2]};
-    j["ai_profile"]   = e.aiProfileId;
-    j["hitbox_profile"]= e.hitboxProfileId;
-    j["weapons"]      = e.weaponIds;
-    j["abilities"]    = e.abilityIds;
-    j["bullet_color"] = {e.bulletColor[0], e.bulletColor[1], e.bulletColor[2]};
-    j["stats"]["hp"]            = e.hp;
-    j["stats"]["move_speed"]    = e.moveSpeed;
-    j["stats"]["damage_scale"]  = e.damageScale;
-    std::ofstream f(path);
-    if (!f.is_open())
-    {
-        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
-        return;
-    }
-    f << j.dump(4) << "\n";
-    f.close(); // flush e chiudi prima del reload
-    std::cout << "[Balance] Salvato: " << path << "\n";
-    m_dirty = false;
-    m_registry.reload(getSourceDataDir());
-}
+// Nemici/alleati si editano SOLO nell'Entity Editor (ADR-012):
+// i vecchi tab redirect e i relativi save sono stati rimossi.
 
 void BalanceEditor::saveAI(const mini::AiProfileDef& a)
 {
     std::string path = getSourceDataDir() + "ai/" + a.id + ".json";
-    json j;
-    j["profile_id"]            = a.id;
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+    j.erase("profile_id"); // deprecato: id = nome file (ADR-001)
     j["role"]                  = a.role;
     j["sight_range"]           = a.sightRange;
     j["fov_deg"]               = a.fovDeg;
@@ -155,14 +110,8 @@ void BalanceEditor::saveAI(const mini::AiProfileDef& a)
     j["patrol_speed"]          = a.patrolSpeed;
     j["seek_speed"]            = a.seekSpeed;
     j["jump_enabled"]          = a.jumpEnabled;
-    std::ofstream f(path);
-    if (!f.is_open())
-    {
-        std::cerr << "[Balance] ERRORE scrittura: " << path << "\n";
-        return;
-    }
-    f << j.dump(4) << "\n";
-    f.close(); // flush e chiudi prima del reload
+    return true;
+    });
     std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
     m_registry.reload(getSourceDataDir());
@@ -175,7 +124,7 @@ void BalanceEditor::drawWeaponsTab()
     const auto& weapons = m_registry.weapons();
     if (weapons.empty()) { ImGui::TextDisabled("Nessun file in data/weapons/"); return; }
 
-    ImGui::BeginChild("##wlist", ImVec2(180, 0), true);
+    ImGui::BeginChild("##wlist", ImVec2(180, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     for (auto& [id, w] : weapons)
     {
         bool sel = (id == m_selWeapon);
@@ -284,22 +233,6 @@ void BalanceEditor::drawWeaponsTab()
 
 // ── Enemies tab ──────────────────────────────────────────────────────────
 
-void BalanceEditor::drawEnemiesTab()
-{
-    ImGui::TextColored({1.0f, 0.8f, 0.2f, 1.0f}, "Usa l'Entity Editor per modificare i nemici.");
-    ImGui::TextDisabled("Qui puoi solo consultare la lista dei file presenti.");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    const auto& enemies = m_registry.enemies();
-    if (enemies.empty()) { ImGui::TextDisabled("Nessun file in data/enemies/"); return; }
-
-    ImGui::BeginChild("##elist_ro", ImVec2(0, 0), true);
-    for (auto& [id, e] : enemies)
-        ImGui::Text("  %s   [%s]", e.name.c_str(), id.c_str());
-    ImGui::EndChild();
-}
-
 // ── AI tab ───────────────────────────────────────────────────────────────
 
 void BalanceEditor::drawAITab()
@@ -307,7 +240,7 @@ void BalanceEditor::drawAITab()
     const auto& profiles = m_registry.aiProfiles();
     if (profiles.empty()) { ImGui::TextDisabled("Nessun file in data/ai/"); return; }
 
-    ImGui::BeginChild("##ailist", ImVec2(180, 0), true);
+    ImGui::BeginChild("##ailist", ImVec2(180, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     for (auto& [id, a] : profiles)
     {
         bool sel = (id == m_selAI);
@@ -389,17 +322,10 @@ void BalanceEditor::drawAITab()
 void BalanceEditor::saveMap(const mini::MapDef& m)
 {
     std::string path = getSourceDataDir() + "maps/" + m.id + ".json";
-
-    // READ-MODIFY-WRITE (obbligatorio per tutti gli editor): il file mappa
-    // contiene anche campi autorati da ALTRI moduli (geometry, command_posts,
-    // ally_*...). Un tempo qui si scriveva un JSON nuovo → li distruggeva.
-    json j;
-    {
-        std::ifstream fin(path);
-        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
-    }
-
-    j["id"]           = m.id;
+    // saveJsonRMW (ADR-010): il file mappa contiene campi di ALTRI moduli
+    // (geometry, command_posts, ally_*) — l'incidente 2026-07-08 nasce qui.
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
     j["name"]         = m.name;
     j["mesh"]         = m.meshPath;
     j["metadata"]     = m.metadataPath;
@@ -409,10 +335,8 @@ void BalanceEditor::saveMap(const mini::MapDef& m)
     j["max_tickets"]  = m.maxTickets;
     j["enemy_count"]  = m.enemyCount;
     j["enemy_types"]  = m.enemyTypes;
-    std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Balance] ERRORE scrittura: " << path << "\n"; return; }
-    f << j.dump(4) << "\n";
-    f.close();
+    return true;
+    });
     std::cout << "[Balance] Salvato: " << path << "\n";
     m_dirty = false;
     m_registry.reload(getSourceDataDir());
@@ -424,7 +348,7 @@ void BalanceEditor::drawMapsTab()
     if (maps.empty()) { ImGui::TextDisabled("Nessun file in data/maps/"); return; }
 
     // ── Lista mappe (sinistra) ───────────────────────────────────────
-    ImGui::BeginChild("##mlist", ImVec2(180, 0), true);
+    ImGui::BeginChild("##mlist", ImVec2(180, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     for (auto& [id, m] : maps)
     {
         bool sel = (id == m_selMap);
@@ -559,73 +483,23 @@ void BalanceEditor::drawMapsTab()
 
 // ── Tab Alleati ──────────────────────────────────────────────────────────
 
-void BalanceEditor::saveAlly(const mini::EnemyDef& e)
-{
-    // Il file si chiama sempre <id>.json — NON cambieremo mai l'id dopo la creazione
-    std::string path = getSourceDataDir() + "allies/" + e.id + ".json";
-    // RMW: preserva i campi dell'Entity Editor (attach_points, weapon_display...)
-    json j;
-    {
-        std::ifstream fin(path);
-        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
-    }
-    j["id"]            = e.id;
-    j["name"]          = e.name;
-    j["faction"]       = mini::factionToString(e.faction);
-    j["mesh"]          = e.meshPath;
-    j["texture"]       = e.texturePath;
-    j["color"]         = {e.color[0], e.color[1], e.color[2]};
-    j["bullet_color"]  = {e.bulletColor[0], e.bulletColor[1], e.bulletColor[2]};
-    j["ai_profile"]    = e.aiProfileId;
-    j["hitbox_profile"]= e.hitboxProfileId;
-    j["weapons"]       = e.weaponIds;
-    j["abilities"]     = e.abilityIds;
-    j["stats"]["hp"]           = e.hp;
-    j["stats"]["move_speed"]   = e.moveSpeed;
-    j["stats"]["damage_scale"] = e.damageScale;
-
-    std::ofstream f(path);
-    if (!f.is_open()) { std::cerr << "[Balance] ERRORE scrittura: " << path << "\n"; return; }
-    f << j.dump(4) << "\n";
-    f.close();
-    std::cout << "[Balance] Alleato salvato: " << path << "\n";
-    m_registry.reload(getSourceDataDir());
-    // NON tocchiamo m_selAlly né lastSelAlly: la selezione rimane stabile
-}
-
-void BalanceEditor::drawAlliesTab()
-{
-    ImGui::TextColored({0.3f, 0.8f, 1.0f, 1.0f}, "Usa l'Entity Editor per modificare gli alleati.");
-    ImGui::TextDisabled("Qui puoi solo consultare la lista dei file presenti.");
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    const auto& allies = m_registry.allies();
-    if (allies.empty()) { ImGui::TextDisabled("Nessun file in data/allies/"); return; }
-
-    ImGui::BeginChild("##allylist_ro", ImVec2(0, 0), true);
-    for (auto& [id, a] : allies)
-        ImGui::Text("  %s   [%s]", a.name.c_str(), id.c_str());
-    ImGui::EndChild();
-}
-
 // ── Tab Personaggio (solo stat base) ─────────────────────────────────────
 
 void BalanceEditor::savePlayerDef(const mini::PlayerDef& p)
 {
     std::string path = getSourceDataDir() + "characters/" + p.id + ".json";
-    json j;
-    j["id"]          = p.id;
-    j["name"]        = p.name;
-    j["description"] = p.description;
-    j["stats"]["hp"]           = p.hp;
-    j["stats"]["move_speed"]   = p.moveSpeed;
-    j["stats"]["jump_height"]  = p.jumpHeight;
-    j["stats"]["sprint_mult"]  = p.sprintMult;
-    j["stats"]["armor_rating"] = p.armorRating;
-
-    std::ofstream f(path);
-    if (f.is_open()) { f << j.dump(4) << "\n"; std::cout << "[Balance] PlayerDef salvato: " << path << "\n"; }
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+        j.erase("id"); // deprecato: id = nome file (ADR-001)
+        j["name"]        = p.name;
+        j["description"] = p.description;
+        j["stats"]["hp"]           = p.hp;
+        j["stats"]["move_speed"]   = p.moveSpeed;
+        j["stats"]["jump_height"]  = p.jumpHeight;
+        j["stats"]["sprint_mult"]  = p.sprintMult;
+        j["stats"]["armor_rating"] = p.armorRating;
+        return true;
+    });
+    std::cout << "[Balance] PlayerDef salvato: " << path << "\n";
     m_registry.loadAll(getSourceDataDir());
 }
 
@@ -633,7 +507,7 @@ void BalanceEditor::drawPlayerDefTab()
 {
     ImGui::BeginGroup();
     ImGui::Text("Preset personaggio:");
-    ImGui::BeginChild("##pdlist", ImVec2(180, -50), true);
+    ImGui::BeginChild("##pdlist", ImVec2(180, -50), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
     for (auto& [id, p] : m_registry.playerDefs())
     {
         bool sel = (id == m_selPlayerDef);
@@ -699,10 +573,8 @@ void BalanceEditor::draw()
     if (ImGui::BeginTabBar("##btabs"))
     {
         if (ImGui::BeginTabItem("Armi"))        { drawWeaponsTab();    ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Nemici"))      { drawEnemiesTab();    ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("AI"))          { drawAITab();         ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Alleati"))     { drawAlliesTab();     ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }

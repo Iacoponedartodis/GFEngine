@@ -1,6 +1,7 @@
 #include "mini/core/Renderer.hpp"
 #include "mini/core/Window.hpp"
 #include "mini/platform/OpenGL.hpp"
+#include "mini/core/Telemetry.hpp"
 #include "mini/render/Camera.hpp"
 #include "mini/render/Mesh.hpp"
 #include "mini/render/Shader.hpp"
@@ -110,6 +111,7 @@ Renderer::Renderer(Window& window)
     m_shader = std::make_unique<Shader>(k_vertSrc, k_fragSrc);
 
     checkGL("Renderer init");
+    telemetry::logInfo("Renderer pronto (shader ok, viewport attivo)");
     std::cout << "[Renderer] Pronto. Viewport "
               << window.getWidth() << "x" << window.getHeight() << std::endl;
 }
@@ -141,9 +143,30 @@ void Renderer::drawMesh(const Mesh&     mesh,
                          const glm::mat4& model,
                          const glm::vec3& colorTint)
 {
-    const glm::mat4 mvp      = m_camera->getViewProjection() * model;
+    drawMeshFrom(*m_camera, mesh, texture, model, colorTint);
+}
+
+void Renderer::setViewportRect(int x, int y, int w, int h)
+{
+    if (w > 0 && h > 0)
+        glViewport(x, y, w, h);
+}
+
+void Renderer::getDrawableSize(int& w, int& h) const
+{
+    w = h = 0;
+    SDL_GL_GetDrawableSize(SDL_GL_GetCurrentWindow(), &w, &h);
+}
+
+void Renderer::drawMeshFrom(const Camera&   cam,
+                            const Mesh&     mesh,
+                            const Texture*  texture,
+                            const glm::mat4& model,
+                            const glm::vec3& colorTint)
+{
+    const glm::mat4 mvp      = cam.getViewProjection() * model;
     const glm::vec3 lightDir = glm::normalize(glm::vec3{0.4f, 0.8f, 0.5f});
-    const glm::vec3& camPos  = m_camera->getPosition();
+    const glm::vec3& camPos  = cam.getPosition();
 
     m_shader->use();
     m_shader->setMat4("uMVP",        glm::value_ptr(mvp));

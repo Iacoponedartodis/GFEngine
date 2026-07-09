@@ -120,4 +120,32 @@ int CommandPosts::countOwnedBy(int team) const
     return n;
 }
 
+std::vector<CommandPosts::Status> CommandPosts::status() const
+{
+    std::vector<Status> out;
+    out.reserve(m_posts.size());
+    for (const auto& p : m_posts)
+    {
+        Status s;
+        s.label         = p.def.label;
+        s.owner         = p.owner;
+        s.capturingTeam = p.capturingTeam;
+        s.progress01    = (p.def.captureTime > 0.01f)
+                          ? p.progress / p.def.captureTime : 0.0f;
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+void CommandPosts::forceAllOwners(World& world, int team)
+{
+    for (auto& p : m_posts)
+    {
+        p.owner         = team;
+        p.capturingTeam = 0;
+        p.progress      = 0.0f;
+        applyOwnerColor(world, p);
+    }
+}
+
 } // namespace mini
