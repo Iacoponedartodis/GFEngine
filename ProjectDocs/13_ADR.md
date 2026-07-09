@@ -29,12 +29,44 @@ One entry per structural decision. Newest last.
 - **Decision:** `--sandbox` loads the firebase `MapDef` (geometry + spawn points) and spawns
   respawning dummies, so map/spawn authoring is testable from the arena. Status: **in force.**
 
-## OPEN — Hitbox single source of truth (blocks KnownIssues #1)
-- **Problem:** Runtime uses hitbox PROFILE; EntityEditor authors inline entity zones that never
-  reach the game. Two divergent stores.
-- **Options:** (a) EntityEditor writes to the referenced profile; (b) runtime also reads inline
-  zones; (c) drop inline zones from EntityEditor. **Not yet decided** — must ADR before coding.
+## ADR-006 — Hitbox single source of truth = PROFILE (2026-07-04)
+- **Decision:** The hitbox PROFILE (`data/hitboxes/<id>.json`) is the only authoritative store,
+  because it is what the runtime consumes. EntityEditor's Hitbox tab now reads/writes the
+  profile referenced by `hitbox_profile` (auto-created with id = entity id if the reference is
+  empty). Entity-inline `hitbox_zones` are **deprecated**: ignored when a profile exists, read
+  only as a legacy fallback, erased from the entity JSON on the next save.
+- **Consequence:** Zones authored in EntityEditor now reach the game. HitboxEditor and
+  EntityEditor edit the same file — last save wins; both write the runtime schema
+  (`damage_multiplier`, `bone`, `rotation`). Rationale for (a) over (b): zero runtime changes,
+  one store instead of two.
 
-## OPEN — ConquestMode fallback ids (blocks KnownIssues #2)
-- **Problem:** `grunt/heavy/sniper` fallback ids don't exist. **Decide** on a registry-derived
-  safe fallback vs requiring `MapDef.enemyTypes`. Not yet decided.
+## ADR-008 — IGameMode interface + factory (2026-07-04)
+- **Decision:** Tutte le modalità implementano `IGameMode`
+  (`include/mini/game/game_modes/IGameMode.hpp`): applySettings/start/update, accessor
+  player/spawn/tickets, `hasVictoryCondition()`. Le istanze si creano SOLO via
+  `createGameMode(id)` (`src/game/game_modes/GameModeFactory.cpp`, id: "conquest",
+  "sandbox"; sconosciuto → fallback conquest + log). Application detiene un
+  `unique_ptr<IGameMode>` e non conosce le classi concrete (rimosse le lambda `useSandbox`).
+- **Consequence:** Assalto/Difesa (Fase 1) = nuova classe + una riga nella factory; la
+  logica win/lose usa `hasVictoryCondition()` invece di flag di modalità. `MeshCache` è
+  definito una sola volta in IGameMode.hpp. Prossima evoluzione naturale: id modalità
+  scelto da MapDef/PreMatch invece che dal flag CLI.
+
+## ADR-009 — Command post come sistema riusabile, dati nel MapDef (2026-07-04)
+- **Decision:** I punti di comando sono dati di mappa (`MapDef.commandPosts`, JSON
+  `command_posts`: label/x/y/z/radius/team/capture_time), autorati nel Map Editor come i
+  box/spawn. La logica (presenza esclusiva nel raggio → cattura in captureTime secondi,
+  conteso/vuoto → decay; visual palo+piastra colorati per team) vive nella classe riusabile
+  `CommandPosts` (`include/mini/game/CommandPosts.hpp`), NON nei game mode.
+- **Consequence:** Ogni modalità configura e interroga il sistema per le proprie regole:
+  Conquista applica ticket bleed (maggioranza post → -1 ticket avversario ogni 6s);
+  la Sandbox li rende catturabili senza conseguenze (test dal vivo). Le future
+  Assalto/Difesa riusano lo stesso blocco con regole diverse. KnownIssues #9 chiuso.
+
+## ADR-007 — Game-mode fallback ids come from the registry (2026-07-04)
+- **Decision:** `ConquestMode::buildEnemySpawnList` no longer hardcodes archetype ids. When
+  `MapDef.enemyTypes` is empty it falls back to the sorted list of ids actually registered in
+  `data/enemies/`; if that is also empty, it spawns nothing and logs an error (no blind ids).
+- **Consequence:** Renaming enemy files can no longer silently break spawning via dead
+  hardcoded strings (KnownIssues #2 closed). Maps should still declare `enemyTypes` for
+  intentional composition.

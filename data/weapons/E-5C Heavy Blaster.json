@@ -1,4 +1,16 @@
 {
+    "attach_points": {
+        "muzzle": [
+            -0.2611593008041382,
+            0.029661385342478752,
+            0.0
+        ],
+        "right_hand": [
+            0.04952972009778023,
+            -0.048937175422906876,
+            0.0
+        ]
+    },
     "bullet_color": [
         0.08823537826538086,
         1.0,
@@ -15,8 +27,15 @@
     "heat_per_shot": 0.30000001192092896,
     "id": "E-5C Heavy Blaster",
     "mesh": "assets/models/weapons/e-5_blaster_rifle.glb",
+    "mesh_rot_x": 0.0,
+    "mesh_scale": 0.800000011920929,
     "min_range": 0.0,
     "name": "E-5C Heavy Blaster",
     "overheat_penalty": 2.75,
-    "projectile_mesh": ""
+    "projectile_mesh": "",
+    "spread_ads": 0.004999999888241291,
+    "spread_base": 0.019999999552965164,
+    "spread_jump": 0.20000000298023224,
+    "spread_move": 0.05999999865889549,
+    "spread_sprint": 0.14000000059604645
 }

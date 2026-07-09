@@ -2,10 +2,12 @@
 #include "modules/WeaponEditor.hpp"
 #include "util/FileDialog.hpp"
 #include "util/RigReader.hpp"
+#include "util/UiWidgets.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
 #include <nlohmann/json.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <fstream>
 #include <filesystem>
@@ -82,9 +84,88 @@ static std::string resolveMesh(const std::string& field)
 
 WeaponEditor::WeaponEditor() { loadWeapons(); if (!m_weapons.empty()) selectWeapon(0); }
 
+// ── Trasformazione arma (coerente con loadModel: rotX * scala) ───────────────
+
+glm::mat4 WeaponEditor::weaponTransform() const
+{
+    return glm::rotate(glm::mat4(1.0f), glm::radians(m_rotX), {1,0,0})
+         * glm::scale(glm::mat4(1.0f), {m_scale, m_scale, m_scale});
+}
+
+glm::vec3 WeaponEditor::toWorld(const glm::vec3& modelPos) const
+{
+    return glm::vec3(weaponTransform() * glm::vec4(modelPos, 1.0f));
+}
+
+glm::vec3 WeaponEditor::deltaToLocal(const glm::vec3& worldDelta) const
+{
+    return glm::inverse(glm::mat3(weaponTransform())) * worldDelta;
+}
+
+// ── syncViewportMarkers ───────────────────────────────────────────────────────
+// Rende gli attach point visibili nel viewport come oggetti (box + label),
+// selezionabili con click e spostabili col gizmo.
+void WeaponEditor::syncViewportMarkers()
+{
+    if (m_showProjectileMesh)
+    {
+        // Gli attach point appartengono alla mesh dell'arma, non al proiettile.
+        m_viewport.clearMarkers();
+        m_viewport.setGizmoTarget({0,0,0}, false);
+        return;
+    }
+
+    std::vector<FreeCameraViewport::ViewportMarker> markers;
+    for (auto& [name, ap] : m_attachPoints)
+    {
+        FreeCameraViewport::ViewportMarker mk;
+        mk.name     = name;
+        mk.pos      = toWorld({ap.x, ap.y, ap.z});
+        mk.r        = 0.2f; mk.g = 1.0f; mk.b = 0.2f;
+        mk.selected = (name == m_selAttachPoint);
+        markers.push_back(mk);
+    }
+    m_viewport.setMarkers(markers);
+
+    // Gizmo sul punto selezionato (gli attach point sono punti: solo Sposta)
+    if (!m_selAttachPoint.empty() && m_attachPoints.count(m_selAttachPoint))
+    {
+        auto& ap = m_attachPoints.at(m_selAttachPoint);
+        m_viewport.setGizmoTarget(toWorld({ap.x, ap.y, ap.z}), true);
+    }
+    else
+        m_viewport.setGizmoTarget({0,0,0}, false);
+    m_viewport.setGizmoCanRotateScale(false, false);
+}
+
 // ── tick ─────────────────────────────────────────────────────────────────────
 
-void WeaponEditor::tick(float dt) { m_viewport.tick(dt); }
+void WeaponEditor::tick(float dt)
+{
+    m_viewport.tick(dt);
+
+    // Drag del gizmo → sposta l'attach point selezionato (world → model space)
+    glm::vec3 delta;
+    if (m_viewport.popGizmoDelta(delta))
+    {
+        if (!m_selAttachPoint.empty() && m_attachPoints.count(m_selAttachPoint))
+        {
+            glm::vec3 ld = deltaToLocal(delta);
+            auto& ap = m_attachPoints[m_selAttachPoint];
+            ap.x += ld.x; ap.y += ld.y; ap.z += ld.z;
+            m_dirty = true;
+            syncViewportMarkers();
+        }
+    }
+
+    // Click su un marker nel viewport → seleziona l'attach point
+    std::string clicked = m_viewport.popClickedItem();
+    if (!clicked.empty() && m_attachPoints.count(clicked))
+    {
+        m_selAttachPoint = clicked;
+        syncViewportMarkers();
+    }
+}
 
 // ── loadWeapons ───────────────────────────────────────────────────────────────
 
@@ -160,6 +241,7 @@ void WeaponEditor::selectWeapon(int idx)
 
     reloadPreview();
     loadRigJoints();
+    syncViewportMarkers();
 }
 
 // ── reloadPreview ─────────────────────────────────────────────────────────────
@@ -391,10 +473,11 @@ void WeaponEditor::drawMeshTab(float panelW)
     // Vista viewport
     {
         bool s = !m_showProjectileMesh;
-        if (ImGui::RadioButton("Arma", s)) { m_showProjectileMesh = false; reloadPreview(); }
+        if (ImGui::RadioButton("Arma", s))
+            { m_showProjectileMesh = false; reloadPreview(); syncViewportMarkers(); }
         ImGui::SameLine();
         if (ImGui::RadioButton("Proiettile", m_showProjectileMesh))
-            { m_showProjectileMesh = true; reloadPreview(); }
+            { m_showProjectileMesh = true; reloadPreview(); syncViewportMarkers(); }
     }
 
     ImGui::Separator();
@@ -418,21 +501,24 @@ void WeaponEditor::drawMeshTab(float panelW)
     };
 
     if (floatRow("RotX", m_rotX, -180.f, 180.f, 1.0f, "%.0f"))
-    { changed = true; reloadPreview(); }
+    { changed = true; reloadPreview(); syncViewportMarkers(); }
     if (floatRow("Scala", m_scale, 0.01f, 5.0f, 0.01f, "%.3f"))
-    { changed = true; reloadPreview(); }
+    { changed = true; reloadPreview(); syncViewportMarkers(); }
 
     ImGui::Separator();
 
     // ── Attach points ───────────────────────────────────────────────────
     ImGui::TextDisabled("Attach Points");
 
+    ImGui::TextWrapped("I punti appaiono nel viewport: clicca per selezionare, "
+                       "trascina le frecce per spostare.");
+
     // Lista degli attach points correnti
     for (auto& [apName, ap] : m_attachPoints)
     {
         bool apSel = (apName == m_selAttachPoint);
         if (ImGui::Selectable(apName.c_str(), apSel, 0, ImVec2(slW * 0.45f, 0)))
-            m_selAttachPoint = apName;
+        { m_selAttachPoint = apName; syncViewportMarkers(); }
         ImGui::SameLine();
         ImGui::TextDisabled("(%.2f, %.2f, %.2f)", ap.x, ap.y, ap.z);
     }
@@ -441,8 +527,12 @@ void WeaponEditor::drawMeshTab(float panelW)
     if (!m_selAttachPoint.empty() && m_attachPoints.count(m_selAttachPoint))
     {
         auto& ap = m_attachPoints.at(m_selAttachPoint);
-        ImGui::SetNextItemWidth(slW);
-        if (ImGui::DragFloat3("##apxyz", &ap.x, 0.001f, -2.0f, 2.0f, "%.3f")) changed = true;
+        float xyz[3] = {ap.x, ap.y, ap.z};
+        if (editor::ui::sliderRow3("apx", xyz, -2.0f, 2.0f, 0.001f, "%.3f"))
+        {
+            ap.x = xyz[0]; ap.y = xyz[1]; ap.z = xyz[2];
+            changed = true;
+        }
 
         if (ImGui::SmallButton("Rimuovi##rmap"))
         {
@@ -487,7 +577,7 @@ void WeaponEditor::drawMeshTab(float panelW)
     }
 
     ImGui::Separator();
-    if (changed) m_dirty = true;
+    if (changed) { m_dirty = true; syncViewportMarkers(); }
     if (m_dirty) ImGui::TextColored({1.f,0.7f,0.2f,1.f}, "* Modifiche non salvate");
     else         ImGui::TextDisabled("Salvato");
 
@@ -582,7 +672,6 @@ void WeaponEditor::drawStatsTab(float panelW)
 
 void WeaponEditor::drawViewport(float /*vpW*/)
 {
-    ImGui::TextDisabled("TAB = cattura mouse | WASD/QE = vola | Esc = ritorna");
     if (m_sel >= 0 && m_sel < (int)m_weapons.size())
     {
         const auto& w = m_weapons[m_sel];

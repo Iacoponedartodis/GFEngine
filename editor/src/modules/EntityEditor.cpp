@@ -1,6 +1,7 @@
 #include "modules/EntityEditor.hpp"
 #include "util/RigReader.hpp"
 #include "util/FileDialog.hpp"
+#include "util/UiWidgets.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -187,22 +188,59 @@ void EntityEditor::loadEntries()
                 }
             }
 
-            // Inline hitbox zones
-            if (j.contains("hitbox_zones") && j["hitbox_zones"].is_array())
+            // ── Hitbox: fonte autorevole = PROFILO (ADR-006) ──────────────
+            // Il runtime legge solo data/hitboxes/<profileId>.json. L'editor
+            // carica dal profilo se esiste; le zone inline "hitbox_zones" nel
+            // JSON entità sono legacy e usate solo come fallback di migrazione.
             {
-                for (auto& zj : j["hitbox_zones"])
+                std::string profileId = e.hitboxProfileId.empty() ? e.id
+                                                                  : e.hitboxProfileId;
+                fs::path profPath = fs::path(dataDir) / "hitboxes" / (profileId + ".json");
+                bool loadedFromProfile = false;
+                std::error_code pec;
+                if (fs::exists(profPath, pec))
                 {
-                    EntityEntry::InlineHitZone z;
-                    z.name = zj.value("name", std::string("zona"));
-                    if (zj.contains("offset") && zj["offset"].size() >= 3)
-                        z.offset = {zj["offset"][0], zj["offset"][1], zj["offset"][2]};
-                    if (zj.contains("half_extents") && zj["half_extents"].size() >= 3)
-                        z.halfExt = {zj["half_extents"][0], zj["half_extents"][1], zj["half_extents"][2]};
-                    z.damageMult = zj.value("damage_mult", 1.0f);
-                    z.boneName   = zj.value("bone", std::string(""));
-                    if (zj.contains("rotation") && zj["rotation"].size() >= 3)
-                        z.eulerDeg = {zj["rotation"][0], zj["rotation"][1], zj["rotation"][2]};
-                    e.hitboxZones.push_back(z);
+                    std::ifstream pf(profPath);
+                    json pj;
+                    if (pf.is_open()) { try { pf >> pj; } catch (...) { pj = {}; } }
+                    if (pj.contains("zones") && pj["zones"].is_array())
+                    {
+                        for (auto& zj : pj["zones"])
+                        {
+                            EntityEntry::InlineHitZone z;
+                            z.name = zj.value("name", std::string("zona"));
+                            if (zj.contains("offset") && zj["offset"].size() >= 3)
+                                z.offset = {zj["offset"][0], zj["offset"][1], zj["offset"][2]};
+                            if (zj.contains("half_extents") && zj["half_extents"].size() >= 3)
+                                z.halfExt = {zj["half_extents"][0], zj["half_extents"][1], zj["half_extents"][2]};
+                            z.damageMult = zj.value("damage_multiplier", 1.0f);
+                            z.boneName   = zj.value("bone", std::string(""));
+                            if (zj.contains("rotation") && zj["rotation"].size() >= 3)
+                                z.eulerDeg = {zj["rotation"][0], zj["rotation"][1], zj["rotation"][2]};
+                            e.hitboxZones.push_back(z);
+                        }
+                        loadedFromProfile = true;
+                    }
+                }
+
+                // Fallback legacy: zone inline nel JSON entità (pre-ADR-006)
+                if (!loadedFromProfile
+                    && j.contains("hitbox_zones") && j["hitbox_zones"].is_array())
+                {
+                    for (auto& zj : j["hitbox_zones"])
+                    {
+                        EntityEntry::InlineHitZone z;
+                        z.name = zj.value("name", std::string("zona"));
+                        if (zj.contains("offset") && zj["offset"].size() >= 3)
+                            z.offset = {zj["offset"][0], zj["offset"][1], zj["offset"][2]};
+                        if (zj.contains("half_extents") && zj["half_extents"].size() >= 3)
+                            z.halfExt = {zj["half_extents"][0], zj["half_extents"][1], zj["half_extents"][2]};
+                        z.damageMult = zj.value("damage_mult", 1.0f);
+                        z.boneName   = zj.value("bone", std::string(""));
+                        if (zj.contains("rotation") && zj["rotation"].size() >= 3)
+                            z.eulerDeg = {zj["rotation"][0], zj["rotation"][1], zj["rotation"][2]};
+                        e.hitboxZones.push_back(z);
+                    }
                 }
             }
 
@@ -315,6 +353,22 @@ void EntityEditor::loadBones()
         m_viewport.setBoneData(m_joints, m_rotX, m_scale);
 }
 
+glm::mat4 EntityEditor::charTransform() const
+{
+    return glm::rotate(glm::mat4(1.0f), glm::radians(m_rotX), {1,0,0})
+         * glm::scale(glm::mat4(1.0f), {m_scale, m_scale, m_scale});
+}
+
+glm::vec3 EntityEditor::toWorld(const glm::vec3& modelPos) const
+{
+    return glm::vec3(charTransform() * glm::vec4(modelPos, 1.0f));
+}
+
+glm::vec3 EntityEditor::deltaToLocal(const glm::vec3& worldDelta) const
+{
+    return glm::inverse(glm::mat3(charTransform())) * worldDelta;
+}
+
 void EntityEditor::loadWeaponPreview()
 {
     m_weaponMeshPath.clear();
@@ -357,10 +411,15 @@ void EntityEditor::updateWeaponTransform()
                 * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponRot.x), {1,0,0})
                 * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponRot.z), {0,0,1});
 
+    // L'arma non deve ereditare la scala del personaggio (M include m_scale):
+    // compensa, identico a WeaponAttach::resolve nel runtime.
+    const float charScale = (m_scale > 0.0001f) ? m_scale : 1.0f;
+    const float effScale  = m_weaponScale / charScale;
+
     // Porta il grip dell'arma sulla mano, poi applica rotazione/scala/offset.
     glm::mat4 local = glm::translate(glm::mat4(1.0f), hand + m_weaponOffset)
                     * R
-                    * glm::scale(glm::mat4(1.0f), glm::vec3(m_weaponScale))
+                    * glm::scale(glm::mat4(1.0f), glm::vec3(effScale))
                     * glm::translate(glm::mat4(1.0f), -m_weaponGrip);
 
     m_viewport.setAttachmentModel(abs, M * local);
@@ -397,6 +456,27 @@ void EntityEditor::syncViewportMarkers()
     }
 
     m_viewport.setMarkers(markers);
+
+    // Wireframe 3D delle zone hitbox (in world space, colorate per danno)
+    std::vector<mini::HitZone> hzv;
+    hzv.reserve(m_hitboxZones.size());
+    for (auto& z : m_hitboxZones)
+    {
+        mini::HitZone hz;
+        hz.name             = z.name;
+        hz.offset           = glm::vec3(M * glm::vec4(z.offset, 1.0f));
+        hz.halfExtents      = z.halfExt * m_scale;
+        hz.damageMultiplier = z.damageMult;
+        hz.eulerDeg         = z.eulerDeg;
+        hz.boneName         = z.boneName;
+        hzv.push_back(hz);
+    }
+    m_viewport.setHitboxes(hzv, m_selZone);
+
+    // Le modalità Ruota/Scala hanno senso solo sulle zone hitbox;
+    // gli attach point sono punti puri (solo Sposta).
+    const bool zoneTarget = (m_gizmoTarget.rfind("hit:", 0) == 0);
+    m_viewport.setGizmoCanRotateScale(zoneTarget, zoneTarget);
 }
 
 void EntityEditor::saveSelected()
@@ -430,20 +510,45 @@ void EntityEditor::saveSelected()
     j["weapons"]        = e.weaponIds;
     j["abilities"]      = e.abilityIds;
 
-    // Inline hitbox zones
-    json zonesArr = json::array();
-    for (auto& z : m_hitboxZones)
+    // ── Hitbox → PROFILO condiviso (ADR-006) ──────────────────────────
+    // Le zone vengono scritte in data/hitboxes/<profileId>.json (schema del
+    // runtime: damage_multiplier). Se l'entità non referenzia un profilo,
+    // ne viene creato uno con id = id entità. Le zone inline legacy vengono
+    // rimosse dal JSON entità.
     {
-        json zj;
-        zj["name"]        = z.name;
-        zj["offset"]      = {z.offset.x, z.offset.y, z.offset.z};
-        zj["half_extents"]= {z.halfExt.x, z.halfExt.y, z.halfExt.z};
-        zj["damage_mult"] = z.damageMult;
-        zj["bone"]        = z.boneName;
-        zj["rotation"]    = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
-        zonesArr.push_back(zj);
+        if (e.hitboxProfileId.empty())
+            e.hitboxProfileId = e.id;
+        j["hitbox_profile"] = e.hitboxProfileId;
+
+        json pj;
+        pj["profile_id"] = e.hitboxProfileId;
+        json zonesArr = json::array();
+        for (auto& z : m_hitboxZones)
+        {
+            json zj;
+            zj["name"]              = z.name;
+            zj["offset"]            = {z.offset.x, z.offset.y, z.offset.z};
+            zj["half_extents"]      = {z.halfExt.x, z.halfExt.y, z.halfExt.z};
+            zj["damage_multiplier"] = z.damageMult;
+            zj["debug_visible"]     = true;
+            zj["bone"]              = z.boneName;
+            zj["rotation"]          = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
+            zonesArr.push_back(zj);
+        }
+        pj["zones"] = zonesArr;
+
+        std::string profPath = getDataDir() + "hitboxes/" + e.hitboxProfileId + ".json";
+        std::ofstream pout(profPath);
+        if (pout.is_open())
+        {
+            pout << pj.dump(4) << "\n";
+            std::cout << "[EntityEditor] Profilo hitbox salvato: " << profPath << "\n";
+        }
+        else
+            std::cerr << "[EntityEditor] ERRORE scrittura profilo hitbox: " << profPath << "\n";
+
+        j.erase("hitbox_zones"); // legacy inline: deprecato da ADR-006
     }
-    j["hitbox_zones"] = zonesArr;
 
     // Arma in mano (posa)
     if (m_weaponId.empty())
@@ -482,29 +587,64 @@ void EntityEditor::tick(float dt)
 {
     m_viewport.tick(dt);
 
-    // Handle gizmo drag
+    // Handle gizmo drag — il delta arriva in world space; i punti sono in
+    // model space, quindi va riportato con l'inversa della trasformazione.
     glm::vec3 delta;
     if (m_viewport.popGizmoDelta(delta))
     {
-        // Apply delta to selected attach point
+        const glm::vec3 localDelta = deltaToLocal(delta);
         if (!m_gizmoTarget.empty())
         {
             if (m_gizmoTarget.substr(0, 4) == "hit:" && m_selZone >= 0
                 && m_selZone < (int)m_hitboxZones.size())
             {
-                m_hitboxZones[m_selZone].offset += delta;
+                auto& z = m_hitboxZones[m_selZone];
+                z.offset += localDelta;
+                m_viewport.setGizmoTarget(toWorld(z.offset), true);
                 m_dirty = true;
                 syncViewportMarkers();
             }
             else if (m_attachPoints.count(m_gizmoTarget))
             {
                 auto& ap = m_attachPoints[m_gizmoTarget];
-                ap.x += delta.x; ap.y += delta.y; ap.z += delta.z;
+                ap.x += localDelta.x; ap.y += localDelta.y; ap.z += localDelta.z;
+                m_viewport.setGizmoTarget(toWorld({ap.x, ap.y, ap.z}), true);
                 m_dirty = true;
                 updateMarker();
                 syncViewportMarkers();
+                updateWeaponTransform();
             }
         }
+    }
+
+    // Gizmo Ruota/Scala: solo sulle zone hitbox selezionate.
+    const bool zoneTarget = (m_gizmoTarget.rfind("hit:", 0) == 0)
+                          && m_selZone >= 0 && m_selZone < (int)m_hitboxZones.size();
+
+    glm::vec3 rotDelta;
+    if (m_viewport.popGizmoRotDelta(rotDelta) && zoneTarget)
+    {
+        auto& z = m_hitboxZones[m_selZone];
+        z.eulerDeg += rotDelta;
+        for (int i = 0; i < 3; ++i)
+        {
+            while (z.eulerDeg[i] >  180.0f) z.eulerDeg[i] -= 360.0f;
+            while (z.eulerDeg[i] < -180.0f) z.eulerDeg[i] += 360.0f;
+        }
+        m_dirty = true;
+        syncViewportMarkers();
+    }
+
+    glm::vec3 scaleDelta;
+    if (m_viewport.popGizmoScaleDelta(scaleDelta) && zoneTarget)
+    {
+        auto& z = m_hitboxZones[m_selZone];
+        // Delta in world units → half extents in model space (scala uniforme)
+        const float s = (m_scale > 0.0001f) ? m_scale : 1.0f;
+        z.halfExt += (scaleDelta * 0.5f) / s;
+        z.halfExt = glm::max(z.halfExt, glm::vec3(0.01f));
+        m_dirty = true;
+        syncViewportMarkers();
     }
 
     // Handle item click from viewport
@@ -517,7 +657,7 @@ void EntityEditor::tick(float dt)
             m_selAttachPoint = clicked;
             m_gizmoTarget    = clicked;
             auto& ap = m_attachPoints[clicked];
-            m_viewport.setGizmoTarget({ap.x, ap.y, ap.z}, true);
+            m_viewport.setGizmoTarget(toWorld({ap.x, ap.y, ap.z}), true);
             updateMarker();
             syncViewportMarkers();
         }
@@ -531,7 +671,7 @@ void EntityEditor::tick(float dt)
                 {
                     m_selZone     = i;
                     m_gizmoTarget = "hit:" + clicked;
-                    m_viewport.setGizmoTarget(m_hitboxZones[i].offset, true);
+                    m_viewport.setGizmoTarget(toWorld(m_hitboxZones[i].offset), true);
                     syncViewportMarkers();
                     foundZone = true;
                     break;
@@ -680,7 +820,7 @@ void EntityEditor::draw()
                             m_attachPoints[joint] = AttachPointEntry{bp.x, bp.y, bp.z};
                             m_selAttachPoint = joint;
                             m_gizmoTarget = joint;
-                            m_viewport.setGizmoTarget(bp, true);
+                            m_viewport.setGizmoTarget(toWorld(bp), true);
                             updateMarker();
                             syncViewportMarkers();
                             m_dirty = true;
@@ -725,7 +865,7 @@ void EntityEditor::draw()
                     m_selAttachPoint = apName;
                     if (exists) {
                         m_gizmoTarget = apName;
-                        m_viewport.setGizmoTarget({ap.x, ap.y, ap.z}, true);
+                        m_viewport.setGizmoTarget(toWorld({ap.x, ap.y, ap.z}), true);
                     }
                     updateMarker();
                     syncViewportMarkers();
@@ -755,7 +895,7 @@ void EntityEditor::draw()
                                     ap.y = jd.modelPos.y;
                                     ap.z = jd.modelPos.z;
                                     m_gizmoTarget = apName;
-                                    m_viewport.setGizmoTarget({ap.x,ap.y,ap.z}, true);
+                                    m_viewport.setGizmoTarget(toWorld({ap.x,ap.y,ap.z}), true);
                                     changed = true; updateMarker();
                                     syncViewportMarkers(); updateWeaponTransform();
                                 }
@@ -885,7 +1025,10 @@ void EntityEditor::draw()
 // ── drawHitboxTab ─────────────────────────────────────────────────────────────
 void EntityEditor::drawHitboxTab()
 {
-    ImGui::TextDisabled("Zone hitbox inline per questa entita'");
+    ImGui::TextDisabled("Zone hitbox (salvate nel profilo condiviso — ADR-006)");
+    editor::ui::gizmoModeBar(m_viewport,
+        m_gizmoTarget.rfind("hit:", 0) == 0,
+        m_gizmoTarget.rfind("hit:", 0) == 0);
     ImGui::Separator();
 
     // Helper: posizione model-space di un bone dato il nome (vec3 + trovato).
@@ -917,7 +1060,7 @@ void EntityEditor::drawHitboxTab()
             m_hitboxZones.push_back(z);
             m_selZone = (int)m_hitboxZones.size() - 1;
             m_gizmoTarget = "hit:" + z.name;
-            m_viewport.setGizmoTarget(z.offset, true);
+            m_viewport.setGizmoTarget(toWorld(z.offset), true);
             m_dirty = true;
             syncViewportMarkers();
         }
@@ -937,7 +1080,7 @@ void EntityEditor::drawHitboxTab()
         {
             m_selZone = i;
             m_gizmoTarget = "hit:" + z.name;
-            m_viewport.setGizmoTarget(z.offset, true);
+            m_viewport.setGizmoTarget(toWorld(z.offset), true);
             syncViewportMarkers();
         }
     }
@@ -990,7 +1133,7 @@ void EntityEditor::drawHitboxTab()
                     z.boneName = jd.name;
                     z.offset   = jd.modelPos; // aggancia la zona alla posizione del bone
                     changed = true;
-                    m_viewport.setGizmoTarget(z.offset, true);
+                    m_viewport.setGizmoTarget(toWorld(z.offset), true);
                 }
             ImGui::EndCombo();
         }
@@ -1001,32 +1144,32 @@ void EntityEditor::drawHitboxTab()
             {
                 glm::vec3 bp{0,0,0};
                 if (boneModelPos(z.boneName, bp))
-                { z.offset = bp; changed = true; m_viewport.setGizmoTarget(z.offset, true); }
+                { z.offset = bp; changed = true; m_viewport.setGizmoTarget(toWorld(z.offset), true); }
             }
         }
 
         // Offset
-        ImGui::TextDisabled("Offset (model space)");
+        ImGui::TextDisabled("Posizione (model space)");
         float off[3] = {z.offset.x, z.offset.y, z.offset.z};
-        if (ImGui::DragFloat3("Offset##hzo", off, 0.01f, -5.0f, 5.0f, "%.3f"))
+        if (editor::ui::sliderRow3("hzo", off, -3.0f, 3.0f, 0.01f, "%.3f"))
         { z.offset = {off[0], off[1], off[2]}; changed = true;
-          m_viewport.setGizmoTarget(z.offset, true); }
+          m_viewport.setGizmoTarget(toWorld(z.offset), true); }
 
         // Half extents
         ImGui::TextDisabled("Dimensioni (half extents)");
         float he[3] = {z.halfExt.x, z.halfExt.y, z.halfExt.z};
-        if (ImGui::DragFloat3("Half##hzhe", he, 0.005f, 0.01f, 3.0f, "%.3f"))
+        if (editor::ui::sliderRow3("hzhe", he, 0.01f, 2.0f, 0.005f, "%.3f"))
         { z.halfExt = {he[0], he[1], he[2]}; changed = true; }
 
-        // Damage multiplier
-        if (ImGui::DragFloat("Danno mult##hzdm", &z.damageMult, 0.05f, 0.1f, 5.0f, "x%.2f"))
-            changed = true;
-
         // Rotation
-        ImGui::TextDisabled("Rotazione Euler (gradi)");
+        ImGui::TextDisabled("Rotazione (gradi)");
         float euler[3] = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
-        if (ImGui::DragFloat3("Rotazione##hzrot", euler, 1.0f, -180.0f, 180.0f, "%.1f"))
+        if (editor::ui::sliderRow3("hzrot", euler, -180.0f, 180.0f, 1.0f, "%.1f"))
         { z.eulerDeg = {euler[0], euler[1], euler[2]}; changed = true; }
+
+        // Damage multiplier
+        if (editor::ui::sliderRow("Danno x", z.damageMult, 0.1f, 5.0f, 0.05f, "%.2f"))
+            changed = true;
 
         if (changed) { m_dirty = true; syncViewportMarkers(); }
     }

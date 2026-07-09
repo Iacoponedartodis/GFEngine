@@ -1,6 +1,9 @@
 #include "mini/game/game_modes/SandboxMode.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/MapQuery.hpp"
+#include "mini/game/WeaponAttach.hpp"
 #include "mini/ecs/Components.hpp"
+#include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/core/GameConfig.hpp"
 
@@ -49,24 +52,41 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     else
         buildArena(world);
 
-    // ── Manichini sullo spawn nemici (per controllare gli spawn point) ────
+    // ── Command post: visibili e catturabili anche in sandbox ─────────────
+    if (map)
+        m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
+    // ── Manichini nemici sullo spawn team2 ────────────────────────────────
     std::string dummyId = "B1 Battle Droid";
     if (registry && !registry->enemies().empty())
         dummyId = registry->enemies().begin()->first;
 
-    // Una fila di manichini centrata sullo spawn team2.
     for (int i = -2; i <= 2; ++i)
-        spawnDummy(world, { p2x + i * 3.0f, p2z, dummyId });
+        spawnDummy(world, { p2x + i * 3.0f, p2z, dummyId, 2 });
+
+    // ── Manichini alleati vicino allo spawn team1 (verso il centro) ───────
+    std::string allyId = "Clone Trooper";
+    if (registry && !registry->allies().empty())
+        allyId = registry->allies().begin()->first;
+
+    const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
+    for (int i = -1; i <= 1; ++i)
+        spawnDummy(world, { p1x + i * 3.0f, p1z + dirZ * 4.0f, allyId, 1 });
 }
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
 {
-    const EnemyDef* def = m_registry ? m_registry->getEnemy(info.id) : nullptr;
+    // team 1 → definizione alleato, team 2 → nemico
+    const EnemyDef* def = nullptr;
+    if (m_registry)
+        def = (info.team == 1) ? m_registry->getAlly(info.id)
+                               : m_registry->getEnemy(info.id);
 
     Mesh* useMesh = m_mesh;
     float rx = 0, ry = 0, scale = 1;
     float footY = 0;
     float cr = 0.80f, cg = 0.15f, cb = 0.15f;
+    if (info.team == 1) { cr = 0.25f; cg = 0.45f; cb = 1.0f; }
 
     if (def)
     {
@@ -86,9 +106,13 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
     }
 
     EntityId e = world.createEntity();
-    const float spawnY = GND_Y + config::AI_HALF_Y;  // centro fisico su suolo
+    // Suolo reale della mappa in (x,z): il pavimento firebase ha top a +0.1,
+    // non a 0 — prima i manichini affondavano di quella differenza.
+    const MapDef* map = m_registry ? m_registry->getMap("firebase") : nullptr;
+    const float ground = mapquery::groundHeightAt(map, info.x, info.z);
+    const float spawnY = ground + config::AI_HALF_Y;  // centro fisico su suolo
     world.addTransform(e, {info.x, spawnY, info.z, rx, ry, 0, scale, scale, scale});
-    world.addTeam(e, {2});
+    world.addTeam(e, {info.team});
     world.addHealth(e, {100.0f, 100.0f});  // muore e respawna
 
     const bool hasRealMesh = (useMesh != m_mesh);
@@ -99,11 +123,25 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
     mrc.g           = cg;
     mrc.b           = cb;
     // Modello GLB: piedi a Y=0, abbassa fino al suolo. Cubo: centrato.
-    mrc.meshOffsetY = hasRealMesh ? (-footY - config::AI_HALF_Y) : 0.0f;
+    // footY è in model space → va scalato come il modello.
+    mrc.meshOffsetY = hasRealMesh ? (-footY * scale - config::AI_HALF_Y) : 0.0f;
+    // Arma in mano dai metadata dell'editor
+    if (hasRealMesh)
+    {
+        auto wa = weaponattach::resolve(m_registry, m_meshCache, def);
+        if (wa.mesh) { mrc.attachMesh = wa.mesh; mrc.attachLocal = wa.local; }
+    }
     world.addMeshRenderer(e, mrc);
 
-    // Hitbox (così i colpi alla testa contano) se il profilo esiste.
+    // Hitbox dal profilo (così testa/zone contano anche in sandbox).
     // Nessun AI component → resta fermo, non spara.
+    if (def && m_registry)
+    {
+        const std::string profId = def->hitboxProfileId.empty()
+                                   ? def->id : def->hitboxProfileId;
+        if (const auto* hp = m_registry->getHitboxProfile(profId))
+            world.addHitbox(e, HitboxComponent{hp});
+    }
 
     m_dummies.push_back({e, info});
     return e;
@@ -146,6 +184,9 @@ void SandboxMode::buildArena(World& world)
 
 void SandboxMode::update(World& world, float dt)
 {
+    // Command post catturabili (nessuna conseguenza: solo test visivo)
+    m_commandPosts.update(world, dt);
+
     // Manichini eliminati → in coda per il respawn
     auto it = m_dummies.begin();
     while (it != m_dummies.end())

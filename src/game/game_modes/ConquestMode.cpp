@@ -1,5 +1,7 @@
 #include "mini/game/game_modes/ConquestMode.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/MapQuery.hpp"
+#include "mini/game/WeaponAttach.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
@@ -24,6 +26,11 @@ struct ResolvedEnemyArchetype
     std::string enemyId;
     std::string hitboxProfileId;
     std::string meshPath;
+    std::string weaponId;
+
+    float meshRotX  = 0.0f;
+    float meshRotY  = 0.0f;
+    float meshScale = 1.0f;
 
     float hp        = 80.0f;
     float moveSpeed = 2.5f;
@@ -64,7 +71,11 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
     out.bg = enemy->bulletColor[1];
     out.bb = enemy->bulletColor[2];
     out.hitboxProfileId = enemy->hitboxProfileId.empty() ? enemy->id : enemy->hitboxProfileId;
-    out.meshPath = enemy->meshPath;
+    out.meshPath  = enemy->meshPath;
+    out.meshRotX  = enemy->meshRotX;
+    out.meshRotY  = enemy->meshRotY;
+    out.meshScale = enemy->meshScale;
+    out.weaponId  = enemy->primaryWeaponId();
 
     if (registry)
     {
@@ -123,10 +134,24 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
         }
     }
 
+    // Fallback: nessun enemy_types nella mappa → usa gli id realmente
+    // registrati (l'id è il nome file, mai stringhe hardcoded — ADR-001).
+    if (preferredIds.empty() && registry)
+    {
+        for (auto& [id, def] : registry->enemies())
+            preferredIds.push_back(id);
+        std::sort(preferredIds.begin(), preferredIds.end());
+        if (!preferredIds.empty())
+            std::cout << "[ConquestMode] enemy_types assenti: fallback su "
+                      << preferredIds.size() << " nemici dal registry.\n";
+    }
+
     if (preferredIds.empty())
     {
-        preferredIds = {"grunt", "heavy", "sniper"};
-        std::cout << "[ConquestMode] enemy_types non trovati: uso fallback grunt/heavy/sniper.\n";
+        std::cerr << "[ConquestMode] ERRORE: nessun nemico disponibile "
+                     "(ne' enemy_types nella mappa ne' file in data/enemies/). "
+                     "Nessuno spawn nemico.\n";
+        return result;
     }
 
     for (int i = 0; i < count; ++i)
@@ -139,10 +164,19 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
     EntityId e = world.createEntity();
-    // Sempre a livello del suolo: niente unità sospese in aria.
-    float yPos = AI_GND_Y;
+    // A livello del suolo REALE della mappa (il pavimento può non essere a
+    // y=0: firebase ha il top a +0.1 — prima le unità affondavano di 0.1).
+    const float ground = mapquery::groundHeightAt(m_map, info.x, info.z);
+    float yPos = ground + AI_GND_Y;
 
-    world.addTransform(e, {info.x, yPos, info.z});
+    // Trasformazione modello dall'EnemyDef, solo per mesh custom:
+    // il cubo placeholder resta a scala 1 (altrimenti sparirebbe).
+    const bool  hasMesh = (info.entityMesh != nullptr);
+    const float mrx = hasMesh ? info.meshRotX  : 0.0f;
+    const float mry = hasMesh ? info.meshRotY  : 0.0f;
+    const float msc = hasMesh ? info.meshScale : 1.0f;
+
+    world.addTransform(e, {info.x, yPos, info.z, mrx, mry, 0, msc, msc, msc});
     world.addTeam(e, {info.teamId});
     world.addHealth(e, {info.hp, info.hp});
     Mesh* useMesh = (info.entityMesh ? info.entityMesh : m_mesh);
@@ -150,12 +184,18 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     mrc.mesh    = useMesh;
     mrc.texture = m_tex;
     mrc.r = info.mr; mrc.g = info.mg; mrc.b = info.mb;
-    // I modelli GLB hanno i piedi a Y=0: abbassa la mesh fino al suolo.
-    // Il cubo placeholder è centrato sull'origine: nessun offset.
-    mrc.meshOffsetY = (info.entityMesh ? -yPos : 0.0f);
+    // I modelli GLB hanno i piedi a Y=0: abbassa la mesh fino ai piedi
+    // dell'entità (mezza altezza fisica sotto il centro).
+    mrc.meshOffsetY = (hasMesh ? -AI_GND_Y : 0.0f);
+    // Arma visibile in mano (risolta a monte dai metadata dell'editor)
+    if (hasMesh && info.weaponMesh)
+    {
+        mrc.attachMesh  = info.weaponMesh;
+        mrc.attachLocal = info.weaponLocal;
+    }
     world.addMeshRenderer(e, mrc);
 
-    world.addAi(e, AiComponent{
+    AiComponent aic{
         .shootInterval  = info.interval,
         .aggroRange     = info.range,
         .bulletMesh     = m_mesh,
@@ -174,7 +214,35 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
         .strafeTimer    = 1.4f,
         .strafeSign     = 1.0f,
         .stationary     = info.stationary
-    });
+    };
+
+    // Sosta ai waypoint: con i command post in mappa, l'AI resta nell'area
+    // abbastanza a lungo da completare la cattura (dwell > capture_time).
+    if (m_map && !m_map->commandPosts.empty())
+        aic.patrolDwell = 12.0f;
+
+    // ── Arma reale: cadenza + surriscaldamento + proiettile dal WeaponDef ─
+    // L'AI spara a una frazione della cadenza dell'arma (bilanciamento):
+    // il calore la costringe comunque a raffiche + pause come il giocatore.
+    if (m_registry && !info.weaponId.empty())
+    {
+        if (const WeaponDef* wd = m_registry->getWeapon(info.weaponId))
+        {
+            constexpr float AI_FIRE_RATE_SCALE = 0.35f;
+            if (wd->fireRate > 0.01f)
+                aic.fireInterval = 1.0f / (wd->fireRate * AI_FIRE_RATE_SCALE);
+            aic.heatPerShot     = wd->heatPerShot;
+            aic.cooldownRate    = wd->cooldownRate;
+            aic.overheatPenalty = wd->overheatPenalty;
+            aic.bulletSpeed     = wd->bulletSpeed;
+            aic.bulletDamage    = wd->damage;
+            aic.bulletLifetime  = wd->bulletLifetime;
+            aic.bulletR = wd->bulletColor[0];
+            aic.bulletG = wd->bulletColor[1];
+            aic.bulletB = wd->bulletColor[2];
+        }
+    }
+    world.addAi(e, aic);
 
     UnitTemplate tpl = {
         info.x, info.z, yPos, info.teamId,
@@ -184,6 +252,18 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
         info.patSpd, info.interval, info.range, info.stationary,
         info.hitboxProfileId
     };
+    // Campi non coperti dall'aggregate: senza questi il respawn perdeva
+    // mesh custom, trasformazione e stats proiettile (tornava un cubo).
+    tpl.bulletSpeed    = info.bulletSpeed;
+    tpl.bulletDamage   = info.bulletDamage;
+    tpl.bulletLifetime = info.bulletLifetime;
+    tpl.entityMesh     = info.entityMesh;
+    tpl.meshRotX       = info.meshRotX;
+    tpl.meshRotY       = info.meshRotY;
+    tpl.meshScale      = info.meshScale;
+    tpl.weaponId       = info.weaponId;
+    tpl.weaponMesh     = info.weaponMesh;
+    tpl.weaponLocal    = info.weaponLocal;
 
     if (m_registry)
     {
@@ -228,6 +308,16 @@ void ConquestMode::checkDeaths(World& world)
                 entry.range           = tpl.range;
                 entry.stationary      = tpl.stationary;
                 entry.hitboxProfileId = tpl.hitboxProfileId;
+                entry.bulletSpeed     = tpl.bulletSpeed;
+                entry.bulletDamage    = tpl.bulletDamage;
+                entry.bulletLifetime  = tpl.bulletLifetime;
+                entry.entityMesh      = tpl.entityMesh;
+                entry.meshRotX        = tpl.meshRotX;
+                entry.meshRotY        = tpl.meshRotY;
+                entry.meshScale       = tpl.meshScale;
+                entry.weaponId        = tpl.weaponId;
+                entry.weaponMesh      = tpl.weaponMesh;
+                entry.weaponLocal     = tpl.weaponLocal;
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
@@ -267,11 +357,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     m_tex       = tex;
     m_registry  = registry;
     m_meshCache = meshCache;
+    m_map       = registry ? registry->getMap("firebase") : nullptr;
 
     // Spawn del giocatore dal MapDef (team1), altrimenti default.
     float playerX = 0.0f, playerZ = SPAWN_Z;
-    if (const MapDef* md = registry ? registry->getMap("firebase") : nullptr)
-    { playerX = md->spawnTeam1[0]; playerZ = md->spawnTeam1[2]; }
+    if (m_map)
+    { playerX = m_map->spawnTeam1[0]; playerZ = m_map->spawnTeam1[2]; }
     m_spawnPos  = {playerX, SPAWN_Y, playerZ};
 
     m_team1Tickets = initialTeam1Tickets;
@@ -286,8 +377,10 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
     // ── Lista nemici da mappa/registry ───────────────────────────────────
-    const int nEnemies = std::min(team2AiCount, 20);
+    int nEnemies = std::min(team2AiCount, 20);
     std::vector<std::string> enemyIds = buildEnemySpawnList(registry, nEnemies);
+    if ((int)enemyIds.size() < nEnemies)
+        nEnemies = (int)enemyIds.size(); // registry vuoto: niente spawn ciechi
 
     // ── Lambda helper spawn ───────────────────────────────────────────────
     auto mkUnit = [&](float x, float z, int team,
@@ -330,7 +423,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                               const std::string& hitboxProfile,
                               bool stat,
                               float bspd, float bdmg, float blife,
-                              const std::string& meshPath)
+                              const std::string& meshPath,
+                              float meshRotX = 0.0f, float meshRotY = 0.0f,
+                              float meshScale = 1.0f,
+                              const std::string& weaponId = "",
+                              Mesh* weaponMesh = nullptr,
+                              const glm::mat4& weaponLocal = glm::mat4(1.0f))
     {
         RespawnEntry info;
         info.timer           = 0;
@@ -357,6 +455,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
             if (it != m_meshCache->end())
                 info.entityMesh = it->second;
         }
+        info.meshRotX  = meshRotX;
+        info.meshRotY  = meshRotY;
+        info.meshScale = meshScale;
+        info.weaponId  = weaponId;
+        info.weaponMesh  = weaponMesh;
+        info.weaponLocal = weaponLocal;
         spawnUnit(world, info);
     };
 
@@ -372,22 +476,43 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         allyBaseX  = md->spawnTeam1[0]; allyBaseZ  = md->spawnTeam1[2];
     }
 
-    // Genera N posizioni a livello del suolo, in file davanti allo spawn,
-    // avanzando verso il centro (dirZ). Patrol point laterali per il movimento.
-    auto genPositions = [](float baseX, float baseZ, float dirZ, int count)
+    // Genera N posizioni in file davanti allo spawn, avanzando verso il
+    // centro (dirZ). Ogni posizione viene spinta fuori dagli ostacoli della
+    // mappa (prima le file finivano DENTRO le barricate davanti agli spawn).
+    // Patrol: dallo spawn verso il command post assegnato (round-robin) —
+    // così l'AI marcia sugli obiettivi invece di fare avanti-indietro.
+    auto genPositions = [this](float baseX, float baseZ, float dirZ, int count)
     {
         std::vector<UnitPos> out;
         const int   perRow = 5;
         const float dx = 3.5f, dz = 3.0f;
+        const int   nPosts = m_map ? (int)m_map->commandPosts.size() : 0;
+
         for (int i = 0; i < count; ++i)
         {
             int row = i / perRow, col = i % perRow;
             float x = baseX + (col - (perRow - 1) * 0.5f) * dx;
             float z = baseZ + dirZ * (3.0f + row * dz);
+
+            // Fuori dagli ostacoli (muri/barricate/casse), avanzando in campo
+            mapquery::findFreeSpot(m_map, x, z, 0.0f, dirZ, 0.45f, 0.5f, 0.45f);
+
             UnitPos p;
             p.x = x;  p.z = z;
-            p.pax = x - 1.5f; p.paz = z;
-            p.pbx = x + 1.5f; p.pbz = z;
+            if (nPosts > 0)
+            {
+                const auto& cp = m_map->commandPosts[i % nPosts];
+                p.pax = x;
+                p.paz = z;
+                // Punto di arrivo attorno al post (sparso, non impilato)
+                p.pbx = cp.x + (float)((i % 3) - 1) * 2.0f;
+                p.pbz = cp.z + ((i % 2) ? 1.8f : -1.8f);
+            }
+            else
+            {
+                p.pax = x - 1.5f; p.paz = z;
+                p.pbx = x + 1.5f; p.pbz = z;
+            }
             p.stat = false;
             out.push_back(p);
         }
@@ -403,6 +528,10 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         const std::string enemyId = enemyIds[i];
         const ResolvedEnemyArchetype resolved = resolveEnemyArchetype(registry, enemyId);
 
+        // Arma in mano dai metadata dell'editor
+        auto wa = weaponattach::resolve(registry, m_meshCache,
+                                        registry ? registry->getEnemy(enemyId) : nullptr);
+
         mkUnitWithMesh(p.x, p.z, 2,
                resolved.mr, resolved.mg, resolved.mb,
                resolved.br, resolved.bg, resolved.bb,
@@ -411,7 +540,9 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                resolved.moveSpeed, resolved.interval, resolved.range,
                resolved.hitboxProfileId, p.stat,
                resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
-               resolved.meshPath);
+               resolved.meshPath,
+               resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
+               resolved.weaponId, wa.mesh, wa.local);
     }
 
     // ── Lista alleati da mappa/registry ─────────────────────────────────────
@@ -422,11 +553,17 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         if (map && !map->allyTypes.empty())
             allyIds = map->allyTypes;
     }
-    if (allyIds.empty())
-        allyIds = {"clone_trooper"};
+    // Fallback: id realmente registrati, mai stringhe hardcoded (ADR-001/007).
+    if (allyIds.empty() && registry)
+    {
+        for (auto& [id, def] : registry->allies())
+            allyIds.push_back(id);
+        std::sort(allyIds.begin(), allyIds.end());
+    }
 
     // ── Spawn alleati AI (data-driven) ───────────────────────────────────────
     int nAllies = std::min(team1AiCount, 10);
+    if (allyIds.empty()) nAllies = 0; // nessun alleato registrato: niente spawn ciechi
     std::vector<UnitPos> allyPos = genPositions(allyBaseX, allyBaseZ, -1.0f, nAllies);
     for (int i = 0; i < nAllies; ++i)
     {
@@ -439,6 +576,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         float mr=0.25f, mg=0.45f, mb=1.0f;
         float br=0.30f, bg=0.60f, bb=1.0f;
         float hp=60.0f, pspd=1.8f, intv=3.5f, rng=14.0f;
+        float arx=0.0f, ary=0.0f, asc=1.0f;
         std::string hitboxId;
         std::string meshPath;
 
@@ -446,8 +584,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         {
             mr = allyDef->color[0]; mg = allyDef->color[1]; mb = allyDef->color[2];
             hp = allyDef->hp;
-            hitboxId = allyDef->hitboxProfileId;
+            hitboxId = allyDef->hitboxProfileId.empty() ? allyDef->id
+                                                        : allyDef->hitboxProfileId;
             meshPath = allyDef->meshPath;
+            arx = allyDef->meshRotX;
+            ary = allyDef->meshRotY;
+            asc = allyDef->meshScale;
 
             if (registry)
             {
@@ -460,13 +602,16 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
             }
         }
 
+        auto wa = weaponattach::resolve(registry, m_meshCache, allyDef);
         mkUnitWithMesh(p.x, p.z, 1,
                        mr, mg, mb, br, bg, bb, hp,
                        p.pax, p.paz, p.pbx, p.pbz,
                        pspd, intv, rng,
                        hitboxId, p.stat,
                        8.0f, 20.0f, 5.0f,
-                       meshPath);
+                       meshPath, arx, ary, asc,
+                       allyDef ? allyDef->primaryWeaponId() : std::string(),
+                       wa.mesh, wa.local);
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────
@@ -515,13 +660,44 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         std::cout << "[ConquestMode] Geometria hardcoded (nessuna geometry nel JSON).\n";
     }
 
+    // ── Command post (ADR-009) ────────────────────────────────────────────
+    m_bleedTimer = 0.0f;
+    if (map)
+        m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
     std::cout << "[ConquestMode] Spawn completato: "
-              << nEnemies << " nemici, " << nAllies << " alleati AI.\n";
+              << nEnemies << " nemici, " << nAllies << " alleati AI, "
+              << m_commandPosts.count() << " command post.\n";
 }
 
 void ConquestMode::update(World& world, float dt)
 {
     checkDeaths(world);
+
+    // ── Command post: cattura + ticket bleed (ADR-009) ───────────────────
+    m_commandPosts.update(world, dt);
+    if (m_commandPosts.count() > 0)
+    {
+        m_bleedTimer += dt;
+        if (m_bleedTimer >= m_bleedInterval)
+        {
+            m_bleedTimer -= m_bleedInterval;
+            const int own1 = m_commandPosts.countOwnedBy(1);
+            const int own2 = m_commandPosts.countOwnedBy(2);
+            if (own1 > own2 && m_team2Tickets > 0)
+            {
+                --m_team2Tickets;
+                std::cout << "[Conquest] Maggioranza post alleata: ticket nemici -> "
+                          << m_team2Tickets << "\n";
+            }
+            else if (own2 > own1 && m_team1Tickets > 0)
+            {
+                --m_team1Tickets;
+                std::cout << "[Conquest] Maggioranza post nemica: ticket alleati -> "
+                          << m_team1Tickets << "\n";
+            }
+        }
+    }
 
     for (auto it = m_respawnQueue.begin(); it != m_respawnQueue.end(); )
     {

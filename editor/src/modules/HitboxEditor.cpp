@@ -1,5 +1,6 @@
 #include "modules/HitboxEditor.hpp"
 #include "util/FileDialog.hpp"
+#include "util/UiWidgets.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -165,16 +166,41 @@ void HitboxEditor::tick(float dt)
 {
     m_viewport.tick(dt);
 
-    // Gizmo a 3 frecce: sposta la zona selezionata.
+    const bool zoneSel = (m_selZone >= 0 && m_selZone < (int)m_edit.zones.size());
+
+    // Gizmo Sposta
     glm::vec3 delta;
-    if (m_viewport.popGizmoDelta(delta))
+    if (m_viewport.popGizmoDelta(delta) && zoneSel)
     {
-        if (m_selZone >= 0 && m_selZone < (int)m_edit.zones.size())
+        m_edit.zones[m_selZone].offset += delta;
+        m_dirty = true;
+        syncViewport();
+    }
+
+    // Gizmo Ruota (euler XYZ della zona)
+    glm::vec3 rotDelta;
+    if (m_viewport.popGizmoRotDelta(rotDelta) && zoneSel)
+    {
+        auto& z = m_edit.zones[m_selZone];
+        z.eulerDeg += rotDelta;
+        for (int i = 0; i < 3; ++i)
         {
-            m_edit.zones[m_selZone].offset += delta;
-            m_dirty = true;
-            syncViewport();
+            while (z.eulerDeg[i] >  180.0f) z.eulerDeg[i] -= 360.0f;
+            while (z.eulerDeg[i] < -180.0f) z.eulerDeg[i] += 360.0f;
         }
+        m_dirty = true;
+        syncViewport();
+    }
+
+    // Gizmo Scala (half extents)
+    glm::vec3 scaleDelta;
+    if (m_viewport.popGizmoScaleDelta(scaleDelta) && zoneSel)
+    {
+        auto& z = m_edit.zones[m_selZone];
+        z.halfExtents += scaleDelta * 0.5f; // delta full-size → half extents
+        z.halfExtents = glm::max(z.halfExtents, glm::vec3(0.01f));
+        m_dirty = true;
+        syncViewport();
     }
 }
 
@@ -249,8 +275,6 @@ void HitboxEditor::syncViewport()
 
 void HitboxEditor::drawViewport()
 {
-    ImGui::TextDisabled("TAB = cattura mouse | WASD/QE = vola | Esc = ritorna");
-
     // Selettore modello
     ImGui::SetNextItemWidth(220);
     char buf[512];
@@ -267,6 +291,9 @@ void HitboxEditor::drawViewport()
     if (ImGui::Button("Auto")) loadModelForProfile();
     ImGui::SameLine();
     ImGui::Checkbox("Viste 2D", &m_show2DViews);
+
+    // Barra modalità gizmo (zone: tutte le modalità disponibili)
+    editor::ui::gizmoModeBar(m_viewport, true, true);
 
     m_viewport.draw(false);
 }
@@ -387,23 +414,27 @@ void HitboxEditor::drawZoneProperties()
         }
     }
 
+    ImGui::Spacing();
+    ImGui::TextDisabled("Posizione (offset)");
     float off[3] = {z.offset.x, z.offset.y, z.offset.z};
-    if (ImGui::DragFloat3("Offset", off, 0.01f, -5.0f, 5.0f, "%.3f"))
+    if (editor::ui::sliderRow3("off", off, -3.0f, 3.0f, 0.01f, "%.3f"))
     { z.offset = {off[0],off[1],off[2]}; changed = true; }
 
+    ImGui::Spacing();
+    ImGui::TextDisabled("Dimensioni (half extents)");
     float he[3] = {z.halfExtents.x, z.halfExtents.y, z.halfExtents.z};
-    if (ImGui::DragFloat3("Half Extents", he, 0.005f, 0.01f, 2.0f, "%.3f"))
+    if (editor::ui::sliderRow3("he", he, 0.01f, 2.0f, 0.005f, "%.3f"))
     { z.halfExtents = {he[0],he[1],he[2]}; changed = true; }
 
-    if (ImGui::DragFloat("Moltiplicatore danno", &z.damageMultiplier,
-                          0.05f, 0.1f, 5.0f, "x%.2f"))
-        changed = true;
+    ImGui::Spacing();
+    ImGui::TextDisabled("Rotazione locale (gradi)");
+    float euler[3] = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
+    if (editor::ui::sliderRow3("rot", euler, -180.0f, 180.0f, 1.0f, "%.1f"))
+    { z.eulerDeg = {euler[0], euler[1], euler[2]}; changed = true; }
 
     ImGui::Spacing();
-    ImGui::TextDisabled("Rotazione locale (gradi, Euler)");
-    float euler[3] = {z.eulerDeg.x, z.eulerDeg.y, z.eulerDeg.z};
-    if (ImGui::DragFloat3("Rotazione##euler", euler, 1.0f, -180.0f, 180.0f, "%.1f deg"))
-    { z.eulerDeg = {euler[0], euler[1], euler[2]}; changed = true; }
+    if (editor::ui::sliderRow("Danno x", z.damageMultiplier, 0.1f, 5.0f, 0.05f, "%.2f"))
+        changed = true;
 
     if (changed) { m_dirty = true; syncViewport(); }
 

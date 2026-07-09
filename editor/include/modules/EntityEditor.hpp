@@ -107,6 +107,13 @@ private:
     void loadWeaponPreview();   // legge il JSON arma + carica mesh
     void updateWeaponTransform(); // ricalcola e applica la trasformazione
 
+    // ── Trasformazione personaggio (coerente con marker/modello) ─────────
+    // I punti (attach point, zone hitbox) sono in model space; il viewport
+    // lavora in world space: M = rotX * scala uniforme.
+    glm::mat4 charTransform() const;
+    glm::vec3 toWorld(const glm::vec3& modelPos) const;
+    glm::vec3 deltaToLocal(const glm::vec3& worldDelta) const;
+
     // Resizable panel widths
     float m_listW   = 180.0f;
     float m_centerW = 280.0f;

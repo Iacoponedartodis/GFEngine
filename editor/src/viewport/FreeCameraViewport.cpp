@@ -481,6 +481,24 @@ bool FreeCameraViewport::popGizmoDelta(glm::vec3& outDelta)
     return true;
 }
 
+bool FreeCameraViewport::popGizmoRotDelta(glm::vec3& outEulerDeg)
+{
+    if (!m_gizmoRotDragged) return false;
+    outEulerDeg      = m_gizmoRotDelta;
+    m_gizmoRotDelta  = {0,0,0};
+    m_gizmoRotDragged = false;
+    return true;
+}
+
+bool FreeCameraViewport::popGizmoScaleDelta(glm::vec3& outDelta)
+{
+    if (!m_gizmoScaleDragged) return false;
+    outDelta           = m_gizmoScaleDelta;
+    m_gizmoScaleDelta  = {0,0,0};
+    m_gizmoScaleDragged = false;
+    return true;
+}
+
 // ── Pan ───────────────────────────────────────────────────────────────────────
 void FreeCameraViewport::panCamera(float rightDelta, float upDelta)
 {
@@ -574,9 +592,27 @@ void FreeCameraViewport::drawMarkerLabels()
 }
 
 // ── drawGizmoOverlay ──────────────────────────────────────────────────────────
+// Gizmo a 3 modalità (Sposta/Ruota/Scala) disegnato come overlay ImGui sopra
+// il viewport. Convenzioni: assi world X=rosso, Y=verde, Z=blu; asse attivo
+// evidenziato in giallo; scorciatoie 1/2/3 con mouse sul viewport.
 void FreeCameraViewport::drawGizmoOverlay()
 {
     if (!m_gizmoEnabled) return;
+
+    // ── Scorciatoie modalità (solo viewport hover, mouse libero) ─────────
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !m_mouseCapture)
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_1)) m_gizmoMode = GizmoMode::Translate;
+        if (ImGui::IsKeyPressed(ImGuiKey_2) && m_gizmoCanRotate)
+            m_gizmoMode = GizmoMode::Rotate;
+        if (ImGui::IsKeyPressed(ImGuiKey_3) && m_gizmoCanScale)
+            m_gizmoMode = GizmoMode::Scale;
+    }
+
+    // Modalità non consentita per il target corrente → ripiega su Sposta
+    GizmoMode mode = m_gizmoMode;
+    if (mode == GizmoMode::Rotate && !m_gizmoCanRotate) mode = GizmoMode::Translate;
+    if (mode == GizmoMode::Scale  && !m_gizmoCanScale)  mode = GizmoMode::Translate;
 
     glm::mat4 vp = m_camera->getViewProjection();
     glm::vec4 clip = vp * glm::vec4(m_gizmoPos, 1.0f);
@@ -589,76 +625,223 @@ void FreeCameraViewport::drawGizmoOverlay()
     float cx = m_imgMin.x + (ndcX * 0.5f + 0.5f) * m_imgSize.x;
     float cy = m_imgMin.y + (1.0f - (ndcY * 0.5f + 0.5f)) * m_imgSize.y;
 
+    auto toScreen = [&](glm::vec3 world, bool& ok) -> ImVec2 {
+        glm::vec4 c1 = vp * glm::vec4(world, 1.0f);
+        if (c1.w <= 0.0f) { ok = false; return {0,0}; }
+        ok = true;
+        float nx = c1.x / c1.w, ny = c1.y / c1.w;
+        return { (nx * 0.5f + 0.5f) * m_imgSize.x + m_imgMin.x,
+                 (1.0f - (ny * 0.5f + 0.5f)) * m_imgSize.y + m_imgMin.y };
+    };
+
+    // Direzione schermo (unitaria) di un asse world dal centro gizmo
     auto projectAxis = [&](glm::vec3 dir) -> ImVec2 {
-        glm::vec4 c1 = vp * glm::vec4(m_gizmoPos + dir * 0.3f, 1.0f);
-        if (c1.w <= 0.0f) return {0,0};
-        float n1x = c1.x / c1.w, n1y = c1.y / c1.w;
-        float sx = (n1x * 0.5f + 0.5f) * m_imgSize.x + m_imgMin.x;
-        float sy = (1.0f - (n1y * 0.5f + 0.5f)) * m_imgSize.y + m_imgMin.y;
-        float dx = sx - cx, dy = sy - cy;
+        bool ok = false;
+        ImVec2 p = toScreen(m_gizmoPos + dir * 0.3f, ok);
+        if (!ok) return {0,0};
+        float dx = p.x - cx, dy = p.y - cy;
         float len = std::sqrt(dx*dx + dy*dy);
         if (len > 0.001f) { dx /= len; dy /= len; }
         return {dx, dy};
     };
 
-    ImVec2 axX = projectAxis({1,0,0});
-    ImVec2 axY = projectAxis({0,1,0});
-    ImVec2 axZ = projectAxis({0,0,1});
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    constexpr float GL_ARM = 60.0f;
-    constexpr float TH = 8.0f;
-
+    static const glm::vec3 axisWorld[3] = {{1,0,0},{0,1,0},{0,0,1}};
     static const ImU32 axColors[3] = {
-        IM_COL32(255,60,60,220),
-        IM_COL32(60,220,60,220),
-        IM_COL32(60,120,255,220),
+        IM_COL32(235,70,70,230),   // X rosso
+        IM_COL32(80,220,80,230),   // Y verde
+        IM_COL32(80,130,255,230),  // Z blu
     };
-    ImVec2 axes[3] = {axX, axY, axZ};
-    ImVec2 tips[3];
-
-    for (int a = 0; a < 3; ++a)
-    {
-        tips[a] = {cx + axes[a].x * GL_ARM, cy + axes[a].y * GL_ARM};
-        ImU32 col = (m_gizmoActiveAxis == a) ? IM_COL32(255,255,0,255) : axColors[a];
-        dl->AddLine({cx,cy}, tips[a], col, 2.5f);
-        ImVec2 perp = {-axes[a].y * TH, axes[a].x * TH};
-        dl->AddTriangleFilled(tips[a],
-            {tips[a].x - axes[a].x*TH + perp.x, tips[a].y - axes[a].y*TH + perp.y},
-            {tips[a].x - axes[a].x*TH - perp.x, tips[a].y - axes[a].y*TH - perp.y},
-            col);
-    }
-    dl->AddCircleFilled({cx,cy}, 4.0f, IM_COL32(220,220,220,220));
-
-    // Drag interaction
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 mp = ImGui::GetMousePos();
-    for (int a = 0; a < 3; ++a)
+
+    const float distToCamera = glm::length(m_gizmoPos - m_camera->getPosition());
+    const float pixelToWorld = 2.0f * std::tan(glm::radians(30.0f))
+                             * distToCamera / m_imgSize.y;
+
+    // ── Etichetta modalità accanto al gizmo ───────────────────────────────
     {
-        float d = std::hypot(mp.x - tips[a].x, mp.y - tips[a].y);
-        if (d < 12.0f)
-        {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-            if (ImGui::IsMouseClicked(0)) m_gizmoActiveAxis = a;
-        }
+        const char* modeName = (mode == GizmoMode::Translate) ? "Sposta [1]"
+                             : (mode == GizmoMode::Rotate)    ? "Ruota [2]"
+                                                              : "Scala [3]";
+        dl->AddText({cx + 14.0f, cy + 12.0f}, IM_COL32(200,200,200,200), modeName);
     }
 
-    if (m_gizmoActiveAxis >= 0)
+    // ════════════════════════ SPOSTA / SCALA (assi) ══════════════════════
+    if (mode == GizmoMode::Translate || mode == GizmoMode::Scale)
     {
-        if (ImGui::IsMouseDown(0))
+        constexpr float ARM = 60.0f;
+        constexpr float TH  = 8.0f;
+
+        ImVec2 axes[3];
+        ImVec2 tips[3];
+        for (int a = 0; a < 3; ++a)
         {
-            ImVec2 md = ImGui::GetIO().MouseDelta;
-            float distToCamera = glm::length(m_gizmoPos - m_camera->getPosition());
-            float pixelToWorld = 2.0f * std::tan(glm::radians(30.0f))
-                               * distToCamera / m_imgSize.y;
-            float proj = md.x * axes[m_gizmoActiveAxis].x
-                       - md.y * axes[m_gizmoActiveAxis].y;
-            glm::vec3 axisWorld[3] = {{1,0,0},{0,1,0},{0,0,1}};
-            m_gizmoDelta   += axisWorld[m_gizmoActiveAxis] * proj * pixelToWorld;
-            m_gizmoDragged  = true;
+            axes[a] = projectAxis(axisWorld[a]);
+            tips[a] = {cx + axes[a].x * ARM, cy + axes[a].y * ARM};
+        }
+
+        // Disegno
+        for (int a = 0; a < 3; ++a)
+        {
+            ImU32 col = (m_gizmoActiveAxis == a) ? IM_COL32(255,255,0,255) : axColors[a];
+            dl->AddLine({cx,cy}, tips[a], col, 2.5f);
+
+            if (mode == GizmoMode::Translate)
+            {
+                ImVec2 perp = {-axes[a].y * TH, axes[a].x * TH};
+                dl->AddTriangleFilled(tips[a],
+                    {tips[a].x - axes[a].x*TH + perp.x, tips[a].y - axes[a].y*TH + perp.y},
+                    {tips[a].x - axes[a].x*TH - perp.x, tips[a].y - axes[a].y*TH - perp.y},
+                    col);
+            }
+            else // Scala: maniglie quadrate
+            {
+                dl->AddRectFilled({tips[a].x - 5, tips[a].y - 5},
+                                  {tips[a].x + 5, tips[a].y + 5}, col);
+            }
+        }
+
+        // Quadrato centrale: scala uniforme
+        if (mode == GizmoMode::Scale)
+        {
+            ImU32 c = (m_gizmoActiveAxis == 3) ? IM_COL32(255,255,0,255)
+                                               : IM_COL32(220,220,220,230);
+            dl->AddRect({cx - 7, cy - 7}, {cx + 7, cy + 7}, c, 0, 0, 2.0f);
         }
         else
+            dl->AddCircleFilled({cx,cy}, 4.0f, IM_COL32(220,220,220,220));
+
+        // Hit test: punta O corpo dell'asse (distanza punto-segmento)
+        auto distToSegment = [&](ImVec2 p, ImVec2 a, ImVec2 b) -> float {
+            float vx = b.x-a.x, vy = b.y-a.y;
+            float len2 = vx*vx + vy*vy;
+            float t = len2 > 0 ? ((p.x-a.x)*vx + (p.y-a.y)*vy) / len2 : 0.0f;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            float px = a.x + vx*t, py = a.y + vy*t;
+            return std::hypot(p.x-px, p.y-py);
+        };
+
+        if (ImGui::IsMouseClicked(0) && m_gizmoActiveAxis < 0)
         {
-            m_gizmoActiveAxis = -1;
+            if (mode == GizmoMode::Scale
+                && std::abs(mp.x-cx) < 9 && std::abs(mp.y-cy) < 9)
+                m_gizmoActiveAxis = 3; // uniforme
+            else
+                for (int a = 0; a < 3; ++a)
+                    if (distToSegment(mp, {cx,cy}, tips[a]) < 9.0f)
+                    { m_gizmoActiveAxis = a; break; }
+        }
+        for (int a = 0; a < 3; ++a)
+            if (distToSegment(mp, {cx,cy}, tips[a]) < 9.0f)
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+        // Drag
+        if (m_gizmoActiveAxis >= 0)
+        {
+            if (ImGui::IsMouseDown(0))
+            {
+                ImVec2 md = ImGui::GetIO().MouseDelta;
+                if (m_gizmoActiveAxis == 3) // scala uniforme
+                {
+                    float u = (md.x - md.y) * 0.5f * pixelToWorld;
+                    m_gizmoScaleDelta += glm::vec3(u, u, u);
+                    m_gizmoScaleDragged = true;
+                }
+                else
+                {
+                    // Proiezione del movimento mouse sulla direzione schermo
+                    // dell'asse (entrambi in coordinate y-verso-il-basso).
+                    float proj = md.x * axes[m_gizmoActiveAxis].x
+                               + md.y * axes[m_gizmoActiveAxis].y;
+                    glm::vec3 d = axisWorld[m_gizmoActiveAxis] * proj * pixelToWorld;
+                    if (mode == GizmoMode::Translate)
+                    { m_gizmoDelta += d; m_gizmoDragged = true; }
+                    else
+                    { m_gizmoScaleDelta += d; m_gizmoScaleDragged = true; }
+                }
+            }
+            else m_gizmoActiveAxis = -1;
+        }
+    }
+
+    // ════════════════════════════ RUOTA (anelli) ═════════════════════════
+    else if (mode == GizmoMode::Rotate)
+    {
+        constexpr int   SEG    = 48;
+        constexpr float RING_PX = 70.0f;
+        const float worldR = RING_PX * pixelToWorld;
+
+        // Basi ortogonali per il piano di ogni anello
+        static const glm::vec3 basisU[3] = {{0,1,0},{1,0,0},{1,0,0}};
+        static const glm::vec3 basisV[3] = {{0,0,1},{0,0,1},{0,1,0}};
+
+        ImVec2 pts[3][SEG];
+        bool   ptsOk[3] = {false,false,false};
+
+        for (int a = 0; a < 3; ++a)
+        {
+            if (!m_gizmoRotAxes[a]) continue;
+            bool allOk = true;
+            for (int i = 0; i < SEG; ++i)
+            {
+                float t = (float)i / SEG * 2.0f * 3.1415926f;
+                glm::vec3 w = m_gizmoPos
+                            + worldR * (std::cos(t) * basisU[a] + std::sin(t) * basisV[a]);
+                bool ok = false;
+                pts[a][i] = toScreen(w, ok);
+                if (!ok) { allOk = false; break; }
+            }
+            ptsOk[a] = allOk;
+            if (!allOk) continue;
+
+            ImU32 col = (m_gizmoActiveAxis == a) ? IM_COL32(255,255,0,255) : axColors[a];
+            dl->AddPolyline(pts[a], SEG, col, ImDrawFlags_Closed,
+                            (m_gizmoActiveAxis == a) ? 3.0f : 2.0f);
+        }
+        dl->AddCircleFilled({cx,cy}, 3.5f, IM_COL32(220,220,220,200));
+
+        // Hit test: distanza minima dai campioni dell'anello
+        if (ImGui::IsMouseClicked(0) && m_gizmoActiveAxis < 0)
+        {
+            float best = 10.0f; int bestA = -1;
+            for (int a = 0; a < 3; ++a)
+            {
+                if (!ptsOk[a]) continue;
+                for (int i = 0; i < SEG; ++i)
+                {
+                    float d = std::hypot(mp.x - pts[a][i].x, mp.y - pts[a][i].y);
+                    if (d < best) { best = d; bestA = a; }
+                }
+            }
+            if (bestA >= 0)
+            {
+                m_gizmoActiveAxis = bestA;
+                m_gizmoPrevAngle  = std::atan2(mp.y - cy, mp.x - cx);
+            }
+        }
+
+        // Drag: delta angolare del mouse attorno al centro
+        if (m_gizmoActiveAxis >= 0 && m_gizmoActiveAxis < 3)
+        {
+            if (ImGui::IsMouseDown(0))
+            {
+                float ang = std::atan2(mp.y - cy, mp.x - cx);
+                float d   = ang - m_gizmoPrevAngle;
+                while (d >  3.1415926f) d -= 2.0f * 3.1415926f;
+                while (d < -3.1415926f) d += 2.0f * 3.1415926f;
+                m_gizmoPrevAngle = ang;
+
+                // Segno: rotazione visiva oraria = negativa se l'asse punta
+                // verso la camera (regola mano destra; schermo y-in-basso).
+                glm::vec3 viewDir = glm::normalize(
+                    m_camera->getPosition() - m_gizmoPos);
+                float s = (glm::dot(axisWorld[m_gizmoActiveAxis], viewDir) >= 0.0f)
+                          ? -1.0f : 1.0f;
+
+                m_gizmoRotDelta[m_gizmoActiveAxis] += glm::degrees(d) * s;
+                m_gizmoRotDragged = true;
+            }
+            else m_gizmoActiveAxis = -1;
         }
     }
 }
@@ -705,24 +888,11 @@ void FreeCameraViewport::draw(bool showLoadBar)
 {
     if (showLoadBar) drawLoadBar();
 
-    ImGui::TextDisabled(m_mouseCapture
-        ? "TAB = rilascia mouse  |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce"
-        : "TAB = cattura mouse   |  WASD = muovi  |  E/Q = su/giu  |  Shift = veloce");
-
-    // Pan controls
-    {
-        float dummy = 0.0f;
-        ImGui::SetNextItemWidth(80);
-        ImGui::DragFloat("Pan H", &dummy, 0.1f, -1e6f, 1e6f);
-        if (ImGui::IsItemActive())
-            panCamera(-ImGui::GetIO().MouseDelta.x * 0.02f, 0.0f);
-        ImGui::SameLine();
-        dummy = 0.0f;
-        ImGui::SetNextItemWidth(80);
-        ImGui::DragFloat("Pan V", &dummy, 0.1f, -1e6f, 1e6f);
-        if (ImGui::IsItemActive())
-            panCamera(0.0f, ImGui::GetIO().MouseDelta.y * 0.02f);
-    }
+    ImGui::TextDisabled(
+        "Tasto destro = guarda + WASD/QE vola (Shift veloce, rotella = velocita')  |  "
+        "Rotella = zoom  |  Tasto centrale = pan  |  1/2/3 = gizmo");
+    ImGui::SameLine();
+    ImGui::TextDisabled("  vel: %.0f", m_camSpeed);
 
     ImGui::Separator();
 
@@ -759,8 +929,44 @@ void FreeCameraViewport::draw(bool showLoadBar)
     m_imgMin  = ImGui::GetItemRectMin();
     m_imgSize = ImGui::GetItemRectSize();
 
-    // Check click
-    if (ImGui::IsItemClicked(0) && !m_mouseCapture)
+    const bool imgHovered = ImGui::IsItemHovered();
+    ImGuiIO& io = ImGui::GetIO();
+
+    // ── Navigazione stile Unreal ──────────────────────────────────────
+    // RMB tenuto: mouselook (+ WASD/QE in tick); rotella regola la velocità.
+    // Senza RMB: rotella = dolly avanti/indietro; MMB drag = pan.
+    if (imgHovered && ImGui::IsMouseDown(ImGuiMouseButton_Right))
+        m_rmbLook = true;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Right))
+        m_rmbLook = false;
+
+    if (m_rmbLook)
+    {
+        if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)
+            m_camera->processMouse(io.MouseDelta.x, io.MouseDelta.y, 0.15f);
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+        if (io.MouseWheel != 0.0f)
+        {
+            m_camSpeed *= (1.0f + 0.15f * io.MouseWheel);
+            if (m_camSpeed < 0.5f)  m_camSpeed = 0.5f;
+            if (m_camSpeed > 80.f)  m_camSpeed = 80.f;
+        }
+    }
+    else if (imgHovered)
+    {
+        if (io.MouseWheel != 0.0f)
+        {
+            glm::vec3 pos = m_camera->getPosition();
+            pos += m_camera->getForward() * io.MouseWheel * (m_camSpeed * 0.25f);
+            m_camera->setPosition(pos);
+        }
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+            panCamera(-io.MouseDelta.x * 0.02f, io.MouseDelta.y * 0.02f);
+    }
+
+    // Check click (selezione: solo LMB, mai durante la navigazione)
+    if (ImGui::IsItemClicked(0) && !m_mouseCapture && !m_rmbLook)
     {
         m_imgClicked  = true;
         m_imgClickPos = ImGui::GetMousePos();
@@ -783,12 +989,21 @@ void FreeCameraViewport::tick(float dt)
         SDL_SetRelativeMouseMode(m_mouseCapture ? SDL_TRUE : SDL_FALSE);
     }
     m_tabWasDown = tabNow;
-    m_camera->setSpeed(ks[SDL_SCANCODE_LSHIFT] ? m_camSpeed*3.0f : m_camSpeed);
-    m_camera->processKeyboard(
-        ks[SDL_SCANCODE_W]!=0, ks[SDL_SCANCODE_S]!=0,
-        ks[SDL_SCANCODE_A]!=0, ks[SDL_SCANCODE_D]!=0,
-        ks[SDL_SCANCODE_E] || ks[SDL_SCANCODE_SPACE],
-        ks[SDL_SCANCODE_Q] || ks[SDL_SCANCODE_LCTRL], dt);
+
+    // Il volo WASD è attivo SOLO durante la navigazione (RMB tenuto o TAB
+    // capture) e mai mentre si digita in un campo di testo: prima la camera
+    // si muoveva appena la finestra era focused, rendendo l'editing caotico.
+    const bool flying = (m_mouseCapture || m_rmbLook)
+                      && !ImGui::GetIO().WantTextInput;
+    if (flying)
+    {
+        m_camera->setSpeed(ks[SDL_SCANCODE_LSHIFT] ? m_camSpeed*3.0f : m_camSpeed);
+        m_camera->processKeyboard(
+            ks[SDL_SCANCODE_W]!=0, ks[SDL_SCANCODE_S]!=0,
+            ks[SDL_SCANCODE_A]!=0, ks[SDL_SCANCODE_D]!=0,
+            ks[SDL_SCANCODE_E] || ks[SDL_SCANCODE_SPACE],
+            ks[SDL_SCANCODE_Q] || ks[SDL_SCANCODE_LCTRL], dt);
+    }
     if (m_mouseCapture)
     {
         int dx=0, dy=0;
@@ -936,12 +1151,24 @@ void FreeCameraViewport::setHitboxes(const std::vector<mini::HitZone>& zones,
         glm::vec3 c = {z.offset.x,      z.offset.y,      z.offset.z};
         glm::vec3 e = {z.halfExtents.x, z.halfExtents.y, z.halfExtents.z};
 
-        glm::vec3 corners[8] = {
-            {c.x-e.x, c.y-e.y, c.z-e.z}, {c.x+e.x, c.y-e.y, c.z-e.z},
-            {c.x+e.x, c.y+e.y, c.z-e.z}, {c.x-e.x, c.y+e.y, c.z-e.z},
-            {c.x-e.x, c.y-e.y, c.z+e.z}, {c.x+e.x, c.y-e.y, c.z+e.z},
-            {c.x+e.x, c.y+e.y, c.z+e.z}, {c.x-e.x, c.y+e.y, c.z+e.z},
-        };
+        // Rotazione locale della zona (eulerDeg, ordine Y*X*Z)
+        glm::mat3 R(1.0f);
+        if (z.eulerDeg.x != 0.0f || z.eulerDeg.y != 0.0f || z.eulerDeg.z != 0.0f)
+        {
+            glm::mat4 rm = glm::rotate(glm::mat4(1.0f), glm::radians(z.eulerDeg.y), {0,1,0})
+                         * glm::rotate(glm::mat4(1.0f), glm::radians(z.eulerDeg.x), {1,0,0})
+                         * glm::rotate(glm::mat4(1.0f), glm::radians(z.eulerDeg.z), {0,0,1});
+            R = glm::mat3(rm);
+        }
+
+        glm::vec3 corners[8];
+        {
+            const glm::vec3 local[8] = {
+                {-e.x,-e.y,-e.z}, { e.x,-e.y,-e.z}, { e.x, e.y,-e.z}, {-e.x, e.y,-e.z},
+                {-e.x,-e.y, e.z}, { e.x,-e.y, e.z}, { e.x, e.y, e.z}, {-e.x, e.y, e.z},
+            };
+            for (int k = 0; k < 8; ++k) corners[k] = c + R * local[k];
+        }
         const int edges[12][2] = {
             {0,1},{1,2},{2,3},{3,0},
             {4,5},{5,6},{6,7},{7,4},

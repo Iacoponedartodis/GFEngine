@@ -1,6 +1,33 @@
 {
     "abilities": [],
     "ai_profile": "B1 Heavy Droid",
+    "attach_points": {
+        "eye": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "foot": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "left_hand": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "muzzle": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "right_hand": [
+            -0.1901428997516632,
+            0.8638867735862732,
+            0.08451275527477264
+        ]
+    },
     "bullet_color": [
         1.0,
         0.550000011920929,
@@ -12,9 +39,12 @@
         0.0
     ],
     "faction": "separatist",
-    "hitbox_profile": "",
+    "hitbox_profile": "B1 Heavy Droid",
     "id": "B1 Heavy Droid",
     "mesh": "assets/models/enemies/star_wars_b1_battle_droid.glb",
+    "mesh_rot_x": 0.0,
+    "mesh_rot_y": 0.0,
+    "mesh_scale": 1.0,
     "name": "B1 Heavy Droid",
     "stats": {
         "damage_scale": 1.0,
@@ -23,6 +53,21 @@
     },
     "team": 2,
     "texture": "",
+    "weapon_display": {
+        "hand": "right_hand",
+        "id": "E5 Blaster Rifle",
+        "offset": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "rot": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "scale": 1.0
+    },
     "weapons": [
         "E-5C Heavy Blaster"
     ]

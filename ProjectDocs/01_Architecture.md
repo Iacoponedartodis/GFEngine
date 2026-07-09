@@ -18,7 +18,8 @@
 2. **ECS** (`src/ecs/`): `World` + components (`include/mini/ecs/components/`) + systems
    (`MovementSystem`, `CombatSystem`, `AiSystem`).
 3. **Game** (`src/game/`): `DefinitionRegistry` (data access layer), `data/Definitions.hpp`
-   (schemas), game modes (`ConquestMode`, `SandboxMode`), `PlayerController`, `Weapon`.
+   (schemas), game modes dietro l'interfaccia `IGameMode` + `createGameMode()` factory
+   (ADR-008; concrete: `ConquestMode`, `SandboxMode`), `PlayerController`, `Weapon`.
 4. **Render** (`src/render/`): `Mesh` (client-side arrays, 11 floats/vertex), `Model`
    (OBJ via tinyobj, GLB/glTF via tinygltf), `Shader`, `Camera`, `Texture`, HUD/menus.
 5. **Vendor** (`src/vendor/`): single-TU impls. `TINYGLTF_IMPLEMENTATION` lives **only** in

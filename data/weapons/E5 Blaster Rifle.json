@@ -1,4 +1,16 @@
 {
+    "attach_points": {
+        "muzzle": [
+            -0.26420196890830994,
+            0.03144034370779991,
+            0.0
+        ],
+        "right_hand": [
+            0.06135714799165726,
+            -0.04723987728357315,
+            0.0
+        ]
+    },
     "bullet_color": [
         0.0,
         1.0,
@@ -15,8 +27,15 @@
     "heat_per_shot": 0.25,
     "id": "E5 Blaster Rifle",
     "mesh": "assets/models/weapons/e-5_blaster_rifle.glb",
+    "mesh_rot_x": 0.0,
+    "mesh_scale": 0.800000011920929,
     "min_range": 0.0,
     "name": "E5 Blaster Rifle",
     "overheat_penalty": 1.75,
-    "projectile_mesh": ""
+    "projectile_mesh": "",
+    "spread_ads": 0.004999999888241291,
+    "spread_base": 0.019999999552965164,
+    "spread_jump": 0.20000000298023224,
+    "spread_move": 0.05999999865889549,
+    "spread_sprint": 0.14000000059604645
 }

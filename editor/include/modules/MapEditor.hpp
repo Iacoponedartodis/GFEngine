@@ -33,10 +33,21 @@ private:
     std::string m_mapId;        // id mappa corrente
     std::string m_mapJsonPath;  // percorso file JSON
 
+    // Command post (ADR-009): autorati qui, letti dal runtime via MapDef.
+    struct PostEntry {
+        char  label[64] = "Post";
+        float x=0, y=0, z=0;
+        float radius = 4.0f;
+        int   team   = 0;       // 0 neutrale, 1 alleati, 2 nemici
+        float captureTime = 8.0f;
+    };
+
     std::vector<BoxEntry>     m_boxes;
+    std::vector<PostEntry>    m_posts;
     std::array<float,3>       m_spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3>       m_spawnTeam2 = {0.f, 0.86f, -8.f};
 
+    // Selezione: >=0 box; -2/-3 spawn T1/T2; <=-10 command post (indice -10-i)
     int   m_selBox       = -1;   // box selezionato
     float m_gridSnap     = 0.5f; // snap griglia
     bool  m_showNavmesh  = false; // evidenzia floor

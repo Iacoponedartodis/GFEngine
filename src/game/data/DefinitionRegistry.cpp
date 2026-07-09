@@ -96,6 +96,19 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         w.jumpSpread         = getf(*j, "spread_jump",   0.20f);
         w.meshPath           = gets(*j, "mesh");
         w.projectileMeshPath = gets(*j, "projectile_mesh");
+        w.meshScale          = getf(*j, "mesh_scale", 0.8f);
+        w.meshRotX           = getf(*j, "mesh_rot_x", 0.0f);
+        if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
+        {
+            auto& ap = (*j)["attach_points"];
+            auto readPt = [&](const char* k, std::array<float,3>& out) {
+                if (ap.contains(k) && ap[k].is_array() && ap[k].size() >= 3)
+                    out = {ap[k][0].get<float>(), ap[k][1].get<float>(), ap[k][2].get<float>()};
+            };
+            readPt("grip",       w.gripAttach);
+            readPt("right_hand", w.gripAttach);  // right_hand ha precedenza
+            readPt("muzzle",     w.muzzleAttach);
+        }
         std::cout << "[Registry] Weapon: " << w.id
                   << " [" << factionToString(w.faction) << "]\n";
         m_weapons[w.id] = std::move(w);
@@ -155,10 +168,28 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
         e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
         e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
         e.meshScale       = getf(*j, "mesh_scale",  1.0f);
-        if ((*j).contains("attach_points") && (*j)["attach_points"].contains("foot")) {
-            auto& fp = (*j)["attach_points"]["foot"];
-            if (fp.is_array() && fp.size() >= 3)
-                e.footAttach = {fp[0].get<float>(), fp[1].get<float>(), fp[2].get<float>()};
+        if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
+        {
+            for (auto& [apName, apVal] : (*j)["attach_points"].items())
+            {
+                if (!apVal.is_array() || apVal.size() < 3) continue;
+                std::array<float,3> pt = {apVal[0].get<float>(),
+                                          apVal[1].get<float>(),
+                                          apVal[2].get<float>()};
+                e.attachPoints[apName] = pt;
+                if (apName == "foot") e.footAttach = pt;
+            }
+        }
+        if ((*j).contains("weapon_display") && (*j)["weapon_display"].is_object())
+        {
+            auto& wd = (*j)["weapon_display"];
+            e.weaponDisplay.weaponId = gets(wd, "id");
+            e.weaponDisplay.hand     = gets(wd, "hand", "right_hand");
+            e.weaponDisplay.scale    = getf(wd, "scale", 1.0f);
+            if (wd.contains("rot") && wd["rot"].size() >= 3)
+                e.weaponDisplay.rot = {wd["rot"][0].get<float>(), wd["rot"][1].get<float>(), wd["rot"][2].get<float>()};
+            if (wd.contains("offset") && wd["offset"].size() >= 3)
+                e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
         }
         e.aiProfileId     = gets(*j, "ai_profile");
         e.hitboxProfileId = gets(*j, "hitbox_profile");
@@ -222,8 +253,24 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 m.geometry.push_back(box);
             }
         }
+        if ((*j).contains("command_posts") && (*j)["command_posts"].is_array())
+        {
+            for (auto& cp : (*j)["command_posts"])
+            {
+                CommandPostDef p;
+                p.label       = gets(cp, "label", "Post");
+                p.x           = getf(cp, "x", 0.0f);
+                p.y           = getf(cp, "y", 0.0f);
+                p.z           = getf(cp, "z", 0.0f);
+                p.radius      = getf(cp, "radius", 4.0f);
+                p.initialTeam = geti(cp, "team", 0);
+                p.captureTime = getf(cp, "capture_time", 8.0f);
+                m.commandPosts.push_back(p);
+            }
+        }
         std::cout << "[Registry] Map: " << m.id
-                  << " (geometry: " << m.geometry.size() << " box)\n";
+                  << " (geometry: " << m.geometry.size() << " box, "
+                  << m.commandPosts.size() << " command post)\n";
         m_maps[m.id] = std::move(m);
     }
 }
@@ -280,10 +327,28 @@ void DefinitionRegistry::loadAllies(const std::string& dir)
         e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
         e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
         e.meshScale       = getf(*j, "mesh_scale",  1.0f);
-        if ((*j).contains("attach_points") && (*j)["attach_points"].contains("foot")) {
-            auto& fp = (*j)["attach_points"]["foot"];
-            if (fp.is_array() && fp.size() >= 3)
-                e.footAttach = {fp[0].get<float>(), fp[1].get<float>(), fp[2].get<float>()};
+        if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
+        {
+            for (auto& [apName, apVal] : (*j)["attach_points"].items())
+            {
+                if (!apVal.is_array() || apVal.size() < 3) continue;
+                std::array<float,3> pt = {apVal[0].get<float>(),
+                                          apVal[1].get<float>(),
+                                          apVal[2].get<float>()};
+                e.attachPoints[apName] = pt;
+                if (apName == "foot") e.footAttach = pt;
+            }
+        }
+        if ((*j).contains("weapon_display") && (*j)["weapon_display"].is_object())
+        {
+            auto& wd = (*j)["weapon_display"];
+            e.weaponDisplay.weaponId = gets(wd, "id");
+            e.weaponDisplay.hand     = gets(wd, "hand", "right_hand");
+            e.weaponDisplay.scale    = getf(wd, "scale", 1.0f);
+            if (wd.contains("rot") && wd["rot"].size() >= 3)
+                e.weaponDisplay.rot = {wd["rot"][0].get<float>(), wd["rot"][1].get<float>(), wd["rot"][2].get<float>()};
+            if (wd.contains("offset") && wd["offset"].size() >= 3)
+                e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
         }
         e.aiProfileId     = gets(*j, "ai_profile");
         e.hitboxProfileId = gets(*j, "hitbox_profile");

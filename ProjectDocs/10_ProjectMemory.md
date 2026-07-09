@@ -32,8 +32,28 @@
 - The game reads hitboxes from the **profile** (`EnemyDef.hitboxProfileId` ->
   `registry.getHitboxProfile`), NOT from entity-inline `hitbox_zones`. (See KnownIssues #1.)
 
+## Game vision (Star Wars: Galactic Front) — treat as active, not speculative
+- The project targets a **modular war ecosystem**, not a single linear game: FPS/TPS tactical
+  combat, strategic command layer, RPG-style progression, and a battle sandbox all share one
+  **core battlefield system** (combat, units/classes, hierarchical AI, objectives, vehicles,
+  modular maps, spawn/command posts). New modes must be configurations of this core.
+- Development is explicitly phased (see 00_Vision.md): Phase 1 core playable shooter must be
+  fun on its own before any tactical/progression/strategic layer is added.
+- **Local split-screen co-op is a real functional requirement; online competitive multiplayer
+  is explicitly out of scope.** Any future "scale" discussion (e.g. large battles) refers to
+  local simulation scale (AI/entity counts), not network session scale.
+- The editor's role extends beyond balancing: it is the **metadata authoring system** for the
+  whole project — map metadata useful to AI (cover/patrol/danger zones, in addition to the
+  already-implemented geometry/spawn data), and model metadata for weapons/characters (attach
+  points, bones, animations, hitboxes) that allows fluid integration of new weapons/armor onto
+  character models without engine code changes. EntityEditor's bone-bindable attach points and
+  WeaponEditor's attach_points are the first concrete implementation of this principle.
+
 ## User-stated long-term direction
 - Dropdown-based data assignment everywhere (no free-text ids).
 - In-editor rename for all definition types with cross-reference awareness.
 - Future UI/Interface Editor to centralize menu text/layout/palette/fonts.
 - EntityEditor is the primary enemy/ally tool (BalanceEditor is now a redirect).
+- Future Map Metadata layer (cover/danger/patrol/sectors) consumed by tactical AI.
+- Future GameMode interface/registry so Assault/Defense/strategic modes are configurations,
+  not new hardcoded classes.

@@ -1,4 +1,5 @@
 #pragma once
+#include <glm/glm.hpp>
 
 namespace mini
 {
@@ -14,6 +15,11 @@ struct MeshRendererComponent
     float    b           = 1.0f;
     float    meshOffsetY = 0.0f;
     bool     visible     = true;
+
+    // Modello agganciato (es. arma in mano): disegnato componendo la matrice
+    // modello dell'entità con attachLocal (posa nel model space del personaggio).
+    Mesh*     attachMesh  = nullptr;
+    glm::mat4 attachLocal = glm::mat4(1.0f);
 };
 
 } // namespace mini

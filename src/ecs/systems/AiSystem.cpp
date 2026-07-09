@@ -248,12 +248,30 @@ void AiSystem::update(World& world, float dt)
             }
             else if (ai->state == AiState::Patrol && patrolOk)
             {
-                // Pattuglia iniziale (prima del contatto)
+                // Pattuglia (prima del contatto). Ai waypoint SOSTA per
+                // patrolDwell secondi: è ciò che permette di catturare i
+                // command post (serve presenza continuativa nell'area).
                 float wx = ai->goingToB ? ai->patrolBx : ai->patrolAx;
                 float wz = ai->goingToB ? ai->patrolBz : ai->patrolAz;
                 moveDX = wx - et->x; moveDZ = wz - et->z;
-                if (norm2D(moveDX, moveDZ) < 0.2f)
-                    ai->goingToB = !ai->goingToB;
+
+                if (ai->waitTimer > 0.0f)
+                {
+                    // In sosta: fermo, niente anti-stuck
+                    ai->waitTimer -= dt;
+                    ai->stuckTimer = 0.0f;
+                    moveDX = 0; moveDZ = 0;
+                    if (ai->waitTimer <= 0.0f)
+                        ai->goingToB = !ai->goingToB;
+                }
+                else if (norm2D(moveDX, moveDZ) < 0.6f)
+                {
+                    if (ai->patrolDwell > 0.0f)
+                        ai->waitTimer = ai->patrolDwell;
+                    else
+                        ai->goingToB = !ai->goingToB;
+                    moveDX = 0; moveDZ = 0;
+                }
                 else if (isStuck)
                 { ai->goingToB = !ai->goingToB; ai->stuckTimer = 0; }
                 else
@@ -271,9 +289,17 @@ void AiSystem::update(World& world, float dt)
         const float nz = et->z + moveDZ * moveSpeed * dt;
         aiMove(*et, nx, nz, *ai, dt, world);
 
+        // ── Raffreddamento arma (sempre, anche fuori combattimento) ───
+        if (ai->heat > 0.0f)
+        {
+            ai->heat -= ai->cooldownRate * dt;
+            if (ai->heat <= 0.0f) { ai->heat = 0.0f; ai->overheated = false; }
+        }
+
         // ── Sparo (solo in Alert con LOS) ────────────────────────────
         if (ai->state != AiState::Alert || nearest == 0) continue;
         if (ai->shootCooldown > 0.0f) { ai->shootCooldown -= dt; continue; }
+        if (ai->overheated) continue; // arma surriscaldata: attende il cooling
 
         const auto* tt = world.getTransform(nearest);
         if (!tt) continue;
@@ -290,7 +316,21 @@ void AiSystem::update(World& world, float dt)
         if (ai->bulletMesh)
             world.addMeshRenderer(b, {ai->bulletMesh, ai->bulletTexture, ai->bulletR, ai->bulletG, ai->bulletB});
 
-        ai->shootCooldown = ai->shootInterval;
+        // Cadenza dall'arma se disponibile, altrimenti legacy dal profilo AI
+        ai->shootCooldown = (ai->fireInterval > 0.0f) ? ai->fireInterval
+                                                      : ai->shootInterval;
+
+        // Surriscaldamento (se l'arma lo prevede)
+        if (ai->heatPerShot > 0.0f)
+        {
+            ai->heat += ai->heatPerShot;
+            if (ai->heat >= 1.0f)
+            {
+                ai->heat = 1.0f;
+                ai->overheated = true;
+                ai->shootCooldown = ai->overheatPenalty;
+            }
+        }
     }
 }
 

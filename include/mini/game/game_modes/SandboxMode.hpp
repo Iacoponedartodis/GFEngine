@@ -1,36 +1,34 @@
 #pragma once
-#include "mini/ecs/Entity.hpp"
+#include "mini/game/game_modes/IGameMode.hpp"
+#include "mini/game/CommandPosts.hpp"
+#include "mini/game/MatchSettings.hpp"
 #include <glm/glm.hpp>
-#include <unordered_map>
 #include <vector>
 #include <utility>
 #include <string>
 
 namespace mini
 {
-class World;
-class Mesh;
-class Texture;
-class DefinitionRegistry;
-using MeshCache = std::unordered_map<std::string, Mesh*>;
 
-// Modalità sandbox: arena aperta piatta, niente obiettivi, niente AI attiva.
-// Usata per testare movimenti, armi e posizionamento modelli.
-class SandboxMode
+// Modalità sandbox: mappa firebase, manichini che respawnano, niente
+// obiettivi. Usata per testare mappa, spawn point, armi e modelli.
+class SandboxMode : public IGameMode
 {
 public:
+    void applySettings(const MatchSettings& s) override { playerHp = s.playerHp; }
     void start(World& world, Mesh* defaultMesh, Texture* texture,
-               const DefinitionRegistry* registry = nullptr,
-               const MeshCache* meshCache = nullptr);
-    void update(World& world, float dt);
+               const DefinitionRegistry* registry,
+               const MeshCache* meshCache) override;
+    void update(World& world, float dt) override;
 
-    [[nodiscard]] EntityId  getPlayerEntity() const { return m_playerEntity; }
-    [[nodiscard]] glm::vec3 getSpawnPos()     const { return m_spawnPos; }
-    [[nodiscard]] int       getTeam1Tickets() const { return 999; }
-    [[nodiscard]] int       getTeam2Tickets() const { return 0;   }
+    [[nodiscard]] EntityId  getPlayerEntity() const override { return m_playerEntity; }
+    [[nodiscard]] glm::vec3 getSpawnPos()     const override { return m_spawnPos; }
+    [[nodiscard]] int       getTeam1Tickets() const override { return 999; }
+    [[nodiscard]] int       getTeam2Tickets() const override { return 0;   }
+    [[nodiscard]] bool hasVictoryCondition()  const override { return false; }
 
-    int consumeTeam1Ticket() { return 999; }
-    void overridePlayerEntity(EntityId e) { m_playerEntity = e; }
+    int consumeTeam1Ticket() override { return 999; }
+    void overridePlayerEntity(EntityId e) override { m_playerEntity = e; }
 
     float playerHp = 100.0f;
 
@@ -43,8 +41,12 @@ private:
     const DefinitionRegistry* m_registry  = nullptr;
     const MeshCache*          m_meshCache = nullptr;
 
-    // Manichino: posizione + tipo, per il respawn automatico.
-    struct DummyInfo { float x = 0, z = 0; std::string id; };
+    // Command post visibili/catturabili anche in sandbox (per testarli).
+    CommandPosts m_commandPosts;
+
+    // Manichino: posizione + tipo + team, per il respawn automatico.
+    // team 2 = nemico (da data/enemies), team 1 = alleato (da data/allies).
+    struct DummyInfo { float x = 0, z = 0; std::string id; int team = 2; };
     std::vector<std::pair<EntityId, DummyInfo>> m_dummies;     // attivi
     std::vector<std::pair<float, DummyInfo>>    m_respawnQueue; // in attesa
     float m_respawnDelay = 2.0f;

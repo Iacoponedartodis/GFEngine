@@ -82,6 +82,12 @@ private:
     bool browseForMesh(std::string& outPath);
     void loadRigJoints();
 
+    // Marker + gizmo per gli attach point nel viewport 3D.
+    void syncViewportMarkers();
+    glm::mat4 weaponTransform() const;                    // rotX * scala (come loadModel)
+    glm::vec3 toWorld(const glm::vec3& modelPos) const;
+    glm::vec3 deltaToLocal(const glm::vec3& worldDelta) const;
+
     void drawList(float w);
     void drawMeshTab(float w);
     void drawStatsTab(float w);

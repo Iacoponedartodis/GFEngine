@@ -66,8 +66,24 @@ public:
     std::string getSelectedBone() const { return m_selBone; }
 
     // ── Gizmo ────────────────────────────────────────────────────────────
-    void setGizmoTarget(glm::vec3 pos, bool enabled);
-    bool popGizmoDelta(glm::vec3& outDelta); // true if dragged this frame
+    // Tre modalità stile DCC: Sposta (frecce), Ruota (anelli), Scala (maniglie
+    // quadrate + quadrato centrale per scala uniforme). Scorciatoie 1/2/3 con
+    // mouse sul viewport (non in cattura).
+    enum class GizmoMode { Translate, Rotate, Scale };
+
+    void      setGizmoTarget(glm::vec3 pos, bool enabled);
+    void      setGizmoMode(GizmoMode m)      { m_gizmoMode = m; }
+    GizmoMode getGizmoMode() const           { return m_gizmoMode; }
+    // Limita gli anelli di rotazione disponibili (es. solo Y per i box mappa).
+    void setGizmoRotAxes(bool x, bool y, bool z)
+    { m_gizmoRotAxes[0]=x; m_gizmoRotAxes[1]=y; m_gizmoRotAxes[2]=z; }
+    // Abilita/disabilita le modalità non-translate (es. attach point: solo sposta).
+    void setGizmoCanRotateScale(bool rotate, bool scale)
+    { m_gizmoCanRotate = rotate; m_gizmoCanScale = scale; }
+
+    bool popGizmoDelta(glm::vec3& outDelta);        // world, modalità Sposta
+    bool popGizmoRotDelta(glm::vec3& outEulerDeg);  // delta euler (gradi) per asse
+    bool popGizmoScaleDelta(glm::vec3& outDelta);   // world units per asse
 
     // ── Camera pan ───────────────────────────────────────────────────────
     void panCamera(float rightDelta, float upDelta);
@@ -103,6 +119,7 @@ private:
     bool  m_focused     = false;
     bool  m_mouseCapture= false;
     bool  m_tabWasDown  = false;
+    bool  m_rmbLook     = false;   // navigazione stile Unreal: RMB tenuto = guarda+vola
 
     // ── Diagnostica ──────────────────────────────────────────────────
     std::string m_lastError;
@@ -139,9 +156,20 @@ private:
     // ── Gizmo ────────────────────────────────────────────────────────
     bool      m_gizmoEnabled    = false;
     glm::vec3 m_gizmoPos        = {0,0,0};
+    GizmoMode m_gizmoMode       = GizmoMode::Translate;
+    bool      m_gizmoRotAxes[3] = {true, true, true};
+    bool      m_gizmoCanRotate  = true;
+    bool      m_gizmoCanScale   = true;
+
     bool      m_gizmoDragged    = false;
     glm::vec3 m_gizmoDelta      = {0,0,0};
-    int       m_gizmoActiveAxis = -1;  // 0=X,1=Y,2=Z
+    bool      m_gizmoRotDragged = false;
+    glm::vec3 m_gizmoRotDelta   = {0,0,0};
+    bool      m_gizmoScaleDragged = false;
+    glm::vec3 m_gizmoScaleDelta = {0,0,0};
+
+    int       m_gizmoActiveAxis = -1;  // 0=X,1=Y,2=Z, 3=uniforme (solo Scala)
+    float     m_gizmoPrevAngle  = 0.0f; // angolo mouse precedente (Ruota)
 
     // ── Viewport image rect (per picking + gizmo) ────────────────────
     ImVec2    m_imgMin   = {0,0};

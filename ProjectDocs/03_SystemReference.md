@@ -49,5 +49,13 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
 - **MapEditor**: map geometry boxes + spawn points, gizmo, saves `MapDef.geometry` +
   spawn_team1/2 into `data/maps/*.json`.
 - **BalanceEditor**: reduced to read-only redirect for enemies/allies -> EntityEditor.
-- **FreeCameraViewport**: shared FBO viewport (grid/model/attachment/hitbox/bones/markers/gizmo,
-  click-picking of bones+markers, `popGizmoDelta`, `popClickedItem`).
+- **FreeCameraViewport**: shared FBO viewport (grid/model/attachment/hitbox/bones/markers,
+  click-picking of bones+markers, `popClickedItem`). Gizmo a 3 modalità
+  (Sposta/Ruota/Scala — scorciatoie 1/2/3): `setGizmoMode`, `setGizmoRotAxes`,
+  `setGizmoCanRotateScale`, `popGizmoDelta`/`popGizmoRotDelta`/`popGizmoScaleDelta`.
+  Wireframe hitbox rotation-aware (eulerDeg, ordine Y*X*Z).
+  **Navigazione:** RMB tenuto = mouselook + WASD/QE (Shift veloce, rotella = velocità);
+  rotella = dolly; MMB = pan; TAB capture come alternativa. Il volo è gated su
+  navigazione attiva + `!WantTextInput` (mai mentre si digita).
+- **UiWidgets** (`editor/include/util/UiWidgets.hpp`, header-only): `sliderRow`/`sliderRow3`
+  (slider + campo numerico), `gizmoModeBar`. Da usare in ogni nuovo pannello proprietà.

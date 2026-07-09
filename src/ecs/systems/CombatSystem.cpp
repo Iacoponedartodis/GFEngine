@@ -10,24 +10,42 @@
 namespace mini
 {
 
-static bool pointInZone(const glm::vec3& p, const glm::vec3& entityPos, const HitZone& zone)
+// Trasforma un punto zona dal model space (autorato nell'editor, piedi a Y=0)
+// al world space dell'entità: scala uniforme, yaw, offset verticale mesh.
+// Le zone dei profili sono definite sul modello NON scalato: senza questa
+// trasformazione le hitbox di modelli scalati (es. clone 0.011) erano
+// completamente fuori posto, e per tutti mancava il meshOffsetY (-0.5).
+static bool pointInZone(const glm::vec3& p, const glm::vec3& entityPos,
+                        float scale, float yawDeg, float meshOffY,
+                        const HitZone& zone)
 {
-    const glm::vec3 center = entityPos + zone.offset;
-    return (std::abs(p.x - center.x) <= zone.halfExtents.x &&
-            std::abs(p.y - center.y) <= zone.halfExtents.y &&
-            std::abs(p.z - center.z) <= zone.halfExtents.z);
+    glm::vec3 off = zone.offset * scale;
+    if (yawDeg != 0.0f)
+    {
+        const float c = std::cos(glm::radians(yawDeg));
+        const float s = std::sin(glm::radians(yawDeg));
+        off = { c*off.x + s*off.z, off.y, -s*off.x + c*off.z };
+    }
+    const glm::vec3 center = entityPos + glm::vec3(0, meshOffY, 0) + off;
+    const glm::vec3 he     = zone.halfExtents * scale;
+    return (std::abs(p.x - center.x) <= he.x &&
+            std::abs(p.y - center.y) <= he.y &&
+            std::abs(p.z - center.z) <= he.z);
 }
 
 struct HitResult { bool hit = false; float mult = 1.0f; std::string zone; };
 
 static HitResult testHit(const glm::vec3& bulletPos,
                           const glm::vec3& entityPos,
+                          float scale, float yawDeg, float meshOffY,
                           const HitboxComponent* hb)
 {
     // ── 1. Broad sphere test (O(1) early-out) ──────────────────────────
+    // Il raggio deve coprire anche le zone alte (testa a ~1.8 dal suolo):
+    // 1.2 rigettava gli headshot prima ancora del test per-zona.
     const glm::vec3 d = entityPos - bulletPos;
     const float distSq = d.x*d.x + d.y*d.y + d.z*d.z;
-    const float broadR = 1.2f; // leggermente più grande del corpo
+    const float broadR = 2.5f;
     if (distSq >= broadR * broadR) return {false, 1.0f, ""};
 
     // ── 2. Zone test se disponibile ────────────────────────────────────
@@ -35,7 +53,7 @@ static HitResult testHit(const glm::vec3& bulletPos,
     {
         for (const auto& zone : hb->profile->zones)
         {
-            if (pointInZone(bulletPos, entityPos, zone))
+            if (pointInZone(bulletPos, entityPos, scale, yawDeg, meshOffY, zone))
                 return {true, zone.damageMultiplier, zone.name};
         }
         // Nessuna zona colpita → usa fallback sferico con raggio ridotto
@@ -81,7 +99,10 @@ void CombatSystem::update(World& world, float dt)
 
             const glm::vec3 ePos = {et->x, et->y, et->z};
             const auto* hb = world.getHitbox(eid);
-            auto result = testHit(bPos, ePos, hb);
+            const auto* mr = world.getMeshRenderer(eid);
+            const float scale   = (et->sx > 0.0001f) ? et->sx : 1.0f;
+            const float meshOff = mr ? mr->meshOffsetY : 0.0f;
+            auto result = testHit(bPos, ePos, scale, et->ry, meshOff, hb);
             if (!result.hit) continue;
 
             const float dmg = bullet->damage * result.mult;

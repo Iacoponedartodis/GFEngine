@@ -52,7 +52,13 @@ void BalanceEditor::reload()
 void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
 {
     std::string path = getSourceDataDir() + "weapons/" + w.id + ".json";
+    // RMW: preserva i campi autorati nel Weapon Editor (attach_points,
+    // mesh_scale, mesh_rot_x...) — scrivere un JSON nuovo li distruggerebbe.
     json j;
+    {
+        std::ifstream fin(path);
+        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
+    }
     j["id"]               = w.id;
     j["name"]             = w.name;
     j["faction"]          = mini::factionToString(w.faction);
@@ -90,7 +96,13 @@ void BalanceEditor::saveWeapon(const mini::WeaponDef& w)
 void BalanceEditor::saveEnemy(const mini::EnemyDef& e)
 {
     std::string path = getSourceDataDir() + "enemies/" + e.id + ".json";
+    // RMW: preserva i campi dell'Entity Editor (attach_points, mesh_rot_*,
+    // mesh_scale, weapon_display...).
     json j;
+    {
+        std::ifstream fin(path);
+        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
+    }
     j["id"]           = e.id;
     j["name"]         = e.name;
     j["faction"]      = mini::factionToString(e.faction);
@@ -377,7 +389,16 @@ void BalanceEditor::drawAITab()
 void BalanceEditor::saveMap(const mini::MapDef& m)
 {
     std::string path = getSourceDataDir() + "maps/" + m.id + ".json";
+
+    // READ-MODIFY-WRITE (obbligatorio per tutti gli editor): il file mappa
+    // contiene anche campi autorati da ALTRI moduli (geometry, command_posts,
+    // ally_*...). Un tempo qui si scriveva un JSON nuovo → li distruggeva.
     json j;
+    {
+        std::ifstream fin(path);
+        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
+    }
+
     j["id"]           = m.id;
     j["name"]         = m.name;
     j["mesh"]         = m.meshPath;
@@ -542,7 +563,12 @@ void BalanceEditor::saveAlly(const mini::EnemyDef& e)
 {
     // Il file si chiama sempre <id>.json — NON cambieremo mai l'id dopo la creazione
     std::string path = getSourceDataDir() + "allies/" + e.id + ".json";
+    // RMW: preserva i campi dell'Entity Editor (attach_points, weapon_display...)
     json j;
+    {
+        std::ifstream fin(path);
+        if (fin.is_open()) { try { fin >> j; } catch (...) { j = json::object(); } }
+    }
     j["id"]            = e.id;
     j["name"]          = e.name;
     j["faction"]       = mini::factionToString(e.faction);

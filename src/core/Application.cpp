@@ -10,8 +10,7 @@
 #include "mini/ecs/systems/MovementSystem.hpp"
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/systems/AiSystem.hpp"
-#include "mini/game/game_modes/ConquestMode.hpp"
-#include "mini/game/game_modes/SandboxMode.hpp"
+#include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/MatchSettings.hpp"
 #include "mini/game/PlayerController.hpp"
 #include "mini/game/Weapon.hpp"
@@ -184,6 +183,7 @@ void Application::run(bool directPreMatch, bool sandbox)
 
     for (auto& [id, enemy] : registry.enemies()) loadMeshIntoCache(enemy.meshPath);
     for (auto& [id, ally]  : registry.allies())  loadMeshIntoCache(ally.meshPath);
+    for (auto& [id, wpn]   : registry.weapons()) loadMeshIntoCache(wpn.meshPath);
 
     // ── ECS ──────────────────────────────────────────────────────────
     World world;
@@ -200,42 +200,18 @@ void Application::run(bool directPreMatch, bool sandbox)
     preMatchMenu.setWeaponList(wList);
     preMatchMenu.setAbilityList(aList);
 
-    // ── Game mode ────────────────────────────────────────────────────
+    // ── Game mode (ADR-008: Application parla solo con IGameMode) ─────
     MatchSettings currentSettings;
-    ConquestMode  conquestMode;
-    SandboxMode   sandboxMode;
-    const bool    useSandbox = sandbox;
+    std::unique_ptr<IGameMode> mode =
+        createGameMode(sandbox ? "sandbox" : "conquest");
     bool worldReady = false;
-
-    // Astrazione modalità: instrada le chiamate al mode attivo.
-    auto modeUpdate         = [&](float dt) {
-        if (useSandbox) sandboxMode.update(world, dt); else conquestMode.update(world, dt);
-    };
-    auto modeSpawnPos       = [&]() {
-        return useSandbox ? sandboxMode.getSpawnPos() : conquestMode.getSpawnPos();
-    };
-    auto modePlayerEntity   = [&]() {
-        return useSandbox ? sandboxMode.getPlayerEntity() : conquestMode.getPlayerEntity();
-    };
-    auto modeTeam1Tickets   = [&]() {
-        return useSandbox ? sandboxMode.getTeam1Tickets() : conquestMode.getTeam1Tickets();
-    };
-    auto modeTeam2Tickets   = [&]() {
-        return useSandbox ? sandboxMode.getTeam2Tickets() : conquestMode.getTeam2Tickets();
-    };
-    auto modeConsumeT1      = [&]() {
-        if (useSandbox) sandboxMode.consumeTeam1Ticket(); else conquestMode.consumeTeam1Ticket();
-    };
-    auto modeOverridePlayer = [&](EntityId e) {
-        if (useSandbox) sandboxMode.overridePlayerEntity(e); else conquestMode.overridePlayerEntity(e);
-    };
 
     // ── Player controller ────────────────────────────────────────────
     PlayerController player;
     player.weapon = makeBlasterRifle();
 
     // ── Stato ────────────────────────────────────────────────────────
-    GameState state     = useSandbox     ? GameState::Playing
+    GameState state     = sandbox        ? GameState::Playing
                         : directPreMatch ? GameState::PreMatch
                                          : GameState::Launcher;
     GameState prevState = state;
@@ -255,18 +231,10 @@ void Application::run(bool directPreMatch, bool sandbox)
     // ── Lambda transizioni ───────────────────────────────────────────
     auto initWorld = [&]()
     {
-        if (useSandbox)
-        {
-            sandboxMode.playerHp = currentSettings.playerHp;
-            sandboxMode.start(world, mesh.get(), albedo.get(), &registry, &meshCache);
-        }
-        else
-        {
-            conquestMode.applySettings(currentSettings);
-            conquestMode.start(world, mesh.get(), albedo.get(), &registry, &meshCache);
-        }
-        player.reset(modePlayerEntity(), currentSettings.playerHp,
-                     modeSpawnPos(), cam);
+        mode->applySettings(currentSettings);
+        mode->start(world, mesh.get(), albedo.get(), &registry, &meshCache);
+        player.reset(mode->getPlayerEntity(), currentSettings.playerHp,
+                     mode->getSpawnPos(), cam);
         worldReady = true;
     };
 
@@ -304,7 +272,7 @@ void Application::run(bool directPreMatch, bool sandbox)
     auto doVoluntaryRespawn = [&]()
     {
         if (player.isDead) return;
-        int t1 = modeTeam1Tickets();
+        int t1 = mode->getTeam1Tickets();
         if (t1 <= 0)
         {
             state = GameState::Lose;
@@ -313,7 +281,7 @@ void Application::run(bool directPreMatch, bool sandbox)
             std::cout << "[Game] Nessun ticket per il respawn volontario. SCONFITTA!" << std::endl;
             return;
         }
-        modeConsumeT1();
+        mode->consumeTeam1Ticket();
         player.isDead = true;
         player.prevHp = 0.0f;
         player.respawnTimer = currentSettings.respawnDelay;
@@ -326,12 +294,12 @@ void Application::run(bool directPreMatch, bool sandbox)
         stateChanged = true;
         window.setMouseCaptured(true);
         std::cout << "[Respawn volontario] Ticket rimasti: "
-                  << modeTeam1Tickets()
+                  << mode->getTeam1Tickets()
                   << " — respawn in " << currentSettings.respawnDelay << "s" << std::endl;
     };
 
     // ── Bootstrap Sandbox: salta i menu, entra subito in gioco ────────
-    if (useSandbox)
+    if (sandbox)
     {
         // Arma di default (nessun PreMatch in sandbox)
         const auto* wDef = registry.getWeapon(preMatchMenu.getSelectedWeaponId());
@@ -463,7 +431,7 @@ void Application::run(bool directPreMatch, bool sandbox)
         {
             accumulator += elapsed;
             while (accumulator >= fixedDt)
-            { modeUpdate(fixedDt); world.tick(fixedDt); accumulator -= fixedDt; }
+            { mode->update(world, fixedDt); world.tick(fixedDt); accumulator -= fixedDt; }
 
             player.weapon.update(elapsed);
             if (player.weapon.overheated && !wasOverheated) audio.playOverheat();
@@ -475,8 +443,8 @@ void Application::run(bool directPreMatch, bool sandbox)
                 if (player.respawnTimer <= 0.0f)
                 {
                     player.updateRespawn(world, cam, currentSettings.respawnDelay,
-                                          modeSpawnPos(), currentSettings.playerHp);
-                    modeOverridePlayer(player.entity);
+                                          mode->getSpawnPos(), currentSettings.playerHp);
+                    mode->overridePlayerEntity(player.entity);
                 }
             }
         }
@@ -508,10 +476,10 @@ void Application::run(bool directPreMatch, bool sandbox)
             {
                 player.isDead = true;
                 player.prevHp = 0.0f;
-                int t1 = modeTeam1Tickets();
+                int t1 = mode->getTeam1Tickets();
                 if (t1 > 0)
                 {
-                    modeConsumeT1();
+                    mode->consumeTeam1Ticket();
                     player.respawnTimer = currentSettings.respawnDelay;
                     std::cout << "[Game] Eliminato! Respawn in "
                               << currentSettings.respawnDelay << "s" << std::endl;
@@ -526,10 +494,10 @@ void Application::run(bool directPreMatch, bool sandbox)
 
             if (player.updateHealth(world, audio))
             {
-                int t1 = modeTeam1Tickets();
+                int t1 = mode->getTeam1Tickets();
                 if (t1 > 0)
                 {
-                    modeConsumeT1();
+                    mode->consumeTeam1Ticket();
                     player.respawnTimer = currentSettings.respawnDelay;
                 }
                 else
@@ -542,9 +510,9 @@ void Application::run(bool directPreMatch, bool sandbox)
             player.updateShooting(world, cam, input, audio,
                                    mesh.get(), window.isMouseCaptured());
 
-            if (!useSandbox
+            if (mode->hasVictoryCondition()
                 && world.getTickCount() > 10
-                && modeTeam2Tickets() <= 0
+                && mode->getTeam2Tickets() <= 0
                 && !anyEnemyAlive(world))
             {
                 state = GameState::Win; stateChanged = true;
@@ -572,6 +540,12 @@ void Application::run(bool directPreMatch, bool sandbox)
                                 glm::vec3(0.0f, mr->meshOffsetY, 0.0f)) * model;
                 renderer.drawMesh(*mr->mesh, mr->texture, model,
                                   {mr->r, mr->g, mr->b});
+
+                // Arma in mano (o altro modello agganciato)
+                if (mr->attachMesh)
+                    renderer.drawMesh(*mr->attachMesh, mr->texture,
+                                      model * mr->attachLocal,
+                                      {0.55f, 0.55f, 0.58f});
             }
         }
 
@@ -599,7 +573,7 @@ void Application::run(bool directPreMatch, bool sandbox)
             }
             hud.render(player.prevHp, currentSettings.playerHp, (int)state,
                        player.weapon.heat, player.weapon.overheated, player.weapon.name.c_str(),
-                       modeTeam1Tickets(), modeTeam2Tickets(),
+                       mode->getTeam1Tickets(), mode->getTeam2Tickets(),
                        aliveAllies, aliveEnemies);
         }
 

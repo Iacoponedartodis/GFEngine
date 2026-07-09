@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <unordered_map>
 
 namespace mini
 {
@@ -74,6 +75,14 @@ struct WeaponDef
 
     std::string meshPath;
     std::string projectileMeshPath;
+
+    // Trasformazione/attach del modello arma (autorati nel Weapon Editor).
+    // gripAttach = punto impugnatura (attach "right_hand" o "grip") nel
+    // model space GREZZO del GLB; usato per agganciare l'arma alla mano.
+    float meshScale = 0.8f;
+    float meshRotX  = 0.0f;
+    std::array<float,3> gripAttach   = {0.0f, 0.0f, 0.0f};
+    std::array<float,3> muzzleAttach = {0.0f, 0.0f, 0.0f};
 };
 
 // ── AiProfileDef ─────────────────────────────────────────────────────────
@@ -126,6 +135,20 @@ struct EnemyDef
     std::array<float,3> footAttach = {0.0f, 0.0f, 0.0f};
     [[nodiscard]] float footY() const { return footAttach[1]; }
 
+    // Tutti gli attach point autorati (right_hand, left_hand, eye, muzzle...)
+    std::unordered_map<std::string, std::array<float,3>> attachPoints;
+
+    // Posa dell'arma in mano (autorata nell'Entity Editor, "weapon_display")
+    struct WeaponDisplay
+    {
+        std::string weaponId;               // vuoto = usa l'arma primaria
+        std::string hand  = "right_hand";
+        float       scale = 1.0f;
+        std::array<float,3> rot    = {0.0f, 0.0f, 0.0f};
+        std::array<float,3> offset = {0.0f, 0.0f, 0.0f};
+    };
+    WeaponDisplay weaponDisplay;
+
     // Composizione comportamentale
     std::string aiProfileId;
     std::string hitboxProfileId;
@@ -164,6 +187,18 @@ struct MapGeometryBox
     bool  collider = true;
 };
 
+// ── CommandPostDef ──────────────────────────────────────────────────────────
+// Punto di comando catturabile, autorato nel Map Editor (ADR-009).
+// Riusato da tutte le modalità: Conquista (ticket bleed), future Assalto/Difesa.
+struct CommandPostDef
+{
+    std::string label = "Post";
+    float x = 0, y = 0, z = 0;   // posizione (y = suolo)
+    float radius      = 4.0f;    // raggio di cattura (XZ)
+    int   initialTeam = 0;       // 0 = neutrale, 1 = alleati, 2 = nemici
+    float captureTime = 8.0f;    // secondi di presenza per catturare
+};
+
 // ── MapDef ────────────────────────────────────────────────────────────────
 // data/maps/<id>.json
 struct MapDef
@@ -181,6 +216,7 @@ struct MapDef
     std::vector<std::string> enemyTypes;
     std::vector<std::string> allyTypes;
     std::vector<MapGeometryBox> geometry;
+    std::vector<CommandPostDef> commandPosts;
 };
 
 // ── PlayerDef ─────────────────────────────────────────────────────────────

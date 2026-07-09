@@ -116,6 +116,8 @@ add_executable(GFEngine
     src/ecs/systems/AiSystem.cpp
     src/game/game_modes/ConquestMode.cpp
     src/game/game_modes/SandboxMode.cpp
+    src/game/game_modes/GameModeFactory.cpp
+    src/game/CommandPosts.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp
     src/render/OptionsMenu.cpp

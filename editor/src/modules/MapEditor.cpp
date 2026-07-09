@@ -5,6 +5,7 @@
 
 #include "modules/MapEditor.hpp"
 #include "util/FileDialog.hpp"
+#include "util/UiWidgets.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -52,7 +53,7 @@ void MapEditor::tick(float dt)
 {
     m_viewport.tick(dt);
 
-    // Gizmo a 3 frecce: applica lo spostamento all'elemento selezionato.
+    // Gizmo Sposta: applica lo spostamento all'elemento selezionato.
     glm::vec3 delta;
     if (m_viewport.popGizmoDelta(delta))
     {
@@ -65,8 +66,43 @@ void MapEditor::tick(float dt)
         { m_spawnTeam1[0]+=delta.x; m_spawnTeam1[1]+=delta.y; m_spawnTeam1[2]+=delta.z; }
         else if (m_selBox == -3)
         { m_spawnTeam2[0]+=delta.x; m_spawnTeam2[1]+=delta.y; m_spawnTeam2[2]+=delta.z; }
+        else if (m_selBox <= -10 && (-10 - m_selBox) < (int)m_posts.size())
+        {
+            auto& p = m_posts[-10 - m_selBox];
+            p.x += delta.x; p.y += delta.y; p.z += delta.z;
+        }
         m_dirty = true;
         updateViewport();
+    }
+
+    // Gizmo Ruota: i box mappa ruotano solo attorno a Y.
+    glm::vec3 rotDelta;
+    if (m_viewport.popGizmoRotDelta(rotDelta))
+    {
+        if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+        {
+            auto& b = m_boxes[m_selBox];
+            b.ry += rotDelta.y;
+            while (b.ry >  180.0f) b.ry -= 360.0f;
+            while (b.ry < -180.0f) b.ry += 360.0f;
+            m_dirty = true;
+            updateViewport();
+        }
+    }
+
+    // Gizmo Scala: dimensioni del box (full size), con minimo.
+    glm::vec3 scaleDelta;
+    if (m_viewport.popGizmoScaleDelta(scaleDelta))
+    {
+        if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+        {
+            auto& b = m_boxes[m_selBox];
+            b.sx += scaleDelta.x; if (b.sx < 0.1f) b.sx = 0.1f;
+            b.sy += scaleDelta.y; if (b.sy < 0.1f) b.sy = 0.1f;
+            b.sz += scaleDelta.z; if (b.sz < 0.1f) b.sz = 0.1f;
+            m_dirty = true;
+            updateViewport();
+        }
     }
 }
 
@@ -112,6 +148,7 @@ void MapEditor::loadMap(const std::string& id)
     m_mapId      = id;
     m_mapJsonPath = it->path;
     m_boxes.clear();
+    m_posts.clear();
     m_selBox = -1;
 
     if (j.contains("spawn_team1") && j["spawn_team1"].size() >= 3)
@@ -142,6 +179,23 @@ void MapEditor::loadMap(const std::string& id)
             std::strncpy(b.label, label.c_str(), sizeof(b.label) - 1);
 
             m_boxes.push_back(b);
+        }
+    }
+
+    if (j.contains("command_posts") && j["command_posts"].is_array())
+    {
+        for (auto& cp : j["command_posts"])
+        {
+            PostEntry p;
+            std::string lbl = cp.value("label", std::string("Post"));
+            std::strncpy(p.label, lbl.c_str(), sizeof(p.label) - 1);
+            p.x           = cp.value("x", 0.f);
+            p.y           = cp.value("y", 0.f);
+            p.z           = cp.value("z", 0.f);
+            p.radius      = cp.value("radius", 4.f);
+            p.team        = cp.value("team", 0);
+            p.captureTime = cp.value("capture_time", 8.f);
+            m_posts.push_back(p);
         }
     }
 
@@ -178,6 +232,19 @@ bool MapEditor::saveMap()
         geom.push_back(gb);
     }
     j["geometry"] = geom;
+
+    json postsArr = json::array();
+    for (const auto& p : m_posts)
+    {
+        json cp;
+        cp["label"]        = p.label;
+        cp["x"] = p.x;  cp["y"] = p.y;  cp["z"] = p.z;
+        cp["radius"]       = p.radius;
+        cp["team"]         = p.team;
+        cp["capture_time"] = p.captureTime;
+        postsArr.push_back(cp);
+    }
+    j["command_posts"] = postsArr;
 
     std::ofstream out(m_mapJsonPath);
     if (!out) return false;
@@ -268,18 +335,57 @@ void MapEditor::updateViewport()
         draws.push_back(s);
     }
 
+    // Command post: palo alto + area di cattura, colorati per team
+    for (int i = 0; i < (int)m_posts.size(); ++i)
+    {
+        const auto& p = m_posts[i];
+        float r = 0.75f, g = 0.75f, b = 0.75f;
+        if (p.team == 1) { r = 0.25f; g = 0.50f; b = 1.00f; }
+        if (p.team == 2) { r = 1.00f; g = 0.25f; b = 0.25f; }
+        const bool sel = (m_selBox == -10 - i);
+
+        FreeCameraViewport::MapBoxDraw pole;
+        pole.x = p.x; pole.y = p.y + 1.5f; pole.z = p.z; pole.ry = 0;
+        pole.sx = 0.3f; pole.sy = 3.0f; pole.sz = 0.3f;
+        pole.r = r; pole.g = g; pole.b = b;
+        pole.selected = sel;
+        draws.push_back(pole);
+
+        FreeCameraViewport::MapBoxDraw area;
+        area.x = p.x; area.y = p.y + 0.05f; area.z = p.z; area.ry = 0;
+        area.sx = p.radius * 2.0f; area.sy = 0.05f; area.sz = p.radius * 2.0f;
+        area.r = r * 0.6f; area.g = g * 0.6f; area.b = b * 0.6f;
+        area.selected = sel;
+        draws.push_back(area);
+    }
+
     m_viewport.setMapBoxes(draws);
 
-    // Gizmo a 3 frecce sull'elemento selezionato (box o spawn point).
+    // Gizmo sull'elemento selezionato (box o spawn point).
+    // I box mappa ruotano solo attorno a Y; gli spawn: solo Sposta.
     if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
     {
         const auto& b = m_boxes[m_selBox];
         m_viewport.setGizmoTarget({b.x, b.y, b.z}, true);
+        m_viewport.setGizmoRotAxes(false, true, false);
+        m_viewport.setGizmoCanRotateScale(true, true);
     }
     else if (m_selBox == -2)
+    {
         m_viewport.setGizmoTarget({m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
     else if (m_selBox == -3)
+    {
         m_viewport.setGizmoTarget({m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -10 && (-10 - m_selBox) < (int)m_posts.size())
+    {
+        const auto& p = m_posts[-10 - m_selBox];
+        m_viewport.setGizmoTarget({p.x, p.y, p.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
     else
         m_viewport.setGizmoTarget({0,0,0}, false);
 }
@@ -386,6 +492,13 @@ void MapEditor::drawToolbar()
     ImGui::Checkbox("Area navigabile", &m_showNavmesh);
     if (m_showNavmesh) { updateViewport(); } // aggiorna colori floor
 
+    ImGui::SameLine(0, 16);
+    ImGui::TextDisabled("|");
+    ImGui::SameLine(0, 16);
+    // Modalità gizmo: gli spawn point supportano solo Sposta.
+    const bool boxSel = (m_selBox >= 0 && m_selBox < (int)m_boxes.size());
+    editor::ui::gizmoModeBar(m_viewport, boxSel, boxSel);
+
     // Popups
     if (ImGui::BeginPopup("##saved_ok")) {
         ImGui::TextColored({0.4f,1.0f,0.4f,1.0f}, "Salvato!");
@@ -447,6 +560,44 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     bool spawnT2 = (m_selBox == -3);
     if (ImGui::Selectable("[T2] Spawn Nemici", spawnT2)) { m_selBox = -3; updateViewport(); }
     ImGui::PopStyleColor();
+
+    // ── Command post ─────────────────────────────────────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Command Post (%d)", (int)m_posts.size());
+    for (int i = 0; i < (int)m_posts.size(); ++i)
+    {
+        const auto& p = m_posts[i];
+        ImVec4 col = (p.team == 1) ? ImVec4(0.4f,0.7f,1.0f,1.0f)
+                   : (p.team == 2) ? ImVec4(1.0f,0.4f,0.4f,1.0f)
+                                   : ImVec4(0.8f,0.8f,0.8f,1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        char lbl[96];
+        std::snprintf(lbl, sizeof(lbl), "[CP] %s##cp%d", p.label, i);
+        bool sel = (m_selBox == -10 - i);
+        if (ImGui::Selectable(lbl, sel)) { m_selBox = -10 - i; updateViewport(); }
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::SmallButton("+ Post"))
+    {
+        PostEntry p;
+        std::snprintf(p.label, sizeof(p.label), "Post %d", (int)m_posts.size() + 1);
+        m_posts.push_back(p);
+        m_selBox = -10 - ((int)m_posts.size() - 1);
+        m_dirty = true;
+        updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("- Rimuovi##cp") && m_selBox <= -10)
+    {
+        int i = -10 - m_selBox;
+        if (i >= 0 && i < (int)m_posts.size())
+        {
+            m_posts.erase(m_posts.begin() + i);
+            m_selBox = -1;
+            m_dirty = true;
+            updateViewport();
+        }
+    }
 }
 
 // ── drawProperties ────────────────────────────────────────────────────────────
@@ -461,13 +612,42 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         const char* teamName = (m_selBox == -2) ? "Spawn Alleati (T1)" : "Spawn Nemici (T2)";
         ImGui::TextColored({0.8f,0.8f,0.2f,1.0f}, "%s", teamName);
         ImGui::Separator();
-        ImGui::SetNextItemWidth(sliderW);
         bool changed = false;
-        changed |= ImGui::DragFloat("X##spx", &sp[0], 0.1f, -60.f, 60.f, "%.2f");
+        changed |= editor::ui::sliderRow("X", sp[0], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", sp[1],   0.f,  5.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", sp[2], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Command post selezionato ─────────────────────────────────────────
+    if (m_selBox <= -10)
+    {
+        int pi = -10 - m_selBox;
+        if (pi < 0 || pi >= (int)m_posts.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& p = m_posts[pi];
+        ImGui::TextColored({0.8f,0.8f,0.2f,1.0f}, "Command Post");
+        ImGui::Separator();
+        bool changed = false;
+
         ImGui::SetNextItemWidth(sliderW);
-        changed |= ImGui::DragFloat("Y##spy", &sp[1], 0.1f,   0.f,  5.f, "%.2f");
+        if (ImGui::InputText("Nome##cpl", p.label, sizeof(p.label))) changed = true;
+
+        const char* teams[] = {"Neutrale", "Alleati (T1)", "Nemici (T2)"};
         ImGui::SetNextItemWidth(sliderW);
-        changed |= ImGui::DragFloat("Z##spz", &sp[2], 0.1f, -25.f, 25.f, "%.2f");
+        if (ImGui::Combo("Team iniziale##cpt", &p.team, teams, 3)) changed = true;
+
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X", p.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", p.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", p.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+
+        ImGui::TextDisabled("Cattura");
+        changed |= editor::ui::sliderRow("Raggio", p.radius, 1.f, 20.f, 0.1f, "%.1f");
+        changed |= editor::ui::sliderRow("Tempo (s)", p.captureTime, 1.f, 30.f, 0.5f, "%.1f");
+
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }
@@ -512,30 +692,25 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 
     ImGui::Separator();
     ImGui::TextDisabled("Posizione");
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("X##bx", &b.x, m_gridSnap > 0 ? m_gridSnap : 0.1f, -60.f, 60.f, "%.2f"))
+    const float posSpeed = m_gridSnap > 0 ? m_gridSnap : 0.1f;
+    if (editor::ui::sliderRow("X", b.x, -60.f, 60.f, posSpeed, "%.2f", 18.0f))
         { b.x = snap(b.x); changed = true; }
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("Y##by", &b.y, m_gridSnap > 0 ? m_gridSnap : 0.05f, -2.f, 10.f, "%.2f"))
+    if (editor::ui::sliderRow("Y", b.y, -2.f, 10.f, posSpeed * 0.5f, "%.2f", 18.0f))
         { b.y = snap(b.y); changed = true; }
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("Z##bz", &b.z, m_gridSnap > 0 ? m_gridSnap : 0.1f, -25.f, 25.f, "%.2f"))
+    if (editor::ui::sliderRow("Z", b.z, -60.f, 60.f, posSpeed, "%.2f", 18.0f))
         { b.z = snap(b.z); changed = true; }
 
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("Rot Y##bry", &b.ry, 1.0f, -180.f, 180.f, "%.1f°"))
+    ImGui::TextDisabled("Rotazione");
+    if (editor::ui::sliderRow("Y°", b.ry, -180.f, 180.f, 1.0f, "%.1f", 18.0f))
         changed = true;
 
     ImGui::Separator();
     ImGui::TextDisabled("Dimensioni");
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("W (X)##bsx", &b.sx, m_gridSnap > 0 ? m_gridSnap : 0.1f, 0.1f, 120.f, "%.2f"))
+    if (editor::ui::sliderRow("W", b.sx, 0.1f, 120.f, posSpeed, "%.2f", 18.0f))
         { b.sx = snap(b.sx); if (b.sx < 0.1f) b.sx = 0.1f; changed = true; }
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("H (Y)##bsy", &b.sy, m_gridSnap > 0 ? m_gridSnap : 0.05f, 0.1f, 20.f, "%.2f"))
+    if (editor::ui::sliderRow("H", b.sy, 0.1f, 20.f, posSpeed * 0.5f, "%.2f", 18.0f))
         { b.sy = snap(b.sy); if (b.sy < 0.1f) b.sy = 0.1f; changed = true; }
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::DragFloat("D (Z)##bsz", &b.sz, m_gridSnap > 0 ? m_gridSnap : 0.1f, 0.1f, 120.f, "%.2f"))
+    if (editor::ui::sliderRow("D", b.sz, 0.1f, 120.f, posSpeed, "%.2f", 18.0f))
         { b.sz = snap(b.sz); if (b.sz < 0.1f) b.sz = 0.1f; changed = true; }
 
     ImGui::Separator();
@@ -555,12 +730,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 // ── drawViewport ─────────────────────────────────────────────────────────────
 void MapEditor::drawViewport(float vpW, float vpH)
 {
-    // Hint TAB
-    ImGui::TextDisabled("TAB = cattura mouse | WASD/QE = vola | Esc = ritorna");
-    float hintH = ImGui::GetItemRectSize().y + ImGui::GetStyle().ItemSpacing.y;
-
     m_viewport.draw(false);
-    (void)vpW; (void)vpH; (void)hintH;
+    (void)vpW; (void)vpH;
 }
 
 } // namespace editor

@@ -26,9 +26,24 @@ struct AiComponent
     float    bulletDamage   = 20.0f;
     float    bulletLifetime = 5.0f;
 
+    // ── Modello arma (da WeaponDef): cadenza reale + surriscaldamento ──
+    // fireInterval <= 0 → usa il legacy shootInterval del profilo AI.
+    float    fireInterval    = 0.0f;   // 1 / fire_rate dell'arma
+    float    heat            = 0.0f;   // 0..1
+    float    heatPerShot     = 0.0f;   // 0 = arma senza surriscaldamento
+    float    cooldownRate    = 0.30f;  // raffreddamento al secondo
+    float    overheatPenalty = 2.0f;   // pausa forzata a overheat (s)
+    bool     overheated      = false;
+
     float patrolAx = 0, patrolAz = 0;
     float patrolBx = 0, patrolBz = 0;
     float patrolSpeed = 2.0f;
+
+    // Sosta ai waypoint di pattuglia (secondi). > del capture_time dei
+    // command post → l'AI resta nell'area abbastanza da catturarli.
+    // 0 = comportamento legacy (inversione immediata).
+    float patrolDwell = 0.0f;
+    float waitTimer   = 0.0f;
 
     float seekSpeed      = 3.5f;
     float lastKnownX     = 0.0f;

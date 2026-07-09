@@ -11,6 +11,12 @@
 - Italian comments/UI strings are the norm; keep consistent with surrounding code.
 
 ## Rules to uphold going forward
+- **READ-MODIFY-WRITE obbligatorio per OGNI salvataggio JSON negli editor.** I file dati sono
+  co-autorati da più moduli (es. mappa: BalanceEditor scrive stats, MapEditor geometry/posts;
+  entità: BalanceEditor stats, EntityEditor attach/weapon_display). Costruire un `json j;`
+  nuovo e scriverlo distrugge i campi degli altri moduli — è ESATTAMENTE il bug che il
+  2026-07-08 ha cancellato geometry+command_posts da firebase.json (partita ingiocabile).
+  Pattern corretto: leggi il file esistente in `j`, sovrascrivi solo i tuoi campi, salva.
 - Do **not** write `id`/`profile_id` back into JSON as authoritative (filename is canonical).
   (Current editors mostly avoid this; verify on any new save path.)
 - No new hardcoded gameplay constants in game modes — put tunables in `data/` or
