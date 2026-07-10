@@ -23,7 +23,9 @@ FetchContent_MakeAvailable(SDL2)
 # ── stb ───────────────────────────────────────────────────────────────────────
 FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_SHALLOW    TRUE
+    # Pin al commit già in uso (KI #27: senza tag ogni configure da zero
+    # prendeva il master corrente — build non riproducibile)
+    GIT_TAG        31c1ad37456438565541f4919958214b6e762fb4
 )
 FetchContent_MakeAvailable(stb)
 
@@ -100,8 +102,9 @@ endif()
 # ── Dear ImGui (docking branch) ───────────────────────────────────────────────
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        docking
-    GIT_SHALLOW    TRUE
+    # Pin al commit del branch docking già in uso (KI #27: "docking" è un
+    # branch mobile — un configure da zero poteva prendere una API diversa)
+    GIT_TAG        6029ee3789a2b7898f6423ec0c88cc4e5425f5a9
 )
 FetchContent_MakeAvailable(imgui)
 

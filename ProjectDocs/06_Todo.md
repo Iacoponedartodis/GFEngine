@@ -1,5 +1,47 @@
 # 06 — Todo (reality-based, prioritized)
 
+## Robustezza (audit codice completo 2026-07-10 — ordine = gravità)
+
+A1. ~~FATTO 2026-07-10~~ **Preset partita: sopravvivenza alle build + formato robusto** (KI #19+#20).
+    Spostati in `<exe>/user_presets/match` (fuori dalla `data/` che CMake azzera),
+    serializzati con nlohmann (escaping ok), persistono `map_id` (non più l'indice
+    fragile) e l'intero loadout. Migrazione legacy best-effort. Smoke: salvare un
+    preset → rebuild → deve sopravvivere; caricare un preset → mappa e loadout giusti.
+A2. ~~FATTO 2026-07-10~~ **Fallback `id`/`profile_id` in-file rimosso da TUTTI i loader**
+    (KI #21): id = solo filename stem (ADR-001). Verificato zero mismatch nei dati
+    prima del cambio; smoke `--sim` con registry completo.
+A3. ~~FATTO 2026-07-10~~ **Heat reset allo switch arma** (KI #22): stato riscritto in
+    `weapons[activeWeapon]` prima del cambio. Consolidare `weapon`/`weapons[2]` → A10.
+A4. ~~FATTO 2026-07-10~~ **Spawn spec ConquestMode unificato**: `UnitTemplate` eliminato,
+    `RespawnEntry` (con default sensati) è l'unico tipo per spawn/tracking/respawn —
+    copia integrale, zero liste di campi da allineare. Le lambda `mkUnit*` restano
+    (candidate a prendere direttamente una RespawnEntry — pulizia futura, bassa urgenza).
+A5. ~~FATTO 2026-07-10~~ **Collider ruotati** (KI #23): SAT 2D esatto nel movimento +
+    LOS in spazio locale del box; coerente col test OBB dei proiettili. Smoke manuale
+    alla prima mappa con muri diagonali.
+A6. ~~FATTO 2026-07-10~~ **Dipendenze CMake pinnate** (KI #27): stb 31c1ad3, imgui 6029ee3
+    (i commit già in uso in _deps).
+A7. ~~FATTO 2026-07-10 (completo)~~ **Dedup loader e resolve**: `parseUnitDef` condiviso
+    tra loadEnemies/loadAllies; `resolveUnitArchetype` unico per nemici e alleati in
+    ConquestMode (gli alleati ora prendono le stats proiettile dall'arma reale, non
+    più 8/20/5 hardcoded).
+A8. ~~FATTO 2026-07-10 (in parte)~~ **Igiene dati/fallback** (KI #24+#26): id hardcoded
+    rimossi da SandboxMode; preset armi morti rimossi da Weapon.hpp (resta solo il
+    fallback di ultima istanza documentato); `data/definitions/*` e cartelle vuote
+    eliminati. RESTA: geometria fallback firebase (decisione ADR-004) e
+    `data/versions.json` (verificare se serve, poi rimuovere).
+A9. ~~FATTO 2026-07-10~~ **Campi fantasma marcati "(non attivo)"** negli editor
+    (KI #25): min_range, mesh proiettile, fov_deg, hearing_range, reposition_chance,
+    damage_scale (+ nota su move_speed vinto dal profilo AI). Quando un campo viene
+    consumato dal runtime, togliere il suffisso nello stesso change set.
+A10. **Vincoli architetturali da tracciare (non da fixare ora):** team 1/2 hardcoded
+    trasversale (nessun supporto 3+ fazioni/FFA); timestep misto (world a fixedDt,
+    player/sparo a dt variabile — rilevante per determinismo/replay/split-screen);
+    nessuna broad-phase spaziale (collision/LOS O(N²) — muro alla scala fase 2/3);
+    `MatchSettings.hpp` include ancora SDL in header condiviso.
+    ~~Doppia rappresentazione weapon/weapons[2]~~ → RISOLTA 2026-07-10 (28):
+    accessor `weapon()` su `weapons[activeWeapon]`, nessuna copia da sincronizzare.
+
 ## Rifinitura (diagnosi 2026-07-10 — candidati per la fase di polish)
 
 R1. ~~FATTO 2026-07-10 (18)~~ **Spread/gittata delle armi MAI applicati al giocatore.** `WeaponDef` ha 5 campi

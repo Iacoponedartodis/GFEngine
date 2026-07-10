@@ -2,6 +2,67 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-10 (28) — Rifinitura robustezza, tranche 2 (residuo A7, A9, arma attiva)
+- **Arma attiva consolidata** (radice del KI #22): rimosso il membro-copia
+  `PlayerController::weapon`; l'arma attiva è ora SEMPRE `weapons[activeWeapon]` via
+  accessor `weapon()`. Sparite tutte le assegnazioni di sincronizzazione sparse in
+  Application (5 punti) e l'hack di ri-scrittura allo switch: lo stato heat vive in un
+  posto solo per costruzione.
+- **Residuo A7 chiuso**: `resolveUnitArchetype(registry, id, team)` unico per nemici E
+  alleati in ConquestMode (il path alleati re-implementava il resolve a mano). Fix
+  concreto incluso: gli alleati ora prendono le stats proiettile (velocità/danno/vita)
+  dalla loro ARMA reale invece degli 8/20/5 hardcoded.
+- **A9 (KI #25)**: i campi salvati ma non consumati dal runtime sono ora marcati
+  "(non attivo)" negli editor: min_range e mesh proiettile (Weapon/Balance editor),
+  fov_deg/hearing_range/reposition_chance (tab AI), damage_scale (+ nota che
+  move_speed è vinto dal profilo AI) nell'Entity Editor.
+- **Verifica:** build pulita; smoke `--sim` 12s ok (spawn 6+1+3 post, ingaggi con
+  hit/roll nel log). Smoke manuale: heat persistente allo switch (Q) — invariato
+  rispetto a (27) ma ora garantito strutturalmente.
+
+## 2026-07-10 (27) — Rifinitura robustezza: Todo A2-A8 in un colpo solo
+- **A2 (KI #21)**: tutti i loader del registry ora derivano l'id SOLO dal filename stem
+  (ADR-001); il campo `id`/`profile_id` in-file è ignorato (prima un id stantio
+  registrava la definizione sotto la chiave sbagliata, rompendo le cross-ref in
+  silenzio). Verificato zero mismatch id/stem nei dati correnti prima del cambio.
+- **A3 (KI #22)**: lo switch arma riscrive lo stato runtime (heat/overheat) nell'arma
+  riposta — chiuso l'exploit "switch avanti/indietro = arma fredda".
+- **A4**: eliminato `UnitTemplate` in ConquestMode; `RespawnEntry` (ora con default) è
+  l'UNICO spawn spec per spawn iniziale, tracking e respawn — copia integrale invece di
+  ~60 righe di copie campo-per-campo (classe di bug già vista: respawn come cubo).
+- **A5 (KI #23)**: collisione (SAT 2D + intervallo Y) e LOS (segmento in spazio locale)
+  ora ESATTE sui collider ruotati attorno a Y, coerenti col test OBB dei proiettili;
+  fast path invariato per box non ruotati. Prima un muro diagonale bloccava
+  movimento/LOS col suo AABB gonfiato mentre i colpi morivano sul bordo vero.
+- **A6 (KI #27)**: stb e ImGui pinnati ai commit esatti già in uso (31c1ad3 / 6029ee3).
+- **A7**: `parseUnitDef` condiviso tra loadEnemies/loadAllies (via ~140 righe duplicate;
+  default per-team preservati: colori, hp 80/60, move 4/1.8, fazione).
+- **A8 (KI #24, #26)**: rimossi gli ultimi id di definizione hardcoded (SandboxMode:
+  registry vuoto = log errore, non manichini fantasma); rimossi i preset armi morti da
+  Weapon.hpp (resta solo `makeBlasterRifle` come fallback di ultima istanza,
+  documentato); eliminati `data/definitions/*` (mai caricati) e le cartelle vuote
+  `data/presets`, `data/runtime`.
+- **Verifica:** build pulita (0 errori, riconfigure incluso per i pin); smoke runtime
+  `--sim` 12s: registry completo, spawn 6+1+3 post+2 veicoli, AI in ingaggio
+  (hit/roll/shield nel log), `user_presets/` creata. **Smoke manuali restanti:**
+  heat allo switch (Q), muro diagonale (quando esisterà in una mappa).
+
+## 2026-07-10 (26) — Audit qualità completo + fix preset (KI #19/#20, Todo A1)
+- **Audit dell'intero progetto** (runtime, editor, build, dati): esiti registrati in
+  08_KnownIssues #19-#27 e 06_Todo sezione "Robustezza" (A1-A10, in ordine di gravità).
+- **Fix A1 — preset partita**: spostati da `<exe>/data/presets/match` (cancellata a OGNI
+  build dal post-build CMake → perdita dati sistematica) a `<exe>/user_presets/match`,
+  con migrazione automatica dei file legacy al primo load (e ri-salvataggio subito nella
+  nuova posizione). Serializzazione riscritta con nlohmann::json (via il parser
+  artigianale senza escaping); i preset ora persistono la mappa **per id** (`map_id`,
+  non più l'indice fragile nella lista ordinata) e l'intero loadout (primaria,
+  secondaria, abilità, gadget). `PreMatchMenu::applyPreset` risolve gli id in indici UI
+  al caricamento; retrocompat: i file legacy con solo `map_index` vengono ancora letti.
+  Rimosso `windows.h` da MatchSettings.hpp (via CreateDirectoryA → std::filesystem).
+- Build pulita (GFEngine + GFEditor, 0 errori). **Da verificare a mano (smoke):**
+  salvare un preset con mappa Outpost e loadout → rebuild → ricaricarlo e verificare
+  che sopravviva e che mappa/armi/abilità tornino giuste.
+
 ## 2026-07-10 (25) — Fase B veicoli, tranche 2: respawn mezzi + authoring spawn
 - **Respawn dei veicoli distrutti**: `vehiclespawn::RespawnTracker` (in
   VehicleSpawn.hpp, condiviso): un mezzo esploso torna al suo spawn dopo 15s

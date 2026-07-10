@@ -109,6 +109,7 @@ private:
 
     // ── Helpers ───────────────────────────────────────────────────────
     void syncLoadoutToSettings();   // copia gli idx in m_settings.primaryWeaponId ecc.
+    void applyPreset(const MatchSettings& p);   // preset → settings + risolve id in indici UI
 };
 
 } // namespace mini

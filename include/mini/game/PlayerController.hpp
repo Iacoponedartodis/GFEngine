@@ -28,8 +28,11 @@ public:
     float    respawnTimer = -1.0f;
 
     // ── Armi (0=primaria, 1=secondaria) ──────────────────────────────
-    Weapon   weapon;          // arma attiva (punta a weapons[activeWeapon])
+    // L'arma attiva è SEMPRE weapons[activeWeapon]: niente copia separata
+    // (la copia desincronizzata azzerava il calore allo switch — KI #22).
     Weapon   weapons[2];      // slot primaria e secondaria
+    [[nodiscard]] Weapon&       weapon()       { return weapons[activeWeapon]; }
+    [[nodiscard]] const Weapon& weapon() const { return weapons[activeWeapon]; }
 
     // ── Terza persona ─────────────────────────────────────────────────
     bool      thirdPerson  = false;

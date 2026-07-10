@@ -1321,8 +1321,11 @@ void EntityEditor::drawStatsPanel()
         if (ImGui::DragFloat(label, &v, (hi-lo)*0.005f, lo, hi, fmt)) m_dirty = true;
     };
     drag("HP",           e.hp,          1.f, 2000.f, "%.0f");
-    drag("Velocita'",    e.moveSpeed,   0.5f,  20.f);
-    drag("Danno Scale",  e.damageScale, 0.1f,   5.f);
+    // moveSpeed: usato solo se l'entità NON ha un profilo AI (il profilo
+    // vince col suo patrol_speed); damageScale: non ancora consumato (KI #25).
+    drag("Velocita' (vince il profilo AI)", e.moveSpeed, 0.5f, 20.f);
+    drag("Danno Scale (non attivo)", e.damageScale, 0.1f, 5.f);
+    ImGui::TextDisabled("(non attivo) = salvato ma non consumato dal runtime — KI #25");
 
     ImGui::Separator();
     ImGui::TextDisabled("AI Profile");

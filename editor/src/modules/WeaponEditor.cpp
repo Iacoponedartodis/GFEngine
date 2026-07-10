@@ -500,7 +500,7 @@ void WeaponEditor::drawMeshTab(float panelW)
         if (browseForMesh(w.meshPath)) { changed = true; reloadPreview(); loadRigJoints(); }
     }
 
-    ImGui::TextDisabled("Mesh proiettile");
+    ImGui::TextDisabled("Mesh proiettile (non attiva: il runtime usa il cubo — KI #25)");
     char pbuf[512]; std::strncpy(pbuf, w.projectileMeshPath.c_str(), sizeof(pbuf)-1);
     ImGui::SetNextItemWidth(slW - 36.f);
     if (ImGui::InputText("##pmeshp", pbuf, sizeof(pbuf)))
@@ -699,7 +699,8 @@ void WeaponEditor::drawStatsTab(float panelW)
     ImGui::Separator();
     ImGui::TextDisabled("Gittata");
     drag("Gittata effettiva", w.effectiveRange, 1.f, 100.f);
-    drag("Gittata minima",    w.minRange,       0.f,  20.f);
+    drag("Gittata minima (non attiva)", w.minRange, 0.f, 20.f);
+    ImGui::TextDisabled("(non attiva) = salvata ma non consumata dal runtime — KI #25");
 
     ImGui::Separator();
     if (changed) m_dirty = true;

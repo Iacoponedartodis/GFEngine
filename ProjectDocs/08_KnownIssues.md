@@ -1,5 +1,79 @@
 # 08 — Known Issues
 
+## Audit codice completo 2026-07-10 (issue #19-#27)
+
+## 19. Ogni build cancella i preset partita dell'utente (HIGH) — RISOLTO 2026-07-10
+- I preset erano salvati in `<exe>/data/presets/match` (MatchSettings.hpp), ma il post-build
+  CMake fa `remove_directory` dell'intera `data/` di output e la ricopia dalla sorgente →
+  ogni ricompilazione distruggeva i preset. Stessa classe di incidente "perdita dati" di
+  ADR-010, su un altro canale.
+- **Fix:** preset spostati in `<exe>/user_presets/match` (fuori da `data/`), con migrazione
+  automatica best-effort dei file legacy al primo caricamento. Da smoke-testare: salvare un
+  preset, ricompilare, verificare che sopravviva.
+
+## 20. Formato preset fragile (HIGH) — RISOLTO 2026-07-10
+- Tre difetti nel vecchio formato: (a) persisteva `map_index` (indice nella lista ordinata:
+  aggiungere/rinominare una mappa cambiava silenziosamente la mappa dei preset — contro lo
+  spirito di ADR-001); (b) parser/writer JSON artigianale a ricerca di sottostringhe, senza
+  escaping (un `"` nel nome corrompeva il file); (c) il loadout (armi/abilità/gadget) non
+  veniva persistito affatto.
+- **Fix:** serializzazione via nlohmann::json (già linkato), i preset salvano `map_id` per id
+  + l'intero loadout (`primary_weapon`, `secondary_weapon`, `abilities[]`, `gadget`);
+  PreMatchMenu risolve id → indici al caricamento. I vecchi file con `map_index` vengono
+  ancora letti (retrocompatibilità un-verso).
+
+## 21. ~~`id` in-file autoritativo nei loader del registry~~ — RISOLTO 2026-07-10
+- Tutti i loader ora usano SOLO il filename stem (ADR-001); il campo `id`/`profile_id`
+  in-file è ignorato. Verificato prima del fix che nessun file in data/ avesse un id
+  divergente dallo stem (zero mismatch) → nessun cambio di chiave effettivo.
+  Smoke `--sim`: registry completo (7 armi, 2+2 unità, 2 mappe), cross-ref risolte.
+
+## 22. ~~Cambiare arma azzera il surriscaldamento~~ — RISOLTO 2026-07-10
+- Fix definitivo 2026-07-10 (28): il membro-copia `weapon` è stato RIMOSSO; l'arma
+  attiva è sempre `weapons[activeWeapon]` (accessor `weapon()`) — lo stato heat vive
+  in un posto solo per costruzione, nessuna sincronizzazione possibile da dimenticare.
+  Smoke manuale: scaldare la primaria, Q-switch avanti/indietro → il calore resta.
+
+## 23. ~~Collider ruotati: movimento/LOS e proiettili non concordano~~ — RISOLTO 2026-07-10
+- `hasCollision` ora fa SAT 2D esatto (XZ, 4 assi) + intervallo Y sui collider ruotati
+  (broad-phase AABB conservativa mantenuta come early-out); `hasLineOfSight` porta il
+  segmento nello spazio locale del box (test esatto, coerente con HitTest OBB dei
+  proiettili). Fast path invariato per ry = 0/90/180. Smoke manuale consigliato alla
+  prima mappa con muri diagonali: scivolare lungo un muro ruotato + sparargli contro.
+
+## 24. ~~Ultimi id di definizione hardcoded: SandboxMode~~ — RISOLTO 2026-07-10
+- Fallback `"B1 Battle Droid"`/`"Clone Trooper"` rimossi: registry vuoto = nessun
+  manichino + log errore (come ConquestMode, ADR-007). Zero id di definizione hardcoded
+  rimasti nei game mode.
+
+## 25. Campi editabili ma non consumati — MITIGATO 2026-07-10 (28)
+- Ora marcati "(non attivo)" nella UI degli editor (Weapon/Balance/Entity) con nota
+  KI #25. Il gap resta finché i campi non vengono consumati; l'aspettativa dell'autore
+  però non viene più tradita in silenzio. Dettaglio originale sotto.
+
+## 25b. (dettaglio originale) Campi editabili nell'editor ma MAI consumati dal runtime
+- `min_range`, `projectile_mesh`, `fov_deg`, `hearing_range`, `reposition_chance`,
+  `damage_scale`, `MapDef.metadata/navmesh/max_tickets/enemy_count/ally_count`,
+  `EnemyDef.texture`, `AbilityDef.passive`. Inoltre `EnemyDef.moveSpeed` è sovrascritto dal
+  `patrol_speed` del profilo AI quando il profilo esiste. Il problema è che l'editor li
+  espone come funzionanti: un designer li tara e non osserva alcun effetto. Minimo: marcare
+  "(non ancora attivo)" nella UI o mantenere questo elenco aggiornato.
+
+## 26. Dati/codice morti che possono creare fallback problematici — RISOLTO IN PARTE 2026-07-10
+- ~~`data/definitions/*.json`~~ eliminati (nessun codice li caricava; verificato con grep).
+  Rimossi anche `data/presets/` e `data/runtime/` vuoti dalla data/ sorgente.
+- ~~Preset armi hardcoded in Weapon.hpp~~: rimossi `makeBlasterPistol/HeavyBlaster/
+  SniperRifle` (inutilizzati). Resta SOLO `makeBlasterRifle` come fallback di ultima
+  istanza per id orfani, documentato come tale nel header.
+- RESTA (scelta): geometria fallback firebase hardcoded in ConquestMode — è il fallback
+  documentato da ADR-004; rimuoverlo richiede una decisione (aggiornare ADR-004).
+- RESTA: `data/versions.json` non referenziato da alcun codice — valutare rimozione.
+
+## 27. ~~Dipendenze CMake non pinnate~~ — RISOLTO 2026-07-10
+- `stb` e ImGui pinnati ai commit ESATTI già in uso in `_deps` (stb 31c1ad3, imgui
+  docking 6029ee3): un configure da zero riproduce la build corrente. Riconfigure +
+  build verificati.
+
 ## 1. ~~Two divergent hitbox systems~~ — RESOLVED 2026-07-04 (ADR-006) + 2026-07-09 (ADR-012)
 - Profile = single source of truth (ADR-006). Il residuo "last save wins" tra HitboxEditor
   ed EntityEditor è chiuso: HitboxEditor RIMOSSO, authoring solo in EntityEditor (ADR-012).

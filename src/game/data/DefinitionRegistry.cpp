@@ -53,7 +53,10 @@ void DefinitionRegistry::loadAbilities(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         AbilityDef a;
-        a.id      = gets(*j, "id", entry.path().stem().string());
+        // ADR-001: id = SOLO filename stem; l'eventuale campo in-file è
+        // ignorato (un id stantio registrava la definizione sotto la chiave
+        // sbagliata rompendo le cross-ref in silenzio — KI #21).
+        a.id      = entry.path().stem().string();
         a.name    = gets(*j, "name", a.id);
         a.type    = gets(*j, "type");
         a.param1  = getf(*j, "param1", 0);
@@ -75,7 +78,7 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         WeaponDef w;
-        w.id                 = gets(*j, "id", entry.path().stem().string());
+        w.id                 = entry.path().stem().string();   // ADR-001 (KI #21)
         w.name               = gets(*j, "name", w.id);
         w.faction            = factionFromString(gets(*j, "faction"));
         w.damage             = getf(*j, "damage", 25);
@@ -125,7 +128,7 @@ void DefinitionRegistry::loadAiProfiles(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         AiProfileDef a;
-        a.id               = gets(*j, "profile_id", entry.path().stem().string());
+        a.id               = entry.path().stem().string();   // ADR-001 (KI #21)
         a.role             = gets(*j, "role", "infantry");
         a.sightRange       = getf(*j, "sight_range", 20);
         a.fovDeg           = getf(*j, "fov_deg", 110);
@@ -150,6 +153,68 @@ void DefinitionRegistry::loadAiProfiles(const std::string& dir)
     }
 }
 
+// Parser CONDIVISO nemici/alleati (Todo A7): stessa struttura EnemyDef,
+// cambiano solo team e i default di fazione/colore/stats. Prima erano due
+// funzioni duplicate al 95% che derivavano a ogni nuovo campo.
+static EnemyDef parseUnitDef(const nlohmann::json& j, const fs::path& path, int team)
+{
+    const bool ally = (team == 1);
+    EnemyDef e;
+    e.id      = path.stem().string();   // ADR-001 (KI #21): SOLO filename stem
+    e.name    = gets(j, "name", e.id);
+    e.faction = factionFromString(gets(j, "faction",
+                                       ally ? "republic" : "separatist"));
+    e.team    = ally ? 1 : geti(j, "team", 2);
+    e.meshPath    = gets(j, "mesh");
+    e.texturePath = gets(j, "texture");
+    e.color       = getColor(j, "color",
+        ally ? std::array<float,3>{0.25f,0.45f,1.0f}
+             : std::array<float,3>{0.70f,0.60f,0.45f});
+    e.meshRotX  = getf(j, "mesh_rot_x", 0.0f);
+    e.meshRotY  = getf(j, "mesh_rot_y", 0.0f);
+    e.meshScale = getf(j, "mesh_scale", 1.0f);
+    if (j.contains("attach_points") && j["attach_points"].is_object())
+    {
+        for (auto& [apName, apVal] : j["attach_points"].items())
+        {
+            if (!apVal.is_array() || apVal.size() < 3) continue;
+            std::array<float,3> pt = {apVal[0].get<float>(),
+                                      apVal[1].get<float>(),
+                                      apVal[2].get<float>()};
+            e.attachPoints[apName] = pt;
+            if (apName == "foot") e.footAttach = pt;
+        }
+    }
+    if (j.contains("weapon_display") && j["weapon_display"].is_object())
+    {
+        auto& wd = j["weapon_display"];
+        e.weaponDisplay.weaponId = gets(wd, "id");
+        e.weaponDisplay.hand     = gets(wd, "hand", "right_hand");
+        e.weaponDisplay.scale    = getf(wd, "scale", 1.0f);
+        if (wd.contains("rot") && wd["rot"].size() >= 3)
+            e.weaponDisplay.rot = {wd["rot"][0].get<float>(), wd["rot"][1].get<float>(), wd["rot"][2].get<float>()};
+        if (wd.contains("offset") && wd["offset"].size() >= 3)
+            e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
+    }
+    e.aiProfileId     = gets(j, "ai_profile");
+    e.hitboxProfileId = gets(j, "hitbox_profile");
+    e.weaponIds       = getStrArray(j, "weapons");
+    e.abilityIds      = getStrArray(j, "abilities");
+    e.bulletColor     = getColor(j, "bullet_color",
+        ally ? std::array<float,3>{0.30f,0.60f,1.0f}
+             : std::array<float,3>{1.0f,0.5f,0.0f});
+    if (j.contains("stats")) {
+        auto& s = j["stats"];
+        e.hp          = getf(s, "hp",         ally ? 60.0f : 80.0f);
+        e.moveSpeed   = getf(s, "move_speed", ally ? 1.8f  : 4.0f);
+        e.damageScale = getf(s, "damage_scale", 1);
+    }
+    // Retrocompatibilità: campo "weapon" singolo
+    if (e.weaponIds.empty() && j.contains("weapon"))
+        e.weaponIds.push_back(j["weapon"].get<std::string>());
+    return e;
+}
+
 void DefinitionRegistry::loadEnemies(const std::string& dir)
 {
     fs::path folder = dir + "/enemies";
@@ -158,54 +223,7 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
     {
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
-        EnemyDef e;
-        e.id              = gets(*j, "id", entry.path().stem().string());
-        e.name            = gets(*j, "name", e.id);
-        e.faction         = factionFromString(gets(*j, "faction", "separatist"));
-        e.team            = geti(*j, "team", 2);
-        e.meshPath        = gets(*j, "mesh");
-        e.texturePath     = gets(*j, "texture");
-        e.color           = getColor(*j, "color", {0.70f,0.60f,0.45f});
-        e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
-        e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
-        e.meshScale       = getf(*j, "mesh_scale",  1.0f);
-        if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
-        {
-            for (auto& [apName, apVal] : (*j)["attach_points"].items())
-            {
-                if (!apVal.is_array() || apVal.size() < 3) continue;
-                std::array<float,3> pt = {apVal[0].get<float>(),
-                                          apVal[1].get<float>(),
-                                          apVal[2].get<float>()};
-                e.attachPoints[apName] = pt;
-                if (apName == "foot") e.footAttach = pt;
-            }
-        }
-        if ((*j).contains("weapon_display") && (*j)["weapon_display"].is_object())
-        {
-            auto& wd = (*j)["weapon_display"];
-            e.weaponDisplay.weaponId = gets(wd, "id");
-            e.weaponDisplay.hand     = gets(wd, "hand", "right_hand");
-            e.weaponDisplay.scale    = getf(wd, "scale", 1.0f);
-            if (wd.contains("rot") && wd["rot"].size() >= 3)
-                e.weaponDisplay.rot = {wd["rot"][0].get<float>(), wd["rot"][1].get<float>(), wd["rot"][2].get<float>()};
-            if (wd.contains("offset") && wd["offset"].size() >= 3)
-                e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
-        }
-        e.aiProfileId     = gets(*j, "ai_profile");
-        e.hitboxProfileId = gets(*j, "hitbox_profile");
-        e.weaponIds       = getStrArray(*j, "weapons");
-        e.abilityIds      = getStrArray(*j, "abilities");
-        e.bulletColor     = getColor(*j, "bullet_color", {1.0f,0.5f,0.0f});
-        if ((*j).contains("stats")) {
-            auto& s = (*j)["stats"];
-            e.hp          = getf(s, "hp", 80);
-            e.moveSpeed   = getf(s, "move_speed", 4);
-            e.damageScale = getf(s, "damage_scale", 1);
-        }
-        // Retrocompatibilità: campo "weapon" singolo
-        if (e.weaponIds.empty() && (*j).contains("weapon"))
-            e.weaponIds.push_back((*j)["weapon"].get<std::string>());
+        EnemyDef e = parseUnitDef(*j, entry.path(), 2);
         std::cout << "[Registry] Enemy: " << e.id
                   << " (weapons:" << e.weaponIds.size()
                   << " abilities:" << e.abilityIds.size() << ")\n";
@@ -222,7 +240,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         MapDef m;
-        m.id           = gets(*j, "id", entry.path().stem().string());
+        m.id           = entry.path().stem().string();   // ADR-001 (KI #21)
         m.name         = gets(*j, "name", m.id);
         m.meshPath     = gets(*j, "mesh");
         m.metadataPath = gets(*j, "metadata");
@@ -372,7 +390,7 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         HitboxProfile p;
-        p.profileId = gets(*j, "profile_id", entry.path().stem().string());
+        p.profileId = entry.path().stem().string();   // ADR-001 (KI #21)
         if ((*j).contains("zones") && (*j)["zones"].is_array())
             for (auto& z : (*j)["zones"])
             {
@@ -395,7 +413,7 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
     }
 }
 
-// Carica alleati da data/allies/ — stessa struttura EnemyDef ma team=1
+// Carica alleati da data/allies/ — stesso parser dei nemici, team=1 (A7)
 void DefinitionRegistry::loadAllies(const std::string& dir)
 {
     fs::path folder = dir + "/allies";
@@ -404,53 +422,7 @@ void DefinitionRegistry::loadAllies(const std::string& dir)
     {
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
-        EnemyDef e;
-        e.id              = gets(*j, "id", entry.path().stem().string());
-        e.name            = gets(*j, "name", e.id);
-        e.faction         = factionFromString(gets(*j, "faction", "republic"));
-        e.team            = 1; // sempre alleati
-        e.meshPath        = gets(*j, "mesh");
-        e.texturePath     = gets(*j, "texture");
-        e.color           = getColor(*j, "color", {0.25f,0.45f,1.0f});
-        e.meshRotX        = getf(*j, "mesh_rot_x", 0.0f);
-        e.meshRotY        = getf(*j, "mesh_rot_y", 0.0f);
-        e.meshScale       = getf(*j, "mesh_scale",  1.0f);
-        if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
-        {
-            for (auto& [apName, apVal] : (*j)["attach_points"].items())
-            {
-                if (!apVal.is_array() || apVal.size() < 3) continue;
-                std::array<float,3> pt = {apVal[0].get<float>(),
-                                          apVal[1].get<float>(),
-                                          apVal[2].get<float>()};
-                e.attachPoints[apName] = pt;
-                if (apName == "foot") e.footAttach = pt;
-            }
-        }
-        if ((*j).contains("weapon_display") && (*j)["weapon_display"].is_object())
-        {
-            auto& wd = (*j)["weapon_display"];
-            e.weaponDisplay.weaponId = gets(wd, "id");
-            e.weaponDisplay.hand     = gets(wd, "hand", "right_hand");
-            e.weaponDisplay.scale    = getf(wd, "scale", 1.0f);
-            if (wd.contains("rot") && wd["rot"].size() >= 3)
-                e.weaponDisplay.rot = {wd["rot"][0].get<float>(), wd["rot"][1].get<float>(), wd["rot"][2].get<float>()};
-            if (wd.contains("offset") && wd["offset"].size() >= 3)
-                e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
-        }
-        e.aiProfileId     = gets(*j, "ai_profile");
-        e.hitboxProfileId = gets(*j, "hitbox_profile");
-        e.weaponIds       = getStrArray(*j, "weapons");
-        e.abilityIds      = getStrArray(*j, "abilities");
-        e.bulletColor     = getColor(*j, "bullet_color", {0.30f,0.60f,1.0f});
-        if ((*j).contains("stats")) {
-            auto& s = (*j)["stats"];
-            e.hp          = getf(s, "hp", 60);
-            e.moveSpeed   = getf(s, "move_speed", 1.8f);
-            e.damageScale = getf(s, "damage_scale", 1);
-        }
-        if (e.weaponIds.empty() && (*j).contains("weapon"))
-            e.weaponIds.push_back((*j)["weapon"].get<std::string>());
+        EnemyDef e = parseUnitDef(*j, entry.path(), 1);
         std::cout << "[Registry] Ally: " << e.id << "\n";
         m_allies[e.id] = std::move(e);
     }
@@ -465,7 +437,7 @@ void DefinitionRegistry::loadPlayerDefs(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         PlayerDef p;
-        p.id          = gets(*j, "id", entry.path().stem().string());
+        p.id          = entry.path().stem().string();   // ADR-001 (KI #21)
         p.name        = gets(*j, "name", p.id);
         p.description = gets(*j, "description");
         if ((*j).contains("stats")) {

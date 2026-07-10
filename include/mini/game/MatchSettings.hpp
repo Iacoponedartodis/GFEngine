@@ -1,20 +1,14 @@
 #pragma once
 #include <SDL2/SDL.h>
 
-// NOMINMAX impedisce a windows.h di definire le macro min/max
-// che confliggono con std::min/std::max nel resto del codice
-#ifdef _WIN32
-  #define NOMINMAX
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-#endif
+#include <nlohmann/json.hpp>
 
 #include <string>
 #include <algorithm>
 #include <vector>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <cstdio>
 
 namespace mini
 {
@@ -93,32 +87,35 @@ struct UserPresets
         return &list[slot];
     }
 
-    // ── Persistenza JSON in data/presets/match/ ──────────────────────────
-    // Percorso basato sull'exe (SDL_GetBasePath) -- funziona da qualsiasi CWD
-    static std::string getPresetDir()
+    // ── Persistenza JSON in <exe>/user_presets/match/ ────────────────────
+    // FUORI da data/: il post-build CMake azzera e ricopia la data/ di
+    // output a ogni build (KI #19 — i preset in data/ venivano distrutti).
+    // Percorso basato sull'exe (SDL_GetBasePath) -- funziona da qualsiasi CWD.
+    static std::string exeDir()
     {
         char* base = SDL_GetBasePath();
         std::string dir = (base ? base : "./");
         SDL_free(base);
-        return dir + "data/presets/match";
+        return dir;
+    }
+
+    static std::string getPresetDir()
+    { return exeDir() + "user_presets/match"; }
+
+    // Vecchia posizione (pre KI #19), letta solo in migrazione.
+    static std::string legacySlotPath(int slot)
+    {
+        return exeDir() + "data/presets/match/slot_"
+             + std::to_string(slot) + ".json";
     }
 
     static void ensureDir()
     {
-        std::string pd = getPresetDir();
-        // risale alla cartella dell'exe per creare data/presets/match
-        // SDL_GetBasePath restituisce es: C:/path/to/Debug/
-#ifdef _WIN32
-        std::string exeDir = pd.substr(0, pd.size() - std::string("data/presets/match").size());
-        CreateDirectoryA((exeDir + "data").c_str(),           nullptr);
-        CreateDirectoryA((exeDir + "data/presets").c_str(),   nullptr);
-        CreateDirectoryA(pd.c_str(),                           nullptr);
-#else
-        std::string exeDir = pd.substr(0, pd.size() - std::string("data/presets/match").size());
-        ::mkdir((exeDir + "data").c_str(),          0755);
-        ::mkdir((exeDir + "data/presets").c_str(),  0755);
-        ::mkdir(pd.c_str(),                          0755);
-#endif
+        std::error_code ec;
+        std::filesystem::create_directories(getPresetDir(), ec);
+        if (ec)
+            std::cerr << "[Presets] Impossibile creare " << getPresetDir()
+                      << ": " << ec.message() << "\n";
     }
 
     static std::string slotPath(int slot)
@@ -131,31 +128,41 @@ struct UserPresets
         ensureDir();
         for (int i = 0; i < MAX; ++i)
         {
-            std::string path = slotPath(i);
+            const std::string path = slotPath(i);
             if (list[i].presetName.empty())
             {
-                std::remove(path.c_str());
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
                 continue;
             }
+            nlohmann::json j;
+            const MatchSettings& s = list[i];
+            j["name"]             = s.presetName;
+            j["team1_tickets"]    = s.team1Tickets;
+            j["team2_tickets"]    = s.team2Tickets;
+            j["team1_ai_count"]   = s.team1AiCount;
+            j["team2_ai_count"]   = s.team2AiCount;
+            j["player_hp"]        = s.playerHp;
+            j["respawn_delay"]    = s.respawnDelay;
+            j["mode_index"]       = s.modeIndex;
+            // Mappa per ID (KI #20): l'indice nella lista ordinata cambiava
+            // significato aggiungendo/rinominando una mappa.
+            j["map_id"]           = s.mapId;
+            // Loadout (KI #20: prima non era persistito affatto)
+            j["primary_weapon"]   = s.primaryWeaponId;
+            j["secondary_weapon"] = s.secondaryWeaponId;
+            j["abilities"]        = s.abilityIds;
+            j["gadget"]           = s.gadgetId;
+
             std::ofstream f(path);
             if (!f.is_open())
             {
                 std::cerr << "[Presets] Impossibile scrivere: " << path << "\n";
                 continue;
             }
-            f << "{\n"
-              << "  \"name\": \"" << list[i].presetName << "\",\n"
-              << "  \"team1_tickets\": " << list[i].team1Tickets << ",\n"
-              << "  \"team2_tickets\": " << list[i].team2Tickets << ",\n"
-              << "  \"team1_ai_count\": " << list[i].team1AiCount << ",\n"
-              << "  \"team2_ai_count\": " << list[i].team2AiCount << ",\n"
-              << "  \"player_hp\": " << list[i].playerHp << ",\n"
-              << "  \"respawn_delay\": " << list[i].respawnDelay << ",\n"
-              << "  \"mode_index\": " << list[i].modeIndex << ",\n"
-              << "  \"map_index\": " << list[i].mapIndex << "\n"
-              << "}\n";
+            f << j.dump(2) << "\n";
             std::cout << "[Presets] Salvato slot " << i << ": "
-                      << list[i].presetName << "\n";
+                      << s.presetName << "\n";
         }
     }
 
@@ -164,65 +171,61 @@ struct UserPresets
         list.resize(MAX);
         ensureDir();
 
-        // Helper: estrae valore da JSON minimale
-        auto val = [](const std::string& content, const std::string& key) -> std::string
-        {
-            auto pos = content.find("\"" + key + "\"");
-            if (pos == std::string::npos) return "";
-            pos = content.find(':', pos);
-            if (pos == std::string::npos) return "";
-            ++pos;
-            while (pos < content.size() &&
-                   (content[pos] == ' ' || content[pos] == '\t')) ++pos;
-            if (pos < content.size() && content[pos] == '"')
-            {
-                ++pos;
-                auto end = content.find('"', pos);
-                return content.substr(pos, end - pos);
-            }
-            auto end = pos;
-            while (end < content.size() &&
-                   content[end] != ',' && content[end] != '\n' &&
-                   content[end] != '}') ++end;
-            return content.substr(pos, end - pos);
-        };
-
         int loaded = 0;
         for (int i = 0; i < MAX; ++i)
         {
+            list[i] = {};
+
+            // Nuova posizione; se assente, migrazione dalla legacy in data/
             std::ifstream f(slotPath(i));
-            if (!f.is_open()) { list[i] = {}; continue; }
+            if (!f.is_open()) f.open(legacySlotPath(i));
+            if (!f.is_open()) continue;
 
-            std::string content((std::istreambuf_iterator<char>(f)),
-                                 std::istreambuf_iterator<char>());
-
-            list[i].presetName = val(content, "name");
-            if (list[i].presetName.empty()) { list[i] = {}; continue; }
-
-            try
+            nlohmann::json j;
+            try { f >> j; }
+            catch (const std::exception& e)
             {
-                list[i].team1Tickets = std::stoi(val(content, "team1_tickets"));
-                list[i].team2Tickets = std::stoi(val(content, "team2_tickets"));
-                list[i].team1AiCount = std::stoi(val(content, "team1_ai_count"));
-                list[i].team2AiCount = std::stoi(val(content, "team2_ai_count"));
-                list[i].playerHp     = std::stof(val(content, "player_hp"));
-                list[i].respawnDelay = std::stof(val(content, "respawn_delay"));
-                // Modalità (Conquista/Assalto/Difesa) — preset pre-esistenti
-                // senza il campo restano Conquista (0).
-                const std::string mi = val(content, "mode_index");
-                list[i].modeIndex = mi.empty() ? 0
-                    : std::clamp(std::stoi(mi), 0, MATCH_MODE_COUNT - 1);
-                // Mappa: indice nella lista ordinata del registry; il clamp
-                // al range reale avviene in PreMatchMenu::setMapList.
-                const std::string mp = val(content, "map_index");
-                list[i].mapIndex = mp.empty() ? 0 : std::max(0, std::stoi(mp));
+                std::cerr << "[Presets] Slot " << i << " corrotto: "
+                          << e.what() << "\n";
+                continue;
             }
-            catch (...) { list[i] = {}; continue; }
+
+            MatchSettings& s = list[i];
+            s.presetName = j.value("name", std::string());
+            if (s.presetName.empty()) { s = {}; continue; }
+
+            s.team1Tickets = j.value("team1_tickets", s.team1Tickets);
+            s.team2Tickets = j.value("team2_tickets", s.team2Tickets);
+            s.team1AiCount = j.value("team1_ai_count", s.team1AiCount);
+            s.team2AiCount = j.value("team2_ai_count", s.team2AiCount);
+            s.playerHp     = j.value("player_hp", s.playerHp);
+            s.respawnDelay = j.value("respawn_delay", s.respawnDelay);
+            s.modeIndex    = std::clamp(j.value("mode_index", 0),
+                                        0, MATCH_MODE_COUNT - 1);
+
+            // Mappa: preferisci l'id; i file legacy hanno solo map_index
+            // (risolto/clampato da PreMatchMenu al caricamento del preset).
+            s.mapId    = j.value("map_id", std::string());
+            s.mapIndex = std::max(0, j.value("map_index", 0));
+
+            s.primaryWeaponId   = j.value("primary_weapon", std::string());
+            s.secondaryWeaponId = j.value("secondary_weapon", std::string());
+            s.gadgetId          = j.value("gadget", std::string());
+            s.abilityIds.clear();
+            if (j.contains("abilities") && j["abilities"].is_array())
+                for (const auto& a : j["abilities"])
+                    if (a.is_string()) s.abilityIds.push_back(a.get<std::string>());
+
             ++loaded;
         }
         if (loaded > 0)
+        {
             std::cout << "[Presets] Caricati " << loaded << " preset da "
                       << getPresetDir() << "\n";
+            // Persisti subito nella nuova posizione (completa la migrazione
+            // dalla legacy data/, che la prossima build cancellerà comunque).
+            saveToFile();
+        }
     }
 };
 

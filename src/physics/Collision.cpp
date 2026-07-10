@@ -23,6 +23,44 @@ AABB computeWorldAABB(const TransformComponent& t, const ColliderComponent& c)
     };
 }
 
+// Test ESATTO query-box (allineato agli assi) vs collider ruotato attorno
+// a Y: SAT 2D sul piano XZ (assi mondo + assi locali del collider) più
+// l'intervallo Y. Prima il collider ruotato veniva gonfiato nel suo AABB
+// avvolgente: il movimento urtava "aria" agli angoli dei muri diagonali
+// mentre i proiettili (test OBB vero) morivano sul bordo reale (KI #23).
+static bool boxIntersectsRotatedCollider(const glm::vec3& pos, const glm::vec3& half,
+                                         const TransformComponent& t,
+                                         const ColliderComponent& c)
+{
+    // Intervallo Y (la rotazione è solo attorno a Y)
+    if (pos.y - half.y >= t.y + c.hy || pos.y + half.y <= t.y - c.hy)
+        return false;
+
+    const float ry = t.ry * PI / 180.0f;
+    const float co = std::cos(ry), si = std::sin(ry);
+    // Assi locali del collider nel piano XZ (convenzione glm rotate-Y,
+    // identica a toModelMatrix/HitTest): localX -> (co, -si), localZ -> (si, co)
+    const float ax[2] = {co, -si};
+    const float az[2] = {si,  co};
+    const float dx = t.x - pos.x, dz = t.z - pos.z;
+
+    // 4 assi di separazione: X mondo, Z mondo, X locale, Z locale
+    const float axesX[4] = {1, 0, ax[0], az[0]};
+    const float axesZ[4] = {0, 1, ax[1], az[1]};
+    for (int i = 0; i < 4; ++i)
+    {
+        const float aX = axesX[i], aZ = axesZ[i];
+        // proiezione query box (allineato al mondo)
+        const float rq = half.x * std::abs(aX) + half.z * std::abs(aZ);
+        // proiezione collider (assi locali ax/az con half hx/hz)
+        const float rc = c.hx * std::abs(aX * ax[0] + aZ * ax[1])
+                       + c.hz * std::abs(aX * az[0] + aZ * az[1]);
+        const float dist = std::abs(aX * dx + aZ * dz);
+        if (dist >= rq + rc) return false;   // asse separatore trovato
+    }
+    return true;
+}
+
 bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
                   EntityId excludeId)
 {
@@ -36,10 +74,20 @@ bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
         const auto* t   = world.getTransform(id);
         if (!col || !t) continue;
 
+        // Broad test sempre sull'AABB avvolgente (conservativo, veloce)
         const AABB b = computeWorldAABB(*t, *col);
-        if (pn.x < b.max.x && px.x > b.min.x &&
-            pn.y < b.max.y && px.y > b.min.y &&
-            pn.z < b.max.z && px.z > b.min.z)
+        if (pn.x >= b.max.x || px.x <= b.min.x ||
+            pn.y >= b.max.y || px.y <= b.min.y ||
+            pn.z >= b.max.z || px.z <= b.min.z)
+            continue;
+
+        // Collider non ruotato: il broad test è già esatto
+        const float ryMod = std::fmod(std::abs(t->ry), 180.0f);
+        if (ryMod < 0.01f || std::abs(ryMod - 90.0f) < 0.01f
+            || std::abs(ryMod - 180.0f) < 0.01f)
+            return true;
+
+        if (boxIntersectsRotatedCollider(pos, half, *t, *col))
             return true;
     }
     return false;
@@ -160,15 +208,39 @@ bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world)
         const auto* t   = world.getTransform(id);
         if (!col || !t) continue;
 
-        const AABB b = computeWorldAABB(*t, *col);
+        // Collider ruotato: porta il segmento nello spazio LOCALE del box
+        // (rotazione inversa attorno al centro) e testa contro l'AABB
+        // locale — test esatto, coerente coi proiettili/hitbox (KI #23).
+        const float ryMod = std::fmod(std::abs(t->ry), 180.0f);
+        const bool rotated = !(ryMod < 0.01f || std::abs(ryMod - 180.0f) < 0.01f);
+
+        glm::vec3 o = from, d = dir;
+        glm::vec3 bMin, bMax;
+        if (rotated)
+        {
+            const float ry = t->ry * PI / 180.0f;
+            const float co = std::cos(ry), si = std::sin(ry);
+            // Inversa della rotazione glm attorno a Y (w = R * l):
+            // l.x = co*w.x - si*w.z ; l.z = si*w.x + co*w.z
+            const float wx = from.x - t->x, wz = from.z - t->z;
+            o = { co * wx - si * wz, from.y - t->y, si * wx + co * wz };
+            d = { co * dir.x - si * dir.z, dir.y, si * dir.x + co * dir.z };
+            bMin = {-col->hx, -col->hy, -col->hz};
+            bMax = { col->hx,  col->hy,  col->hz};
+        }
+        else
+        {
+            const AABB b = computeWorldAABB(*t, *col);
+            bMin = b.min; bMax = b.max;
+        }
 
         // Ignora se l'origine è dentro il box (AI a contatto col muro)
-        if (from.x > b.min.x && from.x < b.max.x &&
-            from.y > b.min.y && from.y < b.max.y &&
-            from.z > b.min.z && from.z < b.max.z)
+        if (o.x > bMin.x && o.x < bMax.x &&
+            o.y > bMin.y && o.y < bMax.y &&
+            o.z > bMin.z && o.z < bMax.z)
             continue;
 
-        if (rayBlockedByAABB(from, dir, b.min, b.max))
+        if (rayBlockedByAABB(o, d, bMin, bMax))
             return false;
     }
     return true;

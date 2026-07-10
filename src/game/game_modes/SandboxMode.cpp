@@ -68,13 +68,18 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Manichini nemici sullo spawn team2 ────────────────────────────────
     // Almeno un manichino per OGNI definizione registrata (round-robin):
     // così ogni nemico/alleato autorato è subito testabile in sandbox.
+    // Nessun id hardcoded (ADR-001/007, KI #24): registry vuoto = nessuno
+    // spawn + log errore, come in ConquestMode.
     std::vector<std::string> enemyIds;
     if (registry)
         for (auto& [id, def] : registry->enemies()) enemyIds.push_back(id);
     std::sort(enemyIds.begin(), enemyIds.end());
-    if (enemyIds.empty()) enemyIds.push_back("B1 Battle Droid");
+    if (enemyIds.empty())
+        std::cerr << "[Sandbox] ERRORE: nessun nemico in data/enemies/ — "
+                     "nessun manichino nemico.\n";
 
-    const int nEnemies = std::max(enemyCount, (int)enemyIds.size());
+    const int nEnemies = enemyIds.empty() ? 0
+                       : std::max(enemyCount, (int)enemyIds.size());
     for (int i = 0; i < nEnemies; ++i)
     {
         const float off = ((float)i - (float)(nEnemies - 1) * 0.5f) * 3.0f;
@@ -87,10 +92,13 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     if (registry)
         for (auto& [id, def] : registry->allies()) allyIds.push_back(id);
     std::sort(allyIds.begin(), allyIds.end());
-    if (allyIds.empty()) allyIds.push_back("Clone Trooper");
+    if (allyIds.empty())
+        std::cerr << "[Sandbox] ERRORE: nessun alleato in data/allies/ — "
+                     "nessun manichino alleato.\n";
 
     const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
-    const int nAllies = std::max(allyCount, (int)allyIds.size());
+    const int nAllies = allyIds.empty() ? 0
+                      : std::max(allyCount, (int)allyIds.size());
     for (int i = 0; i < nAllies; ++i)
     {
         const float off = ((float)i - (float)(nAllies - 1) * 0.5f) * 3.0f;

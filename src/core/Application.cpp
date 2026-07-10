@@ -270,7 +270,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
 
     // ── Player controller ────────────────────────────────────────────
     PlayerController player;
-    player.weapon = makeBlasterRifle();
+    player.weapons[0] = makeBlasterRifle();
 
     // ── Stato ────────────────────────────────────────────────────────
     GameState state     = sandbox        ? GameState::Playing
@@ -324,7 +324,6 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         player.weapons[1] = wDef2 ? weaponFromDef(*wDef2) : Weapon{};
 
         player.activeWeapon = 0;
-        player.weapon = player.weapons[0];
 
         // Reset dello stato sandbox/osservatore: una partita vera avviata
         // dopo una simulazione NON deve ereditare volo libero o menu aperto.
@@ -336,7 +335,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         state = GameState::Playing;
         stateChanged = true;
         window.setMouseCaptured(true);
-        std::cout << "[Game] Partita iniziata — " << player.weapon.name << std::endl;
+        std::cout << "[Game] Partita iniziata — " << player.weapon().name << std::endl;
     };
 
     // ── Simulazione AI-vs-AI (17_SandboxTools): condivisa tra il menu
@@ -421,12 +420,11 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         player.weapons[0] = wDef ? weaponFromDef(*wDef) : makeBlasterRifle();
         player.weapons[1] = Weapon{};
         player.activeWeapon = 0;
-        player.weapon = player.weapons[0];
 
         initWorld();
         window.setMouseCaptured(true);
         hud.toast("Sandbox: TAB menu prova, P partita (PreMatch), L log eventi", 6.0f);
-        std::cout << "[Game] Sandbox avviata — " << player.weapon.name << std::endl;
+        std::cout << "[Game] Sandbox avviata — " << player.weapon().name << std::endl;
 
         // --sim: entra direttamente nella simulazione AI-vs-AI (test/debug)
         if (autoSim) startSimulation();
@@ -495,8 +493,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     js["camera"]["forward"] = {cf.x, cf.y, cf.z};
                     js["player"]["hp"]      = player.prevHp;
                     js["player"]["dead"]    = player.isDead;
-                    js["player"]["weapon"]  = player.weapon.name;
-                    js["player"]["heat"]    = player.weapon.heat;
+                    js["player"]["weapon"]  = player.weapon().name;
+                    js["player"]["heat"]    = player.weapon().heat;
                     js["tickets"]["team1"]  = mode->getTeam1Tickets();
                     js["tickets"]["team2"]  = mode->getTeam2Tickets();
                     js["mouse_captured"]    = window.isMouseCaptured();
@@ -574,10 +572,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                             const int slot = sbMenu.weaponSlot();
                             player.weapons[slot] = weaponFromDef(*wd);
                             if (slot == 0 || player.activeWeapon == slot)
-                            {
                                 player.activeWeapon = slot;
-                                player.weapon       = player.weapons[slot];
-                            }
                             const char* slotName = slot == 0 ? "primaria" : "secondaria";
                             hud.toast(std::string("Arma ") + slotName + ": " + wd->name);
                             hud.pushFeed(std::string("ARMA ") + slotName + ": " + wd->name);
@@ -722,7 +717,6 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                             {
                                 player.weapons[0]   = weaponFromDef(*wd);
                                 player.activeWeapon = 0;
-                                player.weapon       = player.weapons[0];
                                 hud.toast("Arma " + std::to_string(idx + 1) + ": "
                                           + wd->name);
                                 telemetry::logInfo("sandbox: arma cambiata -> "
@@ -785,9 +779,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             for (auto& msg : world.eventFeed) hud.pushFeed(msg);
             world.eventFeed.clear();
 
-            player.weapon.update(elapsed);
-            if (player.weapon.overheated && !wasOverheated) audio.playOverheat();
-            wasOverheated = player.weapon.overheated;
+            player.weapon().update(elapsed);
+            if (player.weapon().overheated && !wasOverheated) audio.playOverheat();
+            wasOverheated = player.weapon().overheated;
 
             // In osservatore NIENTE respawn: updateRespawn teletrasporterebbe
             // la camera allo spawn e ricreerebbe il player a team 1 (bug:
@@ -1033,9 +1027,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             // ── Viewmodel arma (Todo #11): arma visibile in prima persona.
             //    Non in osservatore, non alla guida, non in TPS. ───────────
             if (!observerFly && drivenVehicle == 0 && !player.thirdPerson
-                && !player.isDead && !player.weapon.meshPath.empty())
+                && !player.isDead && !player.weapon().meshPath.empty())
             {
-                auto itW = meshCache.find(player.weapon.meshPath);
+                auto itW = meshCache.find(player.weapon().meshPath);
                 if (itW != meshCache.end() && itW->second)
                 {
                     const glm::vec3 f = cam.getForward();
@@ -1053,10 +1047,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     const glm::mat4 model =
                         glm::translate(glm::mat4(1.0f), p) * basis
                         * glm::rotate(glm::mat4(1.0f),
-                                      glm::radians(90.0f + player.weapon.meshRotY),
+                                      glm::radians(90.0f + player.weapon().meshRotY),
                                       glm::vec3(0, 1, 0))
                         * glm::scale(glm::mat4(1.0f),
-                                     glm::vec3(player.weapon.meshScale));
+                                     glm::vec3(player.weapon().meshScale));
                     renderer.drawMesh(*itW->second, nullptr, model,
                                       {0.75f, 0.78f, 0.85f});
                 }
@@ -1086,7 +1080,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
             }
             hud.render(player.prevHp, currentSettings.playerHp, (int)state,
-                       player.weapon.heat, player.weapon.overheated, player.weapon.name.c_str(),
+                       player.weapon().heat, player.weapon().overheated, player.weapon().name.c_str(),
                        mode->getTeam1Tickets(), mode->getTeam2Tickets(),
                        aliveAllies, aliveEnemies);
 

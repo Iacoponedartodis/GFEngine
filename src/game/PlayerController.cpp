@@ -40,15 +40,15 @@ void PlayerController::reset(EntityId e, float hp, const glm::vec3& spawnPos, Ca
     prevHp       = hp;
     isDead       = false;
     respawnTimer = -1.0f;
-    weapon.reset();
 
     isSprinting  = false;
     isCrouching  = false;
     isAiming     = false;
     isRolling    = false;
     rollTimer    = 0.0f;
-    activeWeapon = 0;
-    weapon       = weapons[0];   // ripristina primaria
+    activeWeapon = 0;            // riparte dalla primaria
+    weapons[0].reset();
+    weapons[1].reset();
 
     tpsPlayerPos = spawnPos;
     tpsYaw       = cam.getYaw();
@@ -129,12 +129,10 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
     if (input.isPressed(Action::SwitchWeapon))
     {
         // passa all'altro slot solo se ha un'arma caricata (nome non vuoto)
+        // (weapon() segue activeWeapon: lo stato heat resta nello slot, KI #22)
         int other = activeWeapon == 0 ? 1 : 0;
         if (!weapons[other].name.empty())
-        {
             activeWeapon = other;
-            weapon = weapons[activeWeapon];
-        }
     }
 
     // ── Crouch (toggle) ───────────────────────────────────────────────────────
@@ -353,7 +351,8 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
     if (isDead || !mouseCaptured) return false;
     if (!input.isDown(Action::Shoot)) return false;
     if (isRolling) return false;      // non si spara durante il roll
-    if (!weapon.tryFire()) return false;
+    Weapon& w = weapon();
+    if (!w.tryFire()) return false;
 
     audio.playShoot();
 
@@ -373,20 +372,20 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
     // ── Dispersione dallo stato (R1): i 5 spread del WeaponDef, prima
     //    autorabili nell'editor ma mai consumati, ora contano davvero.
     {
-        float spread = weapon.baseSpread;
+        float spread = w.baseSpread;
         const bool moving = input.isDown(Action::MoveForward)
                          || input.isDown(Action::MoveBack)
                          || input.isDown(Action::MoveLeft)
                          || input.isDown(Action::MoveRight);
-        if (!onGround)         spread = weapon.jumpSpread;
-        else if (isSprinting)  spread = weapon.sprintSpread;
-        else if (moving)       spread = weapon.moveSpread;
+        if (!onGround)         spread = w.jumpSpread;
+        else if (isSprinting)  spread = w.sprintSpread;
+        else if (moving)       spread = w.moveSpread;
 
         // Mira (tasto destro): da fermi si scende all'adsSpread pieno;
         // in movimento/aria la mira riduce comunque la dispersione.
         if (input.isDown(Action::Aim))
             spread = (onGround && !isSprinting && !moving)
-                   ? weapon.adsSpread
+                   ? w.adsSpread
                    : spread * 0.4f;
 
         if (spread > 0.0f)
@@ -407,26 +406,26 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
 
     // ── Gittata (R1): oltre ~2x l'effective_range il colpo si esaurisce
     //    (cap sul lifetime; il falloff del danno arriverà più avanti).
-    float life = weapon.bulletLifetime;
-    if (weapon.effectiveRange > 0.0f && weapon.bulletSpeed > 0.1f)
+    float life = w.bulletLifetime;
+    if (w.effectiveRange > 0.0f && w.bulletSpeed > 0.1f)
         life = std::min(life, config::WEAPON_RANGE_GRACE
-                              * weapon.effectiveRange / weapon.bulletSpeed);
+                              * w.effectiveRange / w.bulletSpeed);
 
     EntityId b = world.createEntity();
     world.addTransform(b, TransformComponent{
         .x = org.x, .y = org.y, .z = org.z,
-        .sx = weapon.bulletScale, .sy = weapon.bulletScale, .sz = weapon.bulletScale
+        .sx = w.bulletScale, .sy = w.bulletScale, .sz = w.bulletScale
     });
     world.addVelocity(b, {
-        fwd.x * weapon.bulletSpeed,
-        fwd.y * weapon.bulletSpeed,
-        fwd.z * weapon.bulletSpeed
+        fwd.x * w.bulletSpeed,
+        fwd.y * w.bulletSpeed,
+        fwd.z * w.bulletSpeed
     });
     world.addTeam(b, {1});
-    world.addBullet(b, {weapon.bulletDamage, life, 1, /*fromPlayer=*/true});
+    world.addBullet(b, {w.bulletDamage, life, 1, /*fromPlayer=*/true});
     if (bulletMesh)
         world.addMeshRenderer(b, {bulletMesh, nullptr,
-                                   weapon.bulletR, weapon.bulletG, weapon.bulletB});
+                                   w.bulletR, w.bulletG, w.bulletB});
     return true;
 }
 

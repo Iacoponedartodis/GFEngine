@@ -304,7 +304,8 @@ void BalanceEditor::drawWeaponsTab()
     ImGui::Separator();
     ImGui::Text("Gittata");
     ImGui::DragFloat("Range effettivo",  &edit.effectiveRange, 0.5f, 1.0f, 200.0f, "%.1f");
-    ImGui::DragFloat("Range minimo",     &edit.minRange,       0.1f, 0.0f,  20.0f, "%.1f");
+    ImGui::DragFloat("Range minimo (non attivo)", &edit.minRange, 0.1f, 0.0f, 20.0f, "%.1f");
+    ImGui::TextDisabled("(non attivo) = salvato ma non ancora consumato dal runtime — KI #25");
 
     ImGui::Separator();
     if (ImGui::CollapsingHeader("Precisione (spread in gradi)"))
@@ -395,9 +396,10 @@ void BalanceEditor::drawAITab()
 
     if (ImGui::CollapsingHeader("Percezione", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("Vista (range)",   &edit.sightRange,   0.5f,  1.0f, 100.0f, "%.1f");
-        ImGui::DragFloat("Campo visivo°",   &edit.fovDeg,       1.0f, 10.0f, 360.0f, "%.0f");
-        ImGui::DragFloat("Udito (range)",   &edit.hearingRange, 0.5f,  0.0f,  50.0f, "%.1f");
+        ImGui::DragFloat("Campo visivo° (non attivo)", &edit.fovDeg, 1.0f, 10.0f, 360.0f, "%.0f");
+        ImGui::DragFloat("Udito (non attivo)", &edit.hearingRange, 0.5f, 0.0f, 50.0f, "%.1f");
         ImGui::DragFloat("Reazione (sec)",  &edit.reactionTime, 0.01f, 0.0f,   3.0f, "%.2f");
+        ImGui::TextDisabled("(non attivo) = salvato ma non ancora consumato dal runtime — KI #25");
     }
     if (ImGui::CollapsingHeader("Comportamento", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Aggressività",  &edit.aggression,   0.0f, 1.0f);
@@ -405,7 +407,7 @@ void BalanceEditor::drawAITab()
         ImGui::SliderFloat("Pref. copertura",&edit.coverPreference,0.0f, 1.0f);
         ImGui::SliderFloat("HP ritiro",     &edit.retreatHpThresh,0.0f, 1.0f);
         ImGui::SliderFloat("Fiancheggia",   &edit.flankChance,  0.0f, 1.0f);
-        ImGui::SliderFloat("Riposiziona",   &edit.repositionChance,0.0f, 1.0f);
+        ImGui::SliderFloat("Riposiziona (non attivo)", &edit.repositionChance, 0.0f, 1.0f);
     }
     if (ImGui::CollapsingHeader("Copertura e fuoco")) {
         ImGui::DragFloat("Peek min (s)",    &edit.peekDurationMin, 0.05f,0.0f, 5.0f, "%.2f");

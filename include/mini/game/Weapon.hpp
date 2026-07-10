@@ -108,7 +108,11 @@ struct Weapon
     }
 };
 
-// ── Preset armi ──────────────────────────────────────────────────────────
+// ── Fallback di ULTIMA istanza ───────────────────────────────────────────
+// Usato solo quando l'arma richiesta non esiste nel registry (id orfano).
+// NON è un'arma di gioco: le armi vere vivono in data/weapons/ (ADR-001).
+// I preset gemelli (pistol/heavy/sniper) sono stati rimossi (KI #26):
+// duplicavano i JSON e mascheravano id mancanti con stats stantie.
 
 inline Weapon makeBlasterRifle()
 {
@@ -118,39 +122,6 @@ inline Weapon makeBlasterRifle()
         .bulletLifetime = 3.0f, .bulletScale = 0.12f,
         .bulletR = 0.3f, .bulletG = 0.65f, .bulletB = 1.0f,
         .heatPerShot = 0.12f, .cooldownRate = 0.30f, .overheatPenalty = 2.0f
-    };
-}
-
-inline Weapon makeBlasterPistol()
-{
-    return Weapon{
-        .name = "DC-17 Pistol",
-        .fireRate = 6.0f, .bulletSpeed = 20.0f, .bulletDamage = 17.0f,
-        .bulletLifetime = 2.5f, .bulletScale = 0.08f,
-        .bulletR = 0.3f, .bulletG = 0.65f, .bulletB = 1.0f,
-        .heatPerShot = 0.10f, .cooldownRate = 0.45f, .overheatPenalty = 1.2f
-    };
-}
-
-inline Weapon makeHeavyBlaster()
-{
-    return Weapon{
-        .name = "Z-6 Rotary",
-        .fireRate = 11.0f, .bulletSpeed = 20.0f, .bulletDamage = 13.0f,
-        .bulletLifetime = 2.0f, .bulletScale = 0.09f,
-        .bulletR = 0.3f, .bulletG = 0.65f, .bulletB = 1.0f,
-        .heatPerShot = 0.03f, .cooldownRate = 0.20f, .overheatPenalty = 3.0f
-    };
-}
-
-inline Weapon makeSniperRifle()
-{
-    return Weapon{
-        .name = "DC-15x Sniper",
-        .fireRate = 1.0f, .bulletSpeed = 35.0f, .bulletDamage = 70.0f,
-        .bulletLifetime = 4.0f, .bulletScale = 0.06f,
-        .bulletR = 0.2f, .bulletG = 0.5f, .bulletB = 1.0f,
-        .heatPerShot = 0.30f, .cooldownRate = 0.25f, .overheatPenalty = 2.5f
     };
 }
 

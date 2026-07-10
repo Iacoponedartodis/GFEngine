@@ -93,6 +93,46 @@ void PreMatchMenu::syncLoadoutToSettings()
         m_settings.gadgetId.clear();
 }
 
+// Preset caricato → settings correnti, risolvendo gli ID persistiti (mappa e
+// loadout, KI #20) negli indici usati dalla UI. I preset legacy senza map_id
+// mantengono il vecchio map_index (clampato).
+void PreMatchMenu::applyPreset(const MatchSettings& p)
+{
+    m_settings = p;
+
+    // Mappa: per id se presente, altrimenti indice legacy clampato
+    if (!p.mapId.empty())
+    {
+        m_settings.mapIndex = 0;
+        for (int i = 0; i < (int)m_mapList.size(); ++i)
+            if (m_mapList[i].id == p.mapId) { m_settings.mapIndex = i; break; }
+    }
+    if (m_settings.mapIndex >= (int)m_mapList.size()) m_settings.mapIndex = 0;
+
+    // Arma primaria (indice diretto nella lista)
+    if (!p.primaryWeaponId.empty())
+        for (int i = 0; i < (int)m_weaponList.size(); ++i)
+            if (m_weaponList[i].id == p.primaryWeaponId) { m_weaponIdx = i; break; }
+
+    // Arma secondaria (0 = nessuna, 1..N = lista)
+    m_weapon2Idx = 0;
+    if (!p.secondaryWeaponId.empty())
+        for (int i = 0; i < (int)m_weaponList.size(); ++i)
+            if (m_weaponList[i].id == p.secondaryWeaponId) { m_weapon2Idx = i + 1; break; }
+
+    // Abilità e gadget (0 = nessuna, 1..N = lista)
+    m_abilityIdx[0] = m_abilityIdx[1] = 0;
+    for (int s = 0; s < 2 && s < (int)p.abilityIds.size(); ++s)
+        for (int i = 0; i < (int)m_abilityList.size(); ++i)
+            if (m_abilityList[i].id == p.abilityIds[s]) { m_abilityIdx[s] = i + 1; break; }
+    m_gadgetIdx = 0;
+    if (!p.gadgetId.empty())
+        for (int i = 0; i < (int)m_abilityList.size(); ++i)
+            if (m_abilityList[i].id == p.gadgetId) { m_gadgetIdx = i + 1; break; }
+
+    buildRows();
+}
+
 void PreMatchMenu::buildRows()
 {
     m_rows.clear();
@@ -263,6 +303,9 @@ PreMatchMenu::Result PreMatchMenu::handleSavePreset(int sc)
 
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
     {
+        // Il preset deve contenere ANCHE mappa per id e loadout (KI #20)
+        syncLoadoutToSettings();
+        m_settings.mapId = getSelectedMapId();
         MatchSettings toSave = m_settings;
         if (m_textInput.empty()) { char buf[32]; std::snprintf(buf, sizeof(buf), "Preset %d", m_presetSlot+1); toSave.presetName = buf; }
         else toSave.presetName = m_textInput;
@@ -283,7 +326,7 @@ PreMatchMenu::Result PreMatchMenu::handleManagePresets(int sc)
     { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
 
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-    { const MatchSettings* p = m_presets.get(m_presetSlot); if (p) { m_settings = *p; buildRows(); } m_page = Page::Rules; return Result::None; }
+    { const MatchSettings* p = m_presets.get(m_presetSlot); if (p) applyPreset(*p); m_page = Page::Rules; return Result::None; }
     if (sc == SDL_SCANCODE_R)
     { const MatchSettings* p = m_presets.get(m_presetSlot); if (p) { m_textInput = p->presetName; m_page = Page::RenamePreset; SDL_StartTextInput(); } return Result::None; }
     if (sc == SDL_SCANCODE_DELETE || sc == SDL_SCANCODE_X)
@@ -309,7 +352,7 @@ PreMatchMenu::Result PreMatchMenu::handleLoadPreset(int sc)
     if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
     { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
     if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
-    { const MatchSettings* p = m_presets.get(m_presetSlot); if (p) { m_settings = *p; buildRows(); } m_page = Page::Rules; return Result::None; }
+    { const MatchSettings* p = m_presets.get(m_presetSlot); if (p) applyPreset(*p); m_page = Page::Rules; return Result::None; }
     if (sc == SDL_SCANCODE_ESCAPE || sc == SDL_SCANCODE_BACKSPACE)
     { m_page = Page::Rules; return Result::None; }
     return Result::None;

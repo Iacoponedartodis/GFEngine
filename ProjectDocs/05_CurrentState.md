@@ -1,5 +1,25 @@
 # 05 — Current State
 
+## 2026-07-10 (24) — Robustezza tranche 2: arma attiva unica + A7/A9 chiusi
+- `PlayerController` senza più copia dell'arma attiva (accessor su weapons[active]) —
+  KI #22 chiuso strutturalmente; resolve unità unico nemici/alleati in ConquestMode
+  (alleati con stats proiettile dall'arma vera); campi non consumati marcati
+  "(non attivo)" negli editor (KI #25 mitigato). Build + smoke --sim ok.
+
+## 2026-07-10 (23) — Rifinitura robustezza completata (Todo A2-A8)
+- id definizioni = SOLO filename stem in tutti i loader (KI #21 chiuso); heat persistente
+  allo switch arma (KI #22); collisione/LOS esatte sui collider ruotati, coerenti coi
+  proiettili (KI #23); spawn spec ConquestMode unificato (via UnitTemplate); loader
+  nemici/alleati deduplicati (`parseUnitDef`); zero id hardcoded nei game mode (KI #24);
+  dipendenze CMake pinnate (KI #27); dati morti eliminati (KI #26 in parte).
+  Smoke `--sim` passato; restano gli smoke manuali elencati nel Changelog (27).
+
+## 2026-07-10 (22) — Audit qualità + preset a prova di build (KI #19/#20)
+- Audit completo del progetto: nuovi KI #19-#27 e roadmap robustezza in 06_Todo (A1-A10).
+- Preset partita: ora in `<exe>/user_presets/` (fuori dalla data/ azzerata dalle build),
+  formato nlohmann con `map_id` per id + loadout completo persistito; migrazione legacy
+  automatica. Smoke manuale pendente (salva → rebuild → ricarica).
+
 ## 2026-07-10 (21) — Seconda mappa "Outpost" + selettore mappa (R3)
 - Due mappe giocabili (firebase, outpost), selezionabili nel PreMatch (riga "Mappa");
   la mappa attiva viaggia in MatchSettings.mapId — zero id hardcoded nei mode.

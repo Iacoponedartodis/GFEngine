@@ -11,17 +11,20 @@
 namespace mini
 {
 
+// Spec di spawn completo di un'unità: usato per lo spawn iniziale, come
+// template dell'unità viva (m_trackedUnits) e come voce della coda di
+// respawn — UN solo tipo, mai copie campo-per-campo (Todo A4).
 struct RespawnEntry
 {
-    float timer;
-    float x, z;
-    int   teamId;
-    float mr, mg, mb;
-    float br, bg, bb;
-    float hp;
-    float pax, paz, pbx, pbz;
-    float patSpd, interval, range;
-    bool  stationary;
+    float timer = 0.0f;
+    float x = 0.0f, z = 0.0f;
+    int   teamId = 2;
+    float mr = 0.7f, mg = 0.1f, mb = 0.1f;
+    float br = 1.0f, bg = 0.5f, bb = 0.0f;
+    float hp = 80.0f;
+    float pax = 0, paz = 0, pbx = 0, pbz = 0;
+    float patSpd = 2.5f, interval = 2.2f, range = 18.0f;
+    bool  stationary = false;
     std::string hitboxProfileId;
 
     // Stats proiettile dall'arma primaria (WeaponDef)
@@ -113,31 +116,11 @@ protected:
 private:
     std::vector<RespawnEntry> m_respawnQueue;
 
-    struct UnitTemplate
-    {
-        float x, z, yPos;
-        int   teamId;
-        float mr, mg, mb;
-        float br, bg, bb;
-        float hp;
-        float pax, paz, pbx, pbz;
-        float patSpd, interval, range;
-        bool  stationary;
-        std::string hitboxProfileId;
-        float bulletSpeed    = 8.0f;
-        float bulletDamage   = 20.0f;
-        float bulletLifetime = 5.0f;
-        Mesh* entityMesh     = nullptr;
-        float meshRotX  = 0.0f;
-        float meshRotY  = 0.0f;
-        float meshScale = 1.0f;
-        std::string weaponId;
-        std::string aiProfileId;
-        std::vector<std::string> abilityIds;
-        Mesh*     weaponMesh  = nullptr;
-        glm::mat4 weaponLocal = glm::mat4(1.0f);
-    };
-    std::vector<std::pair<EntityId, UnitTemplate>> m_trackedUnits;
+    // Template di respawn = la STESSA RespawnEntry usata per lo spawn.
+    // (Prima esisteva un UnitTemplate parallelo copiato campo-per-campo:
+    // ogni campo nuovo andava replicato in 4 punti e un campo dimenticato
+    // ha già causato un bug reale — respawn come cubo. Todo A4.)
+    std::vector<std::pair<EntityId, RespawnEntry>> m_trackedUnits;
 
     void spawnUnit(World& world, const RespawnEntry& info);
     void checkDeaths(World& world);

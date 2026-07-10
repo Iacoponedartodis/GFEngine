@@ -52,18 +52,32 @@ struct ResolvedEnemyArchetype
     float bulletLifetime = 5.0f;
 };
 
-static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* registry,
-                                                    const std::string& enemyId)
+// Risolve un archetipo unità (nemico O alleato: stessa EnemyDef, cambia il
+// registry di provenienza e i default). Prima il path alleati re-implementava
+// questa logica a mano con stats proiettile hardcoded 8/20/5 (Todo A7).
+static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* registry,
+                                                   const std::string& unitId, int team)
 {
+    const bool ally = (team == 1);
     ResolvedEnemyArchetype out;
-    out.enemyId = enemyId;
+    out.enemyId = unitId;
+    if (ally)
+    {   // default alleato (colori/stats storici del path alleati)
+        out.mr = 0.25f; out.mg = 0.45f; out.mb = 1.0f;
+        out.br = 0.30f; out.bg = 0.60f; out.bb = 1.0f;
+        out.hp = 60.0f; out.moveSpeed = 1.8f;
+        out.interval = 3.5f; out.range = 14.0f;
+    }
 
-    const EnemyDef* enemy = registry ? registry->getEnemy(enemyId) : nullptr;
+    const EnemyDef* enemy = registry
+        ? (ally ? registry->getAlly(unitId) : registry->getEnemy(unitId))
+        : nullptr;
     if (!enemy)
     {
-        std::cerr << "[ConquestMode] Enemy '" << enemyId
-                  << "' non trovato nel registry. Uso fallback.\n";
-        out.hitboxProfileId = enemyId;
+        std::cerr << "[ConquestMode] Unita' '" << unitId
+                  << "' non trovata nel registry (team " << team
+                  << "). Uso fallback.\n";
+        out.hitboxProfileId = unitId;
         return out;
     }
 
@@ -311,29 +325,6 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
             world.addAbilities(e, ac);
     }
 
-    UnitTemplate tpl = {
-        info.x, info.z, yPos, info.teamId,
-        info.mr, info.mg, info.mb,
-        info.br, info.bg, info.bb,
-        info.hp, info.pax, info.paz, info.pbx, info.pbz,
-        info.patSpd, info.interval, info.range, info.stationary,
-        info.hitboxProfileId
-    };
-    // Campi non coperti dall'aggregate: senza questi il respawn perdeva
-    // mesh custom, trasformazione e stats proiettile (tornava un cubo).
-    tpl.bulletSpeed    = info.bulletSpeed;
-    tpl.bulletDamage   = info.bulletDamage;
-    tpl.bulletLifetime = info.bulletLifetime;
-    tpl.entityMesh     = info.entityMesh;
-    tpl.meshRotX       = info.meshRotX;
-    tpl.meshRotY       = info.meshRotY;
-    tpl.meshScale      = info.meshScale;
-    tpl.weaponId       = info.weaponId;
-    tpl.aiProfileId    = info.aiProfileId;
-    tpl.abilityIds     = info.abilityIds;
-    tpl.weaponMesh     = info.weaponMesh;
-    tpl.weaponLocal    = info.weaponLocal;
-
     // Profilo hitbox: sempre risolto a monte (id entità come fallback,
     // ADR-006/007). Nessun id hardcoded: se manca, l'unità usa il fallback
     // sferico del CombatSystem.
@@ -343,7 +334,9 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
         if (hp) world.addHitbox(e, HitboxComponent{hp});
     }
 
-    m_trackedUnits.push_back({e, tpl});
+    // Template di respawn = copia integrale dello spawn spec (Todo A4):
+    // nessuna lista di campi da tenere allineata a mano.
+    m_trackedUnits.push_back({e, info});
 }
 
 void ConquestMode::checkDeaths(World& world)
@@ -359,33 +352,9 @@ void ConquestMode::checkDeaths(World& world)
             if (tickets > 0)
             {
                 --tickets;
-                RespawnEntry entry;
-                entry.timer           = respawnDelay;
-                entry.x               = tpl.x;
-                entry.z               = tpl.z;
-                entry.teamId          = tpl.teamId;
-                entry.mr = tpl.mr; entry.mg = tpl.mg; entry.mb = tpl.mb;
-                entry.br = tpl.br; entry.bg = tpl.bg; entry.bb = tpl.bb;
-                entry.hp              = tpl.hp;
-                entry.pax = tpl.pax; entry.paz = tpl.paz;
-                entry.pbx = tpl.pbx; entry.pbz = tpl.pbz;
-                entry.patSpd          = tpl.patSpd;
-                entry.interval        = tpl.interval;
-                entry.range           = tpl.range;
-                entry.stationary      = tpl.stationary;
-                entry.hitboxProfileId = tpl.hitboxProfileId;
-                entry.bulletSpeed     = tpl.bulletSpeed;
-                entry.bulletDamage    = tpl.bulletDamage;
-                entry.bulletLifetime  = tpl.bulletLifetime;
-                entry.entityMesh      = tpl.entityMesh;
-                entry.meshRotX        = tpl.meshRotX;
-                entry.meshRotY        = tpl.meshRotY;
-                entry.meshScale       = tpl.meshScale;
-                entry.weaponId        = tpl.weaponId;
-                entry.aiProfileId     = tpl.aiProfileId;
-                entry.abilityIds      = tpl.abilityIds;
-                entry.weaponMesh      = tpl.weaponMesh;
-                entry.weaponLocal     = tpl.weaponLocal;
+                // Copia integrale dello spawn spec, solo il timer cambia (A4)
+                RespawnEntry entry = tpl;
+                entry.timer = respawnDelay;
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
@@ -618,7 +587,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     {
         const auto& p = enemyPos[i];
         const std::string enemyId = enemyIds[i];
-        const ResolvedEnemyArchetype resolved = resolveEnemyArchetype(registry, enemyId);
+        const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, enemyId, 2);
 
         // Arma in mano dai metadata dell'editor
         auto wa = weaponattach::resolve(registry, m_meshCache,
@@ -662,51 +631,24 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     {
         const auto& p = allyPos[i];
         const std::string allyId = allyIds[i % (int)allyIds.size()];
+        // Stesso resolve dei nemici (A7): stats proiettile dall'arma vera,
+        // non più 8/20/5 hardcoded.
+        const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, allyId, 1);
 
-        // Cerca nel registry allies
-        const EnemyDef* allyDef = registry ? registry->getAlly(allyId) : nullptr;
-
-        float mr=0.25f, mg=0.45f, mb=1.0f;
-        float br=0.30f, bg=0.60f, bb=1.0f;
-        float hp=60.0f, pspd=1.8f, intv=3.5f, rng=14.0f;
-        float arx=0.0f, ary=0.0f, asc=1.0f;
-        std::string hitboxId;
-        std::string meshPath;
-
-        if (allyDef)
-        {
-            mr = allyDef->color[0]; mg = allyDef->color[1]; mb = allyDef->color[2];
-            hp = allyDef->hp;
-            hitboxId = allyDef->hitboxProfileId.empty() ? allyDef->id
-                                                        : allyDef->hitboxProfileId;
-            meshPath = allyDef->meshPath;
-            arx = allyDef->meshRotX;
-            ary = allyDef->meshRotY;
-            asc = allyDef->meshScale;
-
-            if (registry)
-            {
-                const AiProfileDef* ai = registry->getAiProfile(allyDef->aiProfileId);
-                if (ai) { pspd = ai->patrolSpeed; intv = ai->shootInterval; rng = ai->sightRange; }
-
-                const WeaponDef* wpn = registry->getWeapon(allyDef->primaryWeaponId());
-                if (wpn) { br = wpn->bulletColor[0]; bg = wpn->bulletColor[1]; bb = wpn->bulletColor[2]; }
-                else { br = allyDef->bulletColor[0]; bg = allyDef->bulletColor[1]; bb = allyDef->bulletColor[2]; }
-            }
-        }
-
-        auto wa = weaponattach::resolve(registry, m_meshCache, allyDef);
+        auto wa = weaponattach::resolve(registry, m_meshCache,
+                                        registry ? registry->getAlly(allyId) : nullptr);
         mkUnitWithMesh(p.x, p.z, 1,
-                       mr, mg, mb, br, bg, bb, hp,
+                       resolved.mr, resolved.mg, resolved.mb,
+                       resolved.br, resolved.bg, resolved.bb,
+                       resolved.hp,
                        p.pax, p.paz, p.pbx, p.pbz,
-                       pspd, intv, rng,
-                       hitboxId, p.stat,
-                       8.0f, 20.0f, 5.0f,
-                       meshPath, arx, ary, asc,
-                       allyDef ? allyDef->primaryWeaponId() : std::string(),
-                       wa.mesh, wa.local,
-                       allyDef ? allyDef->aiProfileId : std::string(),
-                       allyDef ? allyDef->abilityIds : std::vector<std::string>{});
+                       resolved.moveSpeed, resolved.interval, resolved.range,
+                       resolved.hitboxProfileId, p.stat,
+                       resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
+                       resolved.meshPath,
+                       resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
+                       resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
+                       resolved.abilityIds);
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────
