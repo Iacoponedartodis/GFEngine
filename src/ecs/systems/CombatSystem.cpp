@@ -7,6 +7,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 
 namespace mini
 {
@@ -116,6 +117,16 @@ void CombatSystem::update(World& world, float dt)
     std::vector<EntityId> toDestroy;
     const std::vector<EntityId> entities = world.getEntities();
 
+    // ── Rigenerazione scudi (ability "shield", 16_AiBehavior) ────────
+    for (EntityId eid : entities)
+    {
+        auto* sh = world.getShield(eid);
+        if (!sh || sh->max <= 0.0f) continue;
+        if (sh->timer > 0.0f) { sh->timer -= dt; continue; }
+        if (sh->current < sh->max && sh->regenRate > 0.0f)
+            sh->current = std::min(sh->max, sh->current + sh->regenRate * dt);
+    }
+
     for (EntityId bid : entities)
     {
         auto* bullet = world.getBullet(bid);
@@ -151,7 +162,26 @@ void CombatSystem::update(World& world, float dt)
             if (!result.hit) continue;
 
             const float dmg = bullet->damage * result.mult;
-            eh->current -= dmg;
+
+            // Lo scudo assorbe il danno prima degli HP; l'eccedenza passa
+            // agli HP. Ogni colpo azzera l'attesa della rigenerazione.
+            float toHp = dmg;
+            if (auto* sh = world.getShield(eid); sh && sh->current > 0.0f)
+            {
+                const float absorbed = std::min(sh->current, toHp);
+                sh->current -= absorbed;
+                toHp        -= absorbed;
+                sh->timer    = sh->regenDelay;
+                telemetry::logTrace("shield: entita' "
+                    + std::to_string(eid) + " assorbe "
+                    + std::to_string((int)absorbed) + " (resta "
+                    + std::to_string((int)sh->current) + ")");
+                world.pushEvent("SCUDO #" + std::to_string(eid)
+                    + " assorbe " + std::to_string((int)absorbed)
+                    + "  [" + std::to_string((int)sh->current)
+                    + "/" + std::to_string((int)sh->max) + "]");
+            }
+            eh->current -= toHp;
 
             // Feedback HUD (hitmarker) SOLO per i colpi del giocatore —
             // non per quelli degli alleati AI (stesso team).
@@ -179,12 +209,22 @@ void CombatSystem::update(World& world, float dt)
                 std::cout << "[Combat] Colpito! HP: "
                           << (int)eh->current << "/" << (int)eh->max << "\n";
 
+            // Log chat: colpo (con zona) e — se letale — eliminazione
+            world.pushEvent("HIT team" + std::to_string(bullet->ownerTeam)
+                + " -> #" + std::to_string(eid)
+                + " " + (result.zone.empty() ? "corpo" : result.zone)
+                + " -" + std::to_string((int)dmg)
+                + "  hp " + std::to_string((int)std::max(0.0f, eh->current))
+                + "/" + std::to_string((int)eh->max));
+
             toDestroy.push_back(bid);
             if (eh->current <= 0.0f)
             {
                 telemetry::logInfo("kill: entita' " + std::to_string(eid)
                     + " eliminata dal team " + std::to_string(bullet->ownerTeam));
                 std::cout << "[Combat] Eliminato!\n";
+                world.pushEvent("KILL #" + std::to_string(eid)
+                    + " eliminata dal team " + std::to_string(bullet->ownerTeam));
                 toDestroy.push_back(eid);
             }
             break;

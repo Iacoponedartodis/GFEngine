@@ -1,6 +1,7 @@
 #include "mini/ecs/systems/AiSystem.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
+#include "mini/core/Telemetry.hpp"
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
 
@@ -48,18 +49,73 @@ static float norm2D(float& dx, float& dz)
     return len;
 }
 
-// Genera un punto di ricerca pseudo-random sulla mappa basato sulla posizione attuale
+static float aiRandRange(float lo, float hi)
+{
+    return lo + (hi - lo) * aiRand01();
+}
+
+// Ingresso in Hunt (16_AiBehavior): con probabilità flankChance l'AI
+// raggiunge la lastKnown da un punto laterale (~6m perpendicolare)
+// invece che in linea retta.
+static void enterHunt(AiComponent& ai, const TransformComponent& et)
+{
+    ai.state = AiState::Hunt;
+    if (ai.hasLastKnown && !ai.flankActive && aiRand01() < ai.flankChance)
+    {
+        float dx = ai.lastKnownX - et.x, dz = ai.lastKnownZ - et.z;
+        const float len = std::sqrt(dx*dx + dz*dz);
+        if (len > 1.0f)
+        {
+            dx /= len; dz /= len;
+            const float side = (aiRand01() < 0.5f) ? 1.0f : -1.0f;
+            ai.flankX = ai.lastKnownX + (-dz * side) * 6.0f;
+            ai.flankZ = ai.lastKnownZ + ( dx * side) * 6.0f;
+            ai.flankActive = true;
+        }
+    }
+}
+
+// Genera un punto di ricerca attorno all'ultima posizione nota (raggio
+// ~12m) — mappa-agnostico. Le vecchie coordinate globali -8..+8 erano
+// l'arena hardcoded pre-firebase: su una mappa 50x40 ammassavano tutte
+// le AI al centro, uccidendo la battaglia.
 static void pickSearchPoint(AiComponent& ai, float x, float z)
 {
-    // Deterministico ma vario: usa la posizione come seed
-    int ix = (int)(x * 73.0f) + (int)(z * 137.0f) + (int)(ai.stuckTimer * 31.0f);
-    ai.searchX = -8.0f + (float)(((ix * 1103515245 + 12345) >> 8) % 160) * 0.1f; // -8 a +8
-    ai.searchZ = -9.0f + (float)(((ix * 214013 + 2531011) >> 8) % 160) * 0.1f;    // -9 a +7
+    const float cx = ai.hasLastKnown ? ai.lastKnownX : x;
+    const float cz = ai.hasLastKnown ? ai.lastKnownZ : z;
+    ai.searchX = cx + (aiRand01() - 0.5f) * 24.0f;
+    ai.searchZ = cz + (aiRand01() - 0.5f) * 24.0f;
 }
 
 void AiSystem::update(World& world, float dt)
 {
     const std::vector<EntityId> snap = world.getEntities();
+
+    // Heartbeat diagnostico (ogni ~10s a 60Hz): quante AI e in che stato.
+    // Rende osservabile da telemetria il sintomo "AI ferme".
+    if (world.getTickCount() % 600 == 1)
+    {
+        int nAi = 0, patrol = 0, alert = 0, hunt = 0, search = 0, stat = 0;
+        for (EntityId e : snap)
+            if (const auto* a = world.getAi(e))
+            {
+                ++nAi;
+                if (a->stationary) ++stat;
+                switch (a->state)
+                {
+                case AiState::Patrol: ++patrol; break;
+                case AiState::Alert:  ++alert;  break;
+                case AiState::Hunt:   ++hunt;   break;
+                case AiState::Search: ++search; break;
+                }
+            }
+        telemetry::logTrace("ai: " + std::to_string(nAi)
+            + " (patrol " + std::to_string(patrol)
+            + ", alert " + std::to_string(alert)
+            + ", hunt " + std::to_string(hunt)
+            + ", search " + std::to_string(search)
+            + ", fermi " + std::to_string(stat) + ")");
+    }
 
     // ── Raccogli bersagli per team ───────────────────────────────────
     std::vector<EntityId> team1Tgts, team2Tgts;
@@ -154,22 +210,32 @@ void AiSystem::update(World& world, float dt)
             ai->hasLastKnown = true;
             // Tempo di reazione (dal profilo AI): il primo colpo dopo una
             // nuova acquisizione arriva con ritardo, non istantaneo.
-            if (ai->state != AiState::Alert && ai->reactionTime > 0.0f)
-                ai->shootCooldown = std::max(ai->shootCooldown, ai->reactionTime);
+            if (ai->state != AiState::Alert)
+            {
+                if (ai->reactionTime > 0.0f)
+                    ai->shootCooldown = std::max(ai->shootCooldown, ai->reactionTime);
+                // Nuova acquisizione: SEMPRE una finestra di fuoco piena —
+                // senza questo il roll evasivo poteva sopprimere il primo
+                // colpo e l'ingaggio moriva prima di iniziare.
+                ai->evading     = false;
+                ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax) + ai->reactionTime;
+            }
             ai->state = AiState::Alert;
             ai->alertTimer = 3.0f;
+            ai->searchTimer = 0.0f;
+            ai->flankActive = false; // contatto diretto: niente più flanking
         }
         else if (ai->state == AiState::Alert)
         {
             // Aveva LOS ma l'ha perso: attendi un po' poi Hunt
             ai->alertTimer -= dt;
             if (ai->alertTimer <= 0.0f)
-                ai->state = AiState::Hunt;
+                enterHunt(*ai, *et);
         }
         else if (ai->state == AiState::Patrol && ai->hasLastKnown)
         {
             // Era in pattuglia ma il team ha condiviso una posizione: Hunt
-            ai->state = AiState::Hunt;
+            enterHunt(*ai, *et);
         }
         // Hunt e Search non hanno timeout — l'AI non "dimentica" MAI
 
@@ -207,8 +273,43 @@ void AiSystem::update(World& world, float dt)
                     const float perpX = -advZ * ai->strafeSign;
                     const float perpZ =  advX * ai->strafeSign;
 
-                    if (dist > 2.5f)
+                    // ── Ciclo peek/hide (16_AiBehavior) ──────────────
+                    // A fine finestra di fuoco, con probabilità
+                    // coverPreference entra in fase evasiva (non spara).
+                    ai->exposeTimer -= dt;
+                    if (ai->exposeTimer <= 0.0f)
+                    {
+                        if (!ai->evading && aiRand01() < ai->coverPreference)
+                        { ai->evading = true;  ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax); }
+                        else
+                        { ai->evading = false; ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax); }
+                    }
+
+                    // ── Ritirata sotto soglia HP ─────────────────────
+                    const auto* ehp = world.getHealth(e);
+                    const float hpFrac = (ehp && ehp->max > 0.0f)
+                                       ? ehp->current / ehp->max : 1.0f;
+                    const bool retreating = ai->retreatHpThresh > 0.0f
+                                         && hpFrac < ai->retreatHpThresh;
+
+                    // Distanza d'ingaggio preferita dall'aggressione:
+                    // aggression 1 → ~3m (chiude), 0 → ~12m (tiene il raggio).
+                    const float prefDist = 12.0f - 9.0f * ai->aggression;
+
+                    if (retreating)
+                    { // Disimpegno: arretra dal bersaglio con fuoco di copertura
+                      moveDX = -advX*0.8f + perpX*0.4f; moveDZ = -advZ*0.8f + perpZ*0.4f;
+                      moveSpeed = ai->seekSpeed; }
+                    else if (ai->evading)
+                    { // Fase evasiva: strafe ampio + leggero arretramento
+                      moveDX = perpX*0.9f - advX*0.3f; moveDZ = perpZ*0.9f - advZ*0.3f;
+                      moveSpeed = ai->seekSpeed*0.8f; }
+                    else if (dist > prefDist)
                     { moveDX = advX*0.45f + perpX*0.65f; moveDZ = advZ*0.45f + perpZ*0.65f; moveSpeed = ai->seekSpeed*0.75f; }
+                    else if (dist < prefDist * 0.6f)
+                    { // Troppo vicino per il suo profilo: guadagna distanza
+                      moveDX = -advX*0.5f + perpX*0.7f; moveDZ = -advZ*0.5f + perpZ*0.7f;
+                      moveSpeed = ai->seekSpeed*0.6f; }
                     else
                     { moveDX = perpX; moveDZ = perpZ; moveSpeed = ai->seekSpeed*0.55f; }
 
@@ -217,12 +318,22 @@ void AiSystem::update(World& world, float dt)
             }
             else if (ai->state == AiState::Hunt && ai->hasLastKnown)
             {
-                // Va verso l'ultima posizione nota
-                moveDX = ai->lastKnownX - et->x;
-                moveDZ = ai->lastKnownZ - et->z;
+                // Va verso l'ultima posizione nota (o, se sta fiancheggiando,
+                // prima verso il punto laterale scelto in enterHunt).
+                const float destX = ai->flankActive ? ai->flankX : ai->lastKnownX;
+                const float destZ = ai->flankActive ? ai->flankZ : ai->lastKnownZ;
+                moveDX = destX - et->x;
+                moveDZ = destZ - et->z;
                 float dist = norm2D(moveDX, moveDZ);
 
-                if (dist < 1.0f)
+                if (ai->flankActive && (dist < 1.5f || isStuck))
+                {
+                    // Punto di fiancheggiamento raggiunto (o irraggiungibile):
+                    // prosegui dritto sulla lastKnown.
+                    ai->flankActive = false;
+                    ai->stuckTimer = 0;
+                }
+                else if (dist < 1.0f)
                 {
                     // Raggiunto lastKnown: passa a Search
                     ai->state = AiState::Search;
@@ -243,7 +354,17 @@ void AiSystem::update(World& world, float dt)
             }
             else if (ai->state == AiState::Search)
             {
-                // Cerca in punti random sulla mappa finché non rivede il bersaglio
+                // Cerca attorno alla lastKnown; se la ricerca resta
+                // infruttuosa troppo a lungo torna in PATTUGLIA (verso i
+                // post) — prima restava in Search per sempre e la partita
+                // si spegneva in un vagare senza obiettivi.
+                ai->searchTimer += dt;
+                if (ai->searchTimer > 15.0f)
+                {
+                    ai->searchTimer  = 0.0f;
+                    ai->hasLastKnown = false;
+                    ai->state        = AiState::Patrol;
+                }
                 moveDX = ai->searchX - et->x;
                 moveDZ = ai->searchZ - et->z;
                 float dist = norm2D(moveDX, moveDZ);
@@ -321,8 +442,9 @@ void AiSystem::update(World& world, float dt)
             if (ai->heat <= 0.0f) { ai->heat = 0.0f; ai->overheated = false; }
         }
 
-        // ── Sparo (solo in Alert con LOS) ────────────────────────────
+        // ── Sparo (solo in Alert con LOS, mai in fase evasiva) ───────
         if (ai->state != AiState::Alert || nearest == 0) continue;
+        if (ai->evading) continue; // peek/hide: in "hide" non spara
         if (ai->shootCooldown > 0.0f) { ai->shootCooldown -= dt; continue; }
         if (ai->overheated) continue; // arma surriscaldata: attende il cooling
 

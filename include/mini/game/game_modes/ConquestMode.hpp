@@ -40,6 +40,8 @@ struct RespawnEntry
     std::string weaponId;
     // Profilo AI: risolto in spawnUnit (seekSpeed, accuracy, jump, reaction)
     std::string aiProfileId;
+    // Abilità dell'unità (es. shield) — risolte in spawnUnit dal registry
+    std::vector<std::string> abilityIds;
 
     // Arma visibile in mano (mesh + posa nel model space del personaggio)
     Mesh*     weaponMesh  = nullptr;
@@ -126,6 +128,7 @@ private:
         float meshScale = 1.0f;
         std::string weaponId;
         std::string aiProfileId;
+        std::vector<std::string> abilityIds;
         Mesh*     weaponMesh  = nullptr;
         glm::mat4 weaponLocal = glm::mat4(1.0f);
     };

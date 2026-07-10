@@ -2,6 +2,107 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-10 (5) — Sandbox semplificata: sim come prima classe, partita via PreMatch
+- **Spiegato il "la partita non funziona"**: la pagina Partita del menu sandbox
+  riavviava la SANDBOX (manichini fermi e ticket 999/0 by design), non una partita
+  vera — confusione di responsabilità, non un bug del combat. Decisione (utente):
+  la partita vera NON si avvia dentro la sandbox.
+- **SandboxMenu ridotto a 2 pagine**: *Armi* (slot primaria/secondaria) e
+  *Simulazione* completa — modalità (Conquista/Assalto/Difesa), alleati/nemici AI,
+  ticket per team, respawn. La pagina Partita è stata rimossa.
+- **Scorciatoia P** in sandbox → apre il PreMatch classico (loadout/regole/preset)
+  per giocare una partita vera con il flusso standard.
+- **Bugfix**: `startGame` ora resetta observerFly/simRunning/menu aperto — una
+  partita avviata dopo una simulazione non eredita più il volo libero.
+- Build pulita; smoke `--sim` (28 hit, 3 kill in 40s) e `--sandbox` ok.
+  **Da verificare a mano:** P → PreMatch → partita completa; sim Assalto/Difesa
+  con ticket personalizzati.
+
+## 2026-07-10 (4) — FIX battaglia AI "spenta" + rifiniture Sandbox Tools
+- **BUG "AI ferme come manichini" RISOLTO** (diagnosi empirica con il nuovo flag CLI
+  `--sim`, che avvia direttamente la simulazione AI, + heartbeat `ai:` in telemetria).
+  Tre cause concorrenti in AiSystem:
+  1. `pickSearchPoint` usava coordinate GLOBALI hardcoded dell'arena pre-firebase
+     (-8..+8): su firebase 50x40 tutte le AI convergevano al centro contro i muri.
+     Ora cerca attorno alla lastKnown (±12m, mappa-agnostico).
+  2. Search era uno stato senza uscita: dopo il primo contatto condiviso nessuno
+     tornava MAI in pattuglia sui post. Ora dopo 15s infruttuosi → Patrol.
+  3. Il roll evasivo (peek/hide) poteva sopprimere il primo colpo all'acquisizione.
+     Ora una nuova acquisizione garantisce sempre una finestra di fuoco piena.
+  Verifica: 50s di `--sim` → 28 hit, 3 kill, stati che ciclano patrol/alert/search.
+- **Diagnostica permanente**: `[Conquest] spawn: N nemici, M alleati...` a ogni start;
+  heartbeat `ai: N (patrol/alert/hunt/search/fermi)` ogni ~10s in telemetria.
+- **Sandbox base**: almeno un manichino per OGNI definizione registrata (round-robin
+  su enemies/allies ordinati) — ogni nuovo JSON è subito visibile in sandbox.
+- **Menu sandbox**: pagina Armi con slot < PRIMARIA / SECONDARIA > (SIN/DES);
+  pagina Partita estesa (ticket team1/team2, respawn delay); pagina Simulazione con
+  scelta modalità (Conquista/Assalto/Difesa) — anche Assalto/Difesa ora osservabili
+  AI-vs-AI. Gadget: rimandati a quando esisteranno lato giocatore (17 Out of Scope).
+- **Log chat scorrevole**: PAGSU/PAGGIU nel pannello (storico portato a 200 righe);
+  la vista resta ferma sui messaggi vecchi mentre ne arrivano di nuovi.
+- Build pulita; smoke `--sim` (battaglia viva) e `--sandbox` ok. **Da verificare a
+  mano:** feel della battaglia osservata, slot secondaria, scroll log, sim Assalto.
+
+## 2026-07-10 (3) — Sandbox Tools (nuovo doc 17_SandboxTools)
+- **Menu sandbox (TAB in partita, solo `--sandbox`)** — overlay Ui2D a 3 pagine
+  (`SandboxMenu`, nuovo in render/): *Armi* (lista completa dal registry, scrollabile,
+  INVIO equipaggia — supera il tetto dei tasti 1-9, che restano come scorciatoia);
+  *Partita* (manichini alleati/nemici 0-10, HP giocatore, "Applica e riavvia" via
+  `MatchSettings` → `SandboxMode::applySettings` ora legge anche team1/2AiCount);
+  *Simulazione* (INVIO avvia/ferma).
+- **Simulazione AI-vs-AI con osservatore**: crea una Conquista via factory, il player
+  diventa team 0 (le AI lo ignorano), esito partita sospeso, camera in **volo libero**
+  (WASD + SPAZIO/CTRL, velocità 14) sganciata dal PlayerController. Fermandola si torna
+  alla sandbox normale.
+- **Log chat in-game**: mailbox `World::eventFeed` (pushEvent dai sistemi: hit con zona
+  e danno, assorbimenti scudo, kill; eventi sandbox da Application) drenata ogni frame
+  nella HUD. Ultime 4 righe in basso a sinistra con fade (6s); **L** apre il pannello
+  con lo storico (60 righe conservate). Attiva in tutte le modalità.
+- Mentre il menu sandbox è aperto il giocatore non spara/si muove; il mouse-look è
+  sospeso.
+- Build pulita; sandbox smoke ok. **Da verificare a mano:** TAB→pagine e equip; riavvio
+  con conteggi custom; simulazione (AI che combattono, volo, L per log, TAB per
+  fermarla); shield sul B1 Heavy ora osservabile in chat ("SCUDO #id assorbe N").
+
+## 2026-07-10 (2) — Shield end-to-end + tab Abilità + HUD top + mouse nel menu
+- **Perché lo shield "non funzionava":** nessuna unità lo referenziava e non poteva
+  essere assegnato — l'EntityEditor caricava/salvava `abilities[]` ma NON aveva UI; in
+  più `SandboxMode::spawnDummy` non risolveva le abilità (solo ConquestMode). Fix:
+  sezione "Abilita'" in EntityEditor (combo dal registry, + / X, slot vuoti filtrati al
+  save) e risoluzione shield anche sui manichini sandbox. `B1 Heavy Droid` ora
+  referenzia "Shield" nei dati (assegnazione di prova, modificabile dall'editor).
+- **BalanceEditor: nuova tab "Abilita'"** — lista, creazione, nome, tipo da elenco
+  (shield/roll/melee/jetpack/missile/command_aura, con nota su cosa è attivo nel
+  runtime), param1/2/3 con etichette contestuali per shield, cooldown, passiva.
+  Salvataggio via saveJsonRMW, `id` deprecato rimosso (ADR-001).
+- **HUD alto ridisegnato:** i riquadri dei command post coprivano la riga ticket/vivi.
+  Ora due pannelli fazione (ALLEATI blu a sinistra, NEMICI rosso a destra) ai lati
+  dello spazio centrale riservato ai post: nessuna sovrapposizione possibile.
+- **Mouse nei menu (primo passo):** MainMenu — hover evidenzia la voce, click sinistro
+  attiva (geometria condivisa render/hit-test). PreMatch/Options restano da tastiera;
+  estensione futura. Nota: coordinate mouse in spazio finestra 1:1 con la Ui2D 1280x720;
+  in fullscreen con risoluzioni diverse potrebbe servire uno scaling (da verificare).
+- Build pulita; sandbox smoke ok. **Da verificare a mano:** colpi su B1 Heavy → righe
+  `shield:` nel log e morte ritardata; tab Abilità; HUD in Conquista; click nel menu.
+
+## 2026-07-10 — AI: profilo tattico completo + ability shield (Todo #3, doc 16_AiBehavior)
+- Nuovo Planned Feature doc `16_AiBehavior.md` (prerequisito CLAUDE.md §5), scope 1-5
+  implementato nello stesso change set.
+- AiComponent: campi tattici dal profilo (aggression, retreatHpThresh, coverPreference,
+  peek/hide range, flankChance) + stato runtime (exposeTimer/evading/flank*). Risolti in
+  `ConquestMode::spawnUnit` come i campi già esistenti; inclusi nel template di respawn.
+- AiSystem: distanza d'ingaggio preferita da aggression (3-12m, arretra se troppo vicino);
+  ritirata sotto retreat_hp_threshold (arretra sparando); ciclo peek/hide (in hide non
+  spara, strafe evasivo); flanking all'ingresso in Hunt (punto laterale ~6m, poi lastKnown).
+- Ability "shield" runtime: nuovo `ShieldComponent` (World storage completo); assegnato
+  allo spawn se `abilities[]` dell'unità referenzia un AbilityDef con type "shield";
+  CombatSystem: assorbimento prima degli HP + regen dopo regenDelay; telemetria per colpo.
+  Nota: `AbilityComponent.hpp` resta uno scaffold non collegato (servirà per le abilità
+  attive, Out of Scope per ora).
+- Build pulita; sandbox smoke ok. **Da verificare a mano:** partita con droidi — distanze
+  d'ingaggio diverse tra profili, pause di fuoco (hide), fiancheggiamenti; per lo shield
+  assegnare "shield" a un'unità dall'EntityEditor e verificare assorbimento nel log.
+
 ## 2026-07-09 (12) — Spike split-screen (ADR-011 → Accepted, esito a) + fix riga Modalità
 - PreMatchMenu: le righe enum (con `names`) non disegnano la barra di progresso — il testo
   ("Conquista" ecc.) finiva sotto la barra; freccia ">" spostata per far posto al nome.

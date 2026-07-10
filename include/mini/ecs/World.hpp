@@ -84,6 +84,12 @@ public:
     HitboxComponent*       getHitbox(EntityId e);
     const HitboxComponent* getHitbox(EntityId e) const;
 
+    // Shield (ability "shield", 16_AiBehavior)
+    void addShield(EntityId e, const ShieldComponent& c);
+    [[nodiscard]] bool hasShield(EntityId e) const;
+    ShieldComponent*       getShield(EntityId e);
+    const ShieldComponent* getShield(EntityId e) const;
+
     void setDebugLogging(bool enabled);
     [[nodiscard]] bool isDebugLoggingEnabled() const;
     [[nodiscard]] std::uint64_t                getTickCount() const;
@@ -99,6 +105,12 @@ public:
         void reset() { team1Hit = false; team1Kill = false; }
     };
     CombatFeedback combatFeedback;
+
+    // ── Log chat in-game (17_SandboxTools): messaggi leggibili degli
+    //    eventi di gioco. Mailbox: i sistemi accodano, Application drena
+    //    ogni frame verso la HUD. Non sostituisce la telemetria su file.
+    std::vector<std::string> eventFeed;
+    void pushEvent(std::string msg) { eventFeed.push_back(std::move(msg)); }
 
 private:
     std::uint64_t m_tickCount    = 0;
@@ -117,6 +129,7 @@ private:
     std::unordered_map<EntityId, AiComponent>           m_ais;
     std::unordered_map<EntityId, ColliderComponent>     m_colliders;
     std::unordered_map<EntityId, HitboxComponent>      m_hitboxes;
+    std::unordered_map<EntityId, ShieldComponent>       m_shields;
 
     bool m_debugLogging = false;
 };

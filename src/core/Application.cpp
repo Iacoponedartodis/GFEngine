@@ -26,6 +26,7 @@
 #include "mini/render/Model.hpp"
 #include "mini/render/OptionsMenu.hpp"
 #include "mini/render/PreMatchMenu.hpp"
+#include "mini/render/SandboxMenu.hpp"
 #include "mini/render/Texture.hpp"
 
 #include <SDL2/SDL.h>
@@ -123,7 +124,7 @@ static bool rayAABB(const glm::vec3& o, const glm::vec3& d,
 
 // (la verifica "nemici vivi" ora vive nelle regole dei mode — ADR-014)
 
-void Application::run(bool directPreMatch, bool sandbox)
+void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
 {
     using namespace config;
     initialize();
@@ -234,11 +235,20 @@ void Application::run(bool directPreMatch, bool sandbox)
     HUD              hud(W, H);
     OptionsMenu      optMenu(W, H);
     PreMatchMenu     preMatchMenu(W, H);
+    SandboxMenu      sbMenu(W, H);        // menu banco di prova (17_SandboxTools)
+    bool sbMenuOpen  = false;             // overlay aperto (solo sandbox)
+    bool observerFly = false;             // volo libero osservatore (sim AI)
+    sbMenu.setWeapons(testWeapons);
     preMatchMenu.setWeaponList(wList);
     preMatchMenu.setAbilityList(aList);
 
     // ── Game mode (ADR-008: Application parla solo con IGameMode) ─────
     MatchSettings currentSettings;
+    sbMenu.allyCount    = std::max(1, currentSettings.team1AiCount);
+    sbMenu.enemyCount   = std::max(1, currentSettings.team2AiCount);
+    sbMenu.team1Tickets = currentSettings.team1Tickets;
+    sbMenu.team2Tickets = currentSettings.team2Tickets;
+    sbMenu.respawnDelay = currentSettings.respawnDelay;
     std::unique_ptr<IGameMode> mode =
         createGameMode(sandbox ? "sandbox" : "conquest");
     telemetry::logInfo(std::string("game mode creato: ")
@@ -304,11 +314,48 @@ void Application::run(bool directPreMatch, bool sandbox)
         player.activeWeapon = 0;
         player.weapon = player.weapons[0];
 
+        // Reset dello stato sandbox/osservatore: una partita vera avviata
+        // dopo una simulazione NON deve ereditare volo libero o menu aperto.
+        observerFly       = false;
+        sbMenu.simRunning = false;
+        sbMenuOpen        = false;
+
         initWorld();
         state = GameState::Playing;
         stateChanged = true;
         window.setMouseCaptured(true);
         std::cout << "[Game] Partita iniziata — " << player.weapon.name << std::endl;
+    };
+
+    // ── Simulazione AI-vs-AI (17_SandboxTools): condivisa tra il menu
+    //    sandbox (ToggleSim) e il flag CLI --sim ─────────────────────────
+    auto startSimulation = [&]()
+    {
+        currentSettings.team1AiCount = std::max(1, sbMenu.allyCount);
+        currentSettings.team2AiCount = std::max(1, sbMenu.enemyCount);
+        currentSettings.team1Tickets = sbMenu.team1Tickets;
+        currentSettings.team2Tickets = sbMenu.team2Tickets;
+        currentSettings.respawnDelay = sbMenu.respawnDelay;
+        const char* simMode = matchModeId(sbMenu.simModeIndex);
+        mode = createGameMode(simMode);
+        initWorld();
+        if (auto* tm = world.getTeam(player.entity))
+            tm->teamId = 0;   // neutro: le AI lo ignorano
+        observerFly = true;
+        sbMenu.simRunning = true;
+        hud.pushFeed(std::string("SIMULAZIONE AI avviata (") + simMode
+                     + ", osservatore in volo)");
+        telemetry::logInfo(std::string("sandbox: simulazione AI avviata (")
+                           + simMode + ")");
+    };
+    auto stopSimulation = [&]()
+    {
+        mode = createGameMode("sandbox");
+        observerFly = false;
+        sbMenu.simRunning = false;
+        initWorld();
+        hud.pushFeed("SIMULAZIONE terminata: sandbox normale");
+        telemetry::logInfo("sandbox: simulazione AI terminata");
     };
 
     auto goMainMenu = [&]()
@@ -360,8 +407,11 @@ void Application::run(bool directPreMatch, bool sandbox)
 
         initWorld();
         window.setMouseCaptured(true);
-        hud.toast("Sandbox: tasti 1-9 per provare le armi", 5.0f);
+        hud.toast("Sandbox: TAB menu prova, P partita (PreMatch), L log eventi", 6.0f);
         std::cout << "[Game] Sandbox avviata — " << player.weapon.name << std::endl;
+
+        // --sim: entra direttamente nella simulazione AI-vs-AI (test/debug)
+        if (autoSim) startSimulation();
     }
 
     // ═════════════════════════════════════════════════════════════════
@@ -382,6 +432,29 @@ void Application::run(bool directPreMatch, bool sandbox)
 
             if (ev.type == SDL_TEXTINPUT && state == GameState::PreMatch)
                 preMatchMenu.handleTextInput(ev.text.text);
+
+            // ── Mouse nel menu principale: hover evidenzia, click attiva ──
+            if (state == GameState::MainMenu &&
+                (ev.type == SDL_MOUSEMOTION || ev.type == SDL_MOUSEBUTTONDOWN))
+            {
+                const bool clicked = (ev.type == SDL_MOUSEBUTTONDOWN &&
+                                      ev.button.button == SDL_BUTTON_LEFT);
+                const float mx = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.x : ev.button.x);
+                const float my = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.y : ev.button.y);
+                auto res = mainMenu.handleMouse(mx, my, clicked);
+                if (res == MainMenuScreen::Result::NewGame)
+                {
+                    preMatchMenu.setSettings(currentSettings);
+                    state = GameState::PreMatch; stateChanged = true;
+                }
+                else if (res == MainMenuScreen::Result::Options)
+                {
+                    prevState = GameState::MainMenu;
+                    state = GameState::Options; stateChanged = true;
+                }
+                else if (res == MainMenuScreen::Result::Quit)
+                    window.close();
+            }
 
             if (ev.type == SDL_KEYDOWN)
             {
@@ -469,10 +542,63 @@ void Application::run(bool directPreMatch, bool sandbox)
                     if (sc == SDL_SCANCODE_K && !stateChanged)
                         doVoluntaryRespawn();
                 }
+                else if (state == GameState::Playing && sbMenuOpen)
+                {
+                    // ── Menu sandbox aperto: TUTTI i tasti vanno a lui ──
+                    const auto res = sbMenu.handleKey(sc);
+                    if (res == SandboxMenu::Result::Close)
+                        sbMenuOpen = false;
+                    else if (res == SandboxMenu::Result::EquipWeapon)
+                    {
+                        const auto* wd = registry.getWeapon(sbMenu.selectedWeaponId());
+                        if (wd)
+                        {
+                            const int slot = sbMenu.weaponSlot();
+                            player.weapons[slot] = weaponFromDef(*wd);
+                            if (slot == 0 || player.activeWeapon == slot)
+                            {
+                                player.activeWeapon = slot;
+                                player.weapon       = player.weapons[slot];
+                            }
+                            const char* slotName = slot == 0 ? "primaria" : "secondaria";
+                            hud.toast(std::string("Arma ") + slotName + ": " + wd->name);
+                            hud.pushFeed(std::string("ARMA ") + slotName + ": " + wd->name);
+                            telemetry::logInfo("sandbox: arma cambiata -> " + wd->name);
+                        }
+                        sbMenuOpen = false;
+                    }
+                    else if (res == SandboxMenu::Result::ToggleSim)
+                    {
+                        if (!sbMenu.simRunning) startSimulation();
+                        else                    stopSimulation();
+                        sbMenuOpen = false;
+                    }
+                }
                 else if (state == GameState::Playing)
                 {
                     if (sc == SDL_SCANCODE_V)
                         player.toggleThirdPerson(cam);
+
+                    // ── Menu sandbox (17_SandboxTools): TAB apre l'overlay
+                    if (sandbox && sc == SDL_SCANCODE_TAB)
+                        sbMenuOpen = true;
+
+                    // ── P: scorciatoia dalla sandbox al PreMatch classico
+                    //    (la partita vera si configura/avvia da lì) ──────
+                    if (sandbox && sc == SDL_SCANCODE_P)
+                    {
+                        preMatchMenu.setSettings(currentSettings);
+                        state = GameState::PreMatch;
+                        stateChanged = true;
+                        window.setMouseCaptured(false);
+                        telemetry::logInfo("sandbox: scorciatoia P -> PreMatch");
+                    }
+
+                    // ── Log chat: L apre/chiude, PAGSU/PAGGIU scorre ───
+                    if (sc == SDL_SCANCODE_L)
+                        hud.toggleFeed();
+                    if (sc == SDL_SCANCODE_PAGEUP)   hud.scrollFeed(+6);
+                    if (sc == SDL_SCANCODE_PAGEDOWN) hud.scrollFeed(-6);
 
                     // ── Sandbox: 1-9 = equipaggia arma dal registry ────
                     if (sandbox
@@ -545,6 +671,10 @@ void Application::run(bool directPreMatch, bool sandbox)
             else if (world.combatFeedback.team1Hit) hud.hitmarker(false);
             world.combatFeedback.reset();
 
+            // Log chat: drena gli eventi dei sistemi verso la HUD
+            for (auto& msg : world.eventFeed) hud.pushFeed(msg);
+            world.eventFeed.clear();
+
             player.weapon.update(elapsed);
             if (player.weapon.overheated && !wasOverheated) audio.playOverheat();
             wasOverheated = player.weapon.overheated;
@@ -562,16 +692,30 @@ void Application::run(bool directPreMatch, bool sandbox)
         }
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
-        if (state == GameState::Playing && window.isMouseCaptured())
+        if (state == GameState::Playing && window.isMouseCaptured() && !sbMenuOpen)
             player.processMouse(cam, (float)input.mouseDX(), (float)input.mouseDY());
 
         if (state == GameState::Playing)
-            player.updateMovement(cam, input, world, elapsed);
+        {
+            if (observerFly)
+            {
+                // Volo libero osservatore (17_SandboxTools): camera sganciata
+                // dal PlayerController, WASD + SPAZIO/CTRL, velocità alta.
+                const Uint8* kb = SDL_GetKeyboardState(nullptr);
+                cam.setSpeed(14.0f);
+                cam.processKeyboard(kb[SDL_SCANCODE_W] != 0, kb[SDL_SCANCODE_S] != 0,
+                                    kb[SDL_SCANCODE_A] != 0, kb[SDL_SCANCODE_D] != 0,
+                                    kb[SDL_SCANCODE_SPACE] != 0,
+                                    kb[SDL_SCANCODE_LCTRL] != 0, elapsed);
+            }
+            else if (!sbMenuOpen)
+                player.updateMovement(cam, input, world, elapsed);
+        }
 
         // ── 5. GAME LOGIC ────────────────────────────────────────────
         if (state == GameState::Playing)
         {
-            if (!player.isDead && world.isValidEntity(player.entity))
+            if (!observerFly && !player.isDead && world.isValidEntity(player.entity))
             {
                 auto* pt = world.getTransform(player.entity);
                 if (pt)
@@ -619,8 +763,9 @@ void Application::run(bool directPreMatch, bool sandbox)
                 }
             }
 
-            player.updateShooting(world, cam, input, audio,
-                                   mesh.get(), window.isMouseCaptured());
+            if (!observerFly && !sbMenuOpen)
+                player.updateShooting(world, cam, input, audio,
+                                       mesh.get(), window.isMouseCaptured());
 
             // ── Feedback di mira: il mirino diventa rosso se punta una
             //    hitbox nemica reale (stesse trasformazioni del CombatSystem:
@@ -680,8 +825,10 @@ void Application::run(bool directPreMatch, bool sandbox)
                 hud.setPosts(ps);
             }
 
-            // ── Esito: deciso dal MODE (ADR-014) ─────────────────────
-            const MatchOutcome oc = mode->outcome(world);
+            // ── Esito: deciso dal MODE (ADR-014). In osservazione la
+            //    partita non finisce mai (si guarda la battaglia AI) ────
+            const MatchOutcome oc = observerFly ? MatchOutcome::Ongoing
+                                                : mode->outcome(world);
             if (oc == MatchOutcome::Team1Win)
             {
                 state = GameState::Win; stateChanged = true;
@@ -787,6 +934,9 @@ void Application::run(bool directPreMatch, bool sandbox)
                        player.weapon.heat, player.weapon.overheated, player.weapon.name.c_str(),
                        mode->getTeam1Tickets(), mode->getTeam2Tickets(),
                        aliveAllies, aliveEnemies);
+
+            if (sbMenuOpen && state == GameState::Playing)
+                sbMenu.render();
         }
 
         renderer.endFrame();

@@ -56,12 +56,11 @@
    arma del registry (ordinate per nome, incluse separatiste), toast col nome + hint
    all'avvio, log in telemetria.
 
-3. **AI: abilità + ruoli tattici** (PARZIALE 2026-07-09: fatto salto anti-ostacolo,
-   accuracy→dispersione, reaction_time, seekSpeed dal profilo — vedi Changelog).
-   Resta: uso abilità (shield/roll/...) e comportamento per ruolo (coverPreference,
-   peek/hide, aggression). **Prerequisito (CLAUDE.md §5):** sono un sistema nuovo lato
-   runtime → scrivere prima un documento Planned Feature (16_AiAbilities?, template come
-   14/15) con Overview/Goal/Scope/Out-of-Scope, poi implementare.
+3. ~~AI: abilità + ruoli tattici~~ → FATTO 2026-07-10 (core, doc 16_AiBehavior):
+   aggression→distanza d'ingaggio, retreat_hp_threshold→disimpegno, peek/hide da
+   cover_preference, flank_chance in Hunt; ability "shield" runtime (ShieldComponent,
+   assorbimento + regen in CombatSystem). Resta (16_AiBehavior Out of Scope): abilità
+   attive (roll/jetpack/...), vera copertura geometrica (dipende da 15_MapMetadata).
 4. ~~Assault/Defense mode~~ → FATTO 2026-07-09 (11), ADR-014: ObjectiveModes + selezione
    nel PreMatch + esito deciso dal mode. Resta (minor): salvare modeIndex nei preset.
 5. ~~Runtime weapon-in-hand~~ → FATTO 2026-07-04 (8): WeaponAttach.hpp + attachMesh nel

@@ -21,6 +21,7 @@ private:
     std::string m_selAI;
     std::string m_selMap;
     std::string m_selPlayerDef;
+    std::string m_selAbility;
 
     // Buffer persistenti (evita copia ogni frame)
     mini::EnemyDef  m_editAlly;
@@ -31,12 +32,14 @@ private:
     void drawAITab();
     void drawMapsTab();
     void drawPlayerDefTab();
+    void drawAbilitiesTab();
 
     // ── Salvataggio ──────────────────────────────────────────────────
     void saveWeapon   (const mini::WeaponDef&     w);
     void saveAI       (const mini::AiProfileDef&  a);
     void saveMap      (const mini::MapDef&         m);
     void savePlayerDef(const mini::PlayerDef&     p);
+    void saveAbility  (const mini::AbilityDef&    a);
 
     void reload();
 };

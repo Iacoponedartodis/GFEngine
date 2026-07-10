@@ -160,6 +160,7 @@ add_executable(GFEngine
     src/render/PreMatchMenu.cpp
     src/render/LauncherScreen.cpp
     src/render/MainMenuScreen.cpp
+    src/render/SandboxMenu.cpp
     src/vendor/tinygltf_impl.cpp
 )
 target_include_directories(GFEngine PRIVATE

@@ -5,6 +5,7 @@
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
+#include "mini/core/Telemetry.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -28,6 +29,7 @@ struct ResolvedEnemyArchetype
     std::string meshPath;
     std::string weaponId;
     std::string aiProfileId;
+    std::vector<std::string> abilityIds;
 
     float meshRotX  = 0.0f;
     float meshRotY  = 0.0f;
@@ -78,6 +80,7 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
     out.meshScale = enemy->meshScale;
     out.weaponId  = enemy->primaryWeaponId();
     out.aiProfileId = enemy->aiProfileId;
+    out.abilityIds  = enemy->abilityIds;
 
     if (registry)
     {
@@ -232,6 +235,14 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
             aic.jumpEnabled  = ap->jumpEnabled;
             aic.accuracy     = ap->accuracy;
             aic.reactionTime = ap->reactionTime;
+
+            // Comportamento tattico (16_AiBehavior)
+            aic.aggression      = ap->aggression;
+            aic.retreatHpThresh = ap->retreatHpThresh;
+            aic.coverPreference = ap->coverPreference;
+            aic.peekMin = ap->peekDurationMin;  aic.peekMax = ap->peekDurationMax;
+            aic.hideMin = ap->hideDurationMin;  aic.hideMax = ap->hideDurationMax;
+            aic.flankChance     = ap->flankChance;
         }
     }
 
@@ -258,6 +269,22 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     }
     world.addAi(e, aic);
 
+    // ── Abilità (16_AiBehavior): per ora solo il tipo passivo "shield" ───
+    if (m_registry)
+    {
+        for (const auto& abId : info.abilityIds)
+        {
+            const AbilityDef* ab = m_registry->getAbility(abId);
+            if (!ab || ab->type != "shield") continue;
+            ShieldComponent sh;
+            sh.max = sh.current = ab->param1;
+            sh.regenRate  = ab->param2;
+            sh.regenDelay = ab->param3;
+            world.addShield(e, sh);
+            break; // un solo scudo per entità
+        }
+    }
+
     UnitTemplate tpl = {
         info.x, info.z, yPos, info.teamId,
         info.mr, info.mg, info.mb,
@@ -277,6 +304,7 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     tpl.meshScale      = info.meshScale;
     tpl.weaponId       = info.weaponId;
     tpl.aiProfileId    = info.aiProfileId;
+    tpl.abilityIds     = info.abilityIds;
     tpl.weaponMesh     = info.weaponMesh;
     tpl.weaponLocal    = info.weaponLocal;
 
@@ -329,6 +357,7 @@ void ConquestMode::checkDeaths(World& world)
                 entry.meshScale       = tpl.meshScale;
                 entry.weaponId        = tpl.weaponId;
                 entry.aiProfileId     = tpl.aiProfileId;
+                entry.abilityIds      = tpl.abilityIds;
                 entry.weaponMesh      = tpl.weaponMesh;
                 entry.weaponLocal     = tpl.weaponLocal;
                 m_respawnQueue.push_back(entry);
@@ -442,7 +471,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                               const std::string& weaponId = "",
                               Mesh* weaponMesh = nullptr,
                               const glm::mat4& weaponLocal = glm::mat4(1.0f),
-                              const std::string& aiProfileId = "")
+                              const std::string& aiProfileId = "",
+                              const std::vector<std::string>& abilityIds = {})
     {
         RespawnEntry info;
         info.timer           = 0;
@@ -476,6 +506,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         info.weaponMesh  = weaponMesh;
         info.weaponLocal = weaponLocal;
         info.aiProfileId = aiProfileId;
+        info.abilityIds  = abilityIds;
         spawnUnit(world, info);
     };
 
@@ -557,7 +588,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
                resolved.meshPath,
                resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
-               resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId);
+               resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
+               resolved.abilityIds);
     }
 
     // ── Lista alleati da mappa/registry ─────────────────────────────────────
@@ -627,7 +659,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                        meshPath, arx, ary, asc,
                        allyDef ? allyDef->primaryWeaponId() : std::string(),
                        wa.mesh, wa.local,
-                       allyDef ? allyDef->aiProfileId : std::string());
+                       allyDef ? allyDef->aiProfileId : std::string(),
+                       allyDef ? allyDef->abilityIds : std::vector<std::string>{});
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────
@@ -684,6 +717,10 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     std::cout << "[ConquestMode] Spawn completato: "
               << nEnemies << " nemici, " << nAllies << " alleati AI, "
               << m_commandPosts.count() << " command post.\n";
+    telemetry::logInfo("[Conquest] spawn: " + std::to_string(nEnemies)
+        + " nemici, " + std::to_string(nAllies) + " alleati AI, "
+        + std::to_string(m_commandPosts.count()) + " post, entita' totali "
+        + std::to_string(world.getEntities().size()));
 }
 
 // Regole obiettivo di Conquista: maggioranza dei post → drena i ticket

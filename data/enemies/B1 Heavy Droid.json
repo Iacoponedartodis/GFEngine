@@ -1,5 +1,7 @@
 {
-    "abilities": [],
+    "abilities": [
+        "Shield"
+    ],
     "ai_profile": "B1 Heavy Droid",
     "attach_points": {
         "eye": [

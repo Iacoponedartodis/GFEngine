@@ -7,6 +7,7 @@
 #include "mini/ecs/World.hpp"
 #include "mini/core/GameConfig.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 
@@ -57,21 +58,37 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
 
     // ── Manichini nemici sullo spawn team2 ────────────────────────────────
-    std::string dummyId = "B1 Battle Droid";
-    if (registry && !registry->enemies().empty())
-        dummyId = registry->enemies().begin()->first;
+    // Almeno un manichino per OGNI definizione registrata (round-robin):
+    // così ogni nemico/alleato autorato è subito testabile in sandbox.
+    std::vector<std::string> enemyIds;
+    if (registry)
+        for (auto& [id, def] : registry->enemies()) enemyIds.push_back(id);
+    std::sort(enemyIds.begin(), enemyIds.end());
+    if (enemyIds.empty()) enemyIds.push_back("B1 Battle Droid");
 
-    for (int i = -2; i <= 2; ++i)
-        spawnDummy(world, { p2x + i * 3.0f, p2z, dummyId, 2 });
+    const int nEnemies = std::max(enemyCount, (int)enemyIds.size());
+    for (int i = 0; i < nEnemies; ++i)
+    {
+        const float off = ((float)i - (float)(nEnemies - 1) * 0.5f) * 3.0f;
+        spawnDummy(world, { p2x + off, p2z + (float)(i % 2) * 2.5f,
+                            enemyIds[i % (int)enemyIds.size()], 2 });
+    }
 
     // ── Manichini alleati vicino allo spawn team1 (verso il centro) ───────
-    std::string allyId = "Clone Trooper";
-    if (registry && !registry->allies().empty())
-        allyId = registry->allies().begin()->first;
+    std::vector<std::string> allyIds;
+    if (registry)
+        for (auto& [id, def] : registry->allies()) allyIds.push_back(id);
+    std::sort(allyIds.begin(), allyIds.end());
+    if (allyIds.empty()) allyIds.push_back("Clone Trooper");
 
     const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
-    for (int i = -1; i <= 1; ++i)
-        spawnDummy(world, { p1x + i * 3.0f, p1z + dirZ * 4.0f, allyId, 1 });
+    const int nAllies = std::max(allyCount, (int)allyIds.size());
+    for (int i = 0; i < nAllies; ++i)
+    {
+        const float off = ((float)i - (float)(nAllies - 1) * 0.5f) * 3.0f;
+        spawnDummy(world, { p1x + off, p1z + dirZ * (4.0f + (float)(i % 2) * 2.5f),
+                            allyIds[i % (int)allyIds.size()], 1 });
+    }
 }
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
@@ -141,6 +158,20 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
                                    ? def->id : def->hitboxProfileId;
         if (const auto* hp = m_registry->getHitboxProfile(profId))
             world.addHitbox(e, HitboxComponent{hp});
+
+        // Abilità (16_AiBehavior): lo shield conta anche sui manichini,
+        // così è testabile in sandbox come tutto il resto del combat.
+        for (const auto& abId : def->abilityIds)
+        {
+            const AbilityDef* ab = m_registry->getAbility(abId);
+            if (!ab || ab->type != "shield") continue;
+            ShieldComponent sh;
+            sh.max = sh.current = ab->param1;
+            sh.regenRate  = ab->param2;
+            sh.regenDelay = ab->param3;
+            world.addShield(e, sh);
+            break;
+        }
     }
 
     m_dummies.push_back({e, info});

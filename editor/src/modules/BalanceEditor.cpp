@@ -117,6 +117,116 @@ void BalanceEditor::saveAI(const mini::AiProfileDef& a)
     m_registry.reload(getSourceDataDir());
 }
 
+void BalanceEditor::saveAbility(const mini::AbilityDef& a)
+{
+    std::string path = getSourceDataDir() + "abilities/" + a.id + ".json";
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+    j.erase("id"); // deprecato: id = nome file (ADR-001)
+    j["name"]     = a.name;
+    j["type"]     = a.type;
+    j["param1"]   = a.param1;
+    j["param2"]   = a.param2;
+    j["param3"]   = a.param3;
+    j["cooldown"] = a.cooldown;
+    j["passive"]  = a.passive;
+    return true;
+    });
+    std::cout << "[Balance] Salvato: " << path << "\n";
+    m_dirty = false;
+    m_registry.reload(getSourceDataDir());
+}
+
+// ── Abilities tab ────────────────────────────────────────────────────────
+
+void BalanceEditor::drawAbilitiesTab()
+{
+    const auto& abilities = m_registry.abilities();
+
+    ImGui::BeginChild("##ablist", ImVec2(180, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    for (auto& [id, a] : abilities)
+    {
+        bool sel = (id == m_selAbility);
+        if (ImGui::Selectable((a.name.empty() ? id : a.name).c_str(), sel))
+            m_selAbility = id;
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+
+    static mini::AbilityDef edit;
+    static std::string editId;
+    static char newAId[64] = "";
+
+    ImGui::BeginChild("##abedit", ImVec2(0, 0), false);
+
+    // Crea nuova abilità
+    ImGui::TextDisabled("Nuova abilita':");
+    ImGui::SetNextItemWidth(160);
+    ImGui::InputText("##newaid", newAId, 64);
+    ImGui::SameLine();
+    if (ImGui::Button("+ Crea") && newAId[0] != '\0')
+    {
+        std::string path = getSourceDataDir() + "abilities/" + newAId + ".json";
+        if (!fs::exists(path))
+        {
+            mini::AbilityDef def;
+            def.id = newAId; def.name = newAId; def.type = "shield";
+            def.param1 = 100.0f; def.param2 = 5.0f; def.param3 = 3.0f;
+            def.cooldown = 10.0f; def.passive = true;
+            saveAbility(def); m_selAbility = newAId;
+        }
+        newAId[0] = '\0';
+    }
+    ImGui::Separator();
+
+    auto it = abilities.find(m_selAbility);
+    if (it == abilities.end())
+    { ImGui::TextDisabled("Seleziona un'abilita'."); ImGui::EndChild(); return; }
+    if (editId != m_selAbility) { edit = it->second; editId = m_selAbility; }
+
+    ImGui::Text("Abilita': %s  [%s]", edit.name.c_str(), edit.id.c_str());
+    ImGui::Separator();
+
+    // Nome (etichetta, non id)
+    {
+        char nameBuf[64];
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", edit.name.c_str());
+        if (ImGui::InputText("Nome", nameBuf, sizeof(nameBuf)))
+            edit.name = nameBuf;
+    }
+
+    // Tipo dall'elenco supportato (niente testo libero)
+    {
+        static const char* kTypes[] =
+            {"shield", "roll", "melee", "jetpack", "missile", "command_aura"};
+        int ti = 0;
+        for (int i = 0; i < 6; ++i) if (edit.type == kTypes[i]) { ti = i; break; }
+        if (ImGui::Combo("Tipo", &ti, kTypes, 6)) edit.type = kTypes[ti];
+    }
+    ImGui::TextDisabled("Runtime attivo: solo 'shield' (16_AiBehavior). Gli altri tipi\n"
+                        "sono autorabili ma non ancora consumati in partita.");
+    ImGui::Separator();
+
+    // Parametri con etichette contestuali per il tipo shield
+    const bool isShield = (edit.type == "shield");
+    ImGui::DragFloat(isShield ? "HP scudo (param1)"    : "param1", &edit.param1, 1.0f,  0.0f, 1000.0f, "%.1f");
+    ImGui::DragFloat(isShield ? "Rigenerazione/s (param2)" : "param2", &edit.param2, 0.1f,  0.0f,  100.0f, "%.1f");
+    ImGui::DragFloat(isShield ? "Ritardo regen s (param3)" : "param3", &edit.param3, 0.1f,  0.0f,   30.0f, "%.1f");
+    ImGui::DragFloat("Cooldown (s)", &edit.cooldown, 0.1f, 0.0f, 60.0f, "%.1f");
+    ImGui::Checkbox("Passiva", &edit.passive);
+
+    ImGui::Separator();
+    if (ImGui::Button("Salva", {120,0}))
+        saveAbility(edit);
+    ImGui::SameLine();
+    if (ImGui::Button("Ripristina", {120,0}))
+        edit = it->second;
+    ImGui::SameLine();
+    if (ImGui::Button("Ricarica tutto", {120,0}))
+        reload();
+
+    ImGui::EndChild();
+}
+
 // ── Weapons tab ──────────────────────────────────────────────────────────
 
 void BalanceEditor::drawWeaponsTab()
@@ -576,6 +686,7 @@ void BalanceEditor::draw()
         if (ImGui::BeginTabItem("AI"))          { drawAITab();         ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Abilita'"))    { drawAbilitiesTab();  ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 }

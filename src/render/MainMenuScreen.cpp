@@ -6,6 +6,44 @@ namespace mini
 
 MainMenuScreen::MainMenuScreen(int w, int h) : m_ui(w, h) {}
 
+// Geometria condivisa render/mouse: rettangolo della voce i.
+static void itemRect(int i, float W, float H,
+                     float& bx, float& by, float& bw, float& bh)
+{
+    bx = W * 0.5f - 180.0f;
+    by = H * 0.38f + (float)i * 68.0f;
+    bw = 360.0f;
+    bh = 52.0f;
+}
+
+MainMenuScreen::Result MainMenuScreen::handleMouse(float mx, float my, bool clicked)
+{
+    constexpr int ITEMS = 3;
+    const float W = (float)m_ui.width();
+    const float H = (float)m_ui.height();
+
+    for (int i = 0; i < ITEMS; ++i)
+    {
+        float bx, by, bw, bh;
+        itemRect(i, W, H, bx, by, bw, bh);
+        if (mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
+        {
+            m_selected = i;
+            if (clicked)
+            {
+                switch (i)
+                {
+                case 0: return Result::NewGame;
+                case 1: return Result::Options;
+                case 2: return Result::Quit;
+                }
+            }
+            break;
+        }
+    }
+    return Result::None;
+}
+
 MainMenuScreen::Result MainMenuScreen::handleKey(int sc)
 {
     constexpr int ITEMS = 3;
@@ -54,14 +92,11 @@ void MainMenuScreen::render() const
     };
     constexpr int N = 3;
 
-    const float startY = H * 0.38f;
-    const float rowH   = 68.0f;
-
     for (int i = 0; i < N; ++i)
     {
-        const float y = startY + i * rowH;
+        float bx, y, bw, bh;
+        itemRect(i, W, H, bx, y, bw, bh);
         const bool sel = (i == m_selected);
-        const float bx = cx - 180, bw = 360, bh = 52;
 
         m_ui.rect(bx, y, bw, bh,
                   sel ? 0.14f : 0.07f, sel ? 0.25f : 0.07f, sel ? 0.45f : 0.09f,
@@ -77,7 +112,7 @@ void MainMenuScreen::render() const
     // Istruzioni
     m_ui.rect(0, H - 42, W, 42, 0, 0, 0, 0.5f);
     m_ui.textCentered(cx, H - 32, 1.7f,
-                      "INVIO = seleziona   |   SU/GIU = naviga   |   ESC = esci",
+                      "INVIO o CLICK = seleziona   |   SU/GIU o MOUSE = naviga   |   ESC = esci",
                       0.5f, 0.5f, 0.55f);
 
     m_ui.end();

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cmath>
+#include <algorithm>
 
 namespace mini
 {
@@ -12,6 +13,26 @@ void HUD::tick(float dt)
 {
     if (m_hitTimer   > 0.0f) m_hitTimer   -= dt;
     if (m_toastTimer > 0.0f) m_toastTimer -= dt;
+    for (auto& l : m_feed) l.age += dt;
+}
+
+void HUD::pushFeed(const std::string& msg)
+{
+    m_feed.push_back({msg, 0.0f});
+    if ((int)m_feed.size() > k_feedMax)
+        m_feed.erase(m_feed.begin(), m_feed.begin() + ((int)m_feed.size() - k_feedMax));
+    // Se l'utente sta leggendo indietro, tieni ferma la vista sui messaggi
+    // vecchi anche quando ne arrivano di nuovi.
+    if (m_feedScroll > 0)
+        m_feedScroll = std::min(m_feedScroll + 1,
+                                std::max(0, (int)m_feed.size() - k_feedPanel));
+}
+
+void HUD::scrollFeed(int lines)
+{
+    if (!m_feedOpen) return;
+    m_feedScroll = std::clamp(m_feedScroll + lines,
+                              0, std::max(0, (int)m_feed.size() - k_feedPanel));
 }
 
 void HUD::hitmarker(bool kill)
@@ -67,15 +88,37 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                       (int)(playerHp > 0 ? playerHp : 0), (int)playerMaxHp);
         m_ui.text(PAD, BY - 16, 1.6f, hpBuf, 0.9f, 0.9f, 0.9f);
 
-        // ── Ticket + contatori (alto centro) ─────────────────────────
+        // ── Ticket + contatori: pannelli fazione AI LATI del centro,
+        //    così i post (al centro) non coprono mai le scritte ────────
         if (state == 0 && team1Tickets >= 0)
         {
-            char tBuf[96];
-            std::snprintf(tBuf, sizeof(tBuf),
-                "ALLEATI  %d vivi  %d ticket   |   NEMICI  %d vivi  %d ticket",
-                aliveAllies, team1Tickets, aliveEnemies, team2Tickets);
-            m_ui.rect(cx - 260, 8, 520, 22, 0, 0, 0, 0.55f);
-            m_ui.text(cx - 250, 12, 1.6f, tBuf, 0.85f, 0.85f, 0.85f);
+            // Spazio riservato al centro per la barra dei command post
+            const float postBox = 30.0f, postGap = 10.0f;
+            const float postW = m_posts.empty() ? 0.0f
+                : (float)m_posts.size() * postBox
+                + (float)(m_posts.size() - 1) * postGap;
+            const float half = postW * 0.5f + (m_posts.empty() ? 0.0f : 26.0f);
+
+            const float PW = 195.0f, PH = 34.0f, PY = 6.0f;
+            char buf[48];
+
+            // Alleati (blu) — a sinistra del centro
+            const float axr = cx - half;             // bordo destro pannello
+            m_ui.rect(axr - PW, PY, PW, PH, 0.06f, 0.10f, 0.22f, 0.78f);
+            m_ui.rect(axr - PW, PY, 3, PH, 0.25f, 0.50f, 1.0f);
+            m_ui.text(axr - PW + 10, PY + 3, 1.3f, "ALLEATI", 0.55f, 0.70f, 1.0f);
+            std::snprintf(buf, sizeof(buf), "%d vivi   %d ticket",
+                          aliveAllies, team1Tickets);
+            m_ui.text(axr - PW + 10, PY + 17, 1.6f, buf, 0.9f, 0.93f, 1.0f);
+
+            // Nemici (rosso) — a destra del centro
+            const float exl = cx + half;             // bordo sinistro pannello
+            m_ui.rect(exl, PY, PW, PH, 0.22f, 0.07f, 0.06f, 0.78f);
+            m_ui.rect(exl + PW - 3, PY, 3, PH, 1.0f, 0.30f, 0.25f);
+            m_ui.text(exl + 10, PY + 3, 1.3f, "NEMICI", 1.0f, 0.60f, 0.55f);
+            std::snprintf(buf, sizeof(buf), "%d vivi   %d ticket",
+                          aliveEnemies, team2Tickets);
+            m_ui.text(exl + 10, PY + 17, 1.6f, buf, 1.0f, 0.92f, 0.9f);
         }
 
         // ── Barra calore + crosshair (solo in Playing) ───────────────
@@ -176,6 +219,57 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
             const float tw = (float)m_toast.size() * 9.0f;
             m_ui.rect(cx - tw*0.5f - 8, 52, tw + 16, 26, 0.05f, 0.05f, 0.08f, 0.8f);
             m_ui.text(cx - tw*0.5f, 58, 1.6f, m_toast.c_str(), 0.95f, 0.9f, 0.5f);
+        }
+
+        // ── Log chat (17_SandboxTools) — basso sinistra, sopra la barra HP.
+        //    Chiusa: ultime righe recenti che sfumano. Aperta (L): pannello
+        //    con lo storico recente. ─────────────────────────────────────
+        {
+            const float lineH = 15.0f, x0 = PAD;
+            if (m_feedOpen)
+            {
+                const int total = (int)m_feed.size();
+                const int n     = std::min(total, k_feedPanel);
+                // Finestra spostata indietro di m_feedScroll righe dal fondo
+                const int end   = std::max(n, total - m_feedScroll);
+                const float panelH = (float)k_feedPanel * lineH + 26.0f;
+                const float y0 = H - 60.0f - panelH;
+                m_ui.rect(x0 - 6, y0 - 6, 470, panelH + 12, 0.03f, 0.04f, 0.06f, 0.82f);
+                char hdr[80];
+                if (m_feedScroll > 0)
+                    std::snprintf(hdr, sizeof(hdr),
+                        "LOG EVENTI   [L] chiudi  [PAGSU/PAGGIU] scorri  (-%d)", m_feedScroll);
+                else
+                    std::snprintf(hdr, sizeof(hdr),
+                        "LOG EVENTI   [L] chiudi  [PAGSU/PAGGIU] scorri");
+                m_ui.text(x0, y0, 1.4f, hdr, 0.6f, 0.75f, 0.95f);
+                for (int i = 0; i < n; ++i)
+                {
+                    const auto& l = m_feed[end - n + i];
+                    m_ui.text(x0, y0 + 20.0f + (float)i * lineH, 1.25f,
+                              l.text.c_str(), 0.85f, 0.87f, 0.9f);
+                }
+            }
+            else if (state == 0)
+            {
+                // Righe recenti (fade), dalla più vecchia in alto
+                int shown = 0;
+                const int n = (int)m_feed.size();
+                for (int i = std::max(0, n - k_feedRecent); i < n; ++i)
+                {
+                    const auto& l = m_feed[i];
+                    if (l.age > k_feedFadeSec) continue;
+                    const float a = (l.age < k_feedFadeSec - 1.5f)
+                                  ? 0.85f
+                                  : 0.85f * (k_feedFadeSec - l.age) / 1.5f;
+                    const float y = H - 66.0f
+                        - (float)(n - 1 - i) * lineH;
+                    // Ui2D::text non ha alpha: il fade scurisce il colore
+                    m_ui.text(x0, y, 1.25f, l.text.c_str(), 0.8f*a, 0.83f*a, 0.88f*a);
+                    ++shown;
+                }
+                (void)shown;
+            }
         }
 
         // ── Overlay Win/Lose ─────────────────────────────────────────

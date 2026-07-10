@@ -539,7 +539,10 @@ void EntityEditor::saveSelected()
     j["ai_profile"]     = e.aiProfileId;
     j["hitbox_profile"] = e.hitboxProfileId;
     j["weapons"]        = e.weaponIds;
-    j["abilities"]      = e.abilityIds;
+    // Niente slot vuoti nel JSON (entry "+ Abilita'" mai riempite)
+    std::vector<std::string> abOut;
+    for (const auto& a : e.abilityIds) if (!a.empty()) abOut.push_back(a);
+    j["abilities"]      = abOut;
 
     j["hitbox_profile"] = e.hitboxProfileId;
     j.erase("hitbox_zones"); // legacy inline: deprecato da ADR-006
@@ -1335,6 +1338,25 @@ void EntityEditor::drawStatsPanel()
         ImGui::PopID();
     }
     if (ImGui::SmallButton("+ Arma")) e.weaponIds.push_back("");
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Abilita'");
+    for (int i = 0; i < (int)e.abilityIds.size(); ++i)
+    {
+        ImGui::PushID(1000 + i);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 30.f);
+        if (ImGui::BeginCombo(("##aid"+std::to_string(i)).c_str(),
+                              e.abilityIds[i].empty() ? "-- seleziona --" : e.abilityIds[i].c_str()))
+        {
+            for (auto& aid : m_availableAbilities)
+                if (ImGui::Selectable(aid.c_str(), e.abilityIds[i] == aid)) { e.abilityIds[i] = aid; m_dirty = true; }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("X")) { e.abilityIds.erase(e.abilityIds.begin()+i); m_dirty = true; ImGui::PopID(); break; }
+        ImGui::PopID();
+    }
+    if (ImGui::SmallButton("+ Abilita'")) e.abilityIds.push_back("");
 
     ImGui::Separator();
     if (m_dirty) ImGui::TextColored({1.f,0.7f,0.2f,1.f}, "* Modifiche non salvate");

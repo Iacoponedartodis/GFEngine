@@ -50,6 +50,21 @@ struct AiComponent
     float accuracy     = 0.55f;  // 1 = colpo perfetto; <1 = dispersione
     float reactionTime = 0.4f;   // ritardo primo colpo all'acquisizione
 
+    // ── Comportamento tattico dal profilo (16_AiBehavior) ─────────────
+    float aggression      = 0.65f; // 1 = chiude la distanza, 0 = tiene il raggio
+    float retreatHpThresh = 0.0f;  // frazione HP sotto cui si disimpegna (0 = mai)
+    float coverPreference = 0.0f;  // probabilità di fase evasiva a fine peek
+    float peekMin = 0.6f, peekMax = 1.1f; // durata finestra di fuoco (s)
+    float hideMin = 0.8f, hideMax = 1.8f; // durata finestra evasiva (s)
+    float flankChance     = 0.0f;  // probabilità di approccio laterale in Hunt
+
+    // Stato runtime peek/hide + flank
+    float searchTimer = 0.0f;   // tempo in Search: oltre il limite → Patrol
+    float exposeTimer = 0.0f;   // countdown della fase corrente
+    bool  evading     = false;  // true = fase evasiva (non spara)
+    bool  flankActive = false;  // sta raggiungendo il punto di fiancheggiamento
+    float flankX = 0.0f, flankZ = 0.0f;
+
     float seekSpeed      = 3.5f;
     float lastKnownX     = 0.0f;
     float lastKnownZ     = 0.0f;

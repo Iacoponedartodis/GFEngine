@@ -15,7 +15,12 @@ namespace mini
 class SandboxMode : public IGameMode
 {
 public:
-    void applySettings(const MatchSettings& s) override { playerHp = s.playerHp; }
+    void applySettings(const MatchSettings& s) override
+    {
+        playerHp   = s.playerHp;
+        allyCount  = s.team1AiCount;
+        enemyCount = s.team2AiCount;
+    }
     void start(World& world, Mesh* defaultMesh, Texture* texture,
                const DefinitionRegistry* registry,
                const MeshCache* meshCache) override;
@@ -30,7 +35,9 @@ public:
     int consumeTeam1Ticket() override { return 999; }
     void overridePlayerEntity(EntityId e) override { m_playerEntity = e; }
 
-    float playerHp = 100.0f;
+    float playerHp   = 100.0f;
+    int   allyCount  = 3;   // manichini team1 (da MatchSettings.team1AiCount)
+    int   enemyCount = 5;   // manichini team2 (da MatchSettings.team2AiCount)
 
 private:
     EntityId  m_playerEntity = 0;

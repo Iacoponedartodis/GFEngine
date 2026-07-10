@@ -1,5 +1,28 @@
 # 05 — Current State
 
+## 2026-07-10 (4) — Battaglia AI viva + Sandbox Tools rifiniti
+- Fix AiSystem (search hardcoded pre-firebase, Search senza uscita, primo colpo
+  soppresso): la battaglia AI-vs-AI ora produce ingaggi/kill continui (verificato con
+  `--sim`: flag CLI che avvia direttamente la simulazione osservatore). Heartbeat
+  `ai:` e riepilogo spawn `[Conquest]` in telemetria. Sandbox: un manichino per ogni
+  definizione; menu con slot arma primaria/secondaria, ticket/respawn, scelta modalità
+  della simulazione; log chat scorrevole (PAGSU/PAGGIU, storico 200).
+
+## 2026-07-10 (3) — Sandbox Tools (17_SandboxTools)
+- TAB in sandbox apre il menu prova: tutte le armi (scroll+INVIO), parametri partita
+  (manichini per team, HP, riavvio), simulazione AI-vs-AI con osservatore neutrale in
+  volo libero (WASD+SPAZIO/CTRL). L = log chat eventi in-game (hit/scudi/kill), attiva
+  in ogni modalità. `SandboxMode` ora legge i conteggi da MatchSettings.
+
+## 2026-07-10 — Profilo tattico AI completo + ability shield (16_AiBehavior, Todo #3)
+- Tutti i campi tattici di `AiProfileDef` ora hanno effetto: aggression (distanza
+  d'ingaggio), retreat_hp_threshold (disimpegno con fuoco di copertura), peek/hide da
+  cover_preference (in "hide" non spara), flank_chance (approccio laterale in Hunt).
+- Ability runtime tipo "shield": `ShieldComponent` assorbe il danno prima degli HP e si
+  rigenera (param1/2/3 dell'AbilityDef); assegnata allo spawn da `abilities[]` dell'unità.
+  `B1 Heavy Droid` la referenzia; assegnabile dall'EntityEditor (sezione Abilita') e
+  bilanciabile dalla tab Abilita' del BalanceEditor. Vale anche sui manichini sandbox.
+
 ## 2026-07-09 (12) — Spike split-screen (ADR-011): esito (a)
 - Due viewport + seconda Camera sulla stessa scena live: funziona con sole aggiunte minori
   al Renderer (`drawMeshFrom(const Camera&)`, `setViewportRect`). Toggle debug F9 in
