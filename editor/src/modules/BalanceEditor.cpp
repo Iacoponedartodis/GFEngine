@@ -1,5 +1,7 @@
 #include "modules/BalanceEditor.hpp"
 #include "util/JsonSave.hpp"
+#include "util/FileDialog.hpp"
+#include "util/DefinitionRename.hpp"
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -444,7 +446,9 @@ void BalanceEditor::saveMap(const mini::MapDef& m)
     j["spawn_team2"]  = { m.spawnTeam2[0], m.spawnTeam2[1], m.spawnTeam2[2] };
     j["max_tickets"]  = m.maxTickets;
     j["enemy_count"]  = m.enemyCount;
+    j["ally_count"]   = m.allyCount;
     j["enemy_types"]  = m.enemyTypes;
+    j["ally_types"]   = m.allyTypes;
     return true;
     });
     std::cout << "[Balance] Salvato: " << path << "\n";
@@ -490,8 +494,9 @@ void BalanceEditor::drawMapsTab()
     // ── Ticket e conteggio ───────────────────────────────────────────
     if (ImGui::CollapsingHeader("Partita", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::DragInt("Ticket massimi",   &edit.maxTickets, 1, 1, 200);
-        ImGui::DragInt("Nemici in campo",  &edit.enemyCount, 1, 1,  20);
+        ImGui::DragInt("Ticket massimi",    &edit.maxTickets, 1, 1, 200);
+        ImGui::DragInt("Nemici in campo",   &edit.enemyCount, 1, 1,  20);
+        ImGui::DragInt("Alleati in campo",  &edit.allyCount,  1, 0,  20);
     }
 
     // ── Spawn points ─────────────────────────────────────────────────
@@ -501,83 +506,97 @@ void BalanceEditor::drawMapsTab()
         ImGui::DragFloat3("Spawn Team 2 (X/Y/Z)", edit.spawnTeam2.data(), 0.1f, -50.f, 50.f, "%.2f");
     }
 
-    // ── Enemy types con dropdown ──────────────────────────────────────
-    if (ImGui::CollapsingHeader("Tipi Nemici (enemy_types)", ImGuiTreeNodeFlags_DefaultOpen))
+    // ── Roster per team: UI unica per enemy_types e ally_types ─────────
+    // Vuoto = "auto": il runtime usa TUTTE le definizioni registrate
+    // (fallback ADR-007) — le nuove entità entrano in partita da sole.
+    auto drawRoster = [&](const char* header, const char* tag,
+                          std::vector<std::string>& types, bool isAllyList)
     {
+        if (!ImGui::CollapsingHeader(header, ImGuiTreeNodeFlags_DefaultOpen))
+            return;
+
         ImGui::TextDisabled("Ordine = sequenza di spawn ciclica in partita.");
+        ImGui::TextDisabled("Lista VUOTA = automatico: tutte le definizioni registrate.");
         ImGui::Spacing();
 
-        const auto& enemies = m_registry.enemies();
+        std::vector<std::string> ids;
+        if (isAllyList) { for (auto& [id, _] : m_registry.allies())  ids.push_back(id); }
+        else            { for (auto& [id, _] : m_registry.enemies()) ids.push_back(id); }
 
-        // Costruisce lista nomi per i dropdown
-        std::vector<std::string> enemyIds;
-        for (auto& [id, _] : enemies) enemyIds.push_back(id);
+        auto defOf = [&](const std::string& id) -> const mini::EnemyDef* {
+            return isAllyList ? m_registry.getAlly(id) : m_registry.getEnemy(id);
+        };
 
-        for (int i = 0; i < (int)edit.enemyTypes.size(); ++i)
+        for (int i = 0; i < (int)types.size(); ++i)
         {
-            ImGui::PushID(i);
+            ImGui::PushID(tag); ImGui::PushID(i);
             ImGui::Text("[%d]", i);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(220);
-            const std::string& cur = edit.enemyTypes[i];
-            if (ImGui::BeginCombo(("##et" + std::to_string(i)).c_str(),
+            const std::string& cur = types[i];
+            if (ImGui::BeginCombo("##slot",
                                   cur.empty() ? "-- seleziona --" : cur.c_str()))
             {
-                for (auto& eid : enemyIds)
+                for (auto& eid : ids)
                 {
-                    const auto* edef = m_registry.getEnemy(eid);
+                    const auto* edef = defOf(eid);
                     std::string label = edef ? (edef->name + "  [" + eid + "]") : eid;
                     bool sel = (cur == eid);
-                    if (ImGui::Selectable(label.c_str(), sel))
-                        edit.enemyTypes[i] = eid;
+                    if (ImGui::Selectable(label.c_str(), sel)) types[i] = eid;
                     if (sel) ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
             }
             ImGui::SameLine();
 
-            // Preview colore nemico
             if (!cur.empty())
             {
-                const auto* edef = m_registry.getEnemy(cur);
-                if (edef)
+                if (const auto* edef = defOf(cur))
                 {
                     ImVec4 col(edef->color[0], edef->color[1], edef->color[2], 1.0f);
-                    ImGui::ColorButton(("##cb" + std::to_string(i)).c_str(), col,
+                    ImGui::ColorButton("##cb", col,
                                        ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
                     ImGui::SameLine();
                 }
             }
 
             if (ImGui::SmallButton("X##rm"))
-            { edit.enemyTypes.erase(edit.enemyTypes.begin() + i); ImGui::PopID(); break; }
-            ImGui::PopID();
+            { types.erase(types.begin() + i); ImGui::PopID(); ImGui::PopID(); break; }
+            ImGui::PopID(); ImGui::PopID();
         }
 
         ImGui::Spacing();
+        ImGui::PushID(tag);
         if (ImGui::SmallButton("+ Aggiungi slot"))
-            edit.enemyTypes.push_back(enemyIds.empty() ? "" : enemyIds[0]);
+            types.push_back(ids.empty() ? "" : ids[0]);
 
-        // Bottoni per duplicare i pattern comuni
         ImGui::Spacing();
         ImGui::TextDisabled("Pattern rapidi:");
-        if (!enemyIds.empty())
+        if (!ids.empty())
         {
             if (ImGui::SmallButton("Tutti uguali (primo tipo)"))
-            {
-                for (auto& et : edit.enemyTypes) et = enemyIds[0];
-            }
-            if (enemyIds.size() >= 2)
+                for (auto& et : types) et = ids[0];
+            if (ids.size() >= 2)
             {
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Alterna 2 tipi"))
-                {
-                    for (int i = 0; i < (int)edit.enemyTypes.size(); ++i)
-                        edit.enemyTypes[i] = enemyIds[i % 2];
-                }
+                    for (int i = 0; i < (int)types.size(); ++i)
+                        types[i] = ids[i % 2];
             }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Uno per ogni definizione"))
+            {
+                types = ids;   // round-robin naturale su tutto il registrato
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Svuota (auto)"))
+                types.clear();
         }
-    }
+        ImGui::PopID();
+    };
+
+    drawRoster("Tipi Nemici (enemy_types)", "en", edit.enemyTypes, false);
+    drawRoster("Tipi Alleati (ally_types)", "al", edit.allyTypes, true);
 
     // ── Salvataggio ──────────────────────────────────────────────────
     ImGui::Spacing();
@@ -687,6 +706,7 @@ void BalanceEditor::draw()
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Abilita'"))    { drawAbilitiesTab();  ImGui::EndTabItem(); }
+        // Veicoli: modulo dedicato "Vehicle Editor" (19_Vehicles)
         ImGui::EndTabBar();
     }
 }

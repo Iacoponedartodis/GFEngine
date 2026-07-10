@@ -202,6 +202,7 @@ add_executable(GFEditor
     editor/src/modules/EntityEditor.cpp
     editor/src/modules/MapEditor.cpp
     editor/src/modules/WeaponEditor.cpp
+    editor/src/modules/VehicleEditor.cpp
     src/core/Telemetry.cpp
     src/game/data/DefinitionRegistry.cpp
     src/platform/OpenGL.cpp

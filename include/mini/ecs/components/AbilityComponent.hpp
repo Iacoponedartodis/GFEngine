@@ -9,10 +9,13 @@ namespace mini
 struct AbilityState
 {
     std::string abilityId;
+    std::string type;         // "roll", ... (dal AbilityDef, risolto allo spawn)
     bool  active    = false;
     float cooldown  = 0.0f;   // tempo rimanente prima di poter riattivarsi
     float stateTime = 0.0f;   // tempo dall'attivazione corrente
-    float param1    = 0.0f;   // es. HP scudo rimanenti
+    float param1    = 0.0f;   // es. velocità roll (m/s)
+    float param2    = 0.0f;   // es. durata roll (s)
+    float cooldownMax = 5.0f; // cooldown pieno dal AbilityDef
 };
 
 // Componente ECS: lista di abilità assegnate a un'entità

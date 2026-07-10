@@ -739,6 +739,40 @@ void EntityEditor::draw()
             selectEntry(i);
     }
     ImGui::EndChild();
+
+    // ── Nuova entità (id = nome file, ADR-001) ───────────────────────────
+    {
+        static char newEId[64] = "";
+        static int  newEKind   = 0;   // 0 = Nemico, 1 = Alleato
+        ImGui::SetNextItemWidth(m_listW - 70.0f);
+        ImGui::InputText("##neweid", newEId, sizeof(newEId));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(62.0f);
+        const char* kinds[2] = {"Nemico", "Alleato"};
+        ImGui::Combo("##newekind", &newEKind, kinds, 2);
+        if (ImGui::Button("+ Nuova entita'", {m_listW, 0}) && newEId[0] != '\0')
+        {
+            const std::string sub  = (newEKind == 1) ? "allies/" : "enemies/";
+            const std::string path = getDataDir() + sub + newEId + ".json";
+            if (!fs::exists(path))
+            {
+                // JSON minimo valido: il resto si autora dall'editor.
+                editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+                    j["name"]      = newEId;
+                    j["faction"]   = (newEKind == 1) ? "republic" : "separatist";
+                    j["stats"]["hp"]           = 100.0f;
+                    j["stats"]["move_speed"]   = 4.0f;
+                    j["stats"]["damage_scale"] = 1.0f;
+                    j["weapons"]   = json::array();
+                    j["abilities"] = json::array();
+                    return true;
+                });
+                m_pendingSelectId = newEId;
+                newEId[0] = '\0';
+            }
+        }
+    }
+
     if (ImGui::Button("Ricarica lista", {m_listW, 0})) loadEntries();
     ImGui::EndGroup();
 

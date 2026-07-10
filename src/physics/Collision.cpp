@@ -23,13 +23,15 @@ AABB computeWorldAABB(const TransformComponent& t, const ColliderComponent& c)
     };
 }
 
-bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world)
+bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
+                  EntityId excludeId)
 {
     const glm::vec3 pn = pos - half;
     const glm::vec3 px = pos + half;
 
     for (EntityId id : world.getEntities())
     {
+        if (id == excludeId) continue;   // es. veicolo che muove sé stesso
         const auto* col = world.getCollider(id);
         const auto* t   = world.getTransform(id);
         if (!col || !t) continue;
@@ -46,12 +48,13 @@ bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world)
 // ── Slide semplice ───────────────────────────────────────────────────────
 
 glm::vec3 slideMove(const glm::vec3& prev, const glm::vec3& next,
-                    const glm::vec3& half, World& world)
+                    const glm::vec3& half, World& world,
+                    EntityId excludeId)
 {
     glm::vec3 r = prev;
-    if (!hasCollision({next.x, r.y, r.z}, half, world)) r.x = next.x;
-    if (!hasCollision({r.x, next.y, r.z}, half, world)) r.y = next.y;
-    if (!hasCollision({r.x, r.y, next.z}, half, world)) r.z = next.z;
+    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId)) r.x = next.x;
+    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId)) r.y = next.y;
+    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId)) r.z = next.z;
     return r;
 }
 
@@ -59,20 +62,20 @@ glm::vec3 slideMove(const glm::vec3& prev, const glm::vec3& next,
 
 glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
                                const glm::vec3& half, World& world,
-                               float stepHeight)
+                               float stepHeight, EntityId excludeId)
 {
     glm::vec3 r = prev;
 
     // Asse X
-    if (!hasCollision({next.x, r.y, r.z}, half, world))
+    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId))
     {
         r.x = next.x;
     }
     else
     {
         const glm::vec3 stepped = {next.x, r.y + stepHeight, r.z};
-        if (!hasCollision(stepped, half, world) &&
-            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world))
+        if (!hasCollision(stepped, half, world, excludeId) &&
+            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId))
         {
             r.x = next.x;
             r.y += stepHeight;
@@ -80,19 +83,19 @@ glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
     }
 
     // Asse Y (gravità — no step-up)
-    if (!hasCollision({r.x, next.y, r.z}, half, world))
+    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId))
         r.y = next.y;
 
     // Asse Z
-    if (!hasCollision({r.x, r.y, next.z}, half, world))
+    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId))
     {
         r.z = next.z;
     }
     else
     {
         const glm::vec3 stepped = {r.x, r.y + stepHeight, next.z};
-        if (!hasCollision(stepped, half, world) &&
-            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world))
+        if (!hasCollision(stepped, half, world, excludeId) &&
+            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId))
         {
             r.z = next.z;
             r.y += stepHeight;
@@ -100,6 +103,25 @@ glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
     }
 
     return r;
+}
+
+glm::vec3 nudgeOutOfColliders(const glm::vec3& pos, const glm::vec3& half,
+                              World& world, float step, int rings)
+{
+    if (!hasCollision(pos, half, world)) return pos;
+    static const float dirs[8][2] = {
+        { 1, 0}, {-1, 0}, { 0, 1}, { 0,-1},
+        { 0.707f, 0.707f}, {-0.707f, 0.707f},
+        { 0.707f,-0.707f}, {-0.707f,-0.707f} };
+    for (int ring = 1; ring <= rings; ++ring)
+        for (const auto& d : dirs)
+        {
+            const glm::vec3 p = {pos.x + d[0] * step * (float)ring,
+                                 pos.y,
+                                 pos.z + d[1] * step * (float)ring};
+            if (!hasCollision(p, half, world)) return p;
+        }
+    return pos;
 }
 
 // ── Ray-AABB LOS ─────────────────────────────────────────────────────────

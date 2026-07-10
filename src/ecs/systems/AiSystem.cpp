@@ -2,6 +2,7 @@
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/core/Telemetry.hpp"
+#include "mini/game/data/Definitions.hpp"   // MapDef (18_AiMapConsumption)
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
 
@@ -73,6 +74,56 @@ static void enterHunt(AiComponent& ai, const TransformComponent& et)
             ai.flankActive = true;
         }
     }
+}
+
+// ── Consumo Map Metadata (18_AiMapConsumption) ───────────────────────────
+
+// Cerca il cover point più vicino (≤ maxDist) il cui fronte guarda verso il
+// nemico (dot(facing, versoNemico) > 0). Ritorna false se non ce n'è.
+static bool pickCover(const MapDef* map, float x, float z,
+                      float enemyX, float enemyZ,
+                      float& outX, float& outZ)
+{
+    if (!map || map->coverPoints.empty()) return false;
+    const float maxDist2 = 12.0f * 12.0f;
+    float best2 = maxDist2;
+    bool found = false;
+    for (const auto& c : map->coverPoints)
+    {
+        const float dx = c.x - x, dz = c.z - z;
+        const float d2 = dx*dx + dz*dz;
+        if (d2 >= best2) continue;
+        // Il fronte della copertura deve guardare verso il nemico
+        float ex = enemyX - c.x, ez = enemyZ - c.z;
+        const float el = std::sqrt(ex*ex + ez*ez);
+        if (el < 0.5f) continue;
+        ex /= el; ez /= el;
+        const float fr = c.facingDeg * (PI / 180.0f);
+        const float fx = std::sin(fr), fz = std::cos(fr);
+        if (fx*ex + fz*ez <= 0.15f) continue;  // copre nella direzione sbagliata
+        best2 = d2; outX = c.x; outZ = c.z; found = true;
+    }
+    return found;
+}
+
+// Repulsione dalle danger zone: piega il vettore di movimento lontano dal
+// centro delle aree pericolose (pesata su dangerLevel e vicinanza). Solo
+// fuori dall'ingaggio: sotto fuoco si combatte, non si scappa dagli hint.
+static void applyDangerRepulsion(const MapDef* map, float x, float z,
+                                 float& moveDX, float& moveDZ)
+{
+    if (!map || map->dangerZones.empty()) return;
+    for (const auto& d : map->dangerZones)
+    {
+        const float dx = x - d.x, dz = z - d.z;
+        const float dist = std::sqrt(dx*dx + dz*dz);
+        if (dist >= d.radius || dist < 0.01f) continue;
+        // Peso 0 al bordo, massimo al centro; scala con dangerLevel
+        const float w = d.dangerLevel * (1.0f - dist / d.radius) * 1.5f;
+        moveDX += (dx / dist) * w;
+        moveDZ += (dz / dist) * w;
+    }
+    norm2D(moveDX, moveDZ);
 }
 
 // Genera un punto di ricerca attorno all'ultima posizione nota (raggio
@@ -280,9 +331,41 @@ void AiSystem::update(World& world, float dt)
                     if (ai->exposeTimer <= 0.0f)
                     {
                         if (!ai->evading && aiRand01() < ai->coverPreference)
-                        { ai->evading = true;  ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax); }
+                        {
+                            ai->evading = true;
+                            ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax);
+                            // Copertura vera se la mappa la offre (doc 18):
+                            // altrimenti resta lo strafe evasivo di fallback.
+                            ai->hasCover = pickCover(world.activeMap,
+                                                     et->x, et->z, tt->x, tt->z,
+                                                     ai->coverX, ai->coverZ);
+
+                            // Abilità ROLL (16 est.): entrando in evasione,
+                            // se pronta, scatto laterale col cooldown del def.
+                            if (auto* ab = world.getAbilities(e))
+                                for (auto& s : ab->states)
+                                {
+                                    if (s.type != "roll" || s.cooldown > 0.0f)
+                                        continue;
+                                    s.cooldown    = s.cooldownMax;
+                                    ai->rollTimer = (s.param2 > 0.05f)
+                                                  ? s.param2 : 0.3f;
+                                    const float spd = (s.param1 > 0.5f)
+                                                    ? s.param1 : 9.0f;
+                                    ai->rollVX = perpX * spd;
+                                    ai->rollVZ = perpZ * spd;
+                                    world.pushEvent("ROLL #" + std::to_string(e));
+                                    telemetry::logTrace("roll: entita' "
+                                        + std::to_string(e));
+                                    break;
+                                }
+                        }
                         else
-                        { ai->evading = false; ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax); }
+                        {
+                            ai->evading  = false;
+                            ai->hasCover = false;
+                            ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax);
+                        }
                     }
 
                     // ── Ritirata sotto soglia HP ─────────────────────
@@ -300,8 +383,14 @@ void AiSystem::update(World& world, float dt)
                     { // Disimpegno: arretra dal bersaglio con fuoco di copertura
                       moveDX = -advX*0.8f + perpX*0.4f; moveDZ = -advZ*0.8f + perpZ*0.4f;
                       moveSpeed = ai->seekSpeed; }
+                    else if (ai->evading && ai->hasCover)
+                    { // Fase evasiva CON copertura autorata: raggiungila e restaci
+                      moveDX = ai->coverX - et->x; moveDZ = ai->coverZ - et->z;
+                      const float cd = norm2D(moveDX, moveDZ);
+                      if (cd < 0.7f) { moveDX = 0; moveDZ = 0; moveSpeed = 0; }
+                      else           moveSpeed = ai->seekSpeed; }
                     else if (ai->evading)
-                    { // Fase evasiva: strafe ampio + leggero arretramento
+                    { // Fase evasiva senza cover: strafe ampio + arretramento
                       moveDX = perpX*0.9f - advX*0.3f; moveDZ = perpZ*0.9f - advZ*0.3f;
                       moveSpeed = ai->seekSpeed*0.8f; }
                     else if (dist > prefDist)
@@ -420,8 +509,28 @@ void AiSystem::update(World& world, float dt)
                 et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
         }
 
-        const float nx = et->x + moveDX * moveSpeed * dt;
-        const float nz = et->z + moveDZ * moveSpeed * dt;
+        // Danger zone (doc 18): fuori dall'ingaggio il movimento evita le
+        // aree marcate pericolose dall'autore della mappa.
+        if (ai->state != AiState::Alert && moveSpeed > 0.0f)
+            applyDangerRepulsion(world.activeMap, et->x, et->z, moveDX, moveDZ);
+
+        // Cooldown abilità attive + scatto roll in corso (16 est.)
+        if (auto* ab = world.getAbilities(e))
+            for (auto& s : ab->states)
+                if (s.cooldown > 0.0f) s.cooldown -= dt;
+
+        float nx, nz;
+        if (ai->rollTimer > 0.0f)
+        {
+            ai->rollTimer -= dt;
+            nx = et->x + ai->rollVX * dt;   // lo scatto vince sul movimento
+            nz = et->z + ai->rollVZ * dt;
+        }
+        else
+        {
+            nx = et->x + moveDX * moveSpeed * dt;
+            nz = et->z + moveDZ * moveSpeed * dt;
+        }
         aiMove(*et, nx, nz, *ai, dt, world);
 
         // ── Salto anti-ostacolo (jump_enabled dal profilo AI) ─────────

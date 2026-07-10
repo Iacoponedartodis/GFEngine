@@ -81,6 +81,7 @@ struct WeaponDef
     // model space GREZZO del GLB; usato per agganciare l'arma alla mano.
     float meshScale = 0.8f;
     float meshRotX  = 0.0f;
+    float meshRotY  = 0.0f;   // raddrizza GLB orientati lateralmente (yaw)
     std::array<float,3> gripAttach   = {0.0f, 0.0f, 0.0f};
     std::array<float,3> muzzleAttach = {0.0f, 0.0f, 0.0f};
 };
@@ -199,6 +200,60 @@ struct CommandPostDef
     float captureTime = 8.0f;    // secondi di presenza per catturare
 };
 
+// ── VehicleDef (19_Vehicles, Fase A) ─────────────────────────────────────
+// data/vehicles/<id>.json — veicolo leggero guidabile dal giocatore.
+struct VehicleDef
+{
+    std::string id;
+    std::string name;
+    float hp          = 150.0f;
+    float maxSpeed    = 12.0f;   // m/s in avanti (metà in retro)
+    float accel       = 10.0f;   // m/s^2
+    float turnRateDeg = 90.0f;   // gradi/s a piena sterzata
+    std::string meshPath;        // vuoto = box di fallback
+    float meshScale = 1.0f;
+    float meshRotY  = 0.0f;
+    // Collisione a box (Todo #23 per forme più ricche)
+    float halfX = 0.7f, halfY = 0.5f, halfZ = 1.2f;
+    std::array<float,3> color = {0.55f, 0.55f, 0.60f};
+};
+
+// Spawn di un veicolo in mappa (MapDef.vehicleSpawns)
+struct VehicleSpawnDef
+{
+    std::string vehicleId;
+    float x = 0, z = 0;
+    float ry = 0;    // orientamento iniziale (gradi)
+};
+
+// ── Map Metadata (15_MapMetadata) ────────────────────────────────────────
+// Hint spaziali opzionali autorati nel Map Editor. Solo dati: nessun
+// sistema runtime li consuma ancora (sarà l'AI tattica, Todo #3 fase 2).
+
+// Posizione + direzione da cui un'AI può coprirsi e sparare.
+// height distingue copertura bassa (peek-over) da alta (peek-around).
+struct CoverPointDef
+{
+    float x = 0, y = 0, z = 0;
+    float facingDeg = 0.0f;   // direzione del fronte di copertura (gradi, yaw)
+    float height    = 1.0f;   // altezza della copertura (m)
+};
+
+// Percorso di pattuglia con nome (riusabile da più squadre in futuro).
+struct PatrolRouteDef
+{
+    std::string id = "route";
+    std::vector<std::array<float,3>> points;   // ordinati
+};
+
+// Area esposta/pericolosa (hint morbido, NON un collider).
+struct DangerZoneDef
+{
+    float x = 0, y = 0, z = 0;
+    float radius      = 4.0f;
+    float dangerLevel = 0.5f;   // 0..1, semantica del consumatore AI
+};
+
 // ── MapDef ────────────────────────────────────────────────────────────────
 // data/maps/<id>.json
 struct MapDef
@@ -217,6 +272,14 @@ struct MapDef
     std::vector<std::string> allyTypes;
     std::vector<MapGeometryBox> geometry;
     std::vector<CommandPostDef> commandPosts;
+
+    // Map Metadata (15_MapMetadata) — opzionali, vuoti finché non autorati
+    std::vector<CoverPointDef>  coverPoints;
+    std::vector<PatrolRouteDef> patrolRoutes;
+    std::vector<DangerZoneDef>  dangerZones;
+
+    // Veicoli in mappa (19_Vehicles, Fase A) — opzionale
+    std::vector<VehicleSpawnDef> vehicleSpawns;
 };
 
 // ── PlayerDef ─────────────────────────────────────────────────────────────

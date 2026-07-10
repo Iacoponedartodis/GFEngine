@@ -5,6 +5,7 @@
 #include "modules/EntityEditor.hpp"
 #include "modules/MapEditor.hpp"
 #include "modules/WeaponEditor.hpp"
+#include "modules/VehicleEditor.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
@@ -94,6 +95,7 @@ void EditorApp::init()
     m_entityEditor  = std::make_unique<EntityEditor>();
     m_mapEditor     = std::make_unique<MapEditor>();
     m_weaponEditor  = std::make_unique<WeaponEditor>();
+    m_vehicleEditor = std::make_unique<VehicleEditor>();
 
     m_running = true;
     std::cout << "[GFEditor] Avviato." << std::endl;
@@ -197,6 +199,8 @@ void EditorApp::tick(float dt)
         m_mapEditor->tick(dt);
     else if (m_active == ActiveModule::WeaponEditor)
         m_weaponEditor->tick(dt);
+    else if (m_active == ActiveModule::VehicleEditor)
+        m_vehicleEditor->tick(dt);
 }
 
 void EditorApp::renderMenuBar()
@@ -217,6 +221,7 @@ void EditorApp::renderMenuBar()
         if (ImGui::MenuItem("Entity Editor"))   m_active = ActiveModule::EntityEditor;
         if (ImGui::MenuItem("Map Editor"))      m_active = ActiveModule::MapEditor;
         if (ImGui::MenuItem("Weapon Editor"))   m_active = ActiveModule::WeaponEditor;
+        if (ImGui::MenuItem("Vehicle Editor"))  m_active = ActiveModule::VehicleEditor;
         if (ImGui::MenuItem("Asset Manager (presto)"))  {}
         if (ImGui::MenuItem("AI Editor (presto)"))      {}
         ImGui::EndMenu();
@@ -235,6 +240,7 @@ void EditorApp::renderMenuBar()
     if (m_active == ActiveModule::EntityEditor)      modName = "Entity Editor";
     if (m_active == ActiveModule::MapEditor)         modName = "Map Editor";
     if (m_active == ActiveModule::WeaponEditor)      modName = "Weapon Editor";
+    if (m_active == ActiveModule::VehicleEditor)     modName = "Vehicle Editor";
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 20);
     ImGui::TextDisabled("| %s", modName);
 
@@ -337,6 +343,15 @@ void EditorApp::render()
         ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
         ImGui::Begin("Weapon Editor", nullptr);
         m_weaponEditor->draw();
+        ImGui::End();
+    }
+    else if (m_active == ActiveModule::VehicleEditor)
+    {
+        const ImGuiViewport* vp2 = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
+        ImGui::Begin("Vehicle Editor", nullptr);
+        m_vehicleEditor->draw();
         ImGui::End();
     }
     else

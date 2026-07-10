@@ -2,6 +2,340 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-10 (25) — Fase B veicoli, tranche 2: respawn mezzi + authoring spawn
+- **Respawn dei veicoli distrutti**: `vehiclespawn::RespawnTracker` (in
+  VehicleSpawn.hpp, condiviso): un mezzo esploso torna al suo spawn dopo 15s
+  (log chat "VEICOLO distrutto: torna tra Ns"). Attivo in Conquest (e derivate)
+  e Sandbox — un match lungo non resta più senza mezzi.
+- **Authoring `vehicle_spawns` nel Map Editor**: quarta sezione metadata
+  ("[VS]" nella lista, range selezione -400): marker arancio a misura di mezzo
+  con freccia direzione, gizmo Sposta, proprietà con COMBO veicolo dal registry
+  (id da data/vehicles, mai testo libero), X/Z e Yaw a slider, salvataggio RMW
+  insieme al resto. Chiusa l'ultima voce "solo JSON a mano" della Fase A.
+- Build pulita; sim regolare, editor ok. **Da verificare a mano:** distruggere
+  uno speeder e vederlo tornare dopo 15s; piazzare/salvare uno spawn veicolo
+  dal Map Editor su Outpost.
+
+## 2026-07-10 (24) — Fix osservatore "teleport+bersagliato" + audit allineamento
+- **BUG osservatore risolto** (diagnosi dal sintomo "posso ancora volare ma i droidi
+  mi sparano"): in simulazione l'entità player restava parcheggiata allo spawn a
+  team 0 → i proiettili VAGANTI di entrambi i team la colpivano → la logica
+  morte/respawn (non esclusa in osservazione) faceva `updateRespawn` →
+  **teletrasporto della camera allo spawn + entità ricreata a team 1** → i droidi
+  bersagliavano l'osservatore. Fix doppio: (a) morte/ticket/respawn del giocatore
+  guardati con `!observerFly`; (b) in `startSimulation` l'entità viene parcheggiata
+  a y=-100 (fuori campo: non intercetta più nemmeno i vaganti).
+  Verifica: 60s di sim senza alcun Eliminato/Respawn nel log (prima entro ~1 min).
+- **Roll su cloni e giocatore**: `Combat Roll` assegnato a Clone Trooper e Heavy
+  Clone Trooper nei dati. Nota: il GIOCATORE ha già la schivata nativa
+  (`Action::Roll`, rimappabile nelle opzioni) — nessun lavoro necessario.
+- **Audit "stessa versione"** (richiesto): trovato il disallineamento segnalato —
+  le opzioni Controlli elencavano solo mouse Sparo/Mira come voci fisse. Ora la
+  schermata ha una **colonna destra "Tasti fissi"** completa: V (prima/terza
+  persona), E (veicolo), L+PAGSU/PAGGIU (log eventi), TAB (menu sandbox),
+  P (PreMatch da sandbox), 1-9 (armi rapide), F12 (dump stato), F11 (fullscreen);
+  colonna sinistra = azioni rimappabili (layout a due colonne per starci).
+  Verificati e già allineati: toast sandbox, footer SandboxMenu, pausa, docs 02/03.
+- Build pulita; sim 60s regolare (23 hit, 5 roll). **Da verificare a mano:**
+  osservare a lungo senza più teleport; schermata Controlli leggibile;
+  cloni che rollano in sim.
+
+## 2026-07-10 (23) — Prima abilità AI ATTIVA: Combat Roll (16_AiBehavior esteso)
+- Lo scaffold `AbilityComponent` (fermo da giorni senza storage) è ora un componente
+  vero: storage in World, `AbilityState` esteso con type/param/cooldownMax risolti
+  dal AbilityDef allo spawn (ConquestMode, insieme allo shield).
+- **Roll AI**: entrando in fase evasiva, se il cooldown è pronto, l'AI esegue uno
+  scatto laterale (param1 = velocità m/s, param2 = durata s, cooldown dal def) che
+  ha priorità sul movimento normale. Telemetria `roll:` + log chat "ROLL #id".
+  Trigger volutamente semplice: l'ingresso in hide È il momento sotto pressione.
+- Dati: nuova ability `Combat Roll` (10 m/s, 0.35s, cd 6s — bilanciabile dalla tab
+  Abilità) assegnata al B1 Battle Droid.
+- Verifica `--sim` 45s: 5 roll da entità diverse, cooldown rispettati, 23 hit.
+  **Da verificare a mano:** in sim si vedono i droidi scattare di lato quando
+  vanno in copertura; righe ROLL in log chat.
+
+## 2026-07-10 (22) — Tre fix da playtest: spawn su veicoli, rotY armi, mappa in sandbox
+- **Spawn incastrati sui veicoli** (visto su Outpost): nuova
+  `physics::nudgeOutOfColliders` (8 direzioni × 3 raggi) applicata allo spawn di
+  unità/manichini in Conquest e Sandbox — la vecchia decollisione (findFreeSpot)
+  vede solo la geometria della MAPPA, non le entità solide come i mezzi.
+- **Pistola renderizzata storta**: il WeaponDef aveva solo `mesh_rot_x` — aggiunto
+  `mesh_rot_y` end-to-end: slider "RotY" nel Weapon Editor (con anteprima:
+  `FreeCameraViewport::loadModel` ora accetta rotY), parse nel registry, viewmodel
+  del giocatore (90° convenzione + rotY per-arma) e arma in mano alle unità
+  (raddrizzamento base attorno al grip, PRIMA della posa weapon_display — le armi
+  esistenti con rotY=0 sono invariate). Ora la pistola si raddrizza dall'editor.
+- **Cambio mappa dalla sandbox**: pagina Simulazione del menu TAB con riga "Mappa"
+  (SIN/DES su tutte le mappe del registry) usata sia dalla simulazione AI sia dalla
+  nuova azione "Riavvia la SANDBOX sulla mappa scelta".
+- Build pulita; smoke: sim su Outpost regolare, editor ok. **Da verificare a mano:**
+  niente più unità sopra gli speeder su Outpost; slider RotY sulla pistola
+  (raddrizza in viewport → uguale in sandbox); TAB → Mappa → riavvio su Outpost.
+
+## 2026-07-10 (21) — Seconda mappa "Outpost" + selettore mappa (R3 chiuso)
+- **R3 chiuso**: nessun game mode carica più "firebase" hardcoded. La mappa attiva
+  viaggia in `MatchSettings.mapId` (risolta da Application); ConquestMode/SandboxMode
+  hanno `m_mapId` da `applySettings` ("firebase" resta solo come fallback di default,
+  nota aggiornata anche nel rename tool).
+- **Selettore mappa nel PreMatch** (pagina Regole, riga "Mappa" con nomi dinamici
+  dal registry — stesso pattern enum della Modalità); `map_index` salvato nei preset.
+- **Nuovo flag CLI `--map <id>`**: mappa iniziale per sandbox/sim (test e debug).
+- **Nuova mappa `data/maps/outpost.json`**: corridoio 30x64 con avamposto centrale
+  rialzato, 3 post in linea (Nord/Centro/Sud), bunker sfalsati, strozzature laterali,
+  metadata completi (4 cover, 2 danger zone sulle strozzature, ronda del centro a 6
+  punti), 2 speeder, roster auto (liste vuote).
+- Verifica: `--sim --map outpost` 45s → 22 hit, 1 kill, veicoli alle coordinate
+  outpost, AI in patrol/alert/search — la mappa nuova funziona senza alcun codice
+  dedicato, che era il vero test del "tutto data-driven".
+- **Da verificare a mano:** partita su Outpost dal PreMatch (riga Mappa), feel del
+  layout; la riga Mappa nei preset.
+
+## 2026-07-10 (20) — Fase B veicoli, tranche 1: danno a sagoma piena + pilota protetto
+- **Danno al veicolo su tutta la sagoma**: nuovo test segmento-vs-OBB del box del
+  mezzo in CombatSystem (via `hittest::segmentInZone` con zona fittizia) — prima
+  contava solo la sfera `k_hitRadius` al centro e i colpi ai bordi si fermavano sul
+  collider senza infliggere danno. Zona telemetria/log chat: "veicolo".
+- **R5 chiuso — pilota protetto**: il CombatSystem raccoglie i driver correnti
+  (da `VehicleComponent.driver`) e li salta come bersagli diretti: finché guidi, i
+  colpi danneggiano il MEZZO, non te. Alla distruzione vieni sganciato illeso
+  (danno residuo al pilota: raffinamento futuro dichiarato in 19 Fase B).
+- Build pulita; `--sim` 30s regolare. **Da verificare a mano:** sparare allo speeder
+  ai bordi (ora fa danno, righe `zona=veicolo` nel log/chat); farsi sparare mentre
+  si guida (gli HP del giocatore non calano, il mezzo sì).
+
+## 2026-07-10 (19) — Rifinitura R4: VehicleEditor sul DefinitionRegistry
+- `VehicleEditor::loadEntries` ora carica dal `DefinitionRegistry` (stesso parse del
+  runtime) invece del parse JSON duplicato riga per riga: l'editor mostra ESATTAMENTE
+  ciò che il gioco caricherà, per costruzione.
+- Analisi R4 completata: Entity/Map editor restano su parser propri per scelta —
+  leggono campi editor-only (label/type dei box, stato di editing) che il runtime
+  non carica; unificarli significherebbe sporcare gli schema runtime. Documentato
+  in 06_Todo R4 (chiuso salvo nuovi duplicati).
+- Build pulita; GFEditor smoke ok.
+
+## 2026-07-10 (18) — Rifinitura R1+R2+R6 (dalla diagnosi (17))
+- **R1 — Spread e gittata del giocatore ATTIVI**: `Weapon` runtime porta i 5 spread +
+  effective_range dal WeaponDef (`weaponFromDef`); in `updateShooting` la direzione
+  viene dispersa per stato (fermo/movimento/corsa/aria; la mira col tasto destro
+  scende all'adsSpread da fermi, riduce del 60% negli altri stati) e il lifetime del
+  proiettile è cappato a `WEAPON_RANGE_GRACE(2.0) * effective_range / bullet_speed`
+  (GameConfig — niente falloff del danno per ora, dichiarato). Tutti i valori del
+  BalanceEditor tab Armi ora contano davvero per il feel.
+- **R6 — Spawn veicoli deduplicato**: nuovo `game/VehicleSpawn.hpp`
+  (`vehiclespawn::spawnFromMap`), usato da Conquest e Sandbox (erano 2 copie).
+  Nota dal log: il secondo speeder ora spawna a (-5,-11) invece di (-5,-14) —
+  conferma che PRIMA nasceva dentro un ostacolo.
+- **R2 — Guida estratta da Application**: nuovo `game/VehicleDrive.hpp`
+  (`vehicledrive::update`: input, sterzo, slide/step-up con excludeId, gravità,
+  camera FPS/TPS, telemetria `drive:`); Application gestisce solo mount/dismount
+  e messaggi. Application.cpp: 1120 → 1057 righe.
+- Build pulita; `--sim` 30s regolare (8 hit, 1 kill, veicoli spawnati decollisi).
+  **Da verificare a mano:** il feel dello spread (corsa vs mira), la gittata
+  (i colpi svaniscono oltre ~2x il range effettivo dell'arma), guida invariata.
+
+## 2026-07-10 (17) — Diagnosi pre-rifinitura (nessun cambio di codice)
+- Audit mirato del progetto su richiesta utente. Trovate 7 voci di rifinitura,
+  registrate in 06_Todo sezione "Rifinitura" (R1-R7): spread/gittata armi mai
+  consumati dal player (R1, il più impattante sul feel), Application.cpp 1120 righe
+  (R2), "firebase" hardcoded nei mode (R3), 3 parser JSON divergenti nell'editor
+  (R4), pilota colpibile dentro il veicolo (R5), spawn veicoli duplicato (R6),
+  igiene data/ (R7). Nessun difetto bloccante: build pulita, sim regolare.
+
+## 2026-07-10 (16) — Proiettili fermati dai muri + veicoli solidi
+- **BUG scoperto in diagnosi: i proiettili attraversavano i muri.** Nessun sistema li
+  testava contro i ColliderComponent (solo contro le entità con HP): il giocatore
+  poteva sparare attraverso le coperture e i colpi AI con spread passavano i muri.
+  Fix in CombatSystem: se il segmento del tick attraversa un collider e non ha colpito
+  un'entità, il proiettile muore lì (`physics::hasLineOfSight` riusato). Limite
+  documentato: bersaglio e muro nello stesso segmento (~0.9m) → vince il bersaglio.
+- **Veicoli solidi** (Fase B parziale, 19_Vehicles): i mezzi hanno ora un
+  ColliderComponent → fanteria e AI non li attraversano, bloccano la linea di vista
+  e fermano i proiettili (il danno al mezzo resta sul test-entità: hitbox veicoli
+  vere in Fase B). `physics::hasCollision/slideMove/slideMoveWithStepUp` hanno un
+  nuovo param `excludeId` (default 0 = comportamento invariato) usato dalla guida
+  per non collidere col proprio collider.
+- Build pulita; `--sim` 45s: 20 hit, 2 kill — combat vivo con i muri solidi.
+  **Da verificare a mano:** sparare a una cassa/muro (il colpo si ferma, niente hit
+  dietro); non poter più attraversare a piedi lo speeder; guida invariata.
+
+## 2026-07-10 (15) — KI #13 risolto: hit test OBB condiviso mirino/proiettili
+- Diagnosi da ProjectDocs: dopo il checkpoint, i difetti di codice aperti erano KI #13
+  (rotazione zone ignorata nel combat) più due voci stale (#3, #5).
+- **Nuovo `include/mini/physics/HitTest.hpp`** (header-only): `segPointDistSq`,
+  `segAABB`, `segmentInZone` OBB-aware — il segmento viene portato nello spazio
+  locale della zona (yaw entità * `eulerDeg` zona, ordine Y*X*Z come il wireframe
+  editor) e testato contro ±halfExtents. Zone a euler zero: comportamento identico
+  a prima.
+- CombatSystem usa l'helper (rimosse le copie locali); il **mirino** in Application
+  ora usa LO STESSO `segmentInZone` (raggio = segmento di 80m) — rimosso il
+  `rayAABB` locale: mirino e proiettili concordano per costruzione, anche sulle
+  zone inclinate (testa B1 a -58°).
+- KI chiusi: **#13** (risolto), **#3** (assorbito dal fix churn FBO di #17),
+  **#5** (Clone Trooper: risolto dall'utente il 2026-07-04, voce rimasta aperta
+  per svista).
+- Build pulita; `--sim` 30s: 10 hit, 1 kill — combat regolare col nuovo test.
+  **Da verificare a mano:** headshot sulla testa inclinata del B1 in sandbox
+  (mirino rosso e colpo devono coincidere anche ai bordi della zona).
+
+## 2026-07-10 (14) — Viewmodel arma del giocatore (Todo #11 completo) + #10 chiuso
+- **Todo #10 verificato già implementato**: `WeaponAttach` usa `WeaponDef.gripAttach`
+  (attach "right_hand"/"grip", con right_hand prioritario) — resta solo autorare i
+  punti nei GLB delle armi dal Weapon Editor (attività dati, non codice).
+- **Viewmodel prima persona**: l'arma equipaggiata del giocatore è ora visibile in
+  basso a destra dello schermo (mesh dal `WeaponDef.meshPath` via meshCache, offset
+  camera-relative, yaw 90° per la convenzione GLB lungo +X, scala dal def). Attivo
+  solo in FPS: niente viewmodel in TPS, alla guida, da osservatore o da morto.
+  `Weapon` runtime ora porta `meshPath`/`meshScale` (copiati in `weaponFromDef`).
+- Limite noto (classico dei viewmodel senza depth-hack): l'arma può compenetrare i
+  muri a distanza ravvicinata — accettato per la Fase 1.
+- Build pulita; sandbox smoke ok. **Da verificare a mano:** arma visibile in FPS
+  (E-5/DC-17 hanno mesh; armi senza `mesh` nel JSON non mostrano nulla), cambio arma
+  1-9/menu TAB aggiorna il modello, posizione/scala gradevoli (tarabili dal Weapon
+  Editor con mesh_scale).
+
+## 2026-07-10 (13) — CHECKPOINT: allineamento documentazione + preset modeIndex
+- **Audit docs vs codice** (richiesto dall'utente prima della fase di rifinitura):
+  - 10_ProjectMemory: indice Planned Feature riscritto (15/16/17/18/19 e ADR-010/011
+    risultavano ancora "not yet"); aggiunti i vincoli confermati della sessione
+    (input sintetici non arrivano a SDL → diagnosi via telemetria; pattern mailbox
+    su World; risorse GL only-grow su aree ImGui oscillanti; liste roster vuote=auto).
+  - 02_FileStructure: sezione nuovi file (vehicles/, SandboxMenu, Shield/Vehicle
+    Component, VehicleEditor, doc 16-19) + flag CLI `--sim`.
+  - 03_SystemReference: riferimento rapido dei sistemi aggiunti (shield, AI tattica,
+    log chat, sandbox tools, metadata+consumo, veicoli, HUD, diagnostica); nota
+    "Planned tooling ADR-010" corretta in IMPLEMENTATO.
+- **Preset partita: salvato anche `mode_index`** (Conquista/Assalto/Difesa) — era il
+  "minor" residuo di ADR-014; preset vecchi senza campo = Conquista, valore clampato.
+- Build pulita; `--sim` regolare. Stato: **checkpoint raggiunto** — tutti i sistemi
+  Fase 1 in piedi e documentazione allineata; pronta la fase di rifinitura (smoke
+  manuali pendenti: guida veicoli, shield in chat, KI #17 memoria editor in uso).
+
+## 2026-07-10 (12) — Fix incastri veicoli + roster firebase in auto
+- **Spawn veicoli decolliso**: `findFreeSpot` (stessa decollisione della fanteria, con
+  gli half del veicolo) in Conquest e Sandbox — lo spawn lato nemici finiva in parte
+  dentro una barricata e il mezzo nasceva incastrato.
+- **Dismount sicuro**: scendendo si sceglie il primo lato LIBERO attorno al mezzo
+  (destra/sinistra/dietro/davanti, check `hasCollision` con gli half del giocatore) —
+  prima 2.2m a destra alla cieca, anche dentro un muro.
+- **firebase in modalità auto**: `enemy_types`/`ally_types` svuotati → il runtime usa
+  TUTTE le definizioni registrate (round-robin ordinato). Il nuovo "Heavy clone
+  trooper" (e ogni entità futura) entra in partita/sim senza altri passaggi; il
+  pattern alternato B1/Heavy resta identico perché l'auto alterna i 2 tipi registrati.
+  Pattern espliciti ricreabili in BalanceEditor → Mappe.
+- Analisi problemi registrata in 19_Vehicles Out of Scope: niente respawn dei mezzi
+  distrutti; i veicoli non fanno da ostacolo a fanteria/altri mezzi (si attraversano).
+- Build pulita; `--sim` regolare. **Da verificare a mano:** veicolo nemico non più nel
+  muro; Heavy clone trooper in sim (alza "Alleati AI" ad almeno 2 nel menu TAB).
+
+## 2026-07-10 (11) — KI #17: fix churn FBO nel viewport editor
+- Misura baseline: GFEditor sulla Home è PIATTO (67MB stabili 75s) → il leak
+  segnalato (73→259MB/min) vive nei moduli col viewport 3D.
+- Root cause: `resizeFBO` distruggeva e ricreava FBO+texture+RBO a ogni variazione
+  di dimensione dell'area del pannello — che può oscillare di pochi px tra frame
+  (scrollbar/separatori) → churn di risorse GL a 60Hz. Era il sospetto storico #3.
+- Fix: la texture di rendering è allocata a multipli di 64px e viene SOLO
+  ingrandita; il pannello mostra la sub-regione corretta via UV (flip incluso).
+  Ogni realloc reale è loggato (`[Viewport] Realloc FBO ...`) — se ne vedi una
+  raffica continua nel log console, il bug è altrove.
+- Build pulita; editor stabile 45s con viewport-modulo default. **Da confermare:**
+  sessione d'uso reale nei moduli (Entity/Map/Vehicle) con memoria heartbeat piatta.
+
+## 2026-07-10 (10) — TPS in veicolo, roster mappa completo, modulo Vehicle Editor
+- **Terza persona alla guida**: con V attivo la camera sta dietro/sopra il mezzo
+  (offset dal forward del veicolo, lookAt sul mezzo); prima persona invariata.
+- **Roster per mappa unificato (BalanceEditor → Mappe)**: la UI degli slot con
+  dropdown+pattern ora vale ANCHE per gli alleati (`ally_types`, prima non editabile);
+  aggiunti "Alleati in campo" (`ally_count`), pattern "Uno per ogni definizione" e
+  "Svuota (auto)". Regola resa esplicita nella UI: **lista vuota = automatico, il
+  runtime usa tutte le definizioni registrate** (fallback ADR-007) — è così che le
+  nuove entità entrano in partita/sim senza toccare le mappe. `saveMap` ora scrive
+  anche `ally_types`/`ally_count` (prima andavano persi al salvataggio!).
+- **Nuovo modulo "Vehicle Editor"** (card in Home + menu Moduli): lista/creazione/
+  rinomina (sweep `vehicle_spawns`), statistiche di guida, modello 3D con browse e
+  **anteprima nel viewport** con il box di collisione in wireframe sovrapposto —
+  si vede subito se il box combacia col modello. La tab Veicoli del BalanceEditor
+  (temporanea, di ieri) è stata rimossa: unico posto di editing. Hitbox a zone e
+  attach point per veicoli: Fase B dichiarata (19_Vehicles).
+- Build pulita; GFEditor smoke 8s ok; `--sim` regolare con veicoli spawnati.
+  **Da verificare a mano:** V alla guida; nuova entità → sim (con lista vuota o
+  aggiungendola al roster); Vehicle Editor (crea, mesh, box, salva, rinomina).
+
+## 2026-07-10 (9) — Veicoli: feedback/diagnostica + tab Veicoli nell'editor
+- **Colore al mount**: il veicolo guidato diventa blu, al dismount torna al colore del
+  suo VehicleDef (era il "resta rosso" segnalato — il feedback non esisteva).
+- **Mount in terza persona**: il raggio ora è misurato da `tpsPlayerPos`, non dalla
+  camera (in TPS la camera è arretrata: E poteva fallire pur essendo accanto al mezzo).
+- **Diagnostica guida in telemetria**: `drive: v=... pos=... [BLOCCATO]` ~2/s alla
+  guida, e `veicolo: E premuto, nessun mezzo in raggio (min Xm)` sui tentativi falliti.
+  Il bug "W/S non muove" NON è riproducibile in automazione (gli input sintetici non
+  raggiungono la finestra SDL senza focus reale): con queste righe il prossimo test
+  manuale identifica la causa dal log. Uno spawn firebase spostato accanto alla base
+  (2, 15.5) per testare al volo.
+- **BalanceEditor: nuova tab "Veicoli"** — lista, creazione, nome, statistiche
+  (HP/vel/accel/sterzata), mesh con browse file + scala/rotY, half extents, colore,
+  salvataggio RMW, **Rinomina** con sweep dei `vehicle_spawns[].vehicle_id` nelle
+  mappe (nuova `Category::Vehicle` in DefinitionRename, ADR-010).
+- Build pulita; GFEditor smoke ok (8s), engine ok. **Da verificare a mano:** guidare
+  lo speeder accanto allo spawn e, se non si muove, mandare le righe `drive:` del log;
+  tab Veicoli (creare/salvare/rinominare).
+
+## 2026-07-10 (8) — Veicoli Fase A (nuovo doc 19_Vehicles) + fix EntityEditor
+- **EntityEditor: "+ Nuova entita'"** — campo nome + combo Nemico/Alleato sotto la
+  lista; crea il JSON minimo (name/faction/stats/weapons/abilities) via saveJsonRMW
+  con id = nome file (ADR-001), poi ricarica e seleziona.
+- **Veicoli (Fase A, doc 19)**: `VehicleDef` (data/vehicles/<id>.json: hp, max_speed,
+  accel, turn_rate_deg, half extents, colore) + loader/getter nel registry;
+  `MapDef.vehicleSpawns` (chiave `vehicle_spawns`, additiva); spawn nei mode
+  (Conquest+Sandbox: entità con Transform/Health/Team 0/VehicleComponent, box di
+  fallback come mesh); **E** sale/scende (raggio in GameConfig), W/S accelera/frena,
+  A/D sterza (invertito in retro), slide+step-up e gravità della fanteria, camera al
+  posto di guida, mouse look invariato. Alla guida non si spara (Fase A). Salendo il
+  veicolo passa a team 1 (bersagliabile), scendendo torna neutro. Se esplode sotto il
+  giocatore: dismount automatico + toast.
+- Dati di prova: `BARC Speeder` + 2 spawn su firebase (uno per base).
+- Limite route annotato in 18 (ostacolo tra punti → inversione, serve pathfinding).
+- Build pulita; smoke: sandbox ok, `--sim` spawna 2 veicoli e la battaglia resta viva.
+  **Da verificare a mano:** salire (E vicino allo speeder), guidare per la mappa,
+  scendere, farlo esplodere sotto di sé; "+ Nuova entita'" nell'EntityEditor.
+
+## 2026-07-10 (7) — L'AI consuma i Map Metadata (nuovo doc 18_AiMapConsumption)
+- **Canale dati**: `World::activeMap` (fwd decl `MapDef`, pattern mailbox — l'ECS non
+  include header di gioco), settato da ConquestMode/SandboxMode in `start()`, azzerato
+  in `World::initialize()`.
+- **Cover point**: in fase "hide" l'AI sceglie il cover più vicino (≤12m) col fronte
+  orientato verso il nemico, lo raggiunge e ci resta fino al prossimo peek; senza
+  cover resta lo strafe evasivo. `height` non guida ancora pose (Todo #24).
+- **Danger zone**: repulsione nel movimento fuori ingaggio (pesata su dangerLevel e
+  vicinanza al centro); in Alert non si applica.
+- **Patrol route**: se la mappa ne ha, ConquestMode assegna alle unità segmenti
+  consecutivi delle route (round-robin) al posto dei waypoint verso i post. Limite
+  documentato: AiComponent ha 2 waypoint → un segmento per unità.
+- **firebase.json**: set minimo di metadata di prova (4 cover, 1 danger sul campo
+  aperto est, route "perimetro_alpha" a 3 punti) — rifinibili dal Map Editor.
+- Note utente registrate: cover più ricche/pose FPS → 15 Future Expansion + Todo #24;
+  shape/collision oltre i box → Todo #23. Chiarimento: una route = PIÙ punti in
+  sequenza (un punto solo non è un percorso).
+- Build pulita; smoke `--sim` 50s: 33 hit, 3 kill, metadata parse-ati senza errori.
+  **Da verificare a mano:** in sim, AI che si appostano ai cover durante il hide,
+  pattuglia sul perimetro Alpha, evitamento della zona pericolosa a est.
+
+## 2026-07-10 (6) — Map Metadata implementato (15_MapMetadata: schema+loader+authoring)
+- `MapDef` esteso con `coverPoints[]` (x/y/z, facing_deg, height), `patrolRoutes[]`
+  (id + points ordinati), `dangerZones[]` (x/y/z, radius, danger_level 0..1) — additivi,
+  vuoti di default, zero impatto sulle mappe esistenti.
+- `DefinitionRegistry::loadMaps`: parse delle nuove chiavi `cover_points`/
+  `patrol_routes`/`danger_zones`; il log `[Registry] Map:` ora riporta i conteggi.
+- MapEditor: sezione **Metadata AI** nella lista (cover verde-acqua con "naso"
+  direzionale e altezza, danger zone disco arancione→rosso col livello, route con
+  pilastrini viola e punto attivo evidenziato), selezione con range dedicati
+  (-100/-200/-300), gizmo Sposta per cover/danger/punti route, pannelli proprietà a
+  sliderRow, salvataggio via saveJsonRMW insieme a geometry/command_posts.
+- **Come da Out of Scope del doc: nessun consumo AI** — il consumer è il lavoro
+  tattico fase 2 (andrà documentato a parte prima di implementarlo).
+- Build pulita; smoke: engine ok, GFEditor aperto 8s senza crash. **Da verificare a
+  mano:** authoring completo su firebase (piazzare cover/route/danger, salvare,
+  ricaricare, controllare il JSON).
+
 ## 2026-07-10 (5) — Sandbox semplificata: sim come prima classe, partita via PreMatch
 - **Spiegato il "la partita non funziona"**: la pagina Partita del menu sandbox
   riavviava la SANDBOX (manichini fermi e ticket 999/0 by design), non una partita

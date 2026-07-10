@@ -1,0 +1,11 @@
+{
+    "name": "BARC Speeder",
+    "hp": 120.0,
+    "max_speed": 16.0,
+    "accel": 12.0,
+    "turn_rate_deg": 110.0,
+    "half_x": 0.5,
+    "half_y": 0.55,
+    "half_z": 1.3,
+    "color": [0.45, 0.15, 0.12]
+}

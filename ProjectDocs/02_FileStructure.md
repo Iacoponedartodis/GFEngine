@@ -36,3 +36,20 @@ resolved from source too (`assets/...` paths canonicalized 3 levels up).
 
 ## Build output
 `build/windows-debug/Debug/{GFEngine.exe, GFEditor.exe}` with copied `data/` and `assets/`.
+
+## Aggiunte 2026-07-10 (sessione veicoli/sandbox/metadata)
+```
+data/vehicles/                 VehicleDef (19_Vehicles): BARC Speeder.json
+include/mini/render/SandboxMenu.hpp    menu prova sandbox (TAB in gioco)
+src/render/SandboxMenu.cpp
+include/mini/ecs/components/ShieldComponent.hpp   ability "shield" (16)
+include/mini/ecs/components/VehicleComponent.hpp  veicolo guidabile (19)
+editor/include/modules/VehicleEditor.hpp  modulo Vehicle Editor
+editor/src/modules/VehicleEditor.cpp      (lista|viewport 3D|proprietà)
+ProjectDocs/16_AiBehavior.md      profilo tattico AI + abilità (impl.)
+ProjectDocs/17_SandboxTools.md    menu sandbox, log chat, sim osservatore (impl.)
+ProjectDocs/18_AiMapConsumption.md  consumo Map Metadata dall'AI (impl.)
+ProjectDocs/19_Vehicles.md        veicoli Fase A (impl.) / Fase B (piano)
+```
+Flag CLI runtime: `--sandbox`, `--direct-prematch`, `--sim` (sandbox + simulazione
+AI-vs-AI con osservatore, per test/debug).

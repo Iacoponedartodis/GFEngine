@@ -25,6 +25,25 @@ void PreMatchMenu::setSettings(const MatchSettings& s)
     buildRows();
 }
 
+void PreMatchMenu::setMapList(const std::vector<MapEntry>& maps)
+{
+    m_mapList = maps;
+    m_mapNames.clear();
+    m_mapNamePtrs.clear();
+    for (const auto& m : m_mapList) m_mapNames.push_back(m.name);
+    for (const auto& n : m_mapNames) m_mapNamePtrs.push_back(n.c_str());
+    if (m_settings.mapIndex >= (int)m_mapList.size()) m_settings.mapIndex = 0;
+    buildRows();
+}
+
+const std::string& PreMatchMenu::getSelectedMapId() const
+{
+    static const std::string fallback = "firebase";
+    if (m_settings.mapIndex < 0 || m_settings.mapIndex >= (int)m_mapList.size())
+        return fallback;
+    return m_mapList[m_settings.mapIndex].id;
+}
+
 void PreMatchMenu::setWeaponList(const std::vector<WeaponEntry>& weapons)
 {
     m_weaponList = weapons;
@@ -79,6 +98,10 @@ void PreMatchMenu::buildRows()
     m_rows.clear();
     m_rows.push_back({"Modalita' di gioco",              true,  &m_settings.modeIndex,    nullptr,   1,   0,
                       (float)(MATCH_MODE_COUNT - 1), matchModeNames()});
+    // Mappa (R3): nomi dinamici dal registry via setMapList
+    if (!m_mapNamePtrs.empty())
+        m_rows.push_back({"Mappa",                       true,  &m_settings.mapIndex,     nullptr,   1,   0,
+                          (float)(m_mapNamePtrs.size() - 1), m_mapNamePtrs.data()});
     m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"Vite nemici    (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  10});

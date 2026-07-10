@@ -21,6 +21,19 @@ const std::string& SandboxMenu::selectedWeaponId() const
     return m_weapons[m_weaponSel].first;
 }
 
+void SandboxMenu::setMaps(const std::vector<std::pair<std::string, std::string>>& idName)
+{
+    m_maps = idName;
+    if (m_mapSel >= (int)m_maps.size()) m_mapSel = 0;
+}
+
+const std::string& SandboxMenu::selectedMapId() const
+{
+    static const std::string fallback = "firebase";
+    if (m_mapSel < 0 || m_mapSel >= (int)m_maps.size()) return fallback;
+    return m_maps[m_mapSel].first;
+}
+
 SandboxMenu::Result SandboxMenu::handleKey(int sc)
 {
     if (sc == SDL_SCANCODE_TAB || sc == SDL_SCANCODE_ESCAPE)
@@ -46,26 +59,31 @@ SandboxMenu::Result SandboxMenu::handleKey(int sc)
     }
     else // ── Simulazione ──────────────────────────────────────────────
     {
-        // Righe: 0 modalità, 1 alleati, 2 nemici, 3 tkt alleati,
-        //        4 tkt nemici, 5 respawn, 6 avvia/ferma
-        constexpr int ROWS = 7;
+        // Righe: 0 mappa, 1 modalità, 2 alleati, 3 nemici, 4 tkt alleati,
+        //        5 tkt nemici, 6 respawn, 7 avvia/ferma sim,
+        //        8 riavvia sandbox sulla mappa scelta
+        constexpr int ROWS = 9;
         if (up)   m_simSel = (m_simSel - 1 + ROWS) % ROWS;
         if (down) m_simSel = (m_simSel + 1) % ROWS;
 
         const int dir = right ? +1 : (left ? -1 : 0);
         if (dir != 0)
         {
+            const int nMaps = (int)m_maps.size();
             switch (m_simSel)
             {
-            case 0: simModeIndex = (simModeIndex + (dir > 0 ? 1 : 2)) % 3; break;
-            case 1: allyCount    = std::clamp(allyCount  + dir, 1, 10);    break;
-            case 2: enemyCount   = std::clamp(enemyCount + dir, 1, 10);    break;
-            case 3: team1Tickets = std::clamp(team1Tickets + dir, 1, 50);  break;
-            case 4: team2Tickets = std::clamp(team2Tickets + dir, 1, 50);  break;
-            case 5: respawnDelay = std::clamp(respawnDelay + (float)dir, 0.0f, 30.0f); break;
+            case 0: if (nMaps > 0)
+                        m_mapSel = (m_mapSel + dir + nMaps) % nMaps;        break;
+            case 1: simModeIndex = (simModeIndex + (dir > 0 ? 1 : 2)) % 3; break;
+            case 2: allyCount    = std::clamp(allyCount  + dir, 1, 10);    break;
+            case 3: enemyCount   = std::clamp(enemyCount + dir, 1, 10);    break;
+            case 4: team1Tickets = std::clamp(team1Tickets + dir, 1, 50);  break;
+            case 5: team2Tickets = std::clamp(team2Tickets + dir, 1, 50);  break;
+            case 6: respawnDelay = std::clamp(respawnDelay + (float)dir, 0.0f, 30.0f); break;
             }
         }
-        if (enter && m_simSel == 6) return Result::ToggleSim;
+        if (enter && m_simSel == 7) return Result::ToggleSim;
+        if (enter && m_simSel == 8) return Result::RestartSandbox;
     }
     return Result::None;
 }
@@ -139,42 +157,60 @@ void SandboxMenu::render() const
                   "in volo libero (WASD + SPAZIO/CTRL). [L] log eventi.", 0.75f, 0.78f, 0.82f);
 
         static const char* kModes[3] = {"Conquista", "Assalto", "Difesa"};
-        char buf[48];
+        char buf[64];
         struct Row { const char* label; };
-        const Row rows[6] = {{"Modalita'"}, {"Alleati AI"}, {"Nemici AI"},
+        const Row rows[7] = {{"Mappa"}, {"Modalita'"}, {"Alleati AI"}, {"Nemici AI"},
                              {"Ticket alleati"}, {"Ticket nemici"}, {"Respawn (s)"}};
         const float rowsY = y0 + 46.0f;
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; i < 7; ++i)
         {
             const bool sel = (i == m_simSel);
-            const float y = rowsY + (float)i * 32.0f;
-            if (sel) m_ui.rect(PX + 10, y - 4, PW - 20, 26, 0.14f, 0.25f, 0.45f, 0.8f);
+            const float y = rowsY + (float)i * 30.0f;
+            if (sel) m_ui.rect(PX + 10, y - 4, PW - 20, 24, 0.14f, 0.25f, 0.45f, 0.8f);
             m_ui.text(PX + 22, y, 1.6f, rows[i].label,
                       sel ? 1.0f : 0.7f, sel ? 0.95f : 0.7f, sel ? 0.55f : 0.72f);
             if (i == 0)
+            {
+                const char* mapName = (m_mapSel >= 0 && m_mapSel < (int)m_maps.size())
+                                    ? m_maps[m_mapSel].second.c_str() : "firebase";
+                std::snprintf(buf, sizeof(buf), "%s %s %s",
+                              sel ? "<" : " ", mapName, sel ? ">" : " ");
+            }
+            else if (i == 1)
                 std::snprintf(buf, sizeof(buf), "%s %s %s",
                               sel ? "<" : " ", kModes[simModeIndex], sel ? ">" : " ");
             else
             {
-                const int v = (i == 1) ? allyCount : (i == 2) ? enemyCount
-                            : (i == 3) ? team1Tickets : (i == 4) ? team2Tickets
+                const int v = (i == 2) ? allyCount : (i == 3) ? enemyCount
+                            : (i == 4) ? team1Tickets : (i == 5) ? team2Tickets
                             : (int)respawnDelay;
                 std::snprintf(buf, sizeof(buf), "%s %d %s",
                               sel ? "<" : " ", v, sel ? ">" : " ");
             }
-            m_ui.text(PX + PW - 190, y, 1.6f, buf, 0.9f, 0.9f, 0.9f);
+            m_ui.text(PX + PW - 200, y, 1.6f, buf, 0.9f, 0.9f, 0.9f);
         }
 
-        // Riga avvia/ferma
+        // Riga avvia/ferma sim
         {
-            const bool sel = (m_simSel == 6);
-            const float y = rowsY + 6.0f * 32.0f + 14.0f;
-            m_ui.rect(PX + 10, y - 4, PW - 20, 30, simRunning ? 0.35f : 0.18f,
+            const bool sel = (m_simSel == 7);
+            const float y = rowsY + 7.0f * 30.0f + 10.0f;
+            m_ui.rect(PX + 10, y - 4, PW - 20, 28, simRunning ? 0.35f : 0.18f,
                       simRunning ? 0.18f : 0.35f, 0.2f, sel ? 0.95f : 0.6f);
-            m_ui.text(PX + 22, y, 1.9f,
+            m_ui.text(PX + 22, y, 1.8f,
                       simRunning ? "INVIO: ferma la simulazione (torna sandbox)"
                                  : "INVIO: avvia la simulazione AI",
                       0.95f, 0.95f, 0.8f);
+        }
+
+        // Riga riavvia sandbox sulla mappa scelta
+        {
+            const bool sel = (m_simSel == 8);
+            const float y = rowsY + 7.0f * 30.0f + 46.0f;
+            m_ui.rect(PX + 10, y - 4, PW - 20, 28, 0.16f, 0.22f, 0.40f,
+                      sel ? 0.95f : 0.6f);
+            m_ui.text(PX + 22, y, 1.8f,
+                      "INVIO: riavvia la SANDBOX sulla mappa scelta",
+                      0.85f, 0.9f, 1.0f);
         }
 
         m_ui.text(PX + 18, PY + PH - 26, 1.4f,

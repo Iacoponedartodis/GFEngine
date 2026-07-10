@@ -204,6 +204,16 @@ void FreeCameraViewport::drawArray(const std::vector<float>& data, int count,
 void FreeCameraViewport::resizeFBO(int w, int h)
 {
     if (w == m_fbWidth && h == m_fbHeight) return;
+
+    // KI #17 (leak memoria editor): l'area disponibile del pannello può
+    // OSCILLARE di pochi pixel tra frame (scrollbar, separatori) — prima
+    // ricreava FBO+texture+RBO a ogni oscillazione (churn GL → memoria in
+    // crescita continua). Ora la texture è allocata a multipli di 64 e viene
+    // SOLO ingrandita; il pannello mostra la sub-regione via UV.
+    m_fbWidth = w; m_fbHeight = h;
+    if (w <= m_texWidth && h <= m_texHeight && m_fboOk)
+        return;   // la texture allocata basta già: nessun realloc
+
     if (!s_genFBO || !s_bindFBO || !s_fboTex || !s_genRBO ||
         !s_bindRBO || !s_rboSt  || !s_fboRBO || !s_chkFBO)
     {
@@ -211,7 +221,11 @@ void FreeCameraViewport::resizeFBO(int w, int h)
         return;
     }
 
-    m_fbWidth = w; m_fbHeight = h; m_fboOk = false;
+    const int aw = ((w + 63) / 64) * 64;
+    const int ah = ((h + 63) / 64) * 64;
+    m_texWidth = aw; m_texHeight = ah;
+    std::printf("[Viewport] Realloc FBO %dx%d (richiesti %dx%d)\n", aw, ah, w, h);
+    m_fboOk = false;
 
     if (m_fbo)      { s_delFBO(1, &m_fbo);      m_fbo      = 0; }
     if (m_depthRbo) { s_delRBO(1, &m_depthRbo); m_depthRbo = 0; }
@@ -222,7 +236,7 @@ void FreeCameraViewport::resizeFBO(int w, int h)
 
     glGenTextures(1, &m_colorTex);
     glBindTexture(GL_TEXTURE_2D, m_colorTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_texWidth, m_texHeight, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -231,7 +245,7 @@ void FreeCameraViewport::resizeFBO(int w, int h)
 
     s_genRBO(1, &m_depthRbo);
     s_bindRBO(GL_RENDERBUFFER, m_depthRbo);
-    s_rboSt(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+    s_rboSt(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, m_texWidth, m_texHeight);
     s_bindRBO(GL_RENDERBUFFER, 0);
     s_fboRBO(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
              GL_RENDERBUFFER, m_depthRbo);
@@ -919,10 +933,14 @@ void FreeCameraViewport::draw(bool showLoadBar)
 
     renderScene();
 
+    // Sub-regione della texture (allocata a multipli di 64, KI #17): la
+    // scena occupa l'angolo in basso a sinistra, flip verticale via UV.
+    const float u1 = (m_texWidth  > 0) ? (float)w / (float)m_texWidth  : 1.0f;
+    const float v1 = (m_texHeight > 0) ? (float)h / (float)m_texHeight : 1.0f;
     ImGui::Image(
         (ImTextureID)(uintptr_t)m_colorTex,
         ImVec2((float)w, (float)h),
-        ImVec2(0, 1), ImVec2(1, 0)
+        ImVec2(0, v1), ImVec2(u1, 0)
     );
 
     // Record image rect for picking
@@ -1014,7 +1032,8 @@ void FreeCameraViewport::tick(float dt)
 
 // ── loadModel() ───────────────────────────────────────────────────────────────
 void FreeCameraViewport::loadModel(const std::string& path,
-                                   float meshRotX, float meshScale)
+                                   float meshRotX, float meshScale,
+                                   float meshRotY)
 {
     m_modelData.clear();
     m_modelVertCount = 0;
@@ -1042,6 +1061,8 @@ void FreeCameraViewport::loadModel(const std::string& path,
     }
 
     glm::mat4 correction = glm::rotate(glm::mat4(1.0f),
+                                        glm::radians(meshRotY), {0,1,0})
+                         * glm::rotate(glm::mat4(1.0f),
                                         glm::radians(meshRotX), {1,0,0});
     correction = glm::scale(correction, glm::vec3(meshScale));
 

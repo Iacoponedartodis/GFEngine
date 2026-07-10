@@ -1,10 +1,11 @@
 # 15 — Map Metadata (Planned Feature)
 
-**Status: Planned Feature — not yet implemented in code.**
-This document describes an extension to `MapDef` that does NOT exist yet. `MapDef` currently
-carries geometry + spawn points + command posts only (ADR-004, ADR-009). This document exists
-to give Claude Code a precise, additive target ahead of Phase 2 tactical AI work, per
-08_KnownIssues #11 and 06_Todo #15.
+**Status: Implementato (schema + loader + authoring) — 2026-07-10.**
+`MapDef.coverPoints/patrolRoutes/dangerZones` esistono, sono parse-ati dal
+`DefinitionRegistry` (chiavi JSON `cover_points`/`patrol_routes`/`danger_zones`) e sono
+autorabili nel MapEditor (sezione "Metadata AI": gizmo + slider + RMW, marker dedicati
+nel viewport). Come da Out of Scope, NESSUN sistema AI li consuma ancora: il consumo è il
+resto del Todo #3 fase 2 e andrà documentato a parte.
 
 ## Overview
 Map Metadata is a set of optional, author-placed spatial hints on top of the existing
@@ -93,6 +94,13 @@ spatial-indexing needs (e.g. whether a naive linear scan over `coverPoints[]` is
 or whether a spatial index is needed) — do not assume either way here.
 
 ## Future Expansion
+- **Cover più ricche (richiesta utente 2026-07-10):** il cover point è oggi solo
+  posizione+fronte+altezza. In futuro dovrà supportare le meccaniche FPS di base alle
+  coperture — crouch dietro la copertura, mira DA copertura, peek-over/peek-around
+  guidati da `height` — che richiedono pose/animazioni non ancora nel runtime.
+- **Geometrie oltre i box (richiesta utente 2026-07-10):** mappa, hitbox e collisioni
+  sono oggi limitate a parallelepipedi. Servirà un sistema di shape/collision più
+  ricco (vedi 06_Todo, voce dedicata) sia per l'ambiente che per le entità.
 - Procedural generation/validation tools (e.g. "highlight cover points with no line-of-sight
   to any danger zone") once the AI system exists to define what "useful" means.
 - Named patrol route reuse across multiple unit spawns (already supported by giving routes an

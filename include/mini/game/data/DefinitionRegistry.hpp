@@ -23,6 +23,7 @@ public:
     [[nodiscard]] const MapDef*        getMap          (const std::string& id) const;
     [[nodiscard]] const HitboxProfile* getHitboxProfile(const std::string& id) const;
     [[nodiscard]] const PlayerDef*     getPlayerDef    (const std::string& id) const;
+    [[nodiscard]] const VehicleDef*    getVehicle      (const std::string& id) const;
 
     [[nodiscard]] const auto& abilities()      const { return m_abilities; }
     [[nodiscard]] const auto& weapons()        const { return m_weapons; }
@@ -32,6 +33,7 @@ public:
     [[nodiscard]] const auto& maps()           const { return m_maps; }
     [[nodiscard]] const auto& hitboxProfiles() const { return m_hitboxProfiles; }
     [[nodiscard]] const auto& playerDefs()     const { return m_playerDefs; }
+    [[nodiscard]] const auto& vehicles()       const { return m_vehicles; }
 
     // Filtra armi per fazione (Neutral = tutte)
     [[nodiscard]] std::vector<const WeaponDef*> weaponsForFaction(Faction f) const
@@ -53,6 +55,7 @@ private:
     std::unordered_map<std::string, MapDef>        m_maps;
     std::unordered_map<std::string, HitboxProfile> m_hitboxProfiles;
     std::unordered_map<std::string, PlayerDef>     m_playerDefs;
+    std::unordered_map<std::string, VehicleDef>    m_vehicles;
     bool m_loaded = false;
 
     void loadAbilities      (const std::string& dir);
@@ -63,6 +66,7 @@ private:
     void loadMaps           (const std::string& dir);
     void loadHitboxProfiles (const std::string& dir);
     void loadPlayerDefs     (const std::string& dir);
+    void loadVehicles       (const std::string& dir);
 };
 
 } // namespace mini

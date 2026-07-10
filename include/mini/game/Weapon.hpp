@@ -13,6 +13,12 @@ struct Weapon
     // ── Identità ─────────────────────────────────────────────────────
     std::string name = "DC-15A";
 
+    // Viewmodel (arma visibile in prima persona, Todo #11):
+    // risolto dal WeaponDef; vuoto = nessun modello da mostrare.
+    std::string meshPath;
+    float meshScale = 0.8f;
+    float meshRotY  = 0.0f;   // raddrizzamento yaw del GLB (dal WeaponDef)
+
     // ── Statistiche di fuoco ─────────────────────────────────────────
     float fireRate        = 4.0f;    // colpi al secondo
     float bulletSpeed     = 18.0f;   // m/s
@@ -22,6 +28,15 @@ struct Weapon
 
     // Colore proiettile (blu clone)
     float bulletR = 0.3f, bulletG = 0.6f, bulletB = 1.0f;
+
+    // ── Precisione e gittata (R1: consumati da PlayerController) ─────
+    // Dispersione per stato (radianti circa, come da WeaponDef/editor)
+    float baseSpread   = 0.02f;   // fermo
+    float adsSpread    = 0.005f;  // in mira (tasto destro)
+    float moveSpread   = 0.06f;   // in movimento
+    float sprintSpread = 0.14f;   // in corsa
+    float jumpSpread   = 0.20f;   // in aria
+    float effectiveRange = 20.0f; // oltre ~2x il colpo si esaurisce
 
     // ── Sistema calore ───────────────────────────────────────────────
     float heatPerShot     = 0.12f;   // calore aggiunto per colpo (0-1)

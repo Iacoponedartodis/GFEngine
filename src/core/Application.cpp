@@ -16,8 +16,10 @@
 #include "mini/game/MatchSettings.hpp"
 #include "mini/game/PlayerController.hpp"
 #include "mini/game/Weapon.hpp"
+#include "mini/game/VehicleDrive.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/physics/Collision.hpp"
+#include "mini/physics/HitTest.hpp"
 #include "mini/render/Camera.hpp"
 #include "mini/render/HUD.hpp"
 #include "mini/render/LauncherScreen.hpp"
@@ -55,6 +57,15 @@ inline Weapon weaponFromDef(const WeaponDef& def)
     w.heatPerShot     = def.heatPerShot;
     w.cooldownRate    = def.cooldownRate;
     w.overheatPenalty = def.overheatPenalty;
+    w.meshPath        = def.meshPath;
+    w.meshScale       = def.meshScale;
+    w.meshRotY        = def.meshRotY;
+    w.baseSpread      = def.baseSpread;
+    w.adsSpread       = def.adsSpread;
+    w.moveSpread      = def.moveSpread;
+    w.sprintSpread    = def.sprintSpread;
+    w.jumpSpread      = def.jumpSpread;
+    w.effectiveRange  = def.effectiveRange;
     return w;
 }
 
@@ -97,34 +108,13 @@ static glm::mat4 toModelMatrix(const TransformComponent& t)
     return glm::scale(m, {t.sx, t.sy, t.sz});
 }
 
-// Ray vs AABB (slab test) per il feedback di mira sul mirino.
-static bool rayAABB(const glm::vec3& o, const glm::vec3& d,
-                    const glm::vec3& mn, const glm::vec3& mx, float maxT)
-{
-    float tmin = 0.0f, tmax = maxT;
-    for (int i = 0; i < 3; ++i)
-    {
-        if (std::abs(d[i]) < 1e-6f)
-        {
-            if (o[i] < mn[i] || o[i] > mx[i]) return false;
-        }
-        else
-        {
-            float inv = 1.0f / d[i];
-            float t0 = (mn[i] - o[i]) * inv;
-            float t1 = (mx[i] - o[i]) * inv;
-            if (t0 > t1) std::swap(t0, t1);
-            tmin = std::max(tmin, t0);
-            tmax = std::min(tmax, t1);
-            if (tmin > tmax) return false;
-        }
-    }
-    return true;
-}
+// Il feedback di mira usa il test OBB condiviso in physics/HitTest.hpp
+// (rimosso il rayAABB locale: KI #13, mirino = proiettili per costruzione).
 
 // (la verifica "nemici vivi" ora vive nelle regole dei mode — ADR-014)
 
-void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
+void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
+                      const std::string& mapOverride)
 {
     using namespace config;
     initialize();
@@ -166,6 +156,13 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
         aList.push_back({id, def.name, def.type});
     std::sort(aList.begin(), aList.end(),
         [](const auto& a, const auto& b){ return a.name < b.name; });
+
+    // Mappe selezionabili nel PreMatch (R3: niente più mappa hardcoded)
+    std::vector<PreMatchMenu::MapEntry> mList;
+    for (auto& [id, def] : registry.maps())
+        mList.push_back({id, def.name.empty() ? id : def.name});
+    std::sort(mList.begin(), mList.end(),
+        [](const auto& a, const auto& b){ return a.id < b.id; });
 
     constexpr int W = 1280, H = 720;
     Window   window({"GFEngine v0.1", W, H, true});
@@ -238,12 +235,24 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
     SandboxMenu      sbMenu(W, H);        // menu banco di prova (17_SandboxTools)
     bool sbMenuOpen  = false;             // overlay aperto (solo sandbox)
     bool observerFly = false;             // volo libero osservatore (sim AI)
+    EntityId drivenVehicle = 0;           // veicolo guidato (19_Vehicles)
+    float vehPrevR = 0, vehPrevG = 0, vehPrevB = 0; // colore pre-mount
+    int   vehTraceCnt = 0;                // throttle telemetria guida
     sbMenu.setWeapons(testWeapons);
+    {
+        std::vector<std::pair<std::string, std::string>> sbMaps;
+        for (const auto& me : mList) sbMaps.push_back({me.id, me.name});
+        sbMenu.setMaps(sbMaps);
+    }
     preMatchMenu.setWeaponList(wList);
     preMatchMenu.setAbilityList(aList);
+    preMatchMenu.setMapList(mList);
 
     // ── Game mode (ADR-008: Application parla solo con IGameMode) ─────
     MatchSettings currentSettings;
+    // --map <id>: override della mappa (test/debug, R3)
+    if (!mapOverride.empty() && registry.getMap(mapOverride))
+        currentSettings.mapId = mapOverride;
     sbMenu.allyCount    = std::max(1, currentSettings.team1AiCount);
     sbMenu.enemyCount   = std::max(1, currentSettings.team2AiCount);
     sbMenu.team1Tickets = currentSettings.team1Tickets;
@@ -288,6 +297,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
         mode->start(world, mesh.get(), albedo.get(), &registry, &meshCache);
         player.reset(mode->getPlayerEntity(), currentSettings.playerHp,
                      mode->getSpawnPos(), cam);
+        drivenVehicle = 0;   // ogni restart parte a piedi
         worldReady = true;
     };
 
@@ -296,8 +306,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
         // Modalità scelta nel PreMatch (ADR-014): Conquista/Assalto/Difesa.
         // Ricreata SEMPRE qui (il mode del processo può essere sandbox).
         const char* modeId = matchModeId(currentSettings.modeIndex);
+        currentSettings.mapId = preMatchMenu.getSelectedMapId();   // R3
         mode = createGameMode(modeId);
-        telemetry::logInfo(std::string("game mode da PreMatch: ") + modeId);
+        telemetry::logInfo(std::string("game mode da PreMatch: ") + modeId
+                           + " su mappa '" + currentSettings.mapId + "'");
 
         // ── Arma primaria ─────────────────────────────────────────────
         const std::string& primaryId = preMatchMenu.getSelectedWeaponId();
@@ -336,11 +348,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
         currentSettings.team1Tickets = sbMenu.team1Tickets;
         currentSettings.team2Tickets = sbMenu.team2Tickets;
         currentSettings.respawnDelay = sbMenu.respawnDelay;
+        currentSettings.mapId        = sbMenu.selectedMapId();
         const char* simMode = matchModeId(sbMenu.simModeIndex);
         mode = createGameMode(simMode);
         initWorld();
         if (auto* tm = world.getTeam(player.entity))
             tm->teamId = 0;   // neutro: le AI lo ignorano
+        // Parcheggia l'entità del giocatore FUORI dal campo: da neutrale
+        // fermava comunque i proiettili vaganti (e la loro morte innescava
+        // il respawn → teletrasporto della camera + ritorno a team 1).
+        if (auto* pt = world.getTransform(player.entity))
+            pt->y = -100.0f;
         observerFly = true;
         sbMenu.simRunning = true;
         hud.pushFeed(std::string("SIMULAZIONE AI avviata (") + simMode
@@ -573,6 +591,18 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                         else                    stopSimulation();
                         sbMenuOpen = false;
                     }
+                    else if (res == SandboxMenu::Result::RestartSandbox)
+                    {
+                        currentSettings.mapId = sbMenu.selectedMapId();
+                        mode = createGameMode("sandbox");
+                        observerFly = false; sbMenu.simRunning = false;
+                        initWorld();
+                        sbMenuOpen = false;
+                        hud.toast("Sandbox su '" + currentSettings.mapId + "'");
+                        hud.pushFeed("SANDBOX riavviata su " + currentSettings.mapId);
+                        telemetry::logInfo("sandbox: riavvio su mappa '"
+                                           + currentSettings.mapId + "'");
+                    }
                 }
                 else if (state == GameState::Playing)
                 {
@@ -592,6 +622,86 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                         stateChanged = true;
                         window.setMouseCaptured(false);
                         telemetry::logInfo("sandbox: scorciatoia P -> PreMatch");
+                    }
+
+                    // ── E: sali/scendi dal veicolo (19_Vehicles) ───────
+                    if (sc == SDL_SCANCODE_E && !observerFly && !player.isDead)
+                    {
+                        if (drivenVehicle != 0)
+                        {
+                            // Scendi: primo lato LIBERO attorno al veicolo
+                            // (scendere alla cieca poteva mettere il giocatore
+                            // dentro un muro → "incastrato").
+                            if (auto* vt = world.getTransform(drivenVehicle))
+                            {
+                                const float yr = glm::radians(vt->ry);
+                                const glm::vec3 right = { std::cos(yr), 0, -std::sin(yr)};
+                                const glm::vec3 fwd   = { std::sin(yr), 0,  std::cos(yr)};
+                                const glm::vec3 base  = {vt->x, vt->y + 0.4f, vt->z};
+                                const glm::vec3 half  = {config::PLAYER_HALF_X,
+                                                         config::PLAYER_HALF_Y,
+                                                         config::PLAYER_HALF_Z};
+                                const glm::vec3 tries[4] = {
+                                    base + right * 2.2f,  base - right * 2.2f,
+                                    base - fwd * 3.0f,    base + fwd * 3.0f };
+                                glm::vec3 out = tries[0];
+                                for (const auto& t : tries)
+                                    if (!physics::hasCollision(t, half, world))
+                                    { out = t; break; }
+                                cam.setPosition({out.x, out.y + 0.6f, out.z});
+                            }
+                            if (auto* vc = world.getVehicle(drivenVehicle))
+                                vc->driver = 0;
+                            if (auto* tm = world.getTeam(drivenVehicle))
+                                tm->teamId = 0;   // di nuovo neutro
+                            if (auto* mr = world.getMeshRenderer(drivenVehicle))
+                            { mr->r = vehPrevR; mr->g = vehPrevG; mr->b = vehPrevB; }
+                            drivenVehicle = 0;
+                            hud.toast("Sei sceso dal veicolo");
+                            hud.pushFeed("VEICOLO: giocatore a piedi");
+                        }
+                        else
+                        {
+                            // Sali: veicolo libero più vicino entro il raggio
+                            // In TPS la posizione reale è tpsPlayerPos, non la camera
+                            const glm::vec3 pp = player.thirdPerson
+                                               ? player.tpsPlayerPos
+                                               : cam.getPosition();
+                            EntityId best = 0;
+                            float bestD2 = config::VEHICLE_MOUNT_RANGE
+                                         * config::VEHICLE_MOUNT_RANGE;
+                            float nearest2 = 1e9f;
+                            for (EntityId id : world.getEntities())
+                            {
+                                const auto* vc2 = world.getVehicle(id);
+                                if (!vc2 || vc2->driver != 0) continue;
+                                const auto* vt2 = world.getTransform(id);
+                                if (!vt2) continue;
+                                const float dx = vt2->x - pp.x, dz = vt2->z - pp.z;
+                                const float d2 = dx*dx + dz*dz;
+                                if (d2 < nearest2) nearest2 = d2;
+                                if (d2 < bestD2) { bestD2 = d2; best = id; }
+                            }
+                            if (best == 0)
+                                telemetry::logTrace("veicolo: E premuto, nessun mezzo in raggio (min "
+                                    + std::to_string(std::sqrt(nearest2)) + "m)");
+                            if (best != 0)
+                            {
+                                drivenVehicle = best;
+                                world.getVehicle(best)->driver = player.entity;
+                                if (auto* tm = world.getTeam(best))
+                                    tm->teamId = 1;   // ora bersaglio dei nemici
+                                // Feedback visivo: il veicolo guidato è blu
+                                if (auto* mr = world.getMeshRenderer(best))
+                                {
+                                    vehPrevR = mr->r; vehPrevG = mr->g; vehPrevB = mr->b;
+                                    mr->r = 0.25f; mr->g = 0.50f; mr->b = 1.0f;
+                                }
+                                hud.toast("Alla guida: W/S accelera, A/D sterza, E scendi");
+                                hud.pushFeed("VEICOLO: giocatore alla guida");
+                                telemetry::logInfo("veicolo: giocatore alla guida");
+                            }
+                        }
                     }
 
                     // ── Log chat: L apre/chiude, PAGSU/PAGGIU scorre ───
@@ -679,7 +789,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
             if (player.weapon.overheated && !wasOverheated) audio.playOverheat();
             wasOverheated = player.weapon.overheated;
 
-            if (player.respawnTimer > 0.0f)
+            // In osservatore NIENTE respawn: updateRespawn teletrasporterebbe
+            // la camera allo spawn e ricreerebbe il player a team 1 (bug:
+            // "osservo dall'alto e i droidi iniziano a spararmi").
+            if (!observerFly && player.respawnTimer > 0.0f)
             {
                 player.respawnTimer -= elapsed;
                 if (player.respawnTimer <= 0.0f)
@@ -708,6 +821,18 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                                     kb[SDL_SCANCODE_SPACE] != 0,
                                     kb[SDL_SCANCODE_LCTRL] != 0, elapsed);
             }
+            else if (drivenVehicle != 0)
+            {
+                // ── Guida veicolo (19_Vehicles): fisica+camera estratte in
+                //    game/VehicleDrive.hpp (R2) ────────────────────────────
+                if (!vehicledrive::update(world, drivenVehicle, cam, elapsed,
+                                          player.thirdPerson, vehTraceCnt))
+                {
+                    drivenVehicle = 0;
+                    hud.toast("Veicolo distrutto!");
+                    hud.pushFeed("VEICOLO distrutto sotto il giocatore");
+                }
+            }
             else if (!sbMenuOpen)
                 player.updateMovement(cam, input, world, elapsed);
         }
@@ -728,7 +853,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                 }
             }
 
-            if (!player.isDead && !world.isValidEntity(player.entity))
+            // In osservatore il giocatore non partecipa: niente morte,
+            // ticket o respawn (l'entità parcheggiata può prendere colpi
+            // vaganti — vanno ignorati).
+            if (!observerFly && !player.isDead && !world.isValidEntity(player.entity))
             {
                 player.isDead = true;
                 player.prevHp = 0.0f;
@@ -748,7 +876,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                 }
             }
 
-            if (player.updateHealth(world, audio))
+            if (!observerFly && player.updateHealth(world, audio))
             {
                 int t1 = mode->getTeam1Tickets();
                 if (t1 > 0)
@@ -763,17 +891,20 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
                 }
             }
 
-            if (!observerFly && !sbMenuOpen)
+            // Alla guida non si spara (19_Vehicles Fase A: niente armi di bordo)
+            if (!observerFly && !sbMenuOpen && drivenVehicle == 0)
                 player.updateShooting(world, cam, input, audio,
                                        mesh.get(), window.isMouseCaptured());
 
             // ── Feedback di mira: il mirino diventa rosso se punta una
-            //    hitbox nemica reale (stesse trasformazioni del CombatSystem:
-            //    scala, yaw, offset mesh). Fallback: sfera sul corpo. ───────
+            //    hitbox nemica reale. USA LO STESSO test OBB dei proiettili
+            //    (physics/HitTest.hpp, KI #13): il raggio è un segmento di
+            //    80m — mirino e colpi concordano per costruzione. ──────────
             {
                 bool aimOn = false;
                 const glm::vec3 ro = cam.getPosition();
                 const glm::vec3 rd = cam.getForward();
+                const glm::vec3 re = ro + rd * 80.0f;
                 for (EntityId id : world.getEntities())
                 {
                     const auto* tm2 = world.getTeam(id);
@@ -790,18 +921,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
 
                     if (hb2 && hb2->profile && !hb2->profile->zones.empty())
                     {
-                        const float cy2 = std::cos(glm::radians(tr2->ry));
-                        const float sy2 = std::sin(glm::radians(tr2->ry));
                         for (const auto& z : hb2->profile->zones)
-                        {
-                            glm::vec3 off = z.offset * sc;
-                            glm::vec3 roff{ cy2*off.x + sy2*off.z, off.y,
-                                           -sy2*off.x + cy2*off.z };
-                            const glm::vec3 ctr = ep + glm::vec3(0, mo, 0) + roff;
-                            const glm::vec3 he  = z.halfExtents * sc;
-                            if (rayAABB(ro, rd, ctr - he, ctr + he, 80.0f))
+                            if (hittest::segmentInZone(ro, re, ep, sc,
+                                                       tr2->ry, mo, z))
                             { aimOn = true; break; }
-                        }
                     }
                     else
                     {
@@ -905,6 +1028,38 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim)
 
                 // Ripristina il viewport pieno per HUD/menu
                 renderer.setViewportRect(0, 0, dw, dh);
+            }
+
+            // ── Viewmodel arma (Todo #11): arma visibile in prima persona.
+            //    Non in osservatore, non alla guida, non in TPS. ───────────
+            if (!observerFly && drivenVehicle == 0 && !player.thirdPerson
+                && !player.isDead && !player.weapon.meshPath.empty())
+            {
+                auto itW = meshCache.find(player.weapon.meshPath);
+                if (itW != meshCache.end() && itW->second)
+                {
+                    const glm::vec3 f = cam.getForward();
+                    glm::vec3 r = glm::cross(f, glm::vec3(0, 1, 0));
+                    if (glm::length(r) > 0.001f) r = glm::normalize(r);
+                    const glm::vec3 u = glm::cross(r, f);
+                    const glm::vec3 p = cam.getPosition()
+                                      + f * 0.55f + r * 0.30f - u * 0.26f;
+                    glm::mat4 basis(1.0f);
+                    basis[0] = glm::vec4(r, 0.0f);
+                    basis[1] = glm::vec4(u, 0.0f);
+                    basis[2] = glm::vec4(f, 0.0f);
+                    // Convenzione GLB lungo +X (yaw 90 = forward) più il
+                    // raddrizzamento per-arma mesh_rot_y dal Weapon Editor.
+                    const glm::mat4 model =
+                        glm::translate(glm::mat4(1.0f), p) * basis
+                        * glm::rotate(glm::mat4(1.0f),
+                                      glm::radians(90.0f + player.weapon.meshRotY),
+                                      glm::vec3(0, 1, 0))
+                        * glm::scale(glm::mat4(1.0f),
+                                     glm::vec3(player.weapon.meshScale));
+                    renderer.drawMesh(*itW->second, nullptr, model,
+                                      {0.75f, 0.78f, 0.85f});
+                }
             }
         }
 

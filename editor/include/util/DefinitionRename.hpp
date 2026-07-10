@@ -20,7 +20,8 @@ enum class Category
     Ability,        // data/abilities   ← enemies/allies: abilities[]
     Map,            // data/maps        ← nessun cross-ref dati (ma vedi nota ADR-008:
                     //                    i game mode caricano ancora "firebase" hardcoded)
-    Character       // data/characters  ← nessun cross-ref dati al momento
+    Character,      // data/characters  ← nessun cross-ref dati al momento
+    Vehicle         // data/vehicles    ← maps: vehicle_spawns[].vehicle_id
 };
 
 // Esegue la rinomina. dataDir termina con '/'. Ritorna "" se ok, altrimenti

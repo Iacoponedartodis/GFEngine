@@ -27,11 +27,14 @@ public:
     // ── Liste dinamiche da DefinitionRegistry ────────────────────────
     struct WeaponEntry  { std::string id; std::string name; };
     struct AbilityEntry { std::string id; std::string name; std::string type; };
+    struct MapEntry     { std::string id; std::string name; };
 
     void setWeaponList (const std::vector<WeaponEntry>&  weapons);
     void setAbilityList(const std::vector<AbilityEntry>& abilities);
+    void setMapList    (const std::vector<MapEntry>&     maps);   // R3
 
     [[nodiscard]] const std::string& getSelectedWeaponId()    const;
+    [[nodiscard]] const std::string& getSelectedMapId()       const;
     [[nodiscard]] int getSelectedWeapon() const { return m_weaponIdx; }
 
 private:
@@ -53,6 +56,11 @@ private:
     int m_weaponIdx  = 0;
     int m_weapon2Idx = 0;   // arma secondaria (0 = nessuna)
     std::vector<WeaponEntry> m_weaponList;
+
+    // ── Mappe (R3): nomi persistenti per le righe enum ───────────────
+    std::vector<MapEntry>     m_mapList;
+    std::vector<std::string>  m_mapNames;
+    std::vector<const char*>  m_mapNamePtrs;
 
     // ── Abilità & Gadget ─────────────────────────────────────────────
     std::vector<AbilityEntry> m_abilityList;

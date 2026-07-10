@@ -147,8 +147,9 @@ void OptionsMenu::renderControls(const InputManager& input) const
     const int count = InputManager::rebindableCount();
     const float startY = 78.0f;
     const float rowH   = 42.0f;
-    const float labelX = cx - 280;
-    const float keyX   = cx + 100;
+    // Colonna sinistra: rimappabili. Colonna destra: tasti fissi (audit).
+    const float labelX = 60.0f;
+    const float keyX   = 400.0f;
 
     for (int i = 0; i < count; ++i)
     {
@@ -157,7 +158,7 @@ void OptionsMenu::renderControls(const InputManager& input) const
         const bool sel = (i == m_controlRow);
 
         if (sel)
-            m_ui.rect(labelX - 12, y - 5, W - (labelX - 12) * 2, rowH - 4,
+            m_ui.rect(labelX - 12, y - 5, 600.0f, rowH - 4,
                       0.15f, 0.32f, 0.55f, 0.55f);
 
         // Nome azione
@@ -186,23 +187,34 @@ void OptionsMenu::renderControls(const InputManager& input) const
         }
     }
 
-    // Voci fisse: sparo e mira (mouse, non rimappabili)
+    // Voci fisse: mouse + tasti di sistema non rimappabili. Tenere questa
+    // lista allineata alle azioni reali di Application (audit 2026-07-10).
     struct FixedRow { const char* label; const char* key; };
     const FixedRow fixed[] = {
-        { "Sparo",       "Mouse Sinistro" },
-        { "Mira (ADS)",  "Mouse Destro"   },
+        { "Sparo",                    "Mouse Sinistro" },
+        { "Mira (ADS)",               "Mouse Destro"   },
+        { "Prima/terza persona",      "V"   },
+        { "Sali/scendi dal veicolo",  "E"   },
+        { "Log eventi (scorri)",      "L (PAGSU/PAGGIU)" },
+        { "Sandbox: menu prova",      "TAB" },
+        { "Sandbox: partita (PreMatch)", "P" },
+        { "Sandbox: armi rapide",     "1-9" },
+        { "Dump stato (telemetria)",  "F12" },
+        { "Schermo intero",           "F11" },
     };
-    for (int i = 0; i < 2; ++i)
+    // Colonna DESTRA (11 rimappabili + 10 fisse non stanno in una colonna)
+    constexpr int kFixedCount = (int)(sizeof(fixed) / sizeof(fixed[0]));
+    const float fLabelX = W * 0.62f;
+    const float fKeyX   = W * 0.86f;
+    m_ui.text(fLabelX, startY - 26, 1.6f, "Tasti fissi:", 0.55f, 0.55f, 0.6f);
+    for (int i = 0; i < kFixedCount; ++i)
     {
-        const float fy = startY + (count + i) * rowH;
-        m_ui.rect(labelX - 12, fy - 5, W - (labelX - 12) * 2, rowH - 4,
-                  0.08f, 0.08f, 0.10f, 0.35f);
-        m_ui.text(labelX, fy + 6, 1.9f, fixed[i].label, 0.5f, 0.5f, 0.5f);
-        m_ui.rect(keyX - 8, fy - 2, 230, 30, 0.12f, 0.12f, 0.15f, 0.5f);
-        m_ui.text(keyX, fy + 6, 1.8f, fixed[i].key, 0.5f, 0.5f, 0.5f);
+        const float fy = startY + i * (rowH - 6.0f);
+        m_ui.text(fLabelX, fy + 6, 1.6f, fixed[i].label, 0.5f, 0.5f, 0.5f);
+        m_ui.text(fKeyX,   fy + 6, 1.6f, fixed[i].key,   0.6f, 0.6f, 0.65f);
     }
 
-    const float ly = startY + (count + 2) * rowH + 12;
+    const float ly = startY + count * rowH + 12;
     m_ui.rect(0, ly - 8, W, 64, 0, 0, 0, 0.55f);
     if (m_awaitingKey)
     {

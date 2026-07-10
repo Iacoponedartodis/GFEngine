@@ -30,6 +30,7 @@ private:
 
         // Trasformazione mesh
         float meshRotX  = -90.0f;
+        float meshRotY  = 0.0f;
         float meshScale =   0.8f;
 
         // Attach points (model space)
@@ -63,6 +64,7 @@ private:
 
     // Valori slider live (separati dall'entry per aggiornare il preview al volo)
     float m_rotX  = -90.0f;
+    float m_rotY  = 0.0f;
     float m_scale =   0.8f;
 
     // Vista corrente: false = arma, true = proiettile

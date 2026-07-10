@@ -1,12 +1,13 @@
 {
     "abilities": [
+        "Shield",
         "Combat Roll"
     ],
     "ai_profile": "B1 Battle Droid",
     "attach_points": {
         "eye": [
             0.0,
-            0.0,
+            164.0723114013672,
             0.0
         ],
         "foot": [
@@ -15,8 +16,8 @@
             0.0
         ],
         "left_hand": [
-            0.0,
-            0.0,
+            86.19578552246094,
+            139.96595764160156,
             0.0
         ],
         "muzzle": [
@@ -25,50 +26,24 @@
             0.0
         ],
         "right_hand": [
-            -87.56062316894531,
-            142.88009643554688,
+            -86.05806732177734,
+            142.15802001953125,
             0.0
         ]
     },
-    "bullet_color": [
-        0.30000001192092896,
-        0.6000000238418579,
-        1.0
-    ],
-    "color": [
-        0.8500000238418579,
-        0.8500000238418579,
-        0.8500000238418579
-    ],
     "faction": "republic",
     "hitbox_profile": "Clone Trooper",
     "mesh": "assets/models/allies/clone_trooper_sw_tcw_republic_heroes.glb",
     "mesh_rot_x": 0.0,
     "mesh_rot_y": 0.0,
     "mesh_scale": 0.010999999940395355,
-    "name": "Clone Trooper",
+    "name": "Heavy Clone Trooper",
     "stats": {
         "damage_scale": 1.0,
         "hp": 100.0,
-        "move_speed": 1.7999999523162842
-    },
-    "texture": "",
-    "weapon_display": {
-        "hand": "right_hand",
-        "id": "DC-17 Blaster Pistol",
-        "offset": [
-            0.0,
-            0.0,
-            0.0
-        ],
-        "rot": [
-            0.0,
-            0.0,
-            0.0
-        ],
-        "scale": 1.0
+        "move_speed": 4.0
     },
     "weapons": [
-        "DC-17 Blaster Pistol"
+        "T-21 Heavy Blaster"
     ]
 }

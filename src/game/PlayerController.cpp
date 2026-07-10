@@ -9,6 +9,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 
 namespace mini
@@ -369,6 +370,48 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
         fwd = cam.getForward();
     }
 
+    // ── Dispersione dallo stato (R1): i 5 spread del WeaponDef, prima
+    //    autorabili nell'editor ma mai consumati, ora contano davvero.
+    {
+        float spread = weapon.baseSpread;
+        const bool moving = input.isDown(Action::MoveForward)
+                         || input.isDown(Action::MoveBack)
+                         || input.isDown(Action::MoveLeft)
+                         || input.isDown(Action::MoveRight);
+        if (!onGround)         spread = weapon.jumpSpread;
+        else if (isSprinting)  spread = weapon.sprintSpread;
+        else if (moving)       spread = weapon.moveSpread;
+
+        // Mira (tasto destro): da fermi si scende all'adsSpread pieno;
+        // in movimento/aria la mira riduce comunque la dispersione.
+        if (input.isDown(Action::Aim))
+            spread = (onGround && !isSprinting && !moving)
+                   ? weapon.adsSpread
+                   : spread * 0.4f;
+
+        if (spread > 0.0f)
+        {
+            // LCG deterministico locale (stesso approccio dell'AiSystem)
+            static unsigned s = 0x2545F491u;
+            auto rnd = [&]() {
+                s = s * 1664525u + 1013904223u;
+                return (float)(s >> 8) / 16777216.0f - 0.5f;
+            };
+            glm::vec3 right = glm::cross(fwd, glm::vec3(0, 1, 0));
+            if (glm::length(right) > 0.001f) right = glm::normalize(right);
+            const glm::vec3 up = glm::cross(right, fwd);
+            fwd = glm::normalize(fwd + right * (rnd() * 2.0f * spread)
+                                     + up    * (rnd() * 2.0f * spread));
+        }
+    }
+
+    // ── Gittata (R1): oltre ~2x l'effective_range il colpo si esaurisce
+    //    (cap sul lifetime; il falloff del danno arriverà più avanti).
+    float life = weapon.bulletLifetime;
+    if (weapon.effectiveRange > 0.0f && weapon.bulletSpeed > 0.1f)
+        life = std::min(life, config::WEAPON_RANGE_GRACE
+                              * weapon.effectiveRange / weapon.bulletSpeed);
+
     EntityId b = world.createEntity();
     world.addTransform(b, TransformComponent{
         .x = org.x, .y = org.y, .z = org.z,
@@ -380,7 +423,7 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
         fwd.z * weapon.bulletSpeed
     });
     world.addTeam(b, {1});
-    world.addBullet(b, {weapon.bulletDamage, weapon.bulletLifetime, 1, /*fromPlayer=*/true});
+    world.addBullet(b, {weapon.bulletDamage, life, 1, /*fromPlayer=*/true});
     if (bulletMesh)
         world.addMeshRenderer(b, {bulletMesh, nullptr,
                                    weapon.bulletR, weapon.bulletG, weapon.bulletB});

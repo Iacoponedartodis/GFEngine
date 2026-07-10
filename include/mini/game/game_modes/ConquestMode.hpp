@@ -2,6 +2,7 @@
 #include "mini/game/data/Definitions.hpp"
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/CommandPosts.hpp"
+#include "mini/game/VehicleSpawn.hpp"
 #include "mini/game/MatchSettings.hpp"
 #include <glm/glm.hpp>
 #include <string>
@@ -96,12 +97,16 @@ protected:
     const DefinitionRegistry* m_registry  = nullptr;
     const MeshCache*          m_meshCache = nullptr;
     const MapDef*             m_map       = nullptr; // mappa attiva (per suolo/ostacoli)
+    std::string               m_mapId     = "firebase"; // da MatchSettings (R3)
 
     int m_team1Tickets = 5;
     int m_team2Tickets = 10;
 
     // Command post (ADR-009)
     CommandPosts m_commandPosts;
+
+    // Respawn dei veicoli distrutti (19_Vehicles Fase B)
+    vehiclespawn::RespawnTracker m_vehicleTracker;
     float        m_bleedTimer    = 0.0f;
     float        m_bleedInterval = 6.0f;
 

@@ -63,9 +63,16 @@ inline Resolved resolve(const DefinitionRegistry* registry,
     const float charScale = (def->meshScale > 0.0001f) ? def->meshScale : 1.0f;
     const float effScale  = disp.scale / charScale;
 
+    // mesh_rot_y del WeaponDef: raddrizzamento base del GLB attorno al grip
+    // (0 per le armi esistenti = invariato; la POSA resta in weapon_display)
+    glm::mat4 baseFix(1.0f);
+    if (wd->meshRotY != 0.0f)
+        baseFix = glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotY), {0,1,0});
+
     out.local = glm::translate(glm::mat4(1.0f), hand + off)
               * R
               * glm::scale(glm::mat4(1.0f), glm::vec3(effScale))
+              * baseFix
               * glm::translate(glm::mat4(1.0f), -grip);
     return out;
 }

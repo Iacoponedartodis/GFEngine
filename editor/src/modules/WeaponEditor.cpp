@@ -86,11 +86,12 @@ static std::string resolveMesh(const std::string& field)
 
 WeaponEditor::WeaponEditor() { loadWeapons(); if (!m_weapons.empty()) selectWeapon(0); }
 
-// ── Trasformazione arma (coerente con loadModel: rotX * scala) ───────────────
+// ── Trasformazione arma (coerente con loadModel: rotY * rotX * scala) ────────
 
 glm::mat4 WeaponEditor::weaponTransform() const
 {
-    return glm::rotate(glm::mat4(1.0f), glm::radians(m_rotX), {1,0,0})
+    return glm::rotate(glm::mat4(1.0f), glm::radians(m_rotY), {0,1,0})
+         * glm::rotate(glm::mat4(1.0f), glm::radians(m_rotX), {1,0,0})
          * glm::scale(glm::mat4(1.0f), {m_scale, m_scale, m_scale});
 }
 
@@ -192,6 +193,7 @@ void WeaponEditor::loadWeapons()
         w.meshPath           = j.value("mesh",            std::string(""));
         w.projectileMeshPath = j.value("projectile_mesh", std::string(""));
         w.meshRotX           = j.value("mesh_rot_x",      -90.0f);
+        w.meshRotY           = j.value("mesh_rot_y",        0.0f);
         w.meshScale          = j.value("mesh_scale",        0.8f);
 
         if (j.contains("attach_points") && j["attach_points"].is_object())
@@ -237,6 +239,7 @@ void WeaponEditor::selectWeapon(int idx)
 
     const auto& w = m_weapons[idx];
     m_rotX  = w.meshRotX;
+    m_rotY  = w.meshRotY;
     m_scale = w.meshScale;
     m_attachPoints  = w.attachPoints;
     m_selAttachPoint = m_attachPoints.count("muzzle") ? "muzzle" : "";
@@ -255,7 +258,7 @@ void WeaponEditor::reloadPreview()
     const std::string& field = m_showProjectileMesh ? w.projectileMeshPath : w.meshPath;
     std::string abs = resolveMesh(field);
     if (abs.empty()) { m_viewport.clearModel(); return; }
-    m_viewport.loadModel(abs, m_rotX, m_scale);
+    m_viewport.loadModel(abs, m_rotX, m_scale, m_rotY);
 }
 
 // ── loadRigJoints ─────────────────────────────────────────────────────────────
@@ -282,6 +285,7 @@ void WeaponEditor::saveSelected()
 
     // Commit live slider values back to the entry
     w.meshRotX  = m_rotX;
+    w.meshRotY  = m_rotY;
     w.meshScale = m_scale;
     w.attachPoints = m_attachPoints;
 
@@ -293,6 +297,7 @@ void WeaponEditor::saveSelected()
     j["mesh"]             = w.meshPath;
     j["projectile_mesh"]  = w.projectileMeshPath;
     j["mesh_rot_x"]       = w.meshRotX;
+    j["mesh_rot_y"]       = w.meshRotY;
     j["mesh_scale"]       = w.meshScale;
 
     json apObj = json::object();
@@ -537,6 +542,8 @@ void WeaponEditor::drawMeshTab(float panelW)
         return c;
     };
 
+    if (floatRow("RotY", m_rotY, -180.f, 180.f, 1.0f, "%.0f"))
+    { changed = true; reloadPreview(); syncViewportMarkers(); }
     if (floatRow("RotX", m_rotX, -180.f, 180.f, 1.0f, "%.0f"))
     { changed = true; reloadPreview(); syncViewportMarkers(); }
     if (floatRow("Scala", m_scale, 0.01f, 5.0f, 0.01f, "%.3f"))

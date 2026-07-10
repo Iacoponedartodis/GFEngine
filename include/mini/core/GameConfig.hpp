@@ -16,6 +16,13 @@ constexpr float PLAYER_HALF_X =   0.35f;
 constexpr float PLAYER_HALF_Y =   0.85f;  // altezza occhi da y=0
 constexpr float PLAYER_HALF_Z =   0.35f;
 
+// Veicoli (19_Vehicles, Fase A)
+constexpr float VEHICLE_MOUNT_RANGE = 3.5f;   // distanza max per salire (m)
+constexpr float VEHICLE_EYE_HEIGHT  = 1.4f;   // altezza camera alla guida
+
+// Gittata (R1): portata massima = grace * effective_range dell'arma
+constexpr float WEAPON_RANGE_GRACE  = 2.0f;
+
 constexpr float PLAYER_BULLET_SPEED  = 18.0f;
 constexpr float PLAYER_BULLET_DAMAGE = 25.0f;
 constexpr float PLAYER_BULLET_LIFE   =  3.0f;

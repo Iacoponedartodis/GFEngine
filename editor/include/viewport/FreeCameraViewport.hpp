@@ -22,7 +22,8 @@ public:
     // showLoadBar: se true mostra una barra "Sfoglia modello..." sopra il viewport
     void draw(bool showLoadBar = false);
 
-    void loadModel(const std::string& path, float meshRotX = 0.0f, float meshScale = 1.0f);
+    void loadModel(const std::string& path, float meshRotX = 0.0f, float meshScale = 1.0f,
+                   float meshRotY = 0.0f);
     void clearModel();
     void setHitboxes(const std::vector<mini::HitZone>& zones, int selZone);
 
@@ -94,7 +95,8 @@ public:
 private:
     // ── FBO ──────────────────────────────────────────────────────────
     unsigned int m_fbo=0, m_colorTex=0, m_depthRbo=0;
-    int m_fbWidth=0, m_fbHeight=0;
+    int m_fbWidth=0, m_fbHeight=0;    // area visibile richiesta dal pannello
+    int m_texWidth=0, m_texHeight=0;  // texture allocata (multipli di 64, solo crescita)
     void resizeFBO(int w, int h);
     bool m_fboOk = false;
 

@@ -94,8 +94,29 @@
 - **Future Class concept** (weapon + equipment + role composition) distinct from a single
   weapon — schema now documented in 14_ClassSystem (Planned Feature), ahead of Phase 3.
 
-## Planned Feature index (not yet in code — see individual documents for full scope)
-- 14_ClassSystem.md — `ClassDef` + `PlayerDef.classId`.
-- 15_MapMetadata.md — `MapDef.coverPoints/patrolRoutes/dangerZones`.
-- ADR-010 (13_ADR) — in-editor rename command + centralized RMW save helper.
-- ADR-011 (13_ADR) — split-screen feasibility spike (not yet run).
+## Planned Feature index (aggiornato 2026-07-10)
+- 14_ClassSystem.md — `ClassDef` + `PlayerDef.classId` — **ancora Planned, zero codice**.
+- 15_MapMetadata.md — IMPLEMENTATO (dati + authoring MapEditor); consumer AI in 18.
+- 16_AiBehavior.md — IMPLEMENTATO (scope core); abilità attive ancora out.
+- 17_SandboxTools.md — IMPLEMENTATO; gadget player-side ancora out.
+- 18_AiMapConsumption.md — IMPLEMENTATO; pathfinding e pose alle cover ancora out.
+- 19_Vehicles.md — Fase A IMPLEMENTATA; Fase B pianificata (armi di bordo, multi-posto,
+  AI alla guida, hitbox/attach veicoli, respawn mezzi, collider reciproco).
+- ADR-010 — FATTO (rename + saveJsonRMW). ADR-011 — spike FATTO, esito (a), Accepted.
+
+## Vincoli confermati sul codice reale (sessione 2026-07-10)
+- **Gli input sintetici (SendKeys / keybd_event) NON raggiungono la finestra SDL** nei
+  test automatizzati da questa postazione (finestra senza focus reale; verificato con
+  l'input recorder vuoto). I bug di gameplay interattivo si diagnosticano con
+  telemetria dedicata letta dal log del run dell'utente (`drive:`, `veicolo: E...`,
+  heartbeat `ai:`), non provando a pilotare il gioco dall'esterno.
+- Il titolo della finestra engine è "GFEngine v0.1" (non "GFEngine").
+- **Pattern mailbox su World** per la comunicazione sistemi↔Application senza
+  accoppiare l'ECS al codice di gioco: `combatFeedback`, `eventFeed`, `activeMap`
+  (puntatore opaco + forward declaration). Preferirlo a nuovi include di gioco in ecs/.
+- L'area disponibile di un pannello ImGui può OSCILLARE di pochi px tra frame: ogni
+  risorsa GL dimensionata su di essa deve essere only-grow/con isteresi (incidente
+  KI #17: churn FBO nel viewport → centinaia di MB/min).
+- Liste `enemy_types`/`ally_types` di MapDef VUOTE = auto (tutte le definizioni
+  registrate, ordinate): comportamento voluto, scritto nella UI del BalanceEditor.
+  Non "riempire per sicurezza" le liste nei dati.

@@ -1,6 +1,7 @@
 #pragma once
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/CommandPosts.hpp"
+#include "mini/game/VehicleSpawn.hpp"
 #include "mini/game/MatchSettings.hpp"
 #include <glm/glm.hpp>
 #include <vector>
@@ -20,6 +21,7 @@ public:
         playerHp   = s.playerHp;
         allyCount  = s.team1AiCount;
         enemyCount = s.team2AiCount;
+        m_mapId    = s.mapId.empty() ? "firebase" : s.mapId;   // R3
     }
     void start(World& world, Mesh* defaultMesh, Texture* texture,
                const DefinitionRegistry* registry,
@@ -47,9 +49,13 @@ private:
     Texture* m_tex       = nullptr;
     const DefinitionRegistry* m_registry  = nullptr;
     const MeshCache*          m_meshCache = nullptr;
+    std::string               m_mapId     = "firebase"; // da MatchSettings (R3)
 
     // Command post visibili/catturabili anche in sandbox (per testarli).
     CommandPosts m_commandPosts;
+
+    // Respawn dei veicoli distrutti (19_Vehicles Fase B)
+    vehiclespawn::RespawnTracker m_vehicleTracker;
 
     // Manichino: posizione + tipo + team, per il respawn automatico.
     // team 2 = nemico (da data/enemies), team 1 = alleato (da data/allies).

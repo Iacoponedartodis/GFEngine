@@ -98,6 +98,7 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         w.projectileMeshPath = gets(*j, "projectile_mesh");
         w.meshScale          = getf(*j, "mesh_scale", 0.8f);
         w.meshRotX           = getf(*j, "mesh_rot_x", 0.0f);
+        w.meshRotY           = getf(*j, "mesh_rot_y", 0.0f);
         if ((*j).contains("attach_points") && (*j)["attach_points"].is_object())
         {
             auto& ap = (*j)["attach_points"];
@@ -268,10 +269,97 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 m.commandPosts.push_back(p);
             }
         }
+        // ── Map Metadata (15_MapMetadata): opzionali, additivi ─────────
+        if ((*j).contains("cover_points") && (*j)["cover_points"].is_array())
+        {
+            for (auto& cp : (*j)["cover_points"])
+            {
+                CoverPointDef c;
+                c.x         = getf(cp, "x", 0.0f);
+                c.y         = getf(cp, "y", 0.0f);
+                c.z         = getf(cp, "z", 0.0f);
+                c.facingDeg = getf(cp, "facing_deg", 0.0f);
+                c.height    = getf(cp, "height", 1.0f);
+                m.coverPoints.push_back(c);
+            }
+        }
+        if ((*j).contains("patrol_routes") && (*j)["patrol_routes"].is_array())
+        {
+            for (auto& pr : (*j)["patrol_routes"])
+            {
+                PatrolRouteDef r;
+                r.id = gets(pr, "id", "route");
+                if (pr.contains("points") && pr["points"].is_array())
+                    for (auto& pt : pr["points"])
+                        if (pt.is_array() && pt.size() >= 3)
+                            r.points.push_back({(float)pt[0], (float)pt[1], (float)pt[2]});
+                m.patrolRoutes.push_back(std::move(r));
+            }
+        }
+        if ((*j).contains("danger_zones") && (*j)["danger_zones"].is_array())
+        {
+            for (auto& dz : (*j)["danger_zones"])
+            {
+                DangerZoneDef d;
+                d.x           = getf(dz, "x", 0.0f);
+                d.y           = getf(dz, "y", 0.0f);
+                d.z           = getf(dz, "z", 0.0f);
+                d.radius      = getf(dz, "radius", 4.0f);
+                d.dangerLevel = getf(dz, "danger_level", 0.5f);
+                m.dangerZones.push_back(d);
+            }
+        }
+
+        // Veicoli in mappa (19_Vehicles, Fase A)
+        if ((*j).contains("vehicle_spawns") && (*j)["vehicle_spawns"].is_array())
+        {
+            for (auto& vs : (*j)["vehicle_spawns"])
+            {
+                VehicleSpawnDef v;
+                v.vehicleId = gets(vs, "vehicle_id");
+                v.x  = getf(vs, "x", 0.0f);
+                v.z  = getf(vs, "z", 0.0f);
+                v.ry = getf(vs, "ry", 0.0f);
+                if (!v.vehicleId.empty()) m.vehicleSpawns.push_back(std::move(v));
+            }
+        }
+
         std::cout << "[Registry] Map: " << m.id
                   << " (geometry: " << m.geometry.size() << " box, "
-                  << m.commandPosts.size() << " command post)\n";
+                  << m.commandPosts.size() << " command post, "
+                  << m.coverPoints.size() << " cover, "
+                  << m.patrolRoutes.size() << " route, "
+                  << m.dangerZones.size() << " danger)\n";
         m_maps[m.id] = std::move(m);
+    }
+}
+
+// ── Veicoli (19_Vehicles, Fase A) ─────────────────────────────────────────
+void DefinitionRegistry::loadVehicles(const std::string& dir)
+{
+    fs::path folder = dir + "/vehicles";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        VehicleDef v;
+        v.id          = entry.path().stem().string();   // id = filename (ADR-001)
+        v.name        = gets(*j, "name", v.id);
+        v.hp          = getf(*j, "hp", 150.0f);
+        v.maxSpeed    = getf(*j, "max_speed", 12.0f);
+        v.accel       = getf(*j, "accel", 10.0f);
+        v.turnRateDeg = getf(*j, "turn_rate_deg", 90.0f);
+        v.meshPath    = gets(*j, "mesh");
+        v.meshScale   = getf(*j, "mesh_scale", 1.0f);
+        v.meshRotY    = getf(*j, "mesh_rot_y", 0.0f);
+        v.halfX       = getf(*j, "half_x", 0.7f);
+        v.halfY       = getf(*j, "half_y", 0.5f);
+        v.halfZ       = getf(*j, "half_z", 1.2f);
+        if ((*j).contains("color") && (*j)["color"].size() >= 3)
+            v.color = {(*j)["color"][0], (*j)["color"][1], (*j)["color"][2]};
+        std::cout << "[Registry] Vehicle: " << v.id << "\n";
+        m_vehicles[v.id] = std::move(v);
     }
 }
 
@@ -403,6 +491,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     m_maps.clear();
     m_hitboxProfiles.clear();
     m_playerDefs.clear();
+    m_vehicles.clear();
     m_loaded = false;
 
     std::cout << "[Registry] Caricamento definizioni da '" << dataRoot << "'...\n";
@@ -415,6 +504,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadAllies(dataRoot);
     loadMaps(dataRoot);
     loadPlayerDefs(dataRoot);
+    loadVehicles(dataRoot);
 
     m_loaded = true;
     std::cout << "[Registry] " << m_weapons.size() << " armi, "
@@ -439,6 +529,7 @@ GETTER(m_aiProfiles,     AiProfileDef,     getAiProfile)
 GETTER(m_enemies,        EnemyDef,         getEnemy)
 GETTER(m_allies,         EnemyDef,         getAlly)
 GETTER(m_maps,           MapDef,           getMap)
+GETTER(m_vehicles,       VehicleDef,       getVehicle)
 GETTER(m_hitboxProfiles, HitboxProfile,    getHitboxProfile)
 GETTER(m_playerDefs,     PlayerDef,        getPlayerDef)
 #undef GETTER

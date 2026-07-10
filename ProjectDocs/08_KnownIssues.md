@@ -15,19 +15,19 @@
 - Note: the hitbox fallback `"grunt"` for team2 in `spawnUnit` still exists in `data/hitboxes/`
   and remains valid.
 
-## 3. FreeCameraViewport GL/FBO state (WATCH)
-- Historically caused black-screen / state-restoration issues across render passes. Current
-  code renders to an FBO and restores depth func. Re-check whenever the viewport render path
-  or ImGui multi-viewport handling changes.
+## 3. FreeCameraViewport GL/FBO state — CHIUSO 2026-07-10 (assorbito da #17)
+- Il sospetto storico si è concretizzato come churn FBO da oscillazione dimensioni
+  (KI #17, fixato con texture only-grow). Il render path FBO resta da tenere d'occhio
+  solo se cambia la gestione multi-viewport ImGui.
 
 ## 4. ~~EntityEditor gizmo/marker only correct at identity transform~~ — RESOLVED 2026-07-04
 - Gizmo targets are now set in world space via `toWorld()` (M = rotX*scale) and drag deltas
   are converted back with `deltaToLocal()` (inverse of M) at every call site + in `tick()`.
   Needs one manual verification pass with a scaled/rotated model (e.g. clone trooper).
 
-## 5. Clone Trooper oversized (MEDIUM)
-- `clone_trooper` GLB is authored in FBX centimeters (~285 units tall). With `mesh_scale`=1 it
-  is enormous in-game. Needs per-entity scale or asset normalization.
+## 5. ~~Clone Trooper oversized~~ — RISOLTO 2026-07-04 dall'utente
+- Nuovo GLB + `mesh_scale` 0.011 autorato via editor (vedi 05_CurrentState "Resolved
+  2026-07-04 (later batches)"). Voce rimasta aperta per svista, chiusa 2026-07-10.
 
 ## 6. ~~Repo hygiene~~ — RESOLVED 2026-07-04
 - `.gitignore` was corrupted (contained an old CMakeLists.txt copy, no ignore patterns) —
@@ -74,10 +74,10 @@
   before Phase 3 progression (grades, unlocks) without coupling class identity to a single
   weapon id. Blocks Todo #14.
 
-## 11. MapDef lacks AI-relevant tactical metadata (MEDIUM)
-- `MapDef` currently carries geometry + spawn points only (ADR-004). It does not yet carry
-  cover points, patrol routes, danger zones, or sectors that a tactical AI (Phase 2) or a
-  Map Metadata editor module would need to query at runtime. Blocks Todo #15.
+## 11. MapDef lacks AI-relevant tactical metadata — RISOLTO 2026-07-10 (lato dati)
+- 15_MapMetadata implementato: `MapDef.coverPoints/patrolRoutes/dangerZones`, parse nel
+  registry, authoring nel MapEditor (sezione "Metadata AI"). Il CONSUMER runtime (AI
+  tattica fase 2) resta da progettare/documentare — per scelta di scope, non per gap.
 
 ## 12. Split-screen/multi-viewport support unverified — RISOLTO 2026-07-09 (caso a)
 - Spike ADR-011 eseguito: due viewport + seconda Camera sulla stessa scena live funzionano
@@ -85,21 +85,25 @@
   partita. Il lavoro restante per la feature vera (secondo input locale, secondo HUD) è
   additivo, non un redesign. Conferma visiva manuale (F9) in carico allo sviluppatore.
 
-## 17. Memoria GFEditor crescente (WATCH — rilevata via telemetria 2026-07-09)
-- editor_run: 73 → 259 MB in ~1 minuto di uso normale (heartbeat frame 600/1800/2400).
-  Sospetti principali: ricaricamenti modello nel viewport (loadModel rigenera i buffer a
-  ogni cambio slider), texture/FBO. Da profilare prima che diventi un problema di sessioni
-  lunghe. L'engine resta stabile (~63 MB).
+## 17. Memoria GFEditor crescente — FIX PROBABILE 2026-07-10 (verifica al prossimo uso)
+- Misura: sulla Home la memoria è PIATTA (67MB per 75s) → il leak era nei moduli col
+  viewport 3D. Root cause identificata: `FreeCameraViewport::resizeFBO` ricreava
+  FBO+texture+renderbuffer a OGNI oscillazione di pixel dell'area disponibile
+  (scrollbar/separatori) → churn GL continuo (era anche il vecchio sospetto #3).
+  Fix: texture allocata a multipli di 64 e SOLO ingrandita, pannello mostrato come
+  sub-regione via UV; ogni realloc reale è loggato su stdout. **Da confermare:** una
+  sessione d'uso normale nei moduli con l'heartbeat memoria stabile.
 
 ## 18. Sandbox: verifica post-fix "nemici non muoiono" (PENDING SMOKE)
 - Causa identificata e corretta (profilo hitbox svuotato → headshot nel vuoto, vedi
   Changelog 2026-07-09 (7)). Profilo B1 ripristinato dal .bak. Da confermare al prossimo
   playtest sandbox: colpi a testa/corpo → log `hit:`/`kill:` in engine_run.log.
 
-## 13. Hitbox zone rotation ignorata nel combat test (LOW)
-- CombatSystem trasforma le zone per scala/yaw/meshOffsetY (fix 2026-07-04) ma il test resta
-  AABB: `eulerDeg` per-zona (es. testa B1 a -58°) non inclina il volume di collisione.
-  Serve un test OBB se la precisione diventa importante.
+## 13. Hitbox zone rotation ignorata — RISOLTO 2026-07-10 (test OBB condiviso)
+- Nuovo `physics/HitTest.hpp`: segmento-vs-OBB (yaw entità * eulerDeg zona, ordine
+  Y*X*Z identico al wireframe editor), usato SIA dal CombatSystem SIA dal mirino
+  (che ora è un segmento di 80m con lo stesso helper): mirino e proiettili
+  concordano per costruzione anche su zone inclinate (testa B1 a -58°).
 
 ## 14. Asset default mancanti (LOW)
 - `assets/textures/default.png` e `assets/models/default.obj` non esistono: fallback a

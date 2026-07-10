@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 namespace mini
 {
@@ -7,7 +8,8 @@ class Window;
 class Application
 {
 public:
-    void run(bool directPreMatch = false, bool sandbox = false, bool autoSim = false);
+    void run(bool directPreMatch = false, bool sandbox = false, bool autoSim = false,
+             const std::string& mapOverride = "");
 
     void initialize();
     void shutdown();

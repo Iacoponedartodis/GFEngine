@@ -1,6 +1,8 @@
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
+#include "mini/physics/HitTest.hpp"
+#include "mini/physics/Collision.hpp"
 #include "mini/core/Telemetry.hpp"
 
 #include <glm/glm.hpp>
@@ -8,73 +10,18 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <unordered_set>
 
 namespace mini
 {
 
 // ── Test a SEGMENTO (anti-tunneling) ─────────────────────────────────────
 // I proiettili si muovono a step discreti (a 55 m/s sono ~0.9 m per tick):
-// un test puntuale ATTRAVERSAVA le zone piccole (testa B1: 0.12x0.44x0.15)
-// senza mai esserci "dentro" in un tick — il mirino (raycast continuo)
-// diceva "colpibile" ma il proiettile mancava. Ora si testa il segmento
-// percorso nel tick (posizione precedente → attuale).
-
-// Distanza² tra un punto e un segmento [a,b].
-static float segPointDistSq(const glm::vec3& a, const glm::vec3& b,
-                            const glm::vec3& p)
-{
-    const glm::vec3 ab = b - a;
-    const float len2 = glm::dot(ab, ab);
-    float t = (len2 > 1e-8f) ? glm::dot(p - a, ab) / len2 : 0.0f;
-    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    const glm::vec3 c = a + ab * t;
-    return glm::dot(p - c, p - c);
-}
-
-// Segmento [a,b] vs AABB [mn,mx] (slab test, parametro t in [0,1]).
-static bool segAABB(const glm::vec3& a, const glm::vec3& b,
-                    const glm::vec3& mn, const glm::vec3& mx)
-{
-    const glm::vec3 d = b - a;
-    float tmin = 0.0f, tmax = 1.0f;
-    for (int i = 0; i < 3; ++i)
-    {
-        if (std::abs(d[i]) < 1e-8f)
-        {
-            if (a[i] < mn[i] || a[i] > mx[i]) return false;
-        }
-        else
-        {
-            const float inv = 1.0f / d[i];
-            float t0 = (mn[i] - a[i]) * inv;
-            float t1 = (mx[i] - a[i]) * inv;
-            if (t0 > t1) std::swap(t0, t1);
-            tmin = std::max(tmin, t0);
-            tmax = std::min(tmax, t1);
-            if (tmin > tmax) return false;
-        }
-    }
-    return true;
-}
-
-// Trasforma una zona dal model space al world space dell'entità
-// (scala uniforme, yaw, offset verticale mesh) e testa il segmento.
-static bool segmentInZone(const glm::vec3& a, const glm::vec3& b,
-                          const glm::vec3& entityPos,
-                          float scale, float yawDeg, float meshOffY,
-                          const HitZone& zone)
-{
-    glm::vec3 off = zone.offset * scale;
-    if (yawDeg != 0.0f)
-    {
-        const float c = std::cos(glm::radians(yawDeg));
-        const float s = std::sin(glm::radians(yawDeg));
-        off = { c*off.x + s*off.z, off.y, -s*off.x + c*off.z };
-    }
-    const glm::vec3 center = entityPos + glm::vec3(0, meshOffY, 0) + off;
-    const glm::vec3 he     = zone.halfExtents * scale;
-    return segAABB(a, b, center - he, center + he);
-}
+// un test puntuale ATTRAVERSAVA le zone piccole. Il test segmento-vs-zona
+// (ora OBB, KI #13) è CONDIVISO col mirino in physics/HitTest.hpp: per
+// costruzione, ciò che il mirino riconosce è ciò che il proiettile colpisce.
+using hittest::segPointDistSq;
+using hittest::segmentInZone;
 
 struct HitResult { bool hit = false; float mult = 1.0f; std::string zone; };
 
@@ -112,10 +59,31 @@ static HitResult testHit(const glm::vec3& bulletPrev,
     return {false, 1.0f, ""};
 }
 
+// Test segmento vs sagoma OBB di un veicolo (19_Vehicles Fase B): il danno
+// al mezzo vale su tutto il box (prima solo la sfera k_hitRadius al centro,
+// coi colpi ai bordi che si fermavano sul collider senza danneggiare).
+static bool segmentHitsVehicle(const glm::vec3& a, const glm::vec3& b,
+                               const glm::vec3& pos, float yawDeg,
+                               const VehicleComponent& vc)
+{
+    HitZone box;
+    box.offset      = {0, 0, 0};
+    box.halfExtents = {vc.halfX, vc.halfY, vc.halfZ};
+    return segmentInZone(a, b, pos, /*scale=*/1.0f, yawDeg,
+                         /*meshOffY=*/0.0f, box);
+}
+
 void CombatSystem::update(World& world, float dt)
 {
     std::vector<EntityId> toDestroy;
     const std::vector<EntityId> entities = world.getEntities();
+
+    // ── Piloti a bordo (R5): finché guidano, il MEZZO assorbe i colpi al
+    //    posto loro (l'entità pilota segue la camera dentro il veicolo).
+    std::unordered_set<EntityId> drivers;
+    for (EntityId eid : entities)
+        if (const auto* vc = world.getVehicle(eid); vc && vc->driver != 0)
+            drivers.insert(vc->driver);
 
     // ── Rigenerazione scudi (ability "shield", 16_AiBehavior) ────────
     for (EntityId eid : entities)
@@ -144,6 +112,7 @@ void CombatSystem::update(World& world, float dt)
         if (const auto* bv = world.getVelocity(bid))
             bPrev -= glm::vec3(bv->vx, bv->vy, bv->vz) * dt;
 
+        bool hitSomething = false;
         for (EntityId eid : entities)
         {
             if (eid == bid || world.getBullet(eid)) continue;
@@ -153,12 +122,26 @@ void CombatSystem::update(World& world, float dt)
             auto* eh = world.getHealth(eid);
             if (!et || !eh || eh->current <= 0.0f) continue;
 
+            // Pilota a bordo: intoccabile direttamente, spara al mezzo (R5)
+            if (drivers.count(eid)) continue;
+
             const glm::vec3 ePos = {et->x, et->y, et->z};
-            const auto* hb = world.getHitbox(eid);
-            const auto* mr = world.getMeshRenderer(eid);
-            const float scale   = (et->sx > 0.0001f) ? et->sx : 1.0f;
-            const float meshOff = mr ? mr->meshOffsetY : 0.0f;
-            auto result = testHit(bPrev, bPos, ePos, scale, et->ry, meshOff, hb);
+
+            HitResult result;
+            if (const auto* vcomp = world.getVehicle(eid))
+            {
+                // Veicolo: sagoma OBB completa del box (Fase B)
+                if (segmentHitsVehicle(bPrev, bPos, ePos, et->ry, *vcomp))
+                    result = {true, 1.0f, "veicolo"};
+            }
+            else
+            {
+                const auto* hb = world.getHitbox(eid);
+                const auto* mr = world.getMeshRenderer(eid);
+                const float scale   = (et->sx > 0.0001f) ? et->sx : 1.0f;
+                const float meshOff = mr ? mr->meshOffsetY : 0.0f;
+                result = testHit(bPrev, bPos, ePos, scale, et->ry, meshOff, hb);
+            }
             if (!result.hit) continue;
 
             const float dmg = bullet->damage * result.mult;
@@ -217,6 +200,7 @@ void CombatSystem::update(World& world, float dt)
                 + "  hp " + std::to_string((int)std::max(0.0f, eh->current))
                 + "/" + std::to_string((int)eh->max));
 
+            hitSomething = true;
             toDestroy.push_back(bid);
             if (eh->current <= 0.0f)
             {
@@ -229,6 +213,14 @@ void CombatSystem::update(World& world, float dt)
             }
             break;
         }
+
+        // ── Proiettili vs geometria: un colpo che nel tick ha attraversato
+        //    un collider (muri/casse/veicoli) muore lì — prima i proiettili
+        //    ATTRAVERSAVANO i muri (il test copriva solo le entità con HP).
+        //    Limite: se nello stesso tick c'è anche un bersaglio, vince il
+        //    bersaglio (segmento ~0.9m: caso raro, accettato). ─────────────
+        if (!hitSomething && !physics::hasLineOfSight(bPrev, bPos, world))
+            toDestroy.push_back(bid);
     }
     for (EntityId id : toDestroy) world.destroyEntity(id);
 }

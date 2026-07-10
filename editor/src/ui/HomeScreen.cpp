@@ -32,6 +32,10 @@ static const ModuleCard k_modules[] = {
      "Posiziona box di geometria,\nspawn e zone tattiche.\nSalva come JSON.",
      ActiveModule::MapEditor,          true,  1.0f,  0.35f, 0.35f},
 
+    {"vehicle", "Vehicle\nEditor",
+     "Crea e configura i veicoli:\nmodello, statistiche di guida,\nbox di collisione.",
+     ActiveModule::VehicleEditor,      true,  0.85f, 0.55f, 0.2f},
+
     {"cam",     "Free Camera\nViewport",
      "Naviga la scena in 3D con\ncamera libera. Anteprima\nmodelli e animazioni.",
      ActiveModule::FreeCameraViewport, true,  0.25f, 0.65f, 1.0f},

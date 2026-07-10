@@ -2,10 +2,13 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/MapQuery.hpp"
 #include "mini/game/WeaponAttach.hpp"
+#include "mini/game/VehicleSpawn.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/core/Telemetry.hpp"
+#include "mini/core/GameConfig.hpp"
+#include "mini/physics/Collision.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -121,7 +124,8 @@ static ResolvedEnemyArchetype resolveEnemyArchetype(const DefinitionRegistry* re
     return out;
 }
 
-static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* registry, int count)
+static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* registry,
+                                                    const std::string& mapId, int count)
 {
     std::vector<std::string> result;
     if (count <= 0) return result;
@@ -130,12 +134,12 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
 
     if (registry)
     {
-        const MapDef* map = registry->getMap("firebase");
+        const MapDef* map = registry->getMap(mapId);
         if (map && !map->enemyTypes.empty())
         {
             preferredIds = map->enemyTypes;
-            std::cout << "[ConquestMode] Uso enemy_types da map 'firebase' ("
-                      << preferredIds.size() << " tipi).\n";
+            std::cout << "[ConquestMode] Uso enemy_types da map '" << mapId
+                      << "' (" << preferredIds.size() << " tipi).\n";
         }
     }
 
@@ -181,7 +185,12 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     const float mry = hasMesh ? info.meshRotY  : 0.0f;
     const float msc = hasMesh ? info.meshScale : 1.0f;
 
-    world.addTransform(e, {info.x, yPos, info.z, mrx, mry, 0, msc, msc, msc});
+    // Fuori dalle ENTITÀ solide (veicoli): la decollisione findFreeSpot vede
+    // solo la geometria della mappa, non i mezzi già spawnati.
+    const glm::vec3 freePos = physics::nudgeOutOfColliders(
+        {info.x, yPos, info.z}, config::aiHalf(), world);
+
+    world.addTransform(e, {freePos.x, yPos, freePos.z, mrx, mry, 0, msc, msc, msc});
     world.addTeam(e, {info.teamId});
     world.addHealth(e, {info.hp, info.hp});
     Mesh* useMesh = (info.entityMesh ? info.entityMesh : m_mesh);
@@ -269,20 +278,37 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     }
     world.addAi(e, aic);
 
-    // ── Abilità (16_AiBehavior): per ora solo il tipo passivo "shield" ───
+    // ── Abilità (16_AiBehavior): shield passivo + abilità ATTIVE ─────────
     if (m_registry)
     {
+        AbilityComponent ac;
+        bool hasShield = false;
         for (const auto& abId : info.abilityIds)
         {
             const AbilityDef* ab = m_registry->getAbility(abId);
-            if (!ab || ab->type != "shield") continue;
-            ShieldComponent sh;
-            sh.max = sh.current = ab->param1;
-            sh.regenRate  = ab->param2;
-            sh.regenDelay = ab->param3;
-            world.addShield(e, sh);
-            break; // un solo scudo per entità
+            if (!ab) continue;
+            if (ab->type == "shield" && !hasShield)
+            {
+                ShieldComponent sh;
+                sh.max = sh.current = ab->param1;
+                sh.regenRate  = ab->param2;
+                sh.regenDelay = ab->param3;
+                world.addShield(e, sh);
+                hasShield = true;   // un solo scudo per entità
+            }
+            else if (ab->type == "roll")
+            {
+                AbilityState st;
+                st.abilityId   = ab->id;
+                st.type        = ab->type;
+                st.param1      = ab->param1;   // velocità scatto (m/s)
+                st.param2      = ab->param2;   // durata scatto (s)
+                st.cooldownMax = ab->cooldown;
+                ac.states.push_back(std::move(st));
+            }
         }
+        if (!ac.states.empty())
+            world.addAbilities(e, ac);
     }
 
     UnitTemplate tpl = {
@@ -381,6 +407,7 @@ void ConquestMode::checkDeaths(World& world)
 
 void ConquestMode::applySettings(const MatchSettings& s)
 {
+    m_mapId             = s.mapId.empty() ? "firebase" : s.mapId;
     initialTeam1Tickets = s.team1Tickets;
     initialTeam2Tickets = s.team2Tickets;
     team1AiCount        = s.team1AiCount;
@@ -399,7 +426,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     m_tex       = tex;
     m_registry  = registry;
     m_meshCache = meshCache;
-    m_map       = registry ? registry->getMap("firebase") : nullptr;
+    m_map       = registry ? registry->getMap(m_mapId) : nullptr;
+    world.activeMap = m_map;   // canale metadata per l'AiSystem (doc 18)
 
     // Spawn del giocatore dal MapDef (team1), altrimenti default.
     float playerX = 0.0f, playerZ = SPAWN_Z;
@@ -420,7 +448,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Lista nemici da mappa/registry ───────────────────────────────────
     int nEnemies = std::min(team2AiCount, 20);
-    std::vector<std::string> enemyIds = buildEnemySpawnList(registry, nEnemies);
+    std::vector<std::string> enemyIds = buildEnemySpawnList(registry, m_mapId, nEnemies);
     if ((int)enemyIds.size() < nEnemies)
         nEnemies = (int)enemyIds.size(); // registry vuoto: niente spawn ciechi
 
@@ -516,7 +544,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     // Base spawn: dal MapDef se disponibile, altrimenti default.
     float enemyBaseX = 0.0f, enemyBaseZ = -SPAWN_Z;
     float allyBaseX  = 0.0f, allyBaseZ  =  SPAWN_Z;
-    if (const MapDef* md = registry ? registry->getMap("firebase") : nullptr)
+    if (const MapDef* md = registry ? registry->getMap(m_mapId) : nullptr)
     {
         enemyBaseX = md->spawnTeam2[0]; enemyBaseZ = md->spawnTeam2[2];
         allyBaseX  = md->spawnTeam1[0]; allyBaseZ  = md->spawnTeam1[2];
@@ -534,6 +562,18 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         const float dx = 3.5f, dz = 3.0f;
         const int   nPosts = m_map ? (int)m_map->commandPosts.size() : 0;
 
+        // Patrol route autorate (18_AiMapConsumption): se la mappa ne ha,
+        // le unità pattugliano segmenti consecutivi delle route (round-robin)
+        // invece dei waypoint procedurali verso i post. Limite documentato:
+        // AiComponent ha due waypoint → un segmento per unità.
+        struct Seg { float ax, az, bx, bz; };
+        std::vector<Seg> routeSegs;
+        if (m_map)
+            for (const auto& r : m_map->patrolRoutes)
+                for (size_t k = 0; k + 1 < r.points.size(); ++k)
+                    routeSegs.push_back({r.points[k][0],   r.points[k][2],
+                                         r.points[k+1][0], r.points[k+1][2]});
+
         for (int i = 0; i < count; ++i)
         {
             int row = i / perRow, col = i % perRow;
@@ -545,7 +585,13 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
             UnitPos p;
             p.x = x;  p.z = z;
-            if (nPosts > 0)
+            if (!routeSegs.empty())
+            {
+                const Seg& s = routeSegs[i % (int)routeSegs.size()];
+                p.pax = s.ax; p.paz = s.az;
+                p.pbx = s.bx; p.pbz = s.bz;
+            }
+            else if (nPosts > 0)
             {
                 const auto& cp = m_map->commandPosts[i % nPosts];
                 p.pax = x;
@@ -596,7 +642,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     std::vector<std::string> allyIds;
     if (registry)
     {
-        const MapDef* map = registry->getMap("firebase");
+        const MapDef* map = registry->getMap(m_mapId);
         if (map && !map->allyTypes.empty())
             allyIds = map->allyTypes;
     }
@@ -677,7 +723,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // Geometria autorata nel Map Editor (data/maps/firebase.json "geometry").
     // Se presente, ha priorità sulla geometria hardcoded di fallback.
-    const MapDef* map = registry ? registry->getMap("firebase") : nullptr;
+    const MapDef* map = registry ? registry->getMap(m_mapId) : nullptr;
     if (map && !map->geometry.empty())
     {
         for (const auto& gb : map->geometry)
@@ -713,6 +759,11 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     m_bleedTimer = 0.0f;
     if (map)
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
+    // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ────────────
+    // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
+    vehiclespawn::spawnFromMap(world, map, registry, mesh, tex,
+                               &m_vehicleTracker);
 
     std::cout << "[ConquestMode] Spawn completato: "
               << nEnemies << " nemici, " << nAllies << " alleati AI, "
@@ -772,6 +823,9 @@ MatchOutcome ConquestMode::outcome(const World& world) const
 void ConquestMode::update(World& world, float dt)
 {
     checkDeaths(world);
+
+    // Respawn dei veicoli distrutti (19_Vehicles Fase B)
+    m_vehicleTracker.tick(world, m_map, m_registry, m_mesh, m_tex, dt);
 
     // ── Command post: cattura + regole obiettivo della modalità ──────────
     m_commandPosts.update(world, dt);

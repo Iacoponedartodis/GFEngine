@@ -1,5 +1,43 @@
 # 05 — Current State
 
+## 2026-07-10 (21) — Seconda mappa "Outpost" + selettore mappa (R3)
+- Due mappe giocabili (firebase, outpost), selezionabili nel PreMatch (riga "Mappa");
+  la mappa attiva viaggia in MatchSettings.mapId — zero id hardcoded nei mode.
+  Flag `--map <id>` per test. Outpost verificata in sim SENZA codice dedicato:
+  la promessa "nuova mappa = solo dati" è dimostrata.
+
+## 2026-07-10 (16) — Integrità combat: muri solidi per i proiettili, veicoli solidi
+- I proiettili muoiono sui collider (prima ATTRAVERSAVANO i muri — bug storico mai
+  notato perché le AI sparano solo con LOS). I veicoli sono ostacoli reali (collider
+  + excludeId per il movimento proprio) e bloccano LOS/colpi. Test OBB condiviso
+  mirino/proiettili (KI #13). Viewmodel arma in prima persona.
+
+## 2026-07-10 (10) — Veicoli rifiniti + roster mappa + Vehicle Editor
+- TPS anche alla guida (V). Roster mappa: enemy_types E ally_types editabili con slot/
+  pattern/auto (vuoto = tutte le definizioni registrate — le nuove entità entrano in
+  partita da sole). Nuovo modulo Vehicle Editor (lista, stats, mesh con anteprima 3D e
+  box collisione wireframe, rinomina con sweep). Diagnostica guida in telemetria
+  (`drive:`, tentativi E falliti con distanza).
+
+## 2026-07-10 (8) — Veicoli Fase A (19_Vehicles)
+- VehicleDef data-driven + spawn da MapDef.vehicleSpawns + guida player (E sali/scendi,
+  W/S/A/D, fisica slide/step-up condivisa, camera di guida). Niente armi di bordo/AI
+  alla guida (Fase B). BARC Speeder su firebase (2 spawn). EntityEditor: creazione
+  nuove entità dalla lista. Con questo la Fase 1 della Vision ha tutti i sistemi:
+  resta l'iterazione "is it fun" e i debiti minori.
+
+## 2026-07-10 (7) — L'AI consuma i Map Metadata (18_AiMapConsumption)
+- `World::activeMap` (mailbox opaca) + AiSystem: hide → cover point orientati verso il
+  nemico (fallback strafe), repulsione danger zone fuori ingaggio, pattuglie dai
+  segmenti delle patrol route (ConquestMode). firebase ha un set minimo di metadata di
+  prova. Il level design tattico ora ha effetto osservabile in `--sim`.
+
+## 2026-07-10 (6) — Map Metadata (15_MapMetadata: Implementato, dati+authoring)
+- `MapDef.coverPoints/patrolRoutes/dangerZones` + parse registry + sezione "Metadata AI"
+  nel MapEditor (marker dedicati, gizmo, slider, RMW). Nessun consumer runtime ancora
+  (scelta di scope: l'AI tattica fase 2 andrà documentata a parte). KI #11 chiuso lato
+  dati; Todo #15 done.
+
 ## 2026-07-10 (4) — Battaglia AI viva + Sandbox Tools rifiniti
 - Fix AiSystem (search hardcoded pre-firebase, Search senza uscita, primo colpo
   soppresso): la battaglia AI-vs-AI ora produce ingaggi/kill continui (verificato con

@@ -15,7 +15,8 @@ void World::initialize()
     m_transforms.clear(); m_teams.clear(); m_velocities.clear();
     m_healths.clear(); m_meshRenderers.clear(); m_bullets.clear(); m_ais.clear();
     m_colliders.clear();
-    m_hitboxes.clear(); m_shields.clear();
+    m_hitboxes.clear(); m_shields.clear(); m_vehicles.clear(); m_abilities.clear();
+    activeMap = nullptr;
     std::cout << "[World] Inizializzato." << std::endl;
 }
 
@@ -40,7 +41,7 @@ bool World::destroyEntity(EntityId e)
     if (!isValidEntity(e)) return false;
     m_transforms.erase(e); m_teams.erase(e); m_velocities.erase(e);
     m_healths.erase(e); m_meshRenderers.erase(e); m_bullets.erase(e); m_ais.erase(e);
-    m_hitboxes.erase(e); m_shields.erase(e);
+    m_hitboxes.erase(e); m_shields.erase(e); m_vehicles.erase(e); m_abilities.erase(e);
     m_aliveEntities.erase(e);
     // Swap-and-pop O(1)
     auto it = std::find(m_entities.begin(), m_entities.end(), e);
@@ -67,7 +68,20 @@ IMPL(Ai,           m_ais)
 IMPL(Collider,     m_colliders)
 IMPL(Hitbox,       m_hitboxes)
 IMPL(Shield,       m_shields)
+IMPL(Vehicle,      m_vehicles)
 #undef IMPL
+
+// A mano: il nome plurale non combacia con la macro (AbilityComponent)
+void World::addAbilities(EntityId e, const AbilityComponent& c)
+{ if (isValidEntity(e)) m_abilities[e] = c; }
+bool World::hasAbilities(EntityId e) const
+{ return isValidEntity(e) && m_abilities.count(e); }
+AbilityComponent* World::getAbilities(EntityId e)
+{ if (!isValidEntity(e)) return nullptr; auto it = m_abilities.find(e);
+  return it != m_abilities.end() ? &it->second : nullptr; }
+const AbilityComponent* World::getAbilities(EntityId e) const
+{ if (!isValidEntity(e)) return nullptr; auto it = m_abilities.find(e);
+  return it != m_abilities.end() ? &it->second : nullptr; }
 
 void World::setDebugLogging(bool v)               { m_debugLogging = v; }
 bool World::isDebugLoggingEnabled() const         { return m_debugLogging; }

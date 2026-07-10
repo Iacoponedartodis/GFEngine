@@ -30,8 +30,9 @@ introdurre nuovi dati hardcoded nei game mode (regola CLAUDE.md §2).
 3. **Ciclo peek/hide da `peek_*`/`hide_*`/`cover_preference`** — in ingaggio l'AI
    alterna finestre di esposizione (spara) e di evasione (non spara, strafe ampio).
    `cover_preference` è la probabilità di entrare in evasione a fine finestra.
-   *Nota onesta:* senza cover point in MapDef (bloccati da 15_MapMetadata) "hide" è un
-   ritmo evasivo, non una vera copertura geometrica.
+   *Aggiornamento 2026-07-10:* con 18_AiMapConsumption la fase "hide" ora usa i cover
+   point autorati (se presenti e orientati verso il nemico); lo strafe evasivo resta
+   il fallback quando la mappa non offre copertura.
 4. **Fiancheggiamento da `flank_chance`** — all'ingresso in Hunt, con probabilità
    `flank_chance` l'AI raggiunge la lastKnown da un punto laterale (~6m perpendicolare)
    invece che in linea retta.
@@ -40,9 +41,18 @@ introdurre nuovi dati hardcoded nei game mode (regola CLAUDE.md §2).
    Assegnato allo spawn se `abilities[]` dell'unità referenzia un'ability con
    `type=="shield"`. Il danno assorbito è loggato in telemetria.
 
+## Scope — estensione 2026-07-10: prima abilità ATTIVA ("roll")
+Con lo shield passivo validato in gioco, prima abilità con decisione d'uso:
+- **`type=="roll"`**: schivata rapida. L'AI la usa entrando in fase evasiva (hide)
+  se il cooldown è pronto: scatto laterale a `param1` m/s per `param2` secondi,
+  poi cooldown dall'AbilityDef. Stato runtime nello scaffold `AbilityComponent`
+  (ora con storage in World). Telemetria/log chat: "ROLL #id".
+- Trigger volutamente semplice (niente action-selector generico): l'ingresso in
+  evading È il momento "sotto pressione" che il comportamento già calcola.
+
 ## Out of Scope (per ora)
-- Abilità attive con decisione d'uso (roll, jetpack, missile, command_aura): richiedono
-  un vero action-selector; verranno dopo che il tipo passivo è validato.
+- Altre abilità attive (jetpack, missile, command_aura): arriveranno sullo stesso
+  binario (AbilityComponent + trigger dedicati), una per volta.
 - Vera copertura geometrica (cover point / nav data): dipende da 15_MapMetadata.
 - Ruoli come macro-preset (`role` del profilo resta descrittivo: il comportamento emerge
   dai parametri, non da branch per ruolo — evita hardcoding di archetipi).

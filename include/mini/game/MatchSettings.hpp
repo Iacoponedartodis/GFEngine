@@ -10,6 +10,7 @@
 #endif
 
 #include <string>
+#include <algorithm>
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -35,6 +36,11 @@ struct MatchSettings
 {
     // ── Modalità (0=Conquista, 1=Assalto, 2=Difesa) ───────────────────
     int   modeIndex     = 0;
+
+    // ── Mappa attiva (R3: niente più "firebase" hardcoded nei mode) ───
+    // Id risolto da Application dalla lista registry (mapIndex = riga UI).
+    int         mapIndex = 0;
+    std::string mapId    = "firebase";
 
     // ── Regole partita ────────────────────────────────────────────────
     int   team1Tickets  = 5;
@@ -144,7 +150,9 @@ struct UserPresets
               << "  \"team1_ai_count\": " << list[i].team1AiCount << ",\n"
               << "  \"team2_ai_count\": " << list[i].team2AiCount << ",\n"
               << "  \"player_hp\": " << list[i].playerHp << ",\n"
-              << "  \"respawn_delay\": " << list[i].respawnDelay << "\n"
+              << "  \"respawn_delay\": " << list[i].respawnDelay << ",\n"
+              << "  \"mode_index\": " << list[i].modeIndex << ",\n"
+              << "  \"map_index\": " << list[i].mapIndex << "\n"
               << "}\n";
             std::cout << "[Presets] Salvato slot " << i << ": "
                       << list[i].presetName << "\n";
@@ -199,6 +207,15 @@ struct UserPresets
                 list[i].team2AiCount = std::stoi(val(content, "team2_ai_count"));
                 list[i].playerHp     = std::stof(val(content, "player_hp"));
                 list[i].respawnDelay = std::stof(val(content, "respawn_delay"));
+                // Modalità (Conquista/Assalto/Difesa) — preset pre-esistenti
+                // senza il campo restano Conquista (0).
+                const std::string mi = val(content, "mode_index");
+                list[i].modeIndex = mi.empty() ? 0
+                    : std::clamp(std::stoi(mi), 0, MATCH_MODE_COUNT - 1);
+                // Mappa: indice nella lista ordinata del registry; il clamp
+                // al range reale avviene in PreMatchMenu::setMapList.
+                const std::string mp = val(content, "map_index");
+                list[i].mapIndex = mp.empty() ? 0 : std::max(0, std::stoi(mp));
             }
             catch (...) { list[i] = {}; continue; }
             ++loaded;

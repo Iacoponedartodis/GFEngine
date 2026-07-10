@@ -45,6 +45,17 @@ static std::string getDataDir()
 // ── Ctor ─────────────────────────────────────────────────────────────────────
 MapEditor::MapEditor()
 {
+    // Id veicoli per il combo degli spawn (id = filename stem, ADR-001)
+    {
+        std::error_code ec;
+        fs::path folder = fs::path(getDataDir()) / "vehicles";
+        if (fs::exists(folder, ec))
+            for (auto& entry : fs::directory_iterator(folder, ec))
+                if (entry.path().extension() == ".json")
+                    m_vehicleIds.push_back(entry.path().stem().string());
+        std::sort(m_vehicleIds.begin(), m_vehicleIds.end());
+    }
+
     loadMaps();
     if (!m_mapList.empty())
         loadMap(m_mapList[0].id);
@@ -68,10 +79,39 @@ void MapEditor::tick(float dt)
         { m_spawnTeam1[0]+=delta.x; m_spawnTeam1[1]+=delta.y; m_spawnTeam1[2]+=delta.z; }
         else if (m_selBox == -3)
         { m_spawnTeam2[0]+=delta.x; m_spawnTeam2[1]+=delta.y; m_spawnTeam2[2]+=delta.z; }
-        else if (m_selBox <= -10 && (-10 - m_selBox) < (int)m_posts.size())
+        else if (m_selBox <= -10 && m_selBox > -100
+                 && (-10 - m_selBox) < (int)m_posts.size())
         {
             auto& p = m_posts[-10 - m_selBox];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
+        }
+        else if (m_selBox <= -100 && m_selBox > -200
+                 && (-100 - m_selBox) < (int)m_covers.size())
+        {
+            auto& c = m_covers[-100 - m_selBox];
+            c.x += delta.x; c.y += delta.y; c.z += delta.z;
+        }
+        else if (m_selBox <= -200 && m_selBox > -300
+                 && (-200 - m_selBox) < (int)m_dangers.size())
+        {
+            auto& d = m_dangers[-200 - m_selBox];
+            d.x += delta.x; d.y += delta.y; d.z += delta.z;
+        }
+        else if (m_selBox <= -300 && m_selBox > -400
+                 && (-300 - m_selBox) < (int)m_routes.size())
+        {
+            auto& r = m_routes[-300 - m_selBox];
+            if (m_selRoutePt >= 0 && m_selRoutePt < (int)r.points.size())
+            {
+                r.points[m_selRoutePt][0] += delta.x;
+                r.points[m_selRoutePt][1] += delta.y;
+                r.points[m_selRoutePt][2] += delta.z;
+            }
+        }
+        else if (m_selBox <= -400 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+        {
+            auto& v = m_vehSpawns[-400 - m_selBox];
+            v.x += delta.x; v.z += delta.z;
         }
         m_dirty = true;
         updateViewport();
@@ -151,6 +191,11 @@ void MapEditor::loadMap(const std::string& id)
     m_mapJsonPath = it->path;
     m_boxes.clear();
     m_posts.clear();
+    m_covers.clear();
+    m_dangers.clear();
+    m_routes.clear();
+    m_vehSpawns.clear();
+    m_selRoutePt = 0;
     m_selBox = -1;
 
     if (j.contains("spawn_team1") && j["spawn_team1"].size() >= 3)
@@ -201,6 +246,61 @@ void MapEditor::loadMap(const std::string& id)
         }
     }
 
+    // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
+    if (j.contains("cover_points") && j["cover_points"].is_array())
+    {
+        for (auto& cp : j["cover_points"])
+        {
+            CoverEntry c;
+            c.x      = cp.value("x", 0.f);
+            c.y      = cp.value("y", 0.5f);
+            c.z      = cp.value("z", 0.f);
+            c.facing = cp.value("facing_deg", 0.f);
+            c.height = cp.value("height", 1.f);
+            m_covers.push_back(c);
+        }
+    }
+    if (j.contains("danger_zones") && j["danger_zones"].is_array())
+    {
+        for (auto& dz : j["danger_zones"])
+        {
+            DangerEntry d;
+            d.x      = dz.value("x", 0.f);
+            d.y      = dz.value("y", 0.f);
+            d.z      = dz.value("z", 0.f);
+            d.radius = dz.value("radius", 4.f);
+            d.level  = dz.value("danger_level", 0.5f);
+            m_dangers.push_back(d);
+        }
+    }
+    if (j.contains("patrol_routes") && j["patrol_routes"].is_array())
+    {
+        for (auto& pr : j["patrol_routes"])
+        {
+            RouteEntry r;
+            std::string rid = pr.value("id", std::string("route"));
+            std::strncpy(r.id, rid.c_str(), sizeof(r.id) - 1);
+            if (pr.contains("points") && pr["points"].is_array())
+                for (auto& pt : pr["points"])
+                    if (pt.is_array() && pt.size() >= 3)
+                        r.points.push_back({(float)pt[0], (float)pt[1], (float)pt[2]});
+            m_routes.push_back(std::move(r));
+        }
+    }
+
+    if (j.contains("vehicle_spawns") && j["vehicle_spawns"].is_array())
+    {
+        for (auto& vs : j["vehicle_spawns"])
+        {
+            VehicleSpawnEntry v;
+            v.vehicleId = vs.value("vehicle_id", std::string(""));
+            v.x  = vs.value("x", 0.f);
+            v.z  = vs.value("z", 0.f);
+            v.ry = vs.value("ry", 0.f);
+            m_vehSpawns.push_back(std::move(v));
+        }
+    }
+
     m_dirty = false;
     updateViewport();
 }
@@ -243,6 +343,53 @@ bool MapEditor::saveMap()
         postsArr.push_back(cp);
     }
     j["command_posts"] = postsArr;
+
+    // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
+    json coverArr = json::array();
+    for (const auto& c : m_covers)
+    {
+        json cp;
+        cp["x"] = c.x;  cp["y"] = c.y;  cp["z"] = c.z;
+        cp["facing_deg"] = c.facing;
+        cp["height"]     = c.height;
+        coverArr.push_back(cp);
+    }
+    j["cover_points"] = coverArr;
+
+    json dangerArr = json::array();
+    for (const auto& d : m_dangers)
+    {
+        json dz;
+        dz["x"] = d.x;  dz["y"] = d.y;  dz["z"] = d.z;
+        dz["radius"]       = d.radius;
+        dz["danger_level"] = d.level;
+        dangerArr.push_back(dz);
+    }
+    j["danger_zones"] = dangerArr;
+
+    json routeArr = json::array();
+    for (const auto& r : m_routes)
+    {
+        json pr;
+        pr["id"] = r.id;
+        json pts = json::array();
+        for (const auto& pt : r.points)
+            pts.push_back({pt[0], pt[1], pt[2]});
+        pr["points"] = pts;
+        routeArr.push_back(pr);
+    }
+    j["patrol_routes"] = routeArr;
+
+    json vehArr = json::array();
+    for (const auto& v : m_vehSpawns)
+    {
+        json vs;
+        vs["vehicle_id"] = v.vehicleId;
+        vs["x"] = v.x;  vs["z"] = v.z;  vs["ry"] = v.ry;
+        vehArr.push_back(vs);
+    }
+    j["vehicle_spawns"] = vehArr;
+
     m_dirty = false;
     return true;
     });
@@ -354,6 +501,91 @@ void MapEditor::updateViewport()
         draws.push_back(area);
     }
 
+    // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
+    // Cover point: lastra verde-acqua alta `height` + "naso" nella direzione
+    // del fronte di copertura (facing).
+    for (int i = 0; i < (int)m_covers.size(); ++i)
+    {
+        const auto& c = m_covers[i];
+        const bool sel = (m_selBox == -100 - i);
+
+        FreeCameraViewport::MapBoxDraw slab;
+        slab.x = c.x; slab.y = c.y + c.height * 0.5f; slab.z = c.z; slab.ry = c.facing;
+        slab.sx = 0.9f; slab.sy = c.height; slab.sz = 0.25f;
+        slab.r = 0.15f; slab.g = 0.85f; slab.b = 0.70f;
+        slab.selected = sel;
+        draws.push_back(slab);
+
+        const float fr = glm::radians(c.facing);
+        FreeCameraViewport::MapBoxDraw nose;
+        nose.x = c.x + std::sin(fr) * 0.45f;
+        nose.y = c.y + c.height * 0.5f;
+        nose.z = c.z + std::cos(fr) * 0.45f;
+        nose.ry = c.facing;
+        nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.4f;
+        nose.r = 0.10f; nose.g = 0.60f; nose.b = 0.50f;
+        nose.selected = sel;
+        draws.push_back(nose);
+    }
+
+    // Danger zone: disco arancione (più rosso quanto più pericoloso)
+    for (int i = 0; i < (int)m_dangers.size(); ++i)
+    {
+        const auto& d = m_dangers[i];
+        const bool sel = (m_selBox == -200 - i);
+        FreeCameraViewport::MapBoxDraw area;
+        area.x = d.x; area.y = d.y + 0.03f; area.z = d.z; area.ry = 0;
+        area.sx = d.radius * 2.0f; area.sy = 0.04f; area.sz = d.radius * 2.0f;
+        area.r = 0.9f; area.g = 0.55f - d.level * 0.45f; area.b = 0.10f;
+        area.selected = sel;
+        draws.push_back(area);
+    }
+
+    // Spawn veicoli: box arancio a misura di speeder + freccia direzione
+    for (int i = 0; i < (int)m_vehSpawns.size(); ++i)
+    {
+        const auto& v = m_vehSpawns[i];
+        const bool sel = (m_selBox == -400 - i);
+
+        FreeCameraViewport::MapBoxDraw body;
+        body.x = v.x; body.y = 0.6f; body.z = v.z; body.ry = v.ry;
+        body.sx = 1.0f; body.sy = 1.0f; body.sz = 2.6f;
+        body.r = 0.95f; body.g = 0.60f; body.b = 0.15f;
+        body.selected = sel;
+        draws.push_back(body);
+
+        const float vr = glm::radians(v.ry);
+        FreeCameraViewport::MapBoxDraw nose;
+        nose.x = v.x + std::sin(vr) * 1.6f;
+        nose.y = 0.6f;
+        nose.z = v.z + std::cos(vr) * 1.6f;
+        nose.ry = v.ry;
+        nose.sx = 0.3f; nose.sy = 0.3f; nose.sz = 0.6f;
+        nose.r = 0.8f; nose.g = 0.45f; nose.b = 0.1f;
+        nose.selected = sel;
+        draws.push_back(nose);
+    }
+
+    // Patrol route: pilastrino viola per punto (quello attivo più alto)
+    for (int ri = 0; ri < (int)m_routes.size(); ++ri)
+    {
+        const auto& r = m_routes[ri];
+        const bool routeSel = (m_selBox == -300 - ri);
+        for (int pi = 0; pi < (int)r.points.size(); ++pi)
+        {
+            const bool activePt = routeSel && (pi == m_selRoutePt);
+            FreeCameraViewport::MapBoxDraw wp;
+            wp.x = r.points[pi][0];
+            wp.y = r.points[pi][1] + (activePt ? 0.9f : 0.5f);
+            wp.z = r.points[pi][2];
+            wp.ry = 0;
+            wp.sx = 0.3f; wp.sy = activePt ? 1.8f : 1.0f; wp.sz = 0.3f;
+            wp.r = 0.65f; wp.g = 0.35f; wp.b = 0.95f;
+            wp.selected = activePt;
+            draws.push_back(wp);
+        }
+    }
+
     m_viewport.setMapBoxes(draws);
 
     // Gizmo sull'elemento selezionato (box o spawn point).
@@ -375,10 +607,44 @@ void MapEditor::updateViewport()
         m_viewport.setGizmoTarget({m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
     }
-    else if (m_selBox <= -10 && (-10 - m_selBox) < (int)m_posts.size())
+    else if (m_selBox <= -10 && m_selBox > -100
+             && (-10 - m_selBox) < (int)m_posts.size())
     {
         const auto& p = m_posts[-10 - m_selBox];
         m_viewport.setGizmoTarget({p.x, p.y, p.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -100 && m_selBox > -200
+             && (-100 - m_selBox) < (int)m_covers.size())
+    {
+        const auto& c = m_covers[-100 - m_selBox];
+        m_viewport.setGizmoTarget({c.x, c.y, c.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -200 && m_selBox > -300
+             && (-200 - m_selBox) < (int)m_dangers.size())
+    {
+        const auto& d = m_dangers[-200 - m_selBox];
+        m_viewport.setGizmoTarget({d.x, d.y, d.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -300 && m_selBox > -400
+             && (-300 - m_selBox) < (int)m_routes.size())
+    {
+        const auto& r = m_routes[-300 - m_selBox];
+        if (m_selRoutePt >= 0 && m_selRoutePt < (int)r.points.size())
+        {
+            const auto& pt = r.points[m_selRoutePt];
+            m_viewport.setGizmoTarget({pt[0], pt[1], pt[2]}, true);
+            m_viewport.setGizmoCanRotateScale(false, false);
+        }
+        else
+            m_viewport.setGizmoTarget({0,0,0}, false);
+    }
+    else if (m_selBox <= -400 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+    {
+        const auto& v = m_vehSpawns[-400 - m_selBox];
+        m_viewport.setGizmoTarget({v.x, 0.6f, v.z}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
     }
     else
@@ -616,7 +882,7 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         updateViewport();
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("- Rimuovi##cp") && m_selBox <= -10)
+    if (ImGui::SmallButton("- Rimuovi##cp") && m_selBox <= -10 && m_selBox > -100)
     {
         int i = -10 - m_selBox;
         if (i >= 0 && i < (int)m_posts.size())
@@ -626,6 +892,116 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
             m_dirty = true;
             updateViewport();
         }
+    }
+
+    // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Metadata AI");
+
+    // Cover point
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.75f, 1.0f));
+    for (int i = 0; i < (int)m_covers.size(); ++i)
+    {
+        char lbl[48];
+        std::snprintf(lbl, sizeof(lbl), "[CV] Cover %d##cv%d", i + 1, i);
+        if (ImGui::Selectable(lbl, m_selBox == -100 - i))
+        { m_selBox = -100 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Cover"))
+    {
+        m_covers.push_back({});
+        m_selBox = -100 - ((int)m_covers.size() - 1);
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##cv") && m_selBox <= -100 && m_selBox > -200)
+    {
+        int i = -100 - m_selBox;
+        if (i >= 0 && i < (int)m_covers.size())
+        { m_covers.erase(m_covers.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+    }
+
+    // Danger zone
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.55f, 0.2f, 1.0f));
+    for (int i = 0; i < (int)m_dangers.size(); ++i)
+    {
+        char lbl[48];
+        std::snprintf(lbl, sizeof(lbl), "[DZ] Pericolo %d##dz%d", i + 1, i);
+        if (ImGui::Selectable(lbl, m_selBox == -200 - i))
+        { m_selBox = -200 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Pericolo"))
+    {
+        m_dangers.push_back({});
+        m_selBox = -200 - ((int)m_dangers.size() - 1);
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##dz") && m_selBox <= -200 && m_selBox > -300)
+    {
+        int i = -200 - m_selBox;
+        if (i >= 0 && i < (int)m_dangers.size())
+        { m_dangers.erase(m_dangers.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+    }
+
+    // Patrol route
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.5f, 1.0f, 1.0f));
+    for (int i = 0; i < (int)m_routes.size(); ++i)
+    {
+        char lbl[64];
+        std::snprintf(lbl, sizeof(lbl), "[PR] %s (%d pt)##pr%d",
+                      m_routes[i].id, (int)m_routes[i].points.size(), i);
+        if (ImGui::Selectable(lbl, m_selBox == -300 - i))
+        { m_selBox = -300 - i; m_selRoutePt = 0; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Percorso"))
+    {
+        RouteEntry r;
+        std::snprintf(r.id, sizeof(r.id), "route_%d", (int)m_routes.size() + 1);
+        r.points.push_back({0.f, 0.5f, 0.f});
+        r.points.push_back({4.f, 0.5f, 0.f});
+        m_routes.push_back(std::move(r));
+        m_selBox = -300 - ((int)m_routes.size() - 1);
+        m_selRoutePt = 0;
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##pr") && m_selBox <= -300 && m_selBox > -400)
+    {
+        int i = -300 - m_selBox;
+        if (i >= 0 && i < (int)m_routes.size())
+        { m_routes.erase(m_routes.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+    }
+
+    // Spawn veicoli (19_Vehicles Fase B)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.65f, 0.25f, 1.0f));
+    for (int i = 0; i < (int)m_vehSpawns.size(); ++i)
+    {
+        char lbl[96];
+        std::snprintf(lbl, sizeof(lbl), "[VS] %s##vs%d",
+                      m_vehSpawns[i].vehicleId.empty()
+                          ? "(scegli veicolo)" : m_vehSpawns[i].vehicleId.c_str(), i);
+        if (ImGui::Selectable(lbl, m_selBox == -400 - i))
+        { m_selBox = -400 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Veicolo"))
+    {
+        VehicleSpawnEntry v;
+        if (!m_vehicleIds.empty()) v.vehicleId = m_vehicleIds[0];
+        m_vehSpawns.push_back(std::move(v));
+        m_selBox = -400 - ((int)m_vehSpawns.size() - 1);
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##vs") && m_selBox <= -400)
+    {
+        int i = -400 - m_selBox;
+        if (i >= 0 && i < (int)m_vehSpawns.size())
+        { m_vehSpawns.erase(m_vehSpawns.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
     }
 }
 
@@ -645,6 +1021,144 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         changed |= editor::ui::sliderRow("X", sp[0], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Y", sp[1],   0.f,  5.f, 0.05f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Z", sp[2], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Cover point selezionato (15_MapMetadata) ─────────────────────────
+    if (m_selBox <= -100 && m_selBox > -200)
+    {
+        int ci = -100 - m_selBox;
+        if (ci < 0 || ci >= (int)m_covers.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& c = m_covers[ci];
+        ImGui::TextColored({0.3f,0.9f,0.75f,1.0f}, "Cover Point %d", ci + 1);
+        ImGui::Separator();
+        bool changed = false;
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X", c.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", c.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", c.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        ImGui::TextDisabled("Copertura");
+        changed |= editor::ui::sliderRow("Fronte°", c.facing, -180.f, 180.f, 1.f, "%.0f");
+        changed |= editor::ui::sliderRow("Altezza", c.height, 0.4f, 3.0f, 0.05f, "%.2f");
+        ImGui::TextDisabled(c.height < 1.2f ? "Bassa: l'AI fara' peek-over"
+                                            : "Alta: l'AI fara' peek-around");
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Danger zone selezionata (15_MapMetadata) ─────────────────────────
+    if (m_selBox <= -200 && m_selBox > -300)
+    {
+        int di = -200 - m_selBox;
+        if (di < 0 || di >= (int)m_dangers.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& d = m_dangers[di];
+        ImGui::TextColored({0.95f,0.55f,0.2f,1.0f}, "Danger Zone %d", di + 1);
+        ImGui::Separator();
+        bool changed = false;
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X", d.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", d.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", d.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        ImGui::TextDisabled("Area");
+        changed |= editor::ui::sliderRow("Raggio", d.radius, 0.5f, 30.f, 0.1f, "%.1f");
+        changed |= editor::ui::sliderRow("Pericolo", d.level, 0.f, 1.f, 0.01f, "%.2f");
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Spawn veicolo selezionato (19_Vehicles Fase B) ───────────────────
+    if (m_selBox <= -400)
+    {
+        int vi = -400 - m_selBox;
+        if (vi < 0 || vi >= (int)m_vehSpawns.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& v = m_vehSpawns[vi];
+        ImGui::TextColored({0.95f,0.65f,0.25f,1.0f}, "Spawn Veicolo %d", vi + 1);
+        ImGui::Separator();
+        bool changed = false;
+
+        // Veicolo dal registry (dropdown, mai testo libero)
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::BeginCombo("Veicolo##vsid",
+                              v.vehicleId.empty() ? "-- scegli --"
+                                                  : v.vehicleId.c_str()))
+        {
+            for (const auto& vid : m_vehicleIds)
+                if (ImGui::Selectable(vid.c_str(), v.vehicleId == vid))
+                { v.vehicleId = vid; changed = true; }
+            ImGui::EndCombo();
+        }
+
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X", v.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", v.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        ImGui::TextDisabled("Orientamento");
+        changed |= editor::ui::sliderRow("Yaw°", v.ry, -180.f, 180.f, 1.f, "%.0f");
+        ImGui::TextDisabled("Il runtime decollide lo spawn e appoggia al suolo.");
+
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Patrol route selezionata (15_MapMetadata) ────────────────────────
+    if (m_selBox <= -300)
+    {
+        int ri = -300 - m_selBox;
+        if (ri < 0 || ri >= (int)m_routes.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& r = m_routes[ri];
+        ImGui::TextColored({0.75f,0.5f,1.0f,1.0f}, "Percorso pattuglia");
+        ImGui::Separator();
+        bool changed = false;
+
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::InputText("Nome##prid", r.id, sizeof(r.id))) changed = true;
+
+        ImGui::TextDisabled("Punti (%d)", (int)r.points.size());
+        for (int pi = 0; pi < (int)r.points.size(); ++pi)
+        {
+            char lbl[32];
+            std::snprintf(lbl, sizeof(lbl), "Punto %d##rp%d", pi + 1, pi);
+            if (ImGui::Selectable(lbl, pi == m_selRoutePt))
+            { m_selRoutePt = pi; updateViewport(); }
+        }
+        if (ImGui::SmallButton("+ Punto"))
+        {
+            // Nuovo punto accanto all'ultimo (o all'origine)
+            std::array<float,3> np = r.points.empty()
+                ? std::array<float,3>{0.f, 0.5f, 0.f}
+                : std::array<float,3>{r.points.back()[0] + 2.f,
+                                      r.points.back()[1],
+                                      r.points.back()[2]};
+            r.points.push_back(np);
+            m_selRoutePt = (int)r.points.size() - 1;
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("- Punto") && !r.points.empty()
+            && m_selRoutePt >= 0 && m_selRoutePt < (int)r.points.size())
+        {
+            r.points.erase(r.points.begin() + m_selRoutePt);
+            m_selRoutePt = std::max(0, m_selRoutePt - 1);
+            changed = true;
+        }
+
+        if (m_selRoutePt >= 0 && m_selRoutePt < (int)r.points.size())
+        {
+            auto& pt = r.points[m_selRoutePt];
+            ImGui::TextDisabled("Posizione punto %d", m_selRoutePt + 1);
+            changed |= editor::ui::sliderRow("X", pt[0], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+            changed |= editor::ui::sliderRow("Y", pt[1], -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+            changed |= editor::ui::sliderRow("Z", pt[2], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        }
+
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }

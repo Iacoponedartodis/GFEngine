@@ -2,10 +2,12 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/MapQuery.hpp"
 #include "mini/game/WeaponAttach.hpp"
+#include "mini/game/VehicleSpawn.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/core/GameConfig.hpp"
+#include "mini/physics/Collision.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -33,7 +35,8 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Spawn point dalla mappa firebase ──────────────────────────────────
     float p1x = 0.0f, p1z = 8.0f;     // giocatore (team1)
     float p2x = 0.0f, p2z = -8.0f;    // manichini  (team2)
-    const MapDef* map = registry ? registry->getMap("firebase") : nullptr;
+    const MapDef* map = registry ? registry->getMap(m_mapId) : nullptr;
+    world.activeMap = map;   // canale metadata per l'AiSystem (doc 18)
     if (map)
     {
         p1x = map->spawnTeam1[0]; p1z = map->spawnTeam1[2];
@@ -56,6 +59,11 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Command post: visibili e catturabili anche in sandbox ─────────────
     if (map)
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
+    // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ─────────────
+    // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
+    vehiclespawn::spawnFromMap(world, map, registry, mesh, tex,
+                               &m_vehicleTracker);
 
     // ── Manichini nemici sullo spawn team2 ────────────────────────────────
     // Almeno un manichino per OGNI definizione registrata (round-robin):
@@ -125,10 +133,14 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
     EntityId e = world.createEntity();
     // Suolo reale della mappa in (x,z): il pavimento firebase ha top a +0.1,
     // non a 0 — prima i manichini affondavano di quella differenza.
-    const MapDef* map = m_registry ? m_registry->getMap("firebase") : nullptr;
+    const MapDef* map = m_registry ? m_registry->getMap(m_mapId) : nullptr;
     const float ground = mapquery::groundHeightAt(map, info.x, info.z);
     const float spawnY = ground + config::AI_HALF_Y;  // centro fisico su suolo
-    world.addTransform(e, {info.x, spawnY, info.z, rx, ry, 0, scale, scale, scale});
+    // Fuori dalle ENTITÀ solide (veicoli): la decollisione mapquery vede
+    // solo la geometria della mappa, non i mezzi già spawnati.
+    const glm::vec3 freePos = physics::nudgeOutOfColliders(
+        {info.x, spawnY, info.z}, config::aiHalf(), world);
+    world.addTransform(e, {freePos.x, spawnY, freePos.z, rx, ry, 0, scale, scale, scale});
     world.addTeam(e, {info.team});
     world.addHealth(e, {100.0f, 100.0f});  // muore e respawna
 
@@ -180,7 +192,7 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
 
 void SandboxMode::buildMapGeometry(World& world)
 {
-    const MapDef* map = m_registry ? m_registry->getMap("firebase") : nullptr;
+    const MapDef* map = m_registry ? m_registry->getMap(m_mapId) : nullptr;
     if (!map) return;
 
     for (const auto& gb : map->geometry)
@@ -215,6 +227,10 @@ void SandboxMode::buildArena(World& world)
 
 void SandboxMode::update(World& world, float dt)
 {
+    // Respawn dei veicoli distrutti (19_Vehicles Fase B)
+    const MapDef* map = m_registry ? m_registry->getMap(m_mapId) : nullptr;
+    m_vehicleTracker.tick(world, map, m_registry, m_mesh, m_tex, dt);
+
     // Command post catturabili (nessuna conseguenza: solo test visivo)
     m_commandPosts.update(world, dt);
 

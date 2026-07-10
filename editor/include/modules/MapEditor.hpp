@@ -42,12 +42,29 @@ private:
         float captureTime = 8.0f;
     };
 
+    // ── Map Metadata (15_MapMetadata): hint spaziali per l'AI ────────────
+    struct CoverEntry  { float x=0, y=0.5f, z=0; float facing=0; float height=1.0f; };
+    struct DangerEntry { float x=0, y=0,    z=0; float radius=4.0f; float level=0.5f; };
+    struct RouteEntry  { char id[32] = "route";
+                         std::vector<std::array<float,3>> points; };
+
+    // Spawn veicoli (19_Vehicles Fase B: authoring in editor)
+    struct VehicleSpawnEntry { std::string vehicleId; float x=0, z=0, ry=0; };
+
     std::vector<BoxEntry>     m_boxes;
     std::vector<PostEntry>    m_posts;
+    std::vector<CoverEntry>   m_covers;
+    std::vector<DangerEntry>  m_dangers;
+    std::vector<RouteEntry>   m_routes;
+    std::vector<VehicleSpawnEntry> m_vehSpawns;
+    std::vector<std::string>       m_vehicleIds;   // dal registry (combo)
+    int                       m_selRoutePt = 0;   // punto attivo della route sel.
     std::array<float,3>       m_spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3>       m_spawnTeam2 = {0.f, 0.86f, -8.f};
 
-    // Selezione: >=0 box; -2/-3 spawn T1/T2; <=-10 command post (indice -10-i)
+    // Selezione: >=0 box; -2/-3 spawn T1/T2; -10..-99 command post (-10-i);
+    // -100..-199 cover point (-100-i); -200..-299 danger zone (-200-i);
+    // <=-300 patrol route (-300-i, il gizmo muove il punto m_selRoutePt)
     int   m_selBox       = -1;   // box selezionato
     float m_gridSnap     = 0.5f; // snap griglia
     bool  m_showNavmesh  = false; // evidenzia floor

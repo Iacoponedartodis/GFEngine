@@ -14,6 +14,7 @@ class BalanceEditor;
 class EntityEditor;
 class MapEditor;
 class WeaponEditor;
+class VehicleEditor;
 
 // Modulo attivo
 enum class ActiveModule
@@ -24,6 +25,7 @@ enum class ActiveModule
     EntityEditor,
     MapEditor,
     WeaponEditor,
+    VehicleEditor,
     AssetManager,
     AiEditor,
 };
@@ -51,6 +53,7 @@ private:
     std::unique_ptr<EntityEditor>        m_entityEditor;
     std::unique_ptr<MapEditor>           m_mapEditor;
     std::unique_ptr<WeaponEditor>        m_weaponEditor;
+    std::unique_ptr<VehicleEditor>       m_vehicleEditor;
 
     void init();
     void shutdown();

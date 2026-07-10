@@ -78,7 +78,30 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
   `logTrace/Info/Warn/Error`, `beginFrame`/`frame`, `recordInput`, `dumpGameState(json)`,
   `memoryUsageMB`. Ogni nuovo sistema DEVE loggare qui i propri stati chiave (init,
   errori, transizioni). Artefatti in `_telemetry_data/`; F12 = dump stato in partita.
-- **Planned tooling (not yet implemented, see ADR-010 in 13_ADR):** an in-editor "Rinomina"
-  command in every module above (rename physical file + sweep cross-references + reload
-  registry), and a centralized `saveJsonRMW` helper replacing hand-rolled read-modify-write
-  in every `save*()` function.
+- **Tooling ADR-010 — IMPLEMENTATO (2026-07-09):** comando "Rinomina" nei moduli
+  (rename file + sweep cross-ref + reload; categorie incluse Vehicle) e `saveJsonRMW`
+  centralizzato usato da ogni save path.
+## Sistemi aggiunti 2026-07-10 (riferimento rapido; dettagli nei doc 16-19)
+- **Shield runtime** (`ShieldComponent`, storage in World): assorbe danno prima degli
+  HP in CombatSystem, regen dopo `regenDelay`; assegnato allo spawn da `abilities[]`
+  con AbilityDef `type=="shield"` (param1/2/3 = hp/regen/delay). Doc 16.
+- **Comportamento tattico AI dal profilo**: aggression→distanza d'ingaggio,
+  retreat_hp_threshold→disimpegno, peek/hide (cover_preference), flank in Hunt,
+  Search con timeout→Patrol, ricerca attorno alla lastKnown. Doc 16 + fix in 07 (4).
+- **Log chat in-game**: `World::eventFeed` (mailbox) → HUD (`pushFeed`); L pannello,
+  PAGSU/PAGGIU scroll, righe recenti con fade. Doc 17.
+- **Sandbox tools**: `SandboxMenu` (TAB: Armi con slot primaria/secondaria;
+  Simulazione: modalità/truppe/ticket/respawn + avvia/ferma), P→PreMatch classico,
+  volo osservatore (player team 0, outcome sospeso). Doc 17.
+- **Map Metadata + consumo AI**: `MapDef.coverPoints/patrolRoutes/dangerZones`
+  (authoring nel MapEditor, sezione "Metadata AI"); `World::activeMap` (mailbox
+  opaca) → AiSystem usa cover in hide, repulsione danger fuori ingaggio; ConquestMode
+  assegna segmenti route come pattuglie. Doc 15+18.
+- **Veicoli Fase A**: `VehicleDef` (data/vehicles), `MapDef.vehicleSpawns`,
+  `VehicleComponent`; guida in Application (E sali/scendi con lato libero, W/S/A/D,
+  slide/step-up condiviso, camera FPS/TPS, colore blu al mount). Modulo editor
+  dedicato "Vehicle Editor". Doc 19.
+- **HUD top**: pannelli fazione ai lati (ALLEATI/NEMICI: vivi+ticket), post al
+  centro, hitmarker, crosshair-on-target, toast.
+- **Diagnostica**: heartbeat `ai:` (stati AI ogni ~10s), `[Conquest] spawn:`,
+  `drive:`/`veicolo:` per la guida, `[Viewport] Realloc FBO` nell'editor.

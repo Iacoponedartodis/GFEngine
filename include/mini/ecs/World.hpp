@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace mini { class ISystem; }
+namespace mini { class ISystem; struct MapDef; }
 
 namespace mini
 {
@@ -90,6 +90,18 @@ public:
     ShieldComponent*       getShield(EntityId e);
     const ShieldComponent* getShield(EntityId e) const;
 
+    // Vehicle (19_Vehicles, Fase A)
+    void addVehicle(EntityId e, const VehicleComponent& c);
+    [[nodiscard]] bool hasVehicle(EntityId e) const;
+    VehicleComponent*       getVehicle(EntityId e);
+    const VehicleComponent* getVehicle(EntityId e) const;
+
+    // Abilities attive (16_AiBehavior est.: roll, ...)
+    void addAbilities(EntityId e, const AbilityComponent& c);
+    [[nodiscard]] bool hasAbilities(EntityId e) const;
+    AbilityComponent*       getAbilities(EntityId e);
+    const AbilityComponent* getAbilities(EntityId e) const;
+
     void setDebugLogging(bool enabled);
     [[nodiscard]] bool isDebugLoggingEnabled() const;
     [[nodiscard]] std::uint64_t                getTickCount() const;
@@ -112,6 +124,11 @@ public:
     std::vector<std::string> eventFeed;
     void pushEvent(std::string msg) { eventFeed.push_back(std::move(msg)); }
 
+    // ── Mappa attiva (18_AiMapConsumption): puntatore opaco settato dal
+    //    game mode in start(); l'AiSystem lo usa per cover/danger zone.
+    //    L'ECS non include header di gioco: solo forward declaration.
+    const MapDef* activeMap = nullptr;
+
 private:
     std::uint64_t m_tickCount    = 0;
     EntityId      m_nextEntityId = 1;
@@ -130,6 +147,8 @@ private:
     std::unordered_map<EntityId, ColliderComponent>     m_colliders;
     std::unordered_map<EntityId, HitboxComponent>      m_hitboxes;
     std::unordered_map<EntityId, ShieldComponent>       m_shields;
+    std::unordered_map<EntityId, VehicleComponent>      m_vehicles;
+    std::unordered_map<EntityId, AbilityComponent>      m_abilities;
 
     bool m_debugLogging = false;
 };

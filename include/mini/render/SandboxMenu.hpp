@@ -20,10 +20,12 @@ class SandboxMenu
 public:
     SandboxMenu(int screenW, int screenH);
 
-    enum class Result { None, Close, EquipWeapon, ToggleSim };
+    enum class Result { None, Close, EquipWeapon, ToggleSim, RestartSandbox };
 
     void setWeapons(const std::vector<std::pair<std::string, std::string>>& idName);
+    void setMaps   (const std::vector<std::pair<std::string, std::string>>& idName);
     [[nodiscard]] const std::string& selectedWeaponId() const;
+    [[nodiscard]] const std::string& selectedMapId() const;
     [[nodiscard]] int weaponSlot() const { return m_weaponSlot; } // 0 primaria, 1 secondaria
 
     // Parametri della simulazione (letti da Application in ToggleSim)
@@ -44,7 +46,9 @@ private:
     int  m_weaponSel  = 0;
     int  m_weaponSlot = 0;  // 0 primaria, 1 secondaria (SIN/DES)
     int  m_simSel     = 0;  // riga selezionata in Simulazione
+    int  m_mapSel     = 0;  // mappa scelta (sim E riavvio sandbox)
     std::vector<std::pair<std::string, std::string>> m_weapons; // id, nome
+    std::vector<std::pair<std::string, std::string>> m_maps;    // id, nome
 
     static constexpr int k_visibleWeapons = 14;
 };

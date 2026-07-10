@@ -27,6 +27,7 @@
     "heat_per_shot": 0.2800000011920929,
     "mesh": "assets/models/weapons/dc-17.glb",
     "mesh_rot_x": 0.0,
+    "mesh_rot_y": -90.0,
     "mesh_scale": 0.800000011920929,
     "min_range": 0.0,
     "name": "DC-17 Blaster Pistol",

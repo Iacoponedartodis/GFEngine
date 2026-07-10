@@ -25,6 +25,7 @@ static const char* subdirOf(Category c)
     case Category::Ability:       return "abilities";
     case Category::Map:           return "maps";
     case Category::Character:     return "characters";
+    case Category::Vehicle:       return "vehicles";
     }
     return "";
 }
@@ -161,13 +162,26 @@ std::string renameDefinition(const std::string& dataDir, Category cat,
         sweepDir("maps", [&](json& j){ return patchArray(j, "ally_types", oldId, newId); });
         break;
     case Category::Map:
-        // Nessun cross-reference nei dati. ATTENZIONE (ADR-008 residuo): i
-        // game mode caricano ancora la mappa "firebase" per id hardcoded.
+        // Nessun cross-reference nei dati. R3 (2026-07-10): la mappa attiva
+        // arriva da MatchSettings/PreMatch — i mode non hardcodano più id.
+        // Resta "firebase" solo come FALLBACK di default: rinominarla è
+        // sicuro per le partite avviate dal PreMatch, ma il sandbox boot
+        // userebbe il fallback inesistente finché non selezioni una mappa.
         if (oldId == "firebase")
-            std::cerr << "[Rename] AVVISO: i game mode caricano 'firebase' "
-                         "hardcoded — rinominarla rompe l'avvio partita.\n";
+            std::cerr << "[Rename] AVVISO: 'firebase' e' il fallback di "
+                         "default di MatchSettings.mapId.\n";
         break;
     case Category::Character:
+        break;
+    case Category::Vehicle:
+        // maps: vehicle_spawns[].vehicle_id
+        sweepDir("maps", [&](json& j){
+            bool ch = false;
+            if (j.contains("vehicle_spawns") && j["vehicle_spawns"].is_array())
+                for (auto& vs : j["vehicle_spawns"])
+                    ch |= patchString(vs, "vehicle_id", oldId, newId);
+            return ch;
+        });
         break;
     }
 

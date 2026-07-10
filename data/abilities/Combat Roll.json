@@ -1,0 +1,9 @@
+{
+    "name": "Combat Roll",
+    "type": "roll",
+    "param1": 10.0,
+    "param2": 0.35,
+    "param3": 0.0,
+    "cooldown": 6.0,
+    "passive": false
+}

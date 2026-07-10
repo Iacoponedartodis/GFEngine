@@ -1,5 +1,7 @@
 {
-    "abilities": [],
+    "abilities": [
+        "Combat Roll"
+    ],
     "ai_profile": "B1 Battle Droid",
     "attach_points": {
         "eye": [
@@ -40,7 +42,6 @@
     ],
     "faction": "separatist",
     "hitbox_profile": "B1 Battle Droid",
-    "id": "B1 Battle Droid",
     "mesh": "assets/models/enemies/star_wars_b1_battle_droid.glb",
     "mesh_rot_x": 0.0,
     "mesh_rot_y": 0.0,
@@ -63,7 +64,7 @@
         ],
         "rot": [
             0.0,
-            0.0,
+            90.0,
             0.0
         ],
         "scale": 1.0

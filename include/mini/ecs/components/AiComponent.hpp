@@ -58,7 +58,14 @@ struct AiComponent
     float hideMin = 0.8f, hideMax = 1.8f; // durata finestra evasiva (s)
     float flankChance     = 0.0f;  // probabilità di approccio laterale in Hunt
 
+    // Roll attivo (abilità "roll", 16 est.): scatto in corso
+    float rollTimer = 0.0f;
+    float rollVX = 0.0f, rollVZ = 0.0f;
+
     // Stato runtime peek/hide + flank
+    // Cover point scelto per la fase evasiva (18_AiMapConsumption)
+    bool  hasCover = false;
+    float coverX = 0.0f, coverZ = 0.0f;
     float searchTimer = 0.0f;   // tempo in Search: oltre il limite → Patrol
     float exposeTimer = 0.0f;   // countdown della fase corrente
     bool  evading     = false;  // true = fase evasiva (non spara)
