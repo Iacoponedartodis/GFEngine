@@ -13,7 +13,10 @@ struct VehicleComponent
     float maxSpeed    = 12.0f;
     float accel       = 10.0f;
     float turnRateDeg = 90.0f;
-    float halfX = 0.7f, halfY = 0.5f, halfZ = 1.2f;
+    float halfX = 0.7f, halfY = 0.5f, halfZ = 1.2f;   // collisione (al suolo)
+    // Volume di danno (19 Fase B): offset dal centro fisico + half extents.
+    float hitOffsetY = 0.0f;
+    float hitHalfX = 0.7f, hitHalfY = 0.5f, hitHalfZ = 1.2f;
 
     // Stato runtime
     float    speed  = 0.0f;   // velocità corrente (negativa in retro)

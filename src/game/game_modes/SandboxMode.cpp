@@ -42,11 +42,21 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
         p1x = map->spawnTeam1[0]; p1z = map->spawnTeam1[2];
         p2x = map->spawnTeam2[0]; p2z = map->spawnTeam2[2];
     }
-    m_spawnPos = {p1x, SPAWN_Y, p1z};
+    // Spawn posato a terra (data-driven): groundedSpawn interroga i collider
+    // della MapDef per mettere il giocatore SUL suolo reale (non a Y fissa) e
+    // fuori dagli ostacoli. Prima nasceva a Y=0.86 coi piedi a 0 mentre il
+    // "Pavimento" ha il top a y>0 -> incastrato -> lo step-up lo lanciava in
+    // aria ("respawn sospeso sopra un muro"). Y-occhi = suolo + PLAYER_HALF_Y.
+    m_spawnPos = map
+        ? mapquery::groundedSpawn(map, p1x, p1z,
+                                  config::PLAYER_HALF_X, config::PLAYER_HALF_Y,
+                                  config::PLAYER_HALF_Z, config::PLAYER_HALF_Y,
+                                  0.0f, (p1z > 0.0f ? -1.0f : 1.0f))
+        : glm::vec3{p1x, SPAWN_Y, p1z};
 
     // ── Giocatore ─────────────────────────────────────────────────────────
     m_playerEntity = world.createEntity();
-    world.addTransform(m_playerEntity, {p1x, SPAWN_Y, p1z});
+    world.addTransform(m_playerEntity, {m_spawnPos.x, m_spawnPos.y, m_spawnPos.z});
     world.addTeam(m_playerEntity, {1});
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
@@ -62,7 +72,7 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ─────────────
     // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
-    vehiclespawn::spawnFromMap(world, map, registry, mesh, tex,
+    vehiclespawn::spawnFromMap(world, map, registry, meshCache, mesh, tex,
                                &m_vehicleTracker);
 
     // ── Manichini nemici sullo spawn team2 ────────────────────────────────
@@ -78,14 +88,28 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
         std::cerr << "[Sandbox] ERRORE: nessun nemico in data/enemies/ — "
                      "nessun manichino nemico.\n";
 
+    // Formazione a GRIGLIA (non fila singola): con conteggi alti da stress test
+    // (fino a config::MAX_AI_PER_TEAM) una fila si estenderebbe fuori mappa. La
+    // griglia resta nei limiti; findFreeSpot spinge ogni cella fuori dagli
+    // ostacoli, avanzando verso il centro (come genPositions in ConquestMode).
+    auto gridSpawn = [&](int n, float baseX, float baseZ, float dirZ,
+                         const std::vector<std::string>& ids, int team)
+    {
+        const int   perRow = 10;
+        const float gx = 2.8f, gz = 2.5f;
+        for (int i = 0; i < n; ++i)
+        {
+            const int row = i / perRow, col = i % perRow;
+            float x = baseX + ((float)col - (float)(perRow - 1) * 0.5f) * gx;
+            float z = baseZ + dirZ * (2.5f + (float)row * gz);
+            mapquery::findFreeSpot(map, x, z, 0.0f, dirZ, 0.45f, 0.5f, 0.45f);
+            spawnDummy(world, { x, z, ids[i % (int)ids.size()], team });
+        }
+    };
+
     const int nEnemies = enemyIds.empty() ? 0
                        : std::max(enemyCount, (int)enemyIds.size());
-    for (int i = 0; i < nEnemies; ++i)
-    {
-        const float off = ((float)i - (float)(nEnemies - 1) * 0.5f) * 3.0f;
-        spawnDummy(world, { p2x + off, p2z + (float)(i % 2) * 2.5f,
-                            enemyIds[i % (int)enemyIds.size()], 2 });
-    }
+    gridSpawn(nEnemies, p2x, p2z, (p1z > p2z ? 1.0f : -1.0f), enemyIds, 2);
 
     // ── Manichini alleati vicino allo spawn team1 (verso il centro) ───────
     std::vector<std::string> allyIds;
@@ -99,12 +123,7 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
     const int nAllies = allyIds.empty() ? 0
                       : std::max(allyCount, (int)allyIds.size());
-    for (int i = 0; i < nAllies; ++i)
-    {
-        const float off = ((float)i - (float)(nAllies - 1) * 0.5f) * 3.0f;
-        spawnDummy(world, { p1x + off, p1z + dirZ * (4.0f + (float)(i % 2) * 2.5f),
-                            allyIds[i % (int)allyIds.size()], 1 });
-    }
+    gridSpawn(nAllies, p1x, p1z, dirZ, allyIds, 1);
 }
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
@@ -237,7 +256,7 @@ void SandboxMode::update(World& world, float dt)
 {
     // Respawn dei veicoli distrutti (19_Vehicles Fase B)
     const MapDef* map = m_registry ? m_registry->getMap(m_mapId) : nullptr;
-    m_vehicleTracker.tick(world, map, m_registry, m_mesh, m_tex, dt);
+    m_vehicleTracker.tick(world, map, m_registry, m_meshCache, m_mesh, m_tex, dt);
 
     // Command post catturabili (nessuna conseguenza: solo test visivo)
     m_commandPosts.update(world, dt);

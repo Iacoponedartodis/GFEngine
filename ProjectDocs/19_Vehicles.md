@@ -50,8 +50,13 @@ La Fase 1 richiede i veicoli per essere "già divertente"; ogni altro sistema
   i mezzi sono solidi (ColliderComponent + excludeId nel movimento proprio).
   ~~Danno a sagoma piena~~ → FATTO 2026-07-10 (20): il danno vale su tutto l'OBB
   del box veicolo; il pilota è protetto dal mezzo finché guida (R5 chiuso).
-  Restano per la Fase B: hitbox a ZONE del veicolo (punti deboli con moltiplicatori,
-  quando ci saranno modelli veri) e danno residuo al pilota alla distruzione.
+  ~~Mesh custom renderizzata~~ → FATTO 2026-07-11: i veicoli usano la mesh del
+  VehicleDef (era sempre il box); mesh caricata nel cache come nemici/armi.
+  ~~Hitbox di danno separata dalla collisione~~ → FATTO 2026-07-11:
+  `hit_offset_y`/`hit_half_*` — lo spazio vuoto sotto un mezzo che fluttua non conta;
+  authoring nel Vehicle Editor (wireframe giallo).
+  Restano per la Fase B: hitbox a ZONE MULTIPLE del veicolo (punti deboli con
+  moltiplicatori) e danno residuo al pilota alla distruzione.
 
 ## Dependencies
 - DefinitionRegistry (loader additivo), MapDef (campo additivo), ECS World

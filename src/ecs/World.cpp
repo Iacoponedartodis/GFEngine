@@ -1,6 +1,7 @@
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/ISystem.hpp"
 
+#include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
 #include <algorithm>
 #include <iostream>
 #include <limits>
@@ -21,7 +22,7 @@ void World::initialize()
 }
 
 void World::tick(float dt)
-{ ++m_tickCount; for (auto& s : m_systems) s->update(*this, dt); }
+{ ZoneScoped; ++m_tickCount; for (auto& s : m_systems) s->update(*this, dt); }
 
 void World::registerSystem(std::unique_ptr<ISystem> s)
 { if (s) m_systems.push_back(std::move(s)); }

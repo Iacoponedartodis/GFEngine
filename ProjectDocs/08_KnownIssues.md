@@ -179,13 +179,33 @@
   (che ora è un segmento di 80m con lo stesso helper): mirino e proiettili
   concordano per costruzione anche su zone inclinate (testa B1 a -58°).
 
-## 14. Asset default mancanti (LOW)
-- `assets/textures/default.png` e `assets/models/default.obj` non esistono: fallback a
-  checkerboard + cubo funziona, ma il log sporca l'avvio. Aggiungere gli asset o rimuovere
-  i tentativi di caricamento.
+## 14. Asset default mancanti (LOW) — PARZIALE 2026-07-11
+- `assets/models/default.obj` CREATO (cubo unitario): niente più errore di parsing.
+  Resta `assets/textures/default.png` mancante → fallback checkerboard (una riga di log
+  cosmetica all'avvio). Basso: il fallback funziona.
 
 ## 15. ~~Salvataggi distruttivi (classe di bug)~~ — RESOLVED 2026-07-09 (ADR-010)
 - `saveJsonRMW` centralizzato (`util/JsonSave.hpp`) con backup `.bak` automatico; **tutti**
   i save path di tutti i moduli migrati (nessun `ofstream` JSON fuori dall'helper). La
   regola RMW è ora un vincolo strutturale. I nuovi moduli DEVONO usare l'helper
   (04_CodingStandards).
+
+## 28. Spawn giocatore a Y fissa → incastro nel pavimento / respawn sospeso — RISOLTO 2026-07-13
+- Player e respawn usavano `SPAWN_Y=0.86` hardcoded (piedi a y=0); il "Pavimento" di firebase
+  ha il top a y=0.1 → nascita incastrata → step-up lo lanciava a occhi 1.42 poi assestamento.
+  Evidente dopo una simulazione ("respawn sopra un muro, sospeso anche muovendosi").
+- **Fix:** `mapquery::groundedSpawn` (suolo reale via `groundHeightAt` + `findFreeSpot`) in
+  Sandbox/Conquest `start`. Probe runtime: camY stabile 0.95 dal frame 0. Vedi 07_Changelog.
+
+## 29. Veicoli si bloccano in corrispondenza delle 4 casse laterali (LOW) — APERTO, differito
+- Segnalato 2026-07-13: lo speeder resta bloccato passando vicino alle casse ai lati della
+  mappa anche con spazio apparente. Concordato di differirlo al futuro sistema di hitbox/
+  collisioni più accurato (la collisione tratta il box che si muove come AABB allineata al
+  mondo — vedi VehicleDrive AABB yaw-aware, mitigazione parziale). Non bloccante per il gioco.
+
+## 30. Sim AI: "impossibile muovere la visuale in osservatore" — NON RIPRODOTTO 2026-07-13
+- Segnalato insieme al bug #28. Probe runtime in simulazione: tutti i gate corretti
+  (`mouseCap=1, observerFly=1, thirdPerson=0, sbMenuOpen=0, state=Playing`) → `processMouse`
+  VIENE chiamato e ruota la camera. Possibile confusione col rimbalzo di spawn (#28, ora
+  risolto) o col glitch mouse primo-frame (già mitigato dal flush in `Window::setMouseCaptured`).
+  **Da ri-testare a mano** dopo questi fix; se persiste, catturare un caso concreto.

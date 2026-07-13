@@ -18,7 +18,7 @@
     ],
     "bullet_lifetime": 3.0,
     "bullet_scale": 0.10000000149011612,
-    "bullet_speed": 45.0,
+    "bullet_speed": 70.0,
     "cooldown_rate": 0.30000001192092896,
     "damage": 27.0,
     "effective_range": 18.0,

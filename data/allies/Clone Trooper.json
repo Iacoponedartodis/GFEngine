@@ -55,7 +55,7 @@
     "texture": "",
     "weapon_display": {
         "hand": "right_hand",
-        "id": "DC-17 Blaster Pistol",
+        "id": "DC-15A",
         "offset": [
             0.0,
             0.0,
@@ -63,12 +63,12 @@
         ],
         "rot": [
             0.0,
-            0.0,
+            90.0,
             0.0
         ],
-        "scale": 1.0
+        "scale": 0.4000000059604645
     },
     "weapons": [
-        "DC-17 Blaster Pistol"
+        "DC-15A"
     ]
 }

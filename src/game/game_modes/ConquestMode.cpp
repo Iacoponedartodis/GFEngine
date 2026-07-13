@@ -399,10 +399,18 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     world.activeMap = m_map;   // canale metadata per l'AiSystem (doc 18)
 
     // Spawn del giocatore dal MapDef (team1), altrimenti default.
+    // Posato a terra (data-driven): sul suolo reale della mappa e fuori dagli
+    // ostacoli, non a Y fissa (altrimenti nasce incastrato nel pavimento a
+    // top>0 e lo step-up lo lancia in aria). Y-occhi = suolo + PLAYER_HALF_Y.
     float playerX = 0.0f, playerZ = SPAWN_Z;
     if (m_map)
     { playerX = m_map->spawnTeam1[0]; playerZ = m_map->spawnTeam1[2]; }
-    m_spawnPos  = {playerX, SPAWN_Y, playerZ};
+    m_spawnPos  = m_map
+        ? mapquery::groundedSpawn(m_map, playerX, playerZ,
+                                  config::PLAYER_HALF_X, config::PLAYER_HALF_Y,
+                                  config::PLAYER_HALF_Z, config::PLAYER_HALF_Y,
+                                  0.0f, (playerZ > 0.0f ? -1.0f : 1.0f))
+        : glm::vec3{playerX, SPAWN_Y, playerZ};
 
     m_team1Tickets = initialTeam1Tickets;
     m_team2Tickets = initialTeam2Tickets;
@@ -411,12 +419,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Giocatore ────────────────────────────────────────────────────────
     m_playerEntity = world.createEntity();
-    world.addTransform(m_playerEntity, {playerX, SPAWN_Y, playerZ});
+    world.addTransform(m_playerEntity, {m_spawnPos.x, m_spawnPos.y, m_spawnPos.z});
     world.addTeam(m_playerEntity, {1});
     world.addHealth(m_playerEntity, {playerHp, playerHp});
 
     // ── Lista nemici da mappa/registry ───────────────────────────────────
-    int nEnemies = std::min(team2AiCount, 20);
+    int nEnemies = std::min(team2AiCount, config::MAX_AI_PER_TEAM);
     std::vector<std::string> enemyIds = buildEnemySpawnList(registry, m_mapId, nEnemies);
     if ((int)enemyIds.size() < nEnemies)
         nEnemies = (int)enemyIds.size(); // registry vuoto: niente spawn ciechi
@@ -624,7 +632,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     }
 
     // ── Spawn alleati AI (data-driven) ───────────────────────────────────────
-    int nAllies = std::min(team1AiCount, 10);
+    int nAllies = std::min(team1AiCount, config::MAX_AI_PER_TEAM);
     if (allyIds.empty()) nAllies = 0; // nessun alleato registrato: niente spawn ciechi
     std::vector<UnitPos> allyPos = genPositions(allyBaseX, allyBaseZ, -1.0f, nAllies);
     for (int i = 0; i < nAllies; ++i)
@@ -704,7 +712,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
     // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ────────────
     // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
-    vehiclespawn::spawnFromMap(world, map, registry, mesh, tex,
+    vehiclespawn::spawnFromMap(world, map, registry, m_meshCache, mesh, tex,
                                &m_vehicleTracker);
 
     std::cout << "[ConquestMode] Spawn completato: "
@@ -767,7 +775,7 @@ void ConquestMode::update(World& world, float dt)
     checkDeaths(world);
 
     // Respawn dei veicoli distrutti (19_Vehicles Fase B)
-    m_vehicleTracker.tick(world, m_map, m_registry, m_mesh, m_tex, dt);
+    m_vehicleTracker.tick(world, m_map, m_registry, m_meshCache, m_mesh, m_tex, dt);
 
     // ── Command post: cattura + regole obiettivo della modalità ──────────
     m_commandPosts.update(world, dt);

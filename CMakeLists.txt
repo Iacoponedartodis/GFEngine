@@ -73,6 +73,27 @@ FetchContent_Declare(cpptrace
 )
 FetchContent_MakeAvailable(cpptrace)
 
+# ── Tracy profiler (Fase 1 ottimizzazione — opt-in, ADR-015) ──────────────────
+# Profiling real-time a precisione nanosecondo. OFF di default: le build normali
+# (Debug/Release) restano identiche e a costo zero — con TRACY_ENABLE non definita
+# le macro ZoneScoped/FrameMark diventano no-op e TracyClient compila come stub.
+# Per profilare: configura una build RelWithDebInfo con -DUSE_TRACY_PROFILER=ON e
+# collega il Tracy profiler GUI a 127.0.0.1.
+# Linkato SOLO a GFEngine (ADR-002: l'editor non deve dipendere dal runtime).
+# Tag pinnato (KI #27: niente tag mobili → build riproducibili).
+option(USE_TRACY_PROFILER "Abilita il profiler Tracy in GFEngine" OFF)
+FetchContent_Declare(tracy
+    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+    GIT_TAG        v0.11.1
+    GIT_SHALLOW    TRUE
+)
+# TracyClient legge l'opzione TRACY_ENABLE: ON compila il client e definisce la
+# macro TRACY_ENABLE (propagata via INTERFACE a chi linka); OFF = stub a costo nullo.
+# Gli header restano sempre includibili in entrambi gli stati.
+set(TRACY_ENABLE    ${USE_TRACY_PROFILER} CACHE BOOL "" FORCE)
+set(TRACY_ON_DEMAND ON                      CACHE BOOL "" FORCE)  # profila solo con GUI connessa
+FetchContent_MakeAvailable(tracy)
+
 # ── Sanitizers (opt-in: rallentano molto, non per il playtest) ────────────────
 # MSVC supporta solo ASan (/fsanitize=address); UBSan NON esiste su MSVC.
 option(GF_ENABLE_ASAN "Abilita AddressSanitizer (e UBSan dove supportato)" OFF)
@@ -174,13 +195,14 @@ target_include_directories(GFEngine PRIVATE
     ${tinygltf_SOURCE_DIR}
 )
 target_compile_features(GFEngine PRIVATE cxx_std_20)
-target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(GFEngine PRIVATE SDL_MAIN_HANDLED _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(GFEngine PRIVATE
     SDL2::SDL2-static
     ${PLATFORM_GL_LIBS}
     nlohmann_json::nlohmann_json
     spdlog::spdlog
     cpptrace::cpptrace
+    TracyClient   # stub a costo nullo se USE_TRACY_PROFILER=OFF (ADR-015)
 )
 gf_apply_sanitizers(GFEngine)
 if(MSVC)
@@ -230,7 +252,7 @@ target_include_directories(GFEditor PRIVATE
     ${imgui_SOURCE_DIR}/backends
 )
 target_compile_features(GFEditor PRIVATE cxx_std_20)
-target_compile_definitions(GFEditor PRIVATE SDL_MAIN_HANDLED)
+target_compile_definitions(GFEditor PRIVATE SDL_MAIN_HANDLED _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(GFEditor PRIVATE
     SDL2::SDL2-static
     ${PLATFORM_GL_LIBS}

@@ -35,6 +35,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
+#include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
 #include <filesystem>
 #include <iostream>
 #include <algorithm>
@@ -114,7 +115,7 @@ static glm::mat4 toModelMatrix(const TransformComponent& t)
 // (la verifica "nemici vivi" ora vive nelle regole dei mode — ADR-014)
 
 void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
-                      const std::string& mapOverride)
+                      const std::string& mapOverride, int stressAiCount)
 {
     using namespace config;
     initialize();
@@ -216,9 +217,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         }
     };
 
-    for (auto& [id, enemy] : registry.enemies()) loadMeshIntoCache(enemy.meshPath);
-    for (auto& [id, ally]  : registry.allies())  loadMeshIntoCache(ally.meshPath);
-    for (auto& [id, wpn]   : registry.weapons()) loadMeshIntoCache(wpn.meshPath);
+    for (auto& [id, enemy] : registry.enemies())  loadMeshIntoCache(enemy.meshPath);
+    for (auto& [id, ally]  : registry.allies())   loadMeshIntoCache(ally.meshPath);
+    for (auto& [id, wpn]   : registry.weapons())  loadMeshIntoCache(wpn.meshPath);
+    for (auto& [id, veh]   : registry.vehicles()) loadMeshIntoCache(veh.meshPath);
 
     // ── ECS ──────────────────────────────────────────────────────────
     World world;
@@ -280,9 +282,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     bool      stateChanged  = false;
     bool      wasOverheated = false;
 
-    constexpr float fixedDt = 1.0f / 60.0f;
-    float accumulator = 0.0f;
-    Clock clock;
+    // ── Frame pacing (Fase 2 ottimizzazione) ─────────────────────────
+    // Timestep fisso con accumulatore in DOPPIA precisione; il tempo viene
+    // dal contatore hardware SDL_GetPerformanceCounter (sub-ms), non da
+    // std::chrono/SDL_GetTicks. L'accumulatore float accumulava errore su
+    // sessioni lunghe. La simulazione riceve comunque fixedDt (float)
+    // invariato → il gameplay resta identico a 60 Hz.
+    constexpr float  fixedDt         = 1.0f / 60.0f;  // dt passato ai sistemi (invariato)
+    constexpr double SIMULATION_STEP = 1.0 / 60.0;    // passo dell'accumulatore (double)
+    double       accumulator = 0.0;
+    const double perfFreq    = (double)SDL_GetPerformanceFrequency();
+    Uint64       prevCounter = SDL_GetPerformanceCounter();
     Camera& cam = renderer.getCamera();
 
     if (directPreMatch)
@@ -426,6 +436,15 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         hud.toast("Sandbox: TAB menu prova, P partita (PreMatch), L log eventi", 6.0f);
         std::cout << "[Game] Sandbox avviata — " << player.weapon().name << std::endl;
 
+        // --stress N: forza N AI per team nel sim (profiling a scala con Tracy).
+        // Clampato al cap globale; startSimulation legge sbMenu.ally/enemyCount.
+        if (stressAiCount > 0)
+        {
+            const int n = std::min(stressAiCount, config::MAX_AI_PER_TEAM);
+            sbMenu.allyCount = sbMenu.enemyCount = n;
+            std::cout << "[Stress] " << n << " AI per team (sim)\n";
+        }
+
         // --sim: entra direttamente nella simulazione AI-vs-AI (test/debug)
         if (autoSim) startSimulation();
     }
@@ -438,6 +457,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         telemetry::beginFrame();
         stateChanged = false;
         input.update();
+
 
         // ── 1. EVENTI SDL ────────────────────────────────────────────
         SDL_Event ev;
@@ -686,11 +706,15 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                                 world.getVehicle(best)->driver = player.entity;
                                 if (auto* tm = world.getTeam(best))
                                     tm->teamId = 1;   // ora bersaglio dei nemici
-                                // Feedback visivo: il veicolo guidato è blu
+                                // Feedback visivo: leggera tinta azzurra sul
+                                // veicolo guidato (moltiplica, non sovrascrive,
+                                // così i colori del modello restano leggibili)
                                 if (auto* mr = world.getMeshRenderer(best))
                                 {
                                     vehPrevR = mr->r; vehPrevG = mr->g; vehPrevB = mr->b;
-                                    mr->r = 0.25f; mr->g = 0.50f; mr->b = 1.0f;
+                                    mr->r = vehPrevR * 0.6f;
+                                    mr->g = vehPrevG * 0.75f;
+                                    mr->b = std::min(1.0f, vehPrevB * 1.2f + 0.2f);
                                 }
                                 hud.toast("Alla guida: W/S accelera, A/D sterza, E scendi");
                                 hud.pushFeed("VEICOLO: giocatore alla guida");
@@ -760,15 +784,18 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         }
 
         // ── 3. FIXED UPDATE ──────────────────────────────────────────
-        float elapsed = clock.restart();
-        if (elapsed > 0.25f) elapsed = 0.25f;
+        const Uint64 nowCounter = SDL_GetPerformanceCounter();
+        double frameDt = (double)(nowCounter - prevCounter) / perfFreq;
+        prevCounter = nowCounter;
+        if (frameDt > 0.25) frameDt = 0.25;         // anti spiral-of-death (invariato)
+        const float elapsed = (float)frameDt;        // i sistemi non-simulazione vogliono float
         hud.tick(elapsed);
 
         if (state == GameState::Playing)
         {
-            accumulator += elapsed;
-            while (accumulator >= fixedDt)
-            { mode->update(world, fixedDt); world.tick(fixedDt); accumulator -= fixedDt; }
+            accumulator += frameDt;
+            while (accumulator >= SIMULATION_STEP)
+            { mode->update(world, fixedDt); world.tick(fixedDt); accumulator -= SIMULATION_STEP; }
 
             // Feedback colpi a segno del giocatore → hitmarker sul mirino
             if (world.combatFeedback.team1Kill)     hud.hitmarker(true);
@@ -799,7 +826,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         }
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
-        if (state == GameState::Playing && window.isMouseCaptured() && !sbMenuOpen)
+        // Alla guida la camera segue il veicolo (VehicleDrive): niente
+        // mouse-look, altrimenti lo sterzo sembra invertito.
+        if (state == GameState::Playing && window.isMouseCaptured()
+            && !sbMenuOpen && drivenVehicle == 0)
             player.processMouse(cam, (float)input.mouseDX(), (float)input.mouseDY());
 
         if (state == GameState::Playing)
@@ -913,7 +943,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     const float mo  = mr2 ? mr2->meshOffsetY : 0.0f;
                     const glm::vec3 ep{tr2->x, tr2->y, tr2->z};
 
-                    if (hb2 && hb2->profile && !hb2->profile->zones.empty())
+                    if (const auto* vc2 = world.getVehicle(id))
+                    {
+                        // Veicolo: stesso volume di danno OBB del CombatSystem,
+                        // così il mirino diventa rosso su tutta la carrozzeria.
+                        HitZone box;
+                        box.offset      = {0.0f, vc2->hitOffsetY, 0.0f};
+                        box.halfExtents = {vc2->hitHalfX, vc2->hitHalfY, vc2->hitHalfZ};
+                        if (hittest::segmentInZone(ro, re, ep, 1.0f, tr2->ry, 0.0f, box))
+                            aimOn = true;
+                    }
+                    else if (hb2 && hb2->profile && !hb2->profile->zones.empty())
                     {
                         for (const auto& z : hb2->profile->zones)
                             if (hittest::segmentInZone(ro, re, ep, sc,
@@ -970,6 +1010,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         {
             auto drawScene = [&](const Camera& viewCam)
             {
+                ZoneScopedN("render.drawScene");   // ADR-015 (equiv. Application::render)
                 for (EntityId id : world.getEntities())
                 {
                     const auto* tr = world.getTransform(id);
@@ -978,6 +1019,11 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     // meshOffsetY sposta verticalmente la mesh rispetto al centro
                     // fisico dell'entità (es. per appoggiare i piedi a terra).
                     glm::mat4 model = toModelMatrix(*tr);
+                    // Rotazione visiva extra (veicoli): raddrizza il muso senza
+                    // toccare la direzione di marcia (transform.ry).
+                    if (mr->yawOffsetDeg != 0.0f)
+                        model = model * glm::rotate(glm::mat4(1.0f),
+                                    glm::radians(mr->yawOffsetDeg), glm::vec3(0,1,0));
                     if (mr->meshOffsetY != 0.0f)
                         model = glm::translate(glm::mat4(1.0f),
                                     glm::vec3(0.0f, mr->meshOffsetY, 0.0f)) * model;
@@ -1089,6 +1135,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         }
 
         renderer.endFrame();
+
+        // Fine frame renderizzato (dopo lo swap in endFrame → SDL_GL_SwapWindow):
+        // delimita il frame per Tracy. No-op se il profiler è disabilitato.
+        FrameMark;
+
+        // Frame-cap di sicurezza SOLO se la VSync è spenta (swap interval 0):
+        // senza pacing GPU il loop girerebbe a migliaia di FPS. Sleep IBRIDO
+        // (SDL_Delay grossolano + busy-wait finale) perché lo Sleep di Windows
+        // ha risoluzione ~15ms e da solo darebbe frame-time irregolari. Con
+        // VSync ON (default) questo blocco è inerte (un solo check per frame).
+        if (SDL_GL_GetSwapInterval() == 0)
+        {
+            const double target = 1.0 / (double)config::MAX_UNCAPPED_FPS;
+            const double soFar  = (double)(SDL_GetPerformanceCounter() - prevCounter) / perfFreq;
+            const double remain = target - soFar;
+            if (remain > 0.002)
+                SDL_Delay((Uint32)((remain - 0.002) * 1000.0));   // dormi fino a ~2ms dal target
+            while (((double)(SDL_GetPerformanceCounter() - prevCounter) / perfFreq) < target)
+            { /* busy-wait sub-ms finale */ }
+        }
     }
 
     telemetry::shutdown();

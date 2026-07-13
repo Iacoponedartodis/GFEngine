@@ -44,6 +44,33 @@ constexpr float CAMERA_FOV    = 60.0f;    // gradi
 constexpr float CAMERA_NEAR   =  0.1f;
 constexpr float CAMERA_FAR    = 100.0f;
 
+// ── Frame pacing (Fase 2 ottimizzazione) ───────────────────────────────────
+// Cap FPS di SICUREZZA usato SOLO quando la VSync è spenta: senza pacing GPU
+// il main loop girerebbe a migliaia di FPS bruciando CPU/GPU. Con VSync ON
+// (default) è inerte. Alto di proposito: non limita i monitor ad alto refresh.
+constexpr int   MAX_UNCAPPED_FPS = 300;
+
+// ── Conteggio AI (stress test / profiling Fase 3-4) ─────────────────────────
+// Cap massimo di unità AI per team (sim e partita). Alzato a 50 per poter
+// profilare a scala con Tracy la ricerca target (O(N²)) e la collisione, e
+// decidere sui dati se la griglia spaziale / time-slicing della Fase 4 serve.
+constexpr int   MAX_AI_PER_TEAM = 50;
+
+// ── Time-slicing AI (Fase 4) ────────────────────────────────────────────────
+// Ogni AI esegue la sensing pesante (ricerca target O(N²) + LOS) 1 tick su
+// AI_SENSE_INTERVAL, scaglionata per entità → costo sensing ~/INTERVAL. Il
+// movimento e lo sparo restano ogni tick (sul bersaglio cachato). 6 ≈ 10 Hz a
+// 60 Hz: reattività ancora alta. Più alto = più economico ma più latente.
+constexpr int   AI_SENSE_INTERVAL = 6;
+
+// ── Cap LOS per sensing (Fase 4b) ───────────────────────────────────────────
+// Su questa mappa aggroRange (~20 m) ≈ dimensione mappa (50×40), quindi una
+// griglia spaziale non poterebbe nulla (un query 3×3 copre tutto). Il costo è
+// LOS-bound nella mischia. Si limita quindi la LOS ai K bersagli PIÙ VICINI:
+// l'AI ingaggia un nemico vicino visibile invece dello stretto più vicino
+// globale → costo LOS O(N·K) invece di O(N²), comportamento ~identico.
+constexpr int   AI_MAX_LOS_CHECKS = 8;
+
 // Helper per avere i glm::vec3 a runtime (non constexpr in GLM pre-1.0)
 inline glm::vec3 playerHalf() { return {PLAYER_HALF_X, PLAYER_HALF_Y, PLAYER_HALF_Z}; }
 inline glm::vec3 aiHalf()     { return {AI_HALF_X, AI_HALF_Y, AI_HALF_Z}; }

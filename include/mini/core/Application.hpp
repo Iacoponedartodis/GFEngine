@@ -9,7 +9,7 @@ class Application
 {
 public:
     void run(bool directPreMatch = false, bool sandbox = false, bool autoSim = false,
-             const std::string& mapOverride = "");
+             const std::string& mapOverride = "", int stressAiCount = 0);
 
     void initialize();
     void shutdown();

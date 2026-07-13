@@ -52,7 +52,16 @@ inline bool update(World& world, EntityId vehicle, Camera& cam,
     const glm::vec3 fwd  = {std::sin(yr), 0.0f, std::cos(yr)};
     const glm::vec3 prev = {vt->x, vt->y, vt->z};
     const glm::vec3 next = prev + fwd * (vc->speed * dt);
-    const glm::vec3 H    = {vc->halfX, vc->halfY, vc->halfZ};
+
+    // Box di collisione che tiene conto dello YAW: la fisica tratta il box in
+    // movimento come allineato agli assi del mondo, ma lo speeder è lungo
+    // (halfZ >> halfX). Senza questo, i 5m di lunghezza restano puntati lungo
+    // l'asse Z del mondo anche quando il mezzo gira → "muro invisibile" ai
+    // lati. Usa l'AABB avvolgente della sagoma ruotata (esatto a 0/90°).
+    const float ca = std::abs(std::cos(yr)), sa = std::abs(std::sin(yr));
+    const glm::vec3 H = { vc->halfX * ca + vc->halfZ * sa,
+                          vc->halfY,
+                          vc->halfX * sa + vc->halfZ * ca };
     const glm::vec3 r    = physics::slideMoveWithStepUp(
         prev, {next.x, prev.y, next.z}, H, world,
         config::STEP_HEIGHT, vehicle);
@@ -66,8 +75,11 @@ inline bool update(World& world, EntityId vehicle, Camera& cam,
     else if (vc->velY < 0.0f)
         vc->velY = 0.0f;
 
-    // Camera: prima persona al posto di guida, oppure terza persona
-    // dietro/sopra il mezzo (tasto V).
+    // Camera: SEMPRE orientata lungo la direzione di marcia (fwd), sia in
+    // prima che in terza persona. Prima, in prima persona, la camera restava
+    // col mouse: lo sterzo sembrava invertito perché "destra/sinistra" erano
+    // relativi allo sguardo, non al mezzo (bug 2026-07-11). Ora la vista
+    // segue il veicolo, quindi A = sinistra, D = destra, coerenti.
     if (thirdPerson)
     {
         const glm::vec3 back = {-fwd.x, 0.0f, -fwd.z};
@@ -77,7 +89,11 @@ inline bool update(World& world, EntityId vehicle, Camera& cam,
         cam.lookAt({vt->x, vt->y + 1.0f, vt->z});
     }
     else
-        cam.setPosition({vt->x, vt->y + config::VEHICLE_EYE_HEIGHT, vt->z});
+    {
+        const glm::vec3 eye{vt->x, vt->y + config::VEHICLE_EYE_HEIGHT, vt->z};
+        cam.setPosition(eye);
+        cam.lookAt({eye.x + fwd.x, eye.y, eye.z + fwd.z});
+    }
 
     // Telemetria di guida (~2 volte/s): rende diagnosticabile
     // "il veicolo non si muove" direttamente dal log.

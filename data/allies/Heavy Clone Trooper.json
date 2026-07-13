@@ -43,7 +43,22 @@
         "hp": 100.0,
         "move_speed": 4.0
     },
+    "weapon_display": {
+        "hand": "right_hand",
+        "id": "Z-6 Rotary Blaster",
+        "offset": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "rot": [
+            0.0,
+            90.0,
+            0.0
+        ],
+        "scale": 80.0
+    },
     "weapons": [
-        "T-21 Heavy Blaster"
+        "Z-6 Rotary Blaster"
     ]
 }

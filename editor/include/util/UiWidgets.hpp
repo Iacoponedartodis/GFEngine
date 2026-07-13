@@ -30,6 +30,27 @@ inline bool sliderRow(const char* label, float& v,
     return changed;
 }
 
+// Riga "etichetta a sinistra + campo che riempie il resto". L'etichetta è
+// disegnata PER PRIMA, quindi non viene mai tagliata dal bordo del pannello
+// (il difetto di DragFloat(label) a piena larghezza, che disegna l'etichetta
+// a destra e la fa uscire dal pannello). Ritorna true se il valore cambia.
+inline bool dragRow(const char* label, float& v, float speed,
+                    float lo, float hi, const char* fmt = "%.2f")
+{
+    ImGui::PushID(label);
+    // Mostra solo la parte prima di "##" (id ImGui), come nei widget nativi.
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGui::TextUnformatted(label, end);
+    ImGui::SameLine();
+    float w = ImGui::GetContentRegionAvail().x;
+    if (w < 60.0f) w = 60.0f;
+    ImGui::SetNextItemWidth(w);
+    const bool ch = ImGui::DragFloat("##v", &v, speed, lo, hi, fmt);
+    ImGui::PopID();
+    return ch;
+}
+
 // Tripla riga X/Y/Z per un vettore. Ritorna true se un componente è cambiato.
 inline bool sliderRow3(const char* baseLabel, float* v,
                        float vmin, float vmax, float dragSpeed,

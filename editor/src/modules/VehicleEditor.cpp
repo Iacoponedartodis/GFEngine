@@ -7,6 +7,7 @@
 #include "util/FileDialog.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+#include "util/UiWidgets.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -89,19 +90,35 @@ void VehicleEditor::updateViewport()
     const auto& d = m_entries[m_sel].def;
 
     if (!d.meshPath.empty())
-        m_viewport.loadModel(d.meshPath, 0.0f, d.meshScale);
+        m_viewport.loadModel(d.meshPath, d.meshRotX, d.meshScale, d.meshRotY);
     else
         m_viewport.clearModel();
 
-    // Box di collisione come wireframe (centrato sull'origine, poggiato
-    // idealmente a terra: il runtime spawna con centro a halfY dal suolo).
+    // Due wireframe: COLLISIONE (grigio, raggiunge il suolo) e DANNO
+    // (giallo, il volume che i colpi devono colpire — esclude lo spazio
+    // vuoto sotto un mezzo che fluttua). Y del box = altezza dal suolo,
+    // come li spawna il runtime (centro fisico a halfY).
     std::vector<FreeCameraViewport::MapBoxDraw> boxes;
-    FreeCameraViewport::MapBoxDraw b;
-    b.x = 0; b.y = d.halfY; b.z = 0; b.ry = d.meshRotY;
-    b.sx = d.halfX * 2.0f; b.sy = d.halfY * 2.0f; b.sz = d.halfZ * 2.0f;
-    b.r = d.color[0]; b.g = d.color[1]; b.b = d.color[2];
-    b.selected = true;
-    boxes.push_back(b);
+
+    // Collisione: CIANO brillante. Danno: GIALLO brillante. Colori base
+    // distinti (niente 'selected', che li sbiadirebbe entrambi uguali).
+    FreeCameraViewport::MapBoxDraw col;
+    col.x = 0; col.y = d.halfY; col.z = 0; col.ry = 0;
+    col.sx = d.halfX * 2.0f; col.sy = d.halfY * 2.0f; col.sz = d.halfZ * 2.0f;
+    col.r = 0.2f; col.g = 0.9f; col.b = 1.0f;   // ciano
+    col.selected = false;
+    boxes.push_back(col);
+
+    const float hx = (d.hitHalfX > 0.0f) ? d.hitHalfX : d.halfX;
+    const float hy = (d.hitHalfY > 0.0f) ? d.hitHalfY : d.halfY;
+    const float hz = (d.hitHalfZ > 0.0f) ? d.hitHalfZ : d.halfZ;
+    FreeCameraViewport::MapBoxDraw hit;
+    hit.x = 0; hit.y = d.halfY + d.hitOffsetY; hit.z = 0; hit.ry = 0;
+    hit.sx = hx * 2.0f; hit.sy = hy * 2.0f; hit.sz = hz * 2.0f;
+    hit.r = 1.0f; hit.g = 0.85f; hit.b = 0.1f;   // giallo
+    hit.selected = false;
+    boxes.push_back(hit);
+
     m_viewport.setMapBoxes(boxes);
 }
 
@@ -119,10 +136,16 @@ void VehicleEditor::saveSelected()
         j["turn_rate_deg"] = d.turnRateDeg;
         j["mesh"]          = d.meshPath;
         j["mesh_scale"]    = d.meshScale;
+        j["mesh_rot_x"]    = d.meshRotX;
         j["mesh_rot_y"]    = d.meshRotY;
+        j["mesh_offset_y"] = d.meshOffsetY;
         j["half_x"]        = d.halfX;
         j["half_y"]        = d.halfY;
         j["half_z"]        = d.halfZ;
+        j["hit_offset_y"]  = d.hitOffsetY;
+        j["hit_half_x"]    = d.hitHalfX;
+        j["hit_half_y"]    = d.hitHalfY;
+        j["hit_half_z"]    = d.hitHalfZ;
         j["color"]         = {d.color[0], d.color[1], d.color[2]};
         return true;
     });
@@ -279,21 +302,35 @@ void VehicleEditor::drawProperties()
         }
         ImGui::TextDisabled("Vuoto = box colorato nel runtime");
     }
-    changed |= ImGui::DragFloat("Scala",     &d.meshScale, 0.005f, 0.001f, 10.0f, "%.3f");
-    changed |= ImGui::DragFloat("Rot Y deg", &d.meshRotY,  1.0f, -180.0f, 180.0f, "%.0f");
+    using editor::ui::dragRow;
+    changed |= dragRow("Scala",              d.meshScale,   0.005f, 0.001f, 10.0f, "%.3f");
+    changed |= dragRow("Rotazione X (deg)",  d.meshRotX,    1.0f, -180.0f, 180.0f, "%.0f");
+    changed |= dragRow("Rotazione Y (deg)",  d.meshRotY,    1.0f, -180.0f, 180.0f, "%.0f");
+    changed |= dragRow("Altezza mesh (su/giu)", d.meshOffsetY, 0.02f, -3.0f, 3.0f, "%.2f");
+    ImGui::TextDisabled("Speeder troppo alto? Abbassa 'Altezza mesh' (valori negativi).");
 
     ImGui::Separator();
-    ImGui::TextDisabled("Collisione (box, wireframe nel viewport)");
-    changed |= ImGui::DragFloat("Half X", &d.halfX, 0.02f, 0.1f, 6.0f, "%.2f");
-    changed |= ImGui::DragFloat("Half Y", &d.halfY, 0.02f, 0.1f, 6.0f, "%.2f");
-    changed |= ImGui::DragFloat("Half Z", &d.halfZ, 0.02f, 0.1f, 6.0f, "%.2f");
+    ImGui::TextColored({0.3f,0.9f,1.0f,1.0f}, "Collisione (box CIANO)");
+    ImGui::TextDisabled("Raggiunge il suolo per guidare. NON e' il volume di danno.");
+    changed |= dragRow("Half X", d.halfX, 0.02f, 0.1f, 6.0f, "%.2f");
+    changed |= dragRow("Half Y", d.halfY, 0.02f, 0.1f, 6.0f, "%.2f");
+    changed |= dragRow("Half Z", d.halfZ, 0.02f, 0.1f, 6.0f, "%.2f");
+
+    ImGui::Separator();
+    ImGui::TextColored({1.0f,0.85f,0.2f,1.0f}, "Volume di DANNO (box GIALLO)");
+    ImGui::TextDisabled("Cio' che i colpi colpiscono. Alza l'Offset per escludere lo\n"
+                        "spazio vuoto sotto un mezzo che fluttua. Half=0 usa la collisione.");
+    changed |= dragRow("Hit Offset Y", d.hitOffsetY, 0.02f, -3.0f, 3.0f, "%.2f");
+    changed |= dragRow("Hit Half X",   d.hitHalfX, 0.02f, 0.0f, 6.0f, "%.2f");
+    changed |= dragRow("Hit Half Y",   d.hitHalfY, 0.02f, 0.0f, 6.0f, "%.2f");
+    changed |= dragRow("Hit Half Z",   d.hitHalfZ, 0.02f, 0.0f, 6.0f, "%.2f");
 
     ImGui::Separator();
     changed |= ImGui::ColorEdit3("Colore", d.color.data());
 
     ImGui::Separator();
-    ImGui::TextDisabled("Fase B (19_Vehicles): hitbox a zone, attach point,\n"
-                        "armi di bordo, authoring spawn nel Map Editor.");
+    ImGui::TextDisabled("Fase B (19_Vehicles): hitbox a zone multiple, attach\n"
+                        "point, armi di bordo, AI alla guida.");
 
     ImGui::Separator();
     if (m_dirty) ImGui::TextColored({1.f,0.7f,0.2f,1.f}, "* Modifiche non salvate");

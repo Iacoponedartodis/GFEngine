@@ -370,10 +370,17 @@ void DefinitionRegistry::loadVehicles(const std::string& dir)
         v.turnRateDeg = getf(*j, "turn_rate_deg", 90.0f);
         v.meshPath    = gets(*j, "mesh");
         v.meshScale   = getf(*j, "mesh_scale", 1.0f);
+        v.meshRotX    = getf(*j, "mesh_rot_x", 0.0f);
         v.meshRotY    = getf(*j, "mesh_rot_y", 0.0f);
+        v.meshOffsetY = getf(*j, "mesh_offset_y", 0.0f);
         v.halfX       = getf(*j, "half_x", 0.7f);
         v.halfY       = getf(*j, "half_y", 0.5f);
         v.halfZ       = getf(*j, "half_z", 1.2f);
+        // Volume di danno (0 = usa il box di collisione)
+        v.hitOffsetY  = getf(*j, "hit_offset_y", 0.0f);
+        v.hitHalfX    = getf(*j, "hit_half_x", 0.0f);
+        v.hitHalfY    = getf(*j, "hit_half_y", 0.0f);
+        v.hitHalfZ    = getf(*j, "hit_half_z", 0.0f);
         if ((*j).contains("color") && (*j)["color"].size() >= 3)
             v.color = {(*j)["color"][0], (*j)["color"][1], (*j)["color"][2]};
         std::cout << "[Registry] Vehicle: " << v.id << "\n";

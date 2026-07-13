@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mini/ecs/Entity.hpp"   // EntityId (target cachato per il time-slicing)
+
 namespace mini { class Mesh; class Texture; }
 
 namespace mini
@@ -95,6 +97,12 @@ struct AiComponent
 
     AiState state     = AiState::Patrol;
     bool    goingToB  = true;
+
+    // ── Time-slicing sensing (Fase 4) ─────────────────────────────────
+    // La ricerca target O(N²) + LOS gira solo 1 tick su AI_SENSE_INTERVAL
+    // (scaglionata per entità); fra un sensing e l'altro l'AI riusa questo
+    // bersaglio cachato per mirare/muoversi. 0 = nessun bersaglio.
+    EntityId targetEntity = 0;
 };
 
 } // namespace mini

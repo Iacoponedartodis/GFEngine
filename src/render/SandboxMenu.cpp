@@ -1,4 +1,5 @@
 #include "mini/render/SandboxMenu.hpp"
+#include "mini/core/GameConfig.hpp"
 #include <SDL2/SDL.h>
 #include <algorithm>
 #include <cstdio>
@@ -75,8 +76,8 @@ SandboxMenu::Result SandboxMenu::handleKey(int sc)
             case 0: if (nMaps > 0)
                         m_mapSel = (m_mapSel + dir + nMaps) % nMaps;        break;
             case 1: simModeIndex = (simModeIndex + (dir > 0 ? 1 : 2)) % 3; break;
-            case 2: allyCount    = std::clamp(allyCount  + dir, 1, 10);    break;
-            case 3: enemyCount   = std::clamp(enemyCount + dir, 1, 10);    break;
+            case 2: allyCount    = std::clamp(allyCount  + dir, 1, config::MAX_AI_PER_TEAM); break;
+            case 3: enemyCount   = std::clamp(enemyCount + dir, 1, config::MAX_AI_PER_TEAM); break;
             case 4: team1Tickets = std::clamp(team1Tickets + dir, 1, 50);  break;
             case 5: team2Tickets = std::clamp(team2Tickets + dir, 1, 50);  break;
             case 6: respawnDelay = std::clamp(respawnDelay + (float)dir, 0.0f, 30.0f); break;

@@ -1,5 +1,6 @@
 #include "mini/render/PreMatchMenu.hpp"
 
+#include "mini/core/GameConfig.hpp"
 #include "mini/game/Weapon.hpp"
 #include <SDL2/SDL.h>
 #include <cstdio>
@@ -144,8 +145,8 @@ void PreMatchMenu::buildRows()
                           (float)(m_mapNamePtrs.size() - 1), m_mapNamePtrs.data()});
     m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"Vite nemici    (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
-    m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  10});
-    m_rows.push_back({"AI nemiche   (num unita team 2)", true,  &m_settings.team2AiCount, nullptr,   1,   0,  20});
+    m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  config::MAX_AI_PER_TEAM});
+    m_rows.push_back({"AI nemiche   (num unita team 2)", true,  &m_settings.team2AiCount, nullptr,   1,   0,  config::MAX_AI_PER_TEAM});
     m_rows.push_back({"HP giocatore",                    false, nullptr, &m_settings.playerHp,       25,  25, 500});
     m_rows.push_back({"Ritardo respawn (s)",             false, nullptr, &m_settings.respawnDelay, 0.5f, 0.5f, 30});
 }

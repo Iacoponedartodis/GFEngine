@@ -2,6 +2,311 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-13 (7) — Fase 4b ottimizzazione: cap LOS ai K vicini (invece della griglia spaziale)
+- **Finding che cambia la tecnica:** la griglia spaziale del piano rende solo se il raggio di
+  query << mondo. Qui `aggroRange` = `sight_range` ≈ **20 m** e la mappa è **50×40 m** → un
+  query 3×3 copre l'intera mappa: **una griglia non poterebbe nulla**. Verificato sui valori
+  reali. Il costo residuo è LOS-bound nella mischia densa (ogni AI fa `hasLineOfSight` per
+  ~ogni nemico in range ≈ N).
+- **Tecnica corretta (stesso obiettivo Fase 4b — eliminare l'O(N²)):** nella ricerca target
+  si raccolgono i **K = `config::AI_MAX_LOS_CHECKS` (8) bersagli più vicini** (solo distanze,
+  inserimento in array ordinato — flop economici) e si verifica il LOS solo su quei K, dal più
+  vicino: il primo visibile è il nearest visibile. Bounda la LOS costosa a **O(N·K)** invece
+  di O(N²). Stesso cap applicato alla passata shared-awareness. Comportamento: l'AI ingaggia
+  un nemico vicino visibile invece dello stretto-più-vicino globale — differenza impercettibile
+  (shared-awareness + ri-sensing compensano).
+- **Misura (probe temporanea, DEBUG, `World::tick`):**
+  | scala | baseline | +time-slice (4a) | +K-cap (4b) |
+  |---|---|---|---|
+  | 30 AI | ~23 ms* | — | **6.2 ms** |
+  | 100 AI | 203 ms | 55 ms | **36 ms** |
+  *stima da scaling quadratico. Totale a 100 AI: **203→36 ms ≈ 5.6×**; il residuo ora è
+  dominato dall'azione per-frame (collisione movimento), non più dalla sensing. In Release
+  (~5-20× più veloce) 30 AI ≈ 0.3-1.2 ms, 100 AI ≈ 2-7 ms.
+- **Build-verified**, warning-free. Smoke `--stress 50`: 300 `[Combat] Colpito!`, 0 crash;
+  sandbox normale 0 crash.
+- **Nota:** ulteriori guadagni verrebbero da una struttura spaziale per i COLLIDER (per
+  abbassare il costo di ogni singola `hasLineOfSight`/collisione movimento), non dalla griglia
+  delle entità. Non necessario per la scala reale del gioco (30-50 AI) — da fare solo se serve.
+## 2026-07-13 (6) — Fase 4a ottimizzazione: time-slicing della sensing AI
+- **Motivo (dati Fase 3):** l'AI è il 95-99% del tick e scala O(N²) (ricerca target + LOS).
+  Oltre ~20 AI il gioco lagga già sul PC dello sviluppatore.
+- **Cosa:** la sensing pesante (le due passate O(N²) — shared-awareness e ricerca nearest,
+  con `hasLineOfSight`) ora gira per ogni AI solo 1 tick su `config::AI_SENSE_INTERVAL`
+  (=6, ~10 Hz), **scaglionata per entità** (`(tickCount + entityId) % INTERVAL`). Fra un
+  sensing e l'altro l'AI riusa il bersaglio cachato (`AiComponent::targetEntity`) per
+  mirare/muoversi; movimento e sparo restano ogni tick. La morte del target è rilevata ogni
+  frame (getTransform); il **LOS è ri-verificato al momento dello sparo** (solo a cooldown
+  scaduto → economico) così non spara attraverso i muri col target cachato → nessuna
+  regressione di comportamento.
+- **Misura (probe temporanea, DEBUG, 100 AI = 50v50):**
+  | | prima | dopo | speedup |
+  |---|---|---|---|
+  | `AiSystem::update` | 202 ms | 54 ms | **3.7×** |
+  | `World::tick` | 203 ms | 55 ms | **3.7×** |
+  Non il 6× pieno perché il time-slicing taglia solo la sensing; il lavoro per-frame
+  (movimento+collisione, sparo) resta e ora domina il residuo.
+- **Build-verified**, warning-free. Smoke `--stress 50`: 287 `[Combat] Colpito!`, 0 crash;
+  sandbox normale 0 crash. Comportamento AI preservato.
+- **Prossimo (Fase 4b):** griglia spaziale per la sensing residua O(N²) → O(vicini): sui
+  tick di sensing ogni AI interroga solo le celle adiacenti invece di tutti i bersagli.
+  Attaccherebbe il residuo e permetterebbe di abbassare `AI_SENSE_INTERVAL` (più reattività).
+
+## 2026-07-13 (5) — Stress test AI: cap alzati + spawn a griglia + flag `--stress`
+- **Obiettivo:** poter profilare a scala con Tracy (Fase 3-4) — prima sim max 20 AI,
+  partita max 30.
+- **Cap unificato:** nuova `config::MAX_AI_PER_TEAM = 50`. Sostituisce i literal sparsi:
+  clamp SandboxMenu (era 10/10), slider PreMatch (erano 10/20), `std::min` ConquestMode
+  (erano 20 nemici / 10 alleati). Ora fino a 50 per team in sim e partita.
+- **Spawn scalabile:** `SandboxMode` usava una FILA singola (passo 3m) → con 50 unità si
+  estendeva ±73m fuori da una mappa larga 50m. Convertito a GRIGLIA (`perRow=10` +
+  `findFreeSpot`), come già faceva `ConquestMode::genPositions`. Resta nei limiti mappa.
+- **`--stress N` (CLI, main.cpp/Application::run):** forza sim + N (clampato a 50) AI per
+  team, headless. `GFEngine.exe --stress 50` → riproducibile per il profiling.
+- **Build-verified**, warning-free. Smoke `--stress 50`: **100 AI spawnati, 100 `[Combat]
+  Colpito!`, 0 crash**; sandbox normale (griglia) 0 errori.
+- **Misura iniziale (probe temporanea, build DEBUG non ottimizzata → valori pessimistici):**
+  | scala | World::tick | AiSystem::update | AI % |
+  |---|---|---|---|
+  | 20 AI | 10.5 ms | 10.0 ms | 95% |
+  | 100 AI | 203 ms | 202 ms | 99% |
+  L'AI è il collo di bottiglia (95-99% del tick) e scala **~quadraticamente** (5× unità →
+  ~19× costo → conferma O(N²) di ricerca target + LOS). La Release è ~5-20× più veloce
+  (assoluti molto più bassi) ma lo scaling quadratico è architetturale e resta.
+- **Conclusione dati:** la Fase 4 (time-slicing AI + griglia spaziale) è **giustificata** —
+  attacca direttamente ricerca target e LOS O(N²). Numero preciso di Release da rilevare con
+  la build RelWithDebInfo + Tracy (`--stress 50`) prima di tarare `UPDATE_RATE` / cella griglia.
+
+## 2026-07-13 (4) — Fase 3 ottimizzazione: layout dati SoA per la ricerca target AI
+- **Premessa del piano corretta (verificata sul codice live):** l'ECS NON usa
+  `shared_ptr<Entity>` polimorfici (la premessa della Fase 3); usa
+  `std::unordered_map<EntityId, Component>` per componente. La riscrittura totale a SoA
+  toccherebbe World + ogni accessor + ogni sistema + ogni game mode → alto rischio, non
+  giustificato senza misura. Ho quindi implementato l'approccio *additivo* che il piano
+  stesso prescrive (array flat PARALLELO, non sostituzione dello storage).
+- **Cosa:** `AiSystem::update` aveva due passate O(AI × bersagli) (shared-awareness + nearest)
+  che facevano `getTransform(tgt)` — hash lookup + pointer-chase su heap sparso — nel ciclo
+  interno per OGNI coppia. Ora id+posizione dei bersagli sono catturati UNA volta in array
+  SoA contigui (`team{1,2}Tgts` / `team{1,2}Pos`); i loop leggono `pos[i]` contiguo. Il
+  componente pesante viene recuperato SOLO per il nearest selezionato (`getTransform(nearest)`),
+  come da piano.
+- **Semantica:** la SELEZIONE del target ora usa posizioni a inizio-frame (snapshot coerente)
+  invece che parzialmente aggiornate da AI mosse prima nello stesso tick. Differenza sub-frame
+  (≤~5 cm a 60 Hz), impercettibile e più deterministica. Il puntamento/sparo effettivo usa
+  comunque un `getTransform(nearest)` FRESCO → nessun impatto sulla mira.
+- **Build-verified**, warning-free; smoke `--sim`: AI ingaggiano e si colpiscono
+  (`[Combat] Colpito!`), comportamento preservato. Il guadagno è a scala (40-50 AI, cfr.
+  Fase 4): elimina i lookup hash per-coppia; **misurabile con Tracy** (zona `AiSystem::update`).
+- **Non toccato:** broad-phase di `hasCollision` (altro loop caldo con lookup per-entità) —
+  sarà risolto in modo più fondamentale dalla griglia spaziale della Fase 4, che riuserà
+  questi array flat.
+
+## 2026-07-13 (3) — Fase 2 ottimizzazione: frame pacing (doppia precisione + cap di sicurezza)
+- **Contesto (verificato sul codice live):** l'accumulator a timestep fisso, il decoupling
+  sim/render e la VSync **esistono già** ed erano corretti. La Fase 2 quindi *migliora*
+  l'esistente, non riscrive.
+- **Timing in doppia precisione:** il main loop ora deriva il dt da
+  `SDL_GetPerformanceCounter`/`Frequency` in `double` con accumulatore `double`
+  (`SIMULATION_STEP = 1.0/60.0`), invece dell'accumulatore `float` su `std::chrono`. La
+  simulazione riceve comunque `fixedDt` (float, 1/60) invariato → gameplay identico. Elimina
+  il drift di accumulo su sessioni lunghe. Clamp anti spiral-of-death (0.25s) invariato.
+- **Frame-cap di sicurezza (`config::MAX_UNCAPPED_FPS = 300`):** attivo SOLO quando la VSync
+  è spenta (`SDL_GL_GetSwapInterval()==0`), con sleep IBRIDO (`SDL_Delay` grossolano +
+  busy-wait finale sub-ms) come da piano — lo Sleep di Windows ha risoluzione ~15ms. Con
+  VSync ON (default) è inerte (un check per frame). Evita il loop non limitato a migliaia di
+  FPS (100% CPU) se qualcuno imposta `WindowConfig.vsync=false`.
+- **Build-verified**, warning-free. Probe runtime: **59.98 tick/s su 3s = 60 Hz esatti**
+  (velocità di gioco preservata).
+- **NON fatto (proposto separatamente):** interpolazione di rendering (alpha =
+  accumulator/step). È il vero guadagno visivo su monitor ad alto refresh (sim 60 Hz renderizzata
+  a 144 Hz → micro-stutter delle entità AI/proiettili), ma è invasiva (richiede store
+  prev/current transform + gestione "snap" su respawn/teletrasporto). Il piano la marca
+  "optional"; da decidere se affrontarla.
+
+## 2026-07-13 (2) — Fix spawn giocatore incastrato nel pavimento (respawn "sospeso sopra un muro")
+- **Sintomo:** dopo una simulazione, al riavvio della sandbox il giocatore respawnava in
+  aria/sopra un muro e restava sospeso anche muovendosi.
+- **Causa radice (diagnosticata con probe collisione runtime):** lo spawn usava una Y fissa
+  hardcoded `SPAWN_Y=0.86` → piedi a y=0, ma il collider "Pavimento" di firebase ha il top a
+  y=0.1. Il giocatore nasceva **incastrato di 0.1 nel pavimento** → `hasCollision@spawn=true`
+  → `slideMoveWithStepUp` lo sollevava di un intero `STEP_HEIGHT` (~0.55) lanciandolo a occhi
+  1.42, poi la gravità lo riassestava. Su firebase il rimbalzo si auto-correggeva in ~0.4s;
+  con spawn adiacenti a geometria più alta la sospensione restava persistente. Il bug era su
+  **ogni** spawn/respawn, non solo dopo la sim (la sim lo rendeva evidente).
+- **Fix:** nuovo helper data-driven `mapquery::groundedSpawn` (MapQuery.hpp): sposta lo spawn
+  fuori dagli ostacoli (`findFreeSpot`) e mette la Y-occhi = `groundHeightAt + PLAYER_HALF_Y`,
+  cioè sul suolo reale della mappa. Usato in `SandboxMode::start` e `ConquestMode::start` al
+  posto di `SPAWN_Y` fisso (fallback al vecchio valore solo se manca la MapDef).
+- **Build-verified**; probe runtime: camY ora **stabile a 0.95 dal frame 0** al primo spawn e
+  dopo restart post-sim (prima: 0.86→1.42→assestamento). Warning-free.
+- **Nota latente (non toccata):** `slideMoveWithStepUp` solleva di un intero `STEP_HEIGHT`
+  anche per micro-compenetrazioni; con lo spawn ora corretto il trigger sparisce, ma la
+  correzione "a scatto" resta un candidato per il futuro sistema di collisioni accurate.
+
+## 2026-07-13 — Fase 1 ottimizzazione: integrazione profiler Tracy (ADR-015)
+- Aggiunto **Tracy `v0.11.1`** via FetchContent (tag pinnato) + opzione CMake
+  `USE_TRACY_PROFILER` (default **OFF**): build normali identiche e a costo zero (macro
+  no-op, TracyClient stub). Linkato **solo a GFEngine** (ADR-002).
+- Strumentazione: `FrameMark` a fine main loop; `ZoneScoped` in `World::tick`,
+  `AiSystem::update`, `CombatSystem::update`; `ZoneScopedN("render.drawScene")` nel
+  rendering. (Mappati sui nomi reali: `Application::tick/render` del piano non esistono —
+  il loop è un'unica `Application::run()`.)
+- Deviazione dal piano documentata in ADR-015: default esplicito OFF invece di "ON in
+  RelWithDebInfo" (generatore multi-config VS → `CMAKE_BUILD_TYPE` vuoto).
+- **Build-verified** entrambi i path (OFF e ON), 0 warning. Profiling reale: build
+  RelWithDebInfo con `-DUSE_TRACY_PROFILER=ON`. **Da verificare a mano:** cattura live con
+  Tracy GUI connessa. Fasi 2-4 (fixed-timestep, SoA, AI time-slice/spatial hash) NON ancora
+  toccate — in attesa di verifica.
+
+## 2026-07-11 (8) — Fix spike mouse al primo frame (controlli invertiti + arma flicker)
+- **Sintomo:** alla PRIMA apertura del sandbox i controlli sembravano invertiti e l'arma
+  spariva/riappariva; si "sistemava" dopo qualche secondo (coincidenza col cambio arma) e
+  non si riproduceva più. Causa: al primo `SDL_GetRelativeMouseState` dopo aver abilitato
+  la cattura, SDL restituisce il delta accumulato (spesso enorme) → la camera schizzava,
+  facendo percepire i comandi come invertiti e facendo oscillare il viewmodel dentro/fuori
+  vista (l'arma è agganciata alla camera).
+- Fix: `Window::setMouseCaptured(true)` ora svuota subito l'accumulatore relativo
+  (`SDL_PumpEvents` + `SDL_GetRelativeMouseState`), così il primo frame parte con delta 0.
+- Build compiler-warning-free; sandbox avvio pulito. **Da verificare a mano:** primo avvio
+  sandbox senza scatti di camera né flicker dell'arma.
+
+## 2026-07-11 (7) — Analisi profonda: bug trovati e risolti
+- **Mesh veicolo custom tinta col colore del box (bug visivo):** `spawnOne` moltiplicava
+  il modello texturato per `vd->color` (colore del box di fallback, es. rosso scuro dello
+  speeder) invece di bianco → il modello vero appariva tinto. Fix: tint BIANCO per mesh
+  custom, `vd->color` solo per il box.
+- **Mirino incoerente sui veicoli:** il crosshair usava una sfera di 0.7m per i veicoli
+  mentre i colpi usano tutto l'OBB del mezzo → il mirino non diventava rosso puntando la
+  carrozzeria dello speeder. Ora il mirino usa lo stesso volume di danno OBB (coerenza
+  mirino=colpi, come KI #13).
+- **Tinta blu al mount troppo forte:** copriva i colori del modello custom → ora è un
+  moltiplicatore leggero (il mezzo resta riconoscibile ma leggermente azzurro alla guida).
+- **Warning del compilatore azzerati:** HUD hitmarker (shadowing hr/hg/hb → mkR/mkG/mkB),
+  `respawnDelay` inutilizzato marcato, e C4996 (fopen/strncpy, deprecation MSVC di funzioni
+  standard) silenziati con `_CRT_SECURE_NO_WARNINGS` sui due target — così i warning REALI
+  restano visibili. Build compiler-warning-free (restano solo deprecation CMake da
+  SDL2/tinygltf, esterni).
+- **`assets/models/default.obj` creato** (cubo unitario): elimina l'errore di parsing
+  all'avvio. Resta il solo `default.png` mancante → fallback checkerboard (KI #14).
+- Verifica: build pulita, `--sim` regolare (veicoli, combat), editor ok.
+
+## 2026-07-11 (6) — Veicolo: "muro invisibile" (collisione non teneva conto dello yaw)
+- **Speeder bloccato dove c'era spazio:** la fisica tratta il box in movimento
+  come allineato agli assi del MONDO usando gli half LOCALI, senza ruotarlo per lo
+  yaw del veicolo. Per la fanteria (quasi cubica) è irrilevante, ma lo speeder è
+  lungo (halfZ 2.5 = 5m): guidando girato, i 5m di lunghezza restavano puntati lungo
+  l'asse Z del mondo invece che lungo il muso → collisioni fantasma ai lati.
+- Fix: VehicleDrive usa l'AABB AVVOLGENTE della sagoma ruotata
+  (`halfX*|cos|+halfZ*|sin|`, ecc.), esatto a 0/90° (marcia dritta lungo qualsiasi
+  corridoio) e conservativo in diagonale. Il veicolo-come-ostacolo era già corretto
+  (computeWorldAABB gestisce la rotazione); si sistemava solo il veicolo-in-movimento.
+- Nota: in diagonale il box è ancora l'AABB avvolgente (più grande dell'OBB reale a
+  45°); se serve più margine, ridurre `half_z` nel Vehicle Editor. Una collisione OBB
+  vera è un'estensione futura (Todo #23, forme oltre i box).
+- Build pulita; sandbox/sim ok. **Da verificare a mano:** guidare lo speeder nei
+  corridoi/aree dove prima si bloccava.
+
+## 2026-07-11 (5) — Guida veicolo: rotazione visiva disaccoppiata dalla marcia
+- **Correzione del (4):** il problema vero era AVANTI/INDIETRO (da cui dipendeva
+  anche destra/sinistra). Causa: `mesh_rot_y` (rotazione VISIVA del modello) veniva
+  bakizzato in `transform.ry`, che è anche la direzione di MARCIA. Ruotare il
+  modello ruotava insieme muso E guida → il muso restava disallineato dalla marcia
+  e non si poteva correggere (per questo il 180° "non cambiava nulla").
+- Fix: `transform.ry` del veicolo = SOLO direzione di marcia (`vs.ry`); la
+  correzione visiva del muso va in `MeshRendererComponent.yawOffsetDeg` (nuovo),
+  applicata al render senza toccare la fisica. Ora ruotare il modello nel Vehicle
+  Editor raddrizza il muso SENZA invertire la guida; W è sempre "avanti" (la camera
+  segue la marcia dal fix (4)).
+- Il valore `mesh_rot_y` che avevi messo ora agisce solo sul visivo: taralo nel
+  Vehicle Editor finché il muso punta nella direzione di marcia.
+- Build pulita; sandbox veicolo `[mesh]` ok. **Da verificare a mano:** guidando,
+  W va avanti (dove punta la camera) e il muso del modello è allineato dopo aver
+  regolato mesh_rot_y.
+
+## 2026-07-11 (4) — Guida veicolo: sterzo non più invertito + scan progetto
+- **Sterzo speeder "invertito":** in prima persona la camera restava orientata
+  col MOUSE mentre il veicolo sterzava, quindi "destra/sinistra" erano relativi
+  allo sguardo e non al mezzo → sembravano invertiti (e ruotare il modello 180°
+  non cambiava nulla, perché è la camera il problema). Fix: alla guida la camera
+  segue SEMPRE la direzione di marcia (anche in prima persona: `lookAt(pos+fwd)`);
+  il mouse-look è sospeso durante la guida. Ora A = sinistra, D = destra, coerenti.
+  (Lo sterzo era già corretto matematicamente per una camera che segue.)
+- **Diagnostica viewmodel rimossa** (aveva confermato che le armi renderizzano).
+- **Scan progetto:** `--sim` 40s = 43 hit / 4 kill / 9 roll / 4 veicoli, nessun
+  errore, AI che cicla patrol/alert/hunt/search; sandbox + editor avviano puliti.
+  Unico avviso residuo: `assets/textures/default.png` mancante → fallback
+  checkerboard (cosmetico, KI #14). Build pulita.
+- **Da verificare a mano:** guida speeder in prima e terza persona, sterzo
+  corretto in entrambe.
+
+## 2026-07-11 (3) — Armi in mano: anteprima editor = gioco (fix orientamento)
+- **Bug: l'arma sistemata dritta nell'Entity Editor appariva storta in gioco**, di
+  un angolo diverso per ogni arma. Causa: il runtime (`weaponattach::resolve`)
+  applicava la correzione canonica dell'arma (`mesh_rot_y`), ma l'ANTEPRIMA
+  dell'Entity Editor NON la applicava → si tarava la posa senza quella correzione,
+  e in gioco si aggiungeva. L'angolo variava perché `mesh_rot_y` differisce per arma
+  (DC-15A -180, ecc.).
+- Fix: entrambi ora applicano la STESSA `baseFix` = `rotate(mesh_rot_y) *
+  rotate(mesh_rot_x)` nello stesso punto della catena
+  (`... R(pose) * scale * baseFix * T(-grip)`); il runtime ora include anche
+  `mesh_rot_x` (prima solo Y). L'Entity Editor legge `mesh_rot_x/y` dell'arma e le
+  usa nell'anteprima in mano.
+- Effetto: ciò che è dritto nell'Entity Editor è dritto in sandbox/partita. Le pose
+  già tarate vanno riviste UNA volta (l'anteprima ora è fedele al gioco), poi
+  restano coerenti.
+- Build pulita; smoke engine + editor ok. **Da verificare a mano:** dritta un'arma
+  in mano nell'Entity Editor → dritta in sandbox, per armi con mesh_rot diversi.
+
+## 2026-07-11 (2) — Fix editor: arma entità, scritte tagliate, box veicolo, tab armi
+- **Arma dell'entità che non cambiava in gioco (bug):** l'arma in mano usava
+  `weapon_display.id` (campo separato), mentre l'utente cambiava il loadout
+  `weapons[]` — restavano disallineati (B1 Heavy: loadout E-5C ma display E-5).
+  Fix: l'in-hand ora è l'arma PRIMARIA del loadout (`weaponattach` usa
+  `primaryWeaponId()`; `weapon_display` dà solo la POSA). EntityEditor: il combo
+  "Arma primaria" ora scrive `weapons[0]` (e l'anteprima parte da lì), quindi
+  cambiare/togliere l'arma si riflette subito. Sistema anche i dati esistenti
+  senza ri-salvare.
+- **Scritte tagliate negli editor:** causa = `DragFloat(label)` a piena larghezza
+  disegna l'etichetta a destra, fuori dal pannello. Nuovo helper
+  `editor::ui::dragRow` (etichetta a SINISTRA, campo che riempie il resto: mai
+  tagliata). Applicato ai stat del Weapon Editor e a tutto il Vehicle Editor.
+- **Box veicolo confusi:** collisione (ora CIANO) e danno (GIALLO) hanno colori
+  base brillanti e distinti (niente più highlight che li sbiadiva uguali); le
+  sezioni proprietà sono colorate in tinta col box. Confermato che gli slider
+  scrivono i campi giusti (nessuno scambio).
+- **Altezza speeder:** controllo rinominato "Altezza mesh (su/giu)" con hint
+  ("troppo alto? valori negativi"); i modelli con origine alla base vanno abbassati
+  qui. Nuovi campi veicolo `mesh_rot_x`/`mesh_offset_y` esposti nell'editor.
+- **Balance Editor: rimossa la tab "Armi"** (l'utente l'ha chiesto): due UI sugli
+  stessi file senza live-sync creavano confusione. Il Weapon Editor (con viewport
+  3D) è l'unico strumento armi. Le altre tab (AI/Mappe/Personaggio/Abilità) restano.
+- Build pulita; smoke engine (veicolo `[mesh]`) + editor ok. **Da verificare a
+  mano:** B1 Heavy con E-5C in mano; scritte leggibili ovunque nell'editor; i due
+  box veicolo distinti (ciano/giallo); abbassare lo speeder con "Altezza mesh".
+
+## 2026-07-11 — Veicoli: mesh custom renderizzata + hitbox di danno separata
+- **BUG "lo speeder non si vede": i veicoli non caricavano MAI la mesh custom** —
+  la cache mesh popolava solo enemies/allies/weapons, e `vehiclespawn::spawnOne`
+  usava sempre il box di fallback. Fix: (a) Application carica anche le mesh dei
+  veicoli nel cache; (b) `spawnOne` accetta il `MeshCache` e usa la mesh vera con
+  `mesh_scale/mesh_rot_x/mesh_rot_y/mesh_offset_y`, box solo come fallback.
+  Log spawn ora marca `[mesh]`/`[box]`. Verificato: speeder `[mesh]` in gioco.
+- **Hitbox di danno del veicolo, separata dalla collisione** (richiesta utente): il
+  box di collisione deve raggiungere il suolo per guidare, ma i colpi allo spazio
+  VUOTO sotto un mezzo che fluttua non devono contare. `VehicleDef` +
+  `VehicleComponent` hanno ora `hit_offset_y` + `hit_half_x/y/z` (0 = usa la
+  collisione); CombatSystem `segmentHitsVehicle` usa questo volume. BARC Speeder
+  tarato (offset 0.25, half_y 0.35) per escludere il gap sotto.
+- **VehicleEditor**: aggiunti Rot X, Offset Y e la sezione "Volume di DANNO"; il
+  viewport mostra DUE wireframe (collisione grigia + danno gialla) sovrapposti alla
+  mesh, così il box di danno si tara a vista.
+- **Armi: verificato che RENDERIZZANO** (diagnostica temporanea `viewmodel: ...
+  cache=OK`): il viewmodel del giocatore e l'arma in mano alle AI disegnano la mesh.
+  Se un'arma appare orientata male è tuning di `mesh_rot_y`, non un bug di rendering.
+- Build pulita; smoke engine `[mesh]`+viewmodel OK, editor carica lo speeder GLB.
+  **Da verificare a mano:** speeder visibile in sandbox/partita; box di danno giallo
+  allineato al corpo nel Vehicle Editor; taratura fine di hit_offset_y sullo speeder.
+
 ## 2026-07-10 (28) — Rifinitura robustezza, tranche 2 (residuo A7, A9, arma attiva)
 - **Arma attiva consolidata** (radice del KI #22): rimosso il membro-copia
   `PlayerController::weapon`; l'arma attiva è ora SEMPRE `weapons[activeWeapon]` via

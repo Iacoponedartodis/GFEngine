@@ -56,7 +56,7 @@
     "texture": "",
     "weapon_display": {
         "hand": "right_hand",
-        "id": "E5 Blaster Rifle",
+        "id": "E-5C Heavy Blaster",
         "offset": [
             0.0,
             0.0,
@@ -67,7 +67,7 @@
             90.0,
             0.0
         ],
-        "scale": 1.0
+        "scale": 0.001500000013038516
     },
     "weapons": [
         "E-5C Heavy Blaster"

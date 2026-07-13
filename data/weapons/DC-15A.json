@@ -1,4 +1,16 @@
 {
+    "attach_points": {
+        "muzzle": [
+            1.9399850368499756,
+            0.08828737586736679,
+            -1.69598862953535e-07
+        ],
+        "right_hand": [
+            -1.0134360790252686,
+            -0.1817878931760788,
+            8.859740319167031e-08
+        ]
+    },
     "bullet_color": [
         0.30000001192092896,
         0.6499999761581421,
@@ -6,14 +18,17 @@
     ],
     "bullet_lifetime": 3.0,
     "bullet_scale": 0.10000000149011612,
-    "bullet_speed": 55.0,
+    "bullet_speed": 70.0,
     "cooldown_rate": 0.30000001192092896,
     "damage": 20.0,
     "effective_range": 18.0,
     "faction": "republic",
     "fire_rate": 8.0,
     "heat_per_shot": 0.27000001072883606,
-    "mesh": "",
+    "mesh": "assets/models/weapons/star_wars_dc-15a.glb",
+    "mesh_rot_x": 0.0,
+    "mesh_rot_y": -180.0,
+    "mesh_scale": 0.3499999940395355,
     "min_range": 0.0,
     "name": "DC-15A",
     "overheat_penalty": 2.0,

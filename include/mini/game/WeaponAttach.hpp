@@ -29,9 +29,12 @@ inline Resolved resolve(const DefinitionRegistry* registry,
     Resolved out;
     if (!registry || !meshCache || !def) return out;
 
-    // Arma da mostrare: weapon_display.id, fallback arma primaria
-    std::string weaponId = def->weaponDisplay.weaponId;
-    if (weaponId.empty()) weaponId = def->primaryWeaponId();
+    // Arma in mano = arma PRIMARIA del loadout (weapons[0]); weapon_display
+    // fornisce solo la POSA. Prima il weapon_display.id vinceva sul loadout,
+    // così cambiare l'arma dell'entità non aggiornava il modello in mano
+    // (bug 2026-07-11: B1 Heavy con loadout E-5C ma display E-5).
+    std::string weaponId = def->primaryWeaponId();
+    if (weaponId.empty()) weaponId = def->weaponDisplay.weaponId;
     if (weaponId.empty()) return out;
 
     const WeaponDef* wd = registry->getWeapon(weaponId);
@@ -63,11 +66,13 @@ inline Resolved resolve(const DefinitionRegistry* registry,
     const float charScale = (def->meshScale > 0.0001f) ? def->meshScale : 1.0f;
     const float effScale  = disp.scale / charScale;
 
-    // mesh_rot_y del WeaponDef: raddrizzamento base del GLB attorno al grip
-    // (0 per le armi esistenti = invariato; la POSA resta in weapon_display)
-    glm::mat4 baseFix(1.0f);
-    if (wd->meshRotY != 0.0f)
-        baseFix = glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotY), {0,1,0});
+    // Correzione canonica dell'arma (mesh_rot_x/y del WeaponDef): stessa
+    // orientazione base che il Weapon Editor applica al modello grezzo
+    // (rotY * rotX). La POSA in mano resta in weapon_display.rot.
+    // DEVE combaciare con EntityEditor::updateWeaponTransform (anteprima).
+    const glm::mat4 baseFix =
+          glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotY), {0,1,0})
+        * glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotX), {1,0,0});
 
     out.local = glm::translate(glm::mat4(1.0f), hand + off)
               * R

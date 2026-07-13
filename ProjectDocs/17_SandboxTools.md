@@ -47,3 +47,13 @@ in meno di un minuto, senza riavviare il processo e senza leggere file di log es
 - `Ui2D` (già usata da tutti i menu), `MatchSettings` (team1/2AiCount, playerHp già
   esistenti), factory `createGameMode` (ADR-008) per la simulazione, telemetria
   (ADR-013) — la log chat NON sostituisce il file, lo affianca.
+
+## Stress test / profiling (Fase 3-4 ottimizzazione)
+- Cap AI per team alzato a `config::MAX_AI_PER_TEAM` (=50) in sim e partita: slider
+  SandboxMenu/PreMatch, clamp ConquestMode. Lo spawn resta nei limiti mappa (griglia
+  `perRow` + `findFreeSpot`), non più fila singola.
+- **`--stress N`** (CLI): forza sim AI-vs-AI con N (clampato a 50) AI per team, headless.
+  Uso tipico per profilare a scala:
+  `cmake -S . -B build/reldbg -DUSE_TRACY_PROFILER=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo`,
+  build, poi `GFEngine.exe --stress 50` con il Tracy profiler GUI connesso a 127.0.0.1
+  → zone `World::tick`/`AiSystem::update`/`CombatSystem::update` (ADR-015).

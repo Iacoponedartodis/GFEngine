@@ -211,10 +211,18 @@ struct VehicleDef
     float accel       = 10.0f;   // m/s^2
     float turnRateDeg = 90.0f;   // gradi/s a piena sterzata
     std::string meshPath;        // vuoto = box di fallback
-    float meshScale = 1.0f;
-    float meshRotY  = 0.0f;
-    // Collisione a box (Todo #23 per forme più ricche)
+    float meshScale  = 1.0f;
+    float meshRotX   = 0.0f;
+    float meshRotY   = 0.0f;
+    float meshOffsetY = 0.0f;    // alza/abbassa la mesh (i GLB hanno base a Y=0)
+    // Collisione a box: raggiunge il suolo per la guida (Todo #23 forme ricche)
     float halfX = 0.7f, halfY = 0.5f, halfZ = 1.2f;
+    // Volume di DANNO (19_Vehicles Fase B): separato dalla collisione, così
+    // lo spazio vuoto sotto uno speeder che fluttua non conta come bersaglio.
+    // 0 = usa il box di collisione (retrocompatibile). offset rispetto al
+    // centro fisico (= gy + halfY).
+    float hitOffsetY = 0.0f;
+    float hitHalfX = 0.0f, hitHalfY = 0.0f, hitHalfZ = 0.0f;
     std::array<float,3> color = {0.55f, 0.55f, 0.60f};
 };
 

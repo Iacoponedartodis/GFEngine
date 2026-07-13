@@ -1,11 +1,24 @@
 {
-    "name": "BARC Speeder",
+    "accel": 12.0,
+    "color": [
+        0.38725489377975464,
+        0.38725489377975464,
+        0.38725489377975464
+    ],
+    "half_x": 0.4000000059604645,
+    "half_y": 0.44999998807907104,
+    "half_z": 2.5,
+    "hit_half_x": 0.4000000059604645,
+    "hit_half_y": 0.3499999940395355,
+    "hit_half_z": 2.5,
+    "hit_offset_y": 0.4000000059604645,
     "hp": 120.0,
     "max_speed": 16.0,
-    "accel": 12.0,
-    "turn_rate_deg": 110.0,
-    "half_x": 0.5,
-    "half_y": 0.55,
-    "half_z": 1.3,
-    "color": [0.45, 0.15, 0.12]
+    "mesh": "C:\\Users\\HP\\Desktop\\iacopo\\GFProject\\GFEngine\\assets\\models\\vehicles\\star_wars_battlefront_2_-_barc_speeder.glb",
+    "mesh_offset_y": -0.5,
+    "mesh_rot_x": 0.0,
+    "mesh_rot_y": 180.0,
+    "mesh_scale": 1.0,
+    "name": "BARC Speeder",
+    "turn_rate_deg": 110.0
 }

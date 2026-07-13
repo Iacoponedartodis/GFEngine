@@ -664,9 +664,9 @@ void WeaponEditor::drawStatsTab(float panelW)
     ImGui::Separator();
     ImGui::TextDisabled("Combattimento");
 
+    // Etichetta a sinistra (non tagliata) + campo che riempie il resto.
     auto drag = [&](const char* label, float& v, float lo, float hi, const char* fmt = "%.2f") {
-        ImGui::SetNextItemWidth(slW);
-        if (ImGui::DragFloat(label, &v, (hi-lo)*0.005f, lo, hi, fmt)) changed = true;
+        if (editor::ui::dragRow(label, v, (hi-lo)*0.005f, lo, hi, fmt)) changed = true;
     };
 
     drag("Danno##dmg",        w.damage,          1.f, 500.f);

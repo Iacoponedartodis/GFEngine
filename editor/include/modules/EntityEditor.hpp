@@ -100,6 +100,11 @@ private:
     std::string m_weaponId;                 // arma mostrata ("" = nessuna)
     std::string m_weaponMeshPath;           // mesh dell'arma (campo "assets/...")
     glm::vec3   m_weaponGrip   = {0,0,0};    // attach "right_hand" dell'arma
+    // Correzione canonica dell'arma (mesh_rot_x/y del WeaponDef): l'anteprima
+    // in mano DEVE applicarla come il runtime, altrimenti l'arma appare storta
+    // in gioco rispetto all'editor.
+    float       m_weaponBaseRotX = 0.0f;
+    float       m_weaponBaseRotY = 0.0f;
     float       m_weaponScale  = 1.0f;
     glm::vec3   m_weaponRot    = {0,0,0};    // euler gradi
     glm::vec3   m_weaponOffset = {0,0,0};    // offset fine rispetto alla mano

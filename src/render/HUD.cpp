@@ -173,12 +173,12 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
             if (m_hitTimer > 0.0f)
             {
                 const float d = 9.0f, s = 4.0f;
-                float hr = 1.0f, hg = 0.85f, hb = 0.25f;
-                if (m_hitWasKill) { hg = 0.2f; hb = 0.15f; }
-                m_ui.rect(cx-d-s, cy-d-s, s, s, hr, hg, hb);
-                m_ui.rect(cx+d,   cy-d-s, s, s, hr, hg, hb);
-                m_ui.rect(cx-d-s, cy+d,   s, s, hr, hg, hb);
-                m_ui.rect(cx+d,   cy+d,   s, s, hr, hg, hb);
+                float mkR = 1.0f, mkG = 0.85f, mkB = 0.25f;
+                if (m_hitWasKill) { mkG = 0.2f; mkB = 0.15f; }
+                m_ui.rect(cx-d-s, cy-d-s, s, s, mkR, mkG, mkB);
+                m_ui.rect(cx+d,   cy-d-s, s, s, mkR, mkG, mkB);
+                m_ui.rect(cx-d-s, cy+d,   s, s, mkR, mkG, mkB);
+                m_ui.rect(cx+d,   cy+d,   s, s, mkR, mkG, mkB);
             }
         }
 

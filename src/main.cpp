@@ -1,5 +1,6 @@
 #include "mini/core/Application.hpp"
 #include <cstring>
+#include <cstdlib>
 
 int main(int argc, char* argv[])
 {
@@ -7,6 +8,7 @@ int main(int argc, char* argv[])
     bool sandbox        = false;
     bool autoSim        = false;
     std::string mapOverride;
+    int  stressAiCount  = 0;   // --stress N: N AI per team nel sim (profiling)
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--direct-prematch") == 0)
@@ -17,9 +19,14 @@ int main(int argc, char* argv[])
         { sandbox = true; autoSim = true; }
         else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc)
             mapOverride = argv[++i];   // mappa iniziale (test/debug, R3)
+        else if (std::strcmp(argv[i], "--stress") == 0 && i + 1 < argc)
+        {   // stress test AI: forza sim + N AI per team (per profilare con Tracy)
+            sandbox = true; autoSim = true;
+            stressAiCount = std::atoi(argv[++i]);
+        }
     }
 
     mini::Application app;
-    app.run(directPreMatch, sandbox, autoSim, mapOverride);
+    app.run(directPreMatch, sandbox, autoSim, mapOverride, stressAiCount);
     return 0;
 }

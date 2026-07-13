@@ -112,6 +112,15 @@ void Window::setMouseCaptured(bool captured)
 {
     m_mouseCaptured = captured;
     SDL_SetRelativeMouseMode(captured ? SDL_TRUE : SDL_FALSE);
+    if (captured)
+    {
+        // Svuota il delta relativo accumulato: al primo frame dopo la cattura
+        // SDL restituisce spesso uno spike enorme → la camera schizzava e il
+        // viewmodel oscillava fuori vista ("arma che sparisce/riappare"),
+        // controlli percepiti come invertiti al primo avvio del sandbox.
+        SDL_PumpEvents();
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+    }
     telemetry::logTrace(std::string("mouse ") + (captured ? "catturato" : "libero"));
     std::cout << "[Window] Mouse " << (captured ? "catturato (FPS)" : "libero") << std::endl;
 }

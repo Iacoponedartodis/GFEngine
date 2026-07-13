@@ -434,6 +434,7 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
 bool PlayerController::updateRespawn(World& world, Camera& cam,
                                       float respawnDelay, const glm::vec3& spawnPos, float maxHp)
 {
+    (void)respawnDelay;   // il ritardo è già scalato dal chiamante (Application)
     respawnTimer = -1.0f;
     isDead       = false;
     isCrouching  = false;

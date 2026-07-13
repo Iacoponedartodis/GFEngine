@@ -1,4 +1,16 @@
 {
+    "attach_points": {
+        "muzzle": [
+            4.0391584521515256e-10,
+            -0.0003534461429808289,
+            -0.00924051646143198
+        ],
+        "right_hand": [
+            -3.8081723885419194e-10,
+            0.0,
+            0.008712084963917732
+        ]
+    },
     "bullet_color": [
         0.30000001192092896,
         0.6499999761581421,
@@ -6,15 +18,17 @@
     ],
     "bullet_lifetime": 3.0,
     "bullet_scale": 0.05000000074505806,
-    "bullet_speed": 24.0,
+    "bullet_speed": 70.0,
     "cooldown_rate": 0.30000001192092896,
     "damage": 15.0,
     "effective_range": 18.0,
     "faction": "republic",
-    "fire_rate": 10.0,
-    "heat_per_shot": 0.75,
-    "id": "Z-6 Rotary Blaster",
-    "mesh": "",
+    "fire_rate": 12.0,
+    "heat_per_shot": 0.10000000149011612,
+    "mesh": "assets/models/weapons/cannon_blaster_rotatif_z-6_star_wars_clone_wars.glb",
+    "mesh_rot_x": 0.0,
+    "mesh_rot_y": 90.0,
+    "mesh_scale": 70.0,
     "min_range": 0.0,
     "name": "Z-6 Rotary Blaster",
     "overheat_penalty": 2.0,

@@ -6,6 +6,7 @@
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
 
+#include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
@@ -140,7 +141,9 @@ static void pickSearchPoint(AiComponent& ai, float x, float z)
 
 void AiSystem::update(World& world, float dt)
 {
+    ZoneScoped;   // ADR-015: AI update loop
     const std::vector<EntityId> snap = world.getEntities();
+    const std::uint64_t tick = world.getTickCount();   // time-slicing (Fase 4)
 
     // Heartbeat diagnostico (ogni ~10s a 60Hz): quante AI e in che stato.
     // Rende osservabile da telemetria il sintomo "AI ferme".
@@ -168,14 +171,23 @@ void AiSystem::update(World& world, float dt)
             + ", fermi " + std::to_string(stat) + ")");
     }
 
-    // ── Raccogli bersagli per team ───────────────────────────────────
-    std::vector<EntityId> team1Tgts, team2Tgts;
+    // ── Raccogli bersagli per team (SoA flat, Fase 3) ────────────────
+    // id + posizione catturati UNA volta in array contigui paralleli. I loop
+    // di ricerca del nearest (sotto, O(AI x bersagli)) leggono team*Pos[i]
+    // contiguo invece di fare un getTransform(tgt) — un lookup hash +
+    // pointer-chase su heap sparso — per ogni coppia. Il componente pesante
+    // viene recuperato SOLO per il bersaglio selezionato (getTransform(nearest)).
+    std::vector<EntityId>  team1Tgts, team2Tgts;
+    std::vector<glm::vec3> team1Pos,  team2Pos;
     for (EntityId e : snap)
     {
         const auto* tm = world.getTeam(e);
         if (!tm || world.getBullet(e)) continue;
-        if (tm->teamId == 1) team1Tgts.push_back(e);
-        else if (tm->teamId == 2) team2Tgts.push_back(e);
+        const auto* et = world.getTransform(e);
+        if (!et) continue;   // senza transform non può essere un bersaglio valido
+        const glm::vec3 p = {et->x, et->y, et->z};
+        if (tm->teamId == 1)      { team1Tgts.push_back(e); team1Pos.push_back(p); }
+        else if (tm->teamId == 2) { team2Tgts.push_back(e); team2Pos.push_back(p); }
     }
 
     // ── SHARED AWARENESS: se un qualsiasi nemico vede un bersaglio,
@@ -187,27 +199,32 @@ void AiSystem::update(World& world, float dt)
     for (EntityId e : snap)
     {
         auto* ai   = world.getAi(e);   if (!ai) continue;
+        // Time-slicing (Fase 4): solo gli AI schedulati questo tick fanno la
+        // scansione LOS O(N²). Scaglionati per entità → ~1/AI_SENSE_INTERVAL
+        // contribuiscono per tick, ma su INTERVAL tick contribuiscono tutti.
+        if ((tick + e) % config::AI_SENSE_INTERVAL != 0) continue;
         auto* et   = world.getTransform(e);
         auto* team = world.getTeam(e);
         if (!et || !team) continue;
 
         const int myTeam = team->teamId;
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
+        const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
         const glm::vec3 ePos = {et->x, et->y, et->z};
 
-        for (EntityId tgt : targets)
+        int losChecks = 0;
+        for (size_t i = 0; i < targets.size(); ++i)
         {
-            if (tgt == e) continue;
-            const auto* tt = world.getTransform(tgt);
-            if (!tt) continue;
-            const glm::vec3 tp = {tt->x, tt->y, tt->z};
+            if (targets[i] == e) continue;
+            const glm::vec3& tp = tgtPos[i];   // contiguo, niente hash lookup
             float d2 = (tp.x-ePos.x)*(tp.x-ePos.x)+(tp.y-ePos.y)*(tp.y-ePos.y)+(tp.z-ePos.z)*(tp.z-ePos.z);
             if (d2 >= ai->aggroRange * ai->aggroRange) continue;
+            if (++losChecks > config::AI_MAX_LOS_CHECKS) break;   // Fase 4b: bounda la LOS
             if (!physics::hasLineOfSight(ePos, tp, world)) continue;
 
             // Qualcuno del myTeam ha visto un bersaglio!
-            if (myTeam == 2) { sharedKnownX_t2 = tt->x; sharedKnownZ_t2 = tt->z; hasShared_t2 = true; }
-            else             { sharedKnownX_t1 = tt->x; sharedKnownZ_t1 = tt->z; hasShared_t1 = true; }
+            if (myTeam == 2) { sharedKnownX_t2 = tp.x; sharedKnownZ_t2 = tp.z; hasShared_t2 = true; }
+            else             { sharedKnownX_t1 = tp.x; sharedKnownZ_t1 = tp.z; hasShared_t1 = true; }
             break;
         }
     }
@@ -222,6 +239,7 @@ void AiSystem::update(World& world, float dt)
 
         const int myTeam = team->teamId;
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
+        const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
         const glm::vec3 ePos = {et->x, et->y, et->z};
 
         // Shared awareness: aggiorna lastKnown da chiunque nel team
@@ -237,18 +255,44 @@ void AiSystem::update(World& world, float dt)
         }
 
         // ── Bersaglio con LOS (questo specifico AI) ──────────────────
-        EntityId nearest = 0;
-        float minD2 = ai->aggroRange * ai->aggroRange;
-        for (EntityId tgt : targets)
+        // Time-slicing (Fase 4): la ricerca O(bersagli)+LOS gira solo nel tick
+        // schedulato per questa entità; negli altri tick si riusa il bersaglio
+        // cachato. La morte del target è comunque rilevata ogni frame (sotto,
+        // getTransform); il LOS è ri-verificato al momento dello sparo.
+        EntityId nearest;
+        if ((tick + e) % config::AI_SENSE_INTERVAL == 0)
         {
-            if (tgt == e) continue;
-            const auto* tt = world.getTransform(tgt);
-            if (!tt) continue;
-            const glm::vec3 tp = {tt->x, tt->y, tt->z};
-            float d2 = (tp.x-ePos.x)*(tp.x-ePos.x)+(tp.y-ePos.y)*(tp.y-ePos.y)+(tp.z-ePos.z)*(tp.z-ePos.z);
-            if (d2 >= minD2) continue;
-            if (!physics::hasLineOfSight(ePos, tp, world)) continue;
-            minD2 = d2; nearest = tgt;
+            // Fase 4b: raccogli i K bersagli PIÙ VICINI in range (solo distanze,
+            // niente LOS — inserimento in array ordinato, flop economici), poi
+            // verifica il LOS solo su questi K dal più vicino: il primo visibile
+            // è il nearest visibile. Bounda la LOS costosa a K per AI → la
+            // sensing passa da O(N²) a O(N·K) senza griglia spaziale (inutile
+            // qui: aggro ~ dimensione mappa).
+            constexpr int K = config::AI_MAX_LOS_CHECKS;
+            int   kIdx[K]; float kD2[K]; int kn = 0;
+            const float aggro2 = ai->aggroRange * ai->aggroRange;
+            for (size_t i = 0; i < targets.size(); ++i)
+            {
+                if (targets[i] == e) continue;
+                const glm::vec3& tp = tgtPos[i];   // contiguo, niente hash lookup
+                const float d2 = (tp.x-ePos.x)*(tp.x-ePos.x)+(tp.y-ePos.y)*(tp.y-ePos.y)+(tp.z-ePos.z)*(tp.z-ePos.z);
+                if (d2 >= aggro2) continue;
+                if (kn == K && d2 >= kD2[K-1]) continue;   // più lontano dei K correnti
+                int pos = (kn < K) ? kn : K - 1;           // inserimento ordinato
+                while (pos > 0 && kD2[pos-1] > d2)
+                { kD2[pos] = kD2[pos-1]; kIdx[pos] = kIdx[pos-1]; --pos; }
+                kD2[pos] = d2; kIdx[pos] = (int)i;
+                if (kn < K) ++kn;
+            }
+            nearest = 0;
+            for (int j = 0; j < kn; ++j)
+                if (physics::hasLineOfSight(ePos, tgtPos[kIdx[j]], world))
+                { nearest = targets[kIdx[j]]; break; }
+            ai->targetEntity = nearest;   // cache per i tick non-sensing
+        }
+        else
+        {
+            nearest = ai->targetEntity;   // riusa il bersaglio cachato
         }
 
         // ── Transizioni stato ────────────────────────────────────────
@@ -559,6 +603,12 @@ void AiSystem::update(World& world, float dt)
 
         const auto* tt = world.getTransform(nearest);
         if (!tt) continue;
+        // Il bersaglio è cachato per più frame (time-slicing): ri-verifica il
+        // LOS al tiro, così non spara attraverso i muri se nel frattempo si è
+        // coperto. Costa un LOS solo quando il cooldown è scaduto (raro), non
+        // ogni frame → economico anche a scala.
+        if (!physics::hasLineOfSight({et->x, et->y, et->z},
+                                     {tt->x, tt->y, tt->z}, world)) continue;
         float dx = tt->x-et->x, dy = tt->y-et->y, dz = tt->z-et->z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;

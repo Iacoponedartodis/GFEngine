@@ -310,8 +310,9 @@ void EntityEditor::selectEntry(int idx)
     m_hitboxZones    = e.hitboxZones;
     m_selZone        = -1;
 
-    // Stato arma in mano
-    m_weaponId       = e.dispWeaponId;
+    // Arma in mano = arma PRIMARIA del loadout (weapons[0]); il display id
+    // legacy è solo un fallback. Così l'anteprima combacia col runtime.
+    m_weaponId       = !e.weaponIds.empty() ? e.weaponIds[0] : e.dispWeaponId;
     m_weaponScale    = e.dispWeaponScale;
     m_weaponRot      = e.dispWeaponRot;
     m_weaponOffset   = e.dispWeaponOffset;
@@ -412,6 +413,9 @@ void EntityEditor::loadWeaponPreview()
     json j; try { f >> j; } catch (...) { return; }
 
     m_weaponMeshPath = j.value("mesh", std::string(""));
+    // Correzione canonica dell'arma (come il runtime weaponattach)
+    m_weaponBaseRotX = j.value("mesh_rot_x", 0.0f);
+    m_weaponBaseRotY = j.value("mesh_rot_y", 0.0f);
     if (j.contains("attach_points") && j["attach_points"].is_object())
     {
         auto& ap = j["attach_points"];
@@ -447,10 +451,18 @@ void EntityEditor::updateWeaponTransform()
     const float charScale = (m_scale > 0.0001f) ? m_scale : 1.0f;
     const float effScale  = m_weaponScale / charScale;
 
+    // Correzione canonica dell'arma (mesh_rot_x/y del WeaponDef) — IDENTICA
+    // a WeaponAttach::resolve nel runtime, altrimenti l'anteprima non combacia
+    // col gioco.
+    const glm::mat4 baseFix =
+          glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponBaseRotY), {0,1,0})
+        * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponBaseRotX), {1,0,0});
+
     // Porta il grip dell'arma sulla mano, poi applica rotazione/scala/offset.
     glm::mat4 local = glm::translate(glm::mat4(1.0f), hand + m_weaponOffset)
                     * R
                     * glm::scale(glm::mat4(1.0f), glm::vec3(effScale))
+                    * baseFix
                     * glm::translate(glm::mat4(1.0f), -m_weaponGrip);
 
     m_viewport.setAttachmentModel(abs, M * local);
@@ -1023,15 +1035,25 @@ void EntityEditor::draw()
                 ImGui::EndCombo();
             }
 
+            // Arma PRIMARIA (weapons[0]): è l'arma che l'entità impugna E usa.
+            // Cambiarla qui aggiorna il loadout, quindi anche l'in-hand in gioco.
+            auto setPrimaryWeapon = [&](const std::string& wid)
+            {
+                if (wid.empty())
+                { if (!e.weaponIds.empty()) e.weaponIds.erase(e.weaponIds.begin()); }
+                else if (e.weaponIds.empty()) e.weaponIds.push_back(wid);
+                else e.weaponIds[0] = wid;
+                m_weaponId = wid;
+            };
             ImGui::SetNextItemWidth(200);
             const char* wprev = m_weaponId.empty() ? "(nessuna)" : m_weaponId.c_str();
-            if (ImGui::BeginCombo("Arma##wid", wprev))
+            if (ImGui::BeginCombo("Arma primaria##wid", wprev))
             {
                 if (ImGui::Selectable("(nessuna)", m_weaponId.empty()))
-                { m_weaponId.clear(); loadWeaponPreview(); m_dirty = true; }
+                { setPrimaryWeapon(""); loadWeaponPreview(); m_dirty = true; }
                 for (auto& wid : m_availableWeapons)
                     if (ImGui::Selectable(wid.c_str(), m_weaponId == wid))
-                    { m_weaponId = wid; loadWeaponPreview(); m_dirty = true; }
+                    { setPrimaryWeapon(wid); loadWeaponPreview(); m_dirty = true; }
                 ImGui::EndCombo();
             }
 

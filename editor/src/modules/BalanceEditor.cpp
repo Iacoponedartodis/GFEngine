@@ -703,7 +703,9 @@ void BalanceEditor::draw()
 {
     if (ImGui::BeginTabBar("##btabs"))
     {
-        if (ImGui::BeginTabItem("Armi"))        { drawWeaponsTab();    ImGui::EndTabItem(); }
+        // Armi: modulo dedicato "Weapon Editor" (con viewport 3D). Rimossa
+        // da qui per evitare due UI che editano gli stessi file senza
+        // live-sync (confusione utente 2026-07-11).
         if (ImGui::BeginTabItem("AI"))          { drawAITab();         ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }

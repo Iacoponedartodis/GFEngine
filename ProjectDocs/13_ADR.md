@@ -355,3 +355,42 @@ schermo, split della cattura mouse. Questi sono lavoro additivo, non redesign.
 **Accepted (finding registrato).** Spike build-verified 2026-07-09; conferma visiva manuale
 (F9 in partita) in carico allo sviluppatore. 08_KnownIssues #12 risolto come caso (a);
 il codice spike resta nel binario come strumento debug innocuo (F9).
+
+## ADR-015 — Tracy come profiler opt-in (Accepted, 2026-07-13)
+
+### Context
+Prima di qualsiasi ottimizzazione (fixed-timestep, layout data-oriented, AI time-slicing/
+spatial hashing) serve una misura affidabile a precisione sub-millisecondo: Task Manager e
+timer manuali non bastano per attribuire il costo a singole funzioni/frame. È la Fase 1 di
+un piano di ottimizzazione a 4 fasi. Vincolo di questo repo: due binari con contratto
+solo-file (ADR-002) e build riproducibili con tag pinnati (KI #27).
+
+### Decision
+1. **Tracy (`wolfpld/tracy`, tag pinnato `v0.11.1`) via FetchContent**, coerente col pattern
+   delle altre 8 dipendenze. Nessun submodule.
+2. **Opzione CMake `USE_TRACY_PROFILER` (default OFF)** che pilota l'opzione `TRACY_ENABLE`
+   di TracyClient. OFF ⇒ TracyClient compila come stub e le macro `ZoneScoped`/`FrameMark`
+   sono no-op: le build normali (Debug/Release) restano **identiche e a costo zero**. Gli
+   header restano sempre includibili in entrambi gli stati (`<tracy/Tracy.hpp>` non va
+   protetto da `#ifdef`). `TRACY_ON_DEMAND=ON`: cattura solo quando la GUI è connessa.
+3. **Deviazione consapevole dal piano**: il piano chiedeva "default ON in RelWithDebInfo".
+   Col generatore multi-config di Visual Studio `CMAKE_BUILD_TYPE` è vuoto e TracyClient è
+   compilato una sola volta → un default per-configurazione non è affidabile. Si usa quindi
+   un'opzione esplicita; il workflow di profiling è una build RelWithDebInfo dedicata con
+   `-DUSE_TRACY_PROFILER=ON`.
+4. **Linkato SOLO a GFEngine** (`TracyClient`), mai a GFEditor (ADR-002: l'editor non deve
+   dipendere dal runtime). I TU strumentati (`Application.cpp`, `World.cpp`, `AiSystem.cpp`,
+   `CombatSystem.cpp`) non sono compilati in GFEditor, quindi Tracy resta confinato al runtime.
+5. **Punti di misura** (mappati sui nomi reali, non sui `Application::tick/render` del piano
+   che non esistono): `FrameMark` a fine loop dopo lo swap; `ZoneScoped` in `World::tick`
+   (equiv. tick), `AiSystem::update` (AI loop), `CombatSystem::update` (combat/collision);
+   `ZoneScopedN("render.drawScene")` nella lambda di rendering (equiv. render). Le zone si
+   annidano da sole: `World::tick` ⊃ `CombatSystem::update` + `AiSystem::update`.
+
+### Consequences
+- **Positive:** base di misura pronta per le Fasi 2-4; overhead zero quando il profiler è
+  spento; nessuna violazione del contratto due-binari.
+- **Costo:** un clone shallow in più al primo configure anche con profiler OFF (coerente col
+  modello FetchContent esistente); il profiling vero richiede una build RelWithDebInfo a parte.
+- **Verifica:** entrambi i path (OFF e ON) build-verified 2026-07-13, zero warning. La cattura
+  live (connessione col Tracy profiler GUI) è uno smoke manuale ancora **da eseguire**.

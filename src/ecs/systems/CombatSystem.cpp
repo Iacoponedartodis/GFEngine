@@ -5,6 +5,7 @@
 #include "mini/physics/Collision.hpp"
 #include "mini/core/Telemetry.hpp"
 
+#include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
 #include <glm/glm.hpp>
 #include <iostream>
 #include <vector>
@@ -66,15 +67,18 @@ static bool segmentHitsVehicle(const glm::vec3& a, const glm::vec3& b,
                                const glm::vec3& pos, float yawDeg,
                                const VehicleComponent& vc)
 {
+    // Volume di DANNO (19 Fase B): offset verticale + half extents dedicati,
+    // così lo spazio vuoto sotto uno speeder che fluttua non conta.
     HitZone box;
-    box.offset      = {0, 0, 0};
-    box.halfExtents = {vc.halfX, vc.halfY, vc.halfZ};
+    box.offset      = {0.0f, vc.hitOffsetY, 0.0f};
+    box.halfExtents = {vc.hitHalfX, vc.hitHalfY, vc.hitHalfZ};
     return segmentInZone(a, b, pos, /*scale=*/1.0f, yawDeg,
                          /*meshOffY=*/0.0f, box);
 }
 
 void CombatSystem::update(World& world, float dt)
 {
+    ZoneScoped;   // ADR-015: combat/collision update loop
     std::vector<EntityId> toDestroy;
     const std::vector<EntityId> entities = world.getEntities();
 

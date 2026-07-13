@@ -4,6 +4,7 @@
 // assumere suolo a y=0 o posizioni libere.
 
 #include "mini/game/data/Definitions.hpp"
+#include <glm/glm.hpp>
 #include <cmath>
 
 namespace mini::mapquery
@@ -64,6 +65,22 @@ inline void findFreeSpot(const MapDef* map, float& x, float& z,
         x += dirX * step;
         z += dirZ * step;
     }
+}
+
+// Posizione di spawn "a terra" per un'entità con mezze-estensioni date:
+// (x,z) spostato fuori dagli ostacoli e Y all'altezza degli occhi/centro
+// SOPRA il suolo reale della mappa. Evita che il giocatore nasca incastrato
+// nel pavimento (top del "Pavimento" a y>0 → step-up spurio che lo lancia in
+// aria) o dentro un muro. `eyeHeight` = distanza centro/occhi dal suolo
+// (= PLAYER_HALF_Y per il giocatore). push(X,Z) = verso in cui liberarsi
+// dagli ostacoli (di default verso il centro campo lungo -Z).
+inline glm::vec3 groundedSpawn(const MapDef* map, float x, float z,
+                               float halfX, float halfY, float halfZ,
+                               float eyeHeight,
+                               float pushX = 0.0f, float pushZ = -1.0f)
+{
+    findFreeSpot(map, x, z, pushX, pushZ, halfX, halfY, halfZ);
+    return { x, groundHeightAt(map, x, z) + eyeHeight, z };
 }
 
 } // namespace mini::mapquery
