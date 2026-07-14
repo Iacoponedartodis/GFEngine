@@ -394,3 +394,104 @@ solo-file (ADR-002) e build riproducibili con tag pinnati (KI #27).
   modello FetchContent esistente); il profiling vero richiede una build RelWithDebInfo a parte.
 - **Verifica:** entrambi i path (OFF e ON) build-verified 2026-07-13, zero warning. La cattura
   live (connessione col Tracy profiler GUI) è uno smoke manuale ancora **da eseguire**.
+
+## ADR-016 — Sink telemetria strutturato JSONL (LLM-observable), estende ADR-013 (Accepted, 2026-07-14)
+
+### Context
+Serve una telemetria parsabile perfettamente da agenti LLM per diagnosticare fallimenti
+silenziosi (AI bloccata — 06_Todo #1) e sistemi invisibili. Un piano proponeva di
+"rifattorizzare il basic logger in AITelemetry, senza log testuali". **Audit del codice
+live:** non esiste un basic logger — esiste già il sistema completo ADR-013 (`mini::telemetry`:
+spdlog a livelli, frame counter `frame()`, dump JSON `dumpGameState`, input recorder, crash
+net), usato in centinaia di call site. Il piano assumeva anche `Application::tick()` e
+`EntityManager` che **non esistono** (loop inline in `run()`; entità in `World`).
+
+### Decision
+1. **Additivo, non distruttivo.** Rimuovere i log testuali contraddirebbe ADR-013 (che manda
+   `engine_run.log` leggibile) e romperebbe ogni call site: RIFIUTATO. Si **aggiunge** un sink
+   JSONL accanto, dentro lo stesso modulo `mini::telemetry`. `engine_run.log` = umani,
+   `session_latest.jsonl` (`editor_session.jsonl` per l'editor) = LLM.
+2. **API** (`Telemetry.hpp`): `enum class Level {Trace,Debug,Info,Warn,Error,Fatal}`;
+   `event(Level, const char* system, const std::string& msg, const nlohmann::json& data)` +
+   overload senza data; `flushEvents()`. Riusa **nlohmann/json già in casa** (come già fa
+   `dumpGameState`) e il **frame counter esistente**.
+3. **Formato:** una riga = un oggetto JSON valido:
+   `{"frame":N,"time":T,"system":...,"level":...,"msg":...,"data":{...}}`. `time` = secondi
+   dallo start (steady_clock). `j.dump()` compatto; passato come ARGOMENTO a spdlog (`"{}"`),
+   non come format-string, così le graffe del JSON non vengono interpretate.
+4. **Buffering/flush:** riusa l'infrastruttura spdlog (sink file dedicato, pattern `%v`).
+   `flush_on(err)` + flush esplicito su ERROR/FATAL; `flushEvents()` a fine frame nel main loop.
+
+### Consequences
+- **Positive:** parsing perfetto per LLM senza toccare ADR-013 né i call site; zero nuove
+  dipendenze (nlohmann/spdlog già presenti); frame counter correla JSONL / engine_run.log /
+  input_history / crash_report.
+- **Verifica:** build-verified 2026-07-14, zero warning; `session_latest.jsonl` prodotto,
+  riga validata con parser JSON. Phase 2-4 (hook GameMode/CommandPost/AI + dump stato) da
+  fare dopo verifica dell'utente.
+- **Nota di scope:** Phase 4 del piano (`dumpFullState`) è in gran parte già coperta da
+  `dumpGameState` (F12, ADR-013); andrà estesa/ri-hookata, non creata da zero.
+
+## ADR-017 — Navigazione con Recast/Detour (fasata) (Accepted — Phase A+B+C, 2026-07-14)
+
+### Context
+L'AI non ha alcun pathfinding: `aiMove` muove il bot lungo il vettore verso il target con
+collision-sliding + anti-stuck. Qualsiasi ostacolo *tra* bot e goal lo blocca (la telemetria
+Phase 3/ADR-016 mostra gli stuck addensati sul "Cover Centro N" a z≈-6, alto e non
+scavalcabile). Inoltre l'avoidance tra decine di bot manca. Serve pathfinding + crowd.
+
+### Decision
+Adottare **Recast/Detour/DetourCrowd** (standard di settore), integrato in modo idiomatico e
+**fasato** per de-riskare. Vincoli rispettati: ADR-004 (navmesh generato a runtime da
+`MapDef.geometry`, resta data-driven), ADR-002 (Recast linkato SOLO a GFEngine), KI #27 (tag
+pinnato v1.6.0). Deviazione dai numeri del piano-utente chiarita: "06_Todo #1" reale è il
+rename tooling (fatto); l'AI-stuck non è un item numerato; "#11" = metadata AI (Todo #15/KI
+#11, lato dati fatto, consumer runtime pendente → gancio Phase C).
+- **Phase A (FATTA):** `NavManager` (`src/game/nav/`, header leggero, tipi Detour
+  forward-declared) costruisce un `dtNavMesh` single-tile dai box collider di `MapDef.geometry`
+  (box→12 triangoli con `ry`, pipeline Recast solo-mesh) al load mappa in `initWorld`; API
+  `findPath` (Detour). Parametri: `walkableClimb=STEP_HEIGHT (0.55)` scavalca scalini bassi,
+  muri/cover alti → non walkable → path INTORNO. **Zero cambi di comportamento** (AI ancora su
+  `aiMove`). Validazione via telemetria JSONL (ADR-016): eventi `navmesh built` + `sample path`.
+- **Phase B (FATTA):** `dtCrowd` (max 128 agenti). `CrowdSystem` (registrato DOPO `AiSystem`)
+  registra le AI come agenti, fa il reap dei morti (mappa idx→entità + generazione navmesh per
+  il reset su restart), ticka il crowd una volta per step fisso, write-back `npos`→transform.
+  `World::nav` (puntatore opaco). `AiComponent::crowdAgentIdx`. Movimento in `AiSystem`:
+  **traversata (Hunt/Search/Patrol) → `requestMoveTarget`** (il ramo traversal impone
+  `moveDX/DZ = dest − pos`, quindi target = `pos + moveDX`); **Alert/roll → `requestMoveVelocity`**
+  (velocità tattica + avoidance). Fallback su `aiMove` se il navmesh manca. `requestMoveTarget`
+  salta la ri-pianificazione se il target è ~invariato (chiamarlo ogni frame rendeva il moto
+  lento). Sensing (SoA+K-cap+time-slicing) e player/proiettili/veicoli invariati. Salto
+  anti-ostacolo e stuck-telemetry disattivati col crowd/in Alert (falsi positivi).
+- **Phase C (FATTA):** aree semantiche (Todo #15/#11) dai metadata caricati a runtime
+  (`DangerZoneDef`/`CoverPointDef`; `MapGeometryBox` non ha `type`/`label`, sono editor-only).
+  In `build()`, DOPO l'erosione e PRIMA delle regioni, `rcMarkCylinderArea` marca le danger
+  zone come area `DANGER` e i cover point come `COVER` (id 1/2; ground=0). Il filtro del crowd
+  (`getEditableFilter(0)`) assegna costo `DANGER=10` → il pathfinding **aggira le danger zone**;
+  `GROUND`/`COVER` neutri. Le aree extra sono comunque WALKABLE (attraversabili se non c'è
+  alternativa). Per-ruolo = estensione banale (filtri aggiuntivi + `queryFilterType` per agente).
+
+### Consequences
+- **Positive:** pathfinding reale (aggira gli ostacoli → risolve l'AI-stuck alla radice) +
+  crowd-avoidance non-O(N²); base per navigazione scalabile a 40+ bot.
+- **Verifica (Phase A):** build-verified 2026-07-14, zero warning (Recast esterno silenziato
+  via `/external:W0`). Su firebase: navmesh 74 poligoni da 264 triangoli (bounds mappa
+  corretti); `findPath` spawn1→spawn2 trova 8 waypoint, 40.0m vs ~32m in retta → **aggira**
+  la geometria centrale. Fix CMake: `CMAKE_POLICY_VERSION_MINIMUM=3.5` (v1.6.0 usa un
+  `cmake_minimum_required` rifiutato da CMake 4.0).
+- **Verifica (Phase B):** build-verified 2026-07-14, zero warning. `--stress 20` (40 bot):
+  agenti registrati e on-mesh (40/40), traversano e combattono (168 colpi), muoiono/respawnano
+  (reap ok), 0 crash. **Stuck: da ~80 (Phase 3) a 35**, e la distribuzione Z si è spostata via
+  dal cover z=-6 → l'obstacle-stuck è risolto dal pathfinding; il residuo è **congestione del
+  crowd in mischia** (Hunt/Search), non il bug degli ostacoli.
+- **Verifica (Phase C):** build-verified 2026-07-14, zero warning. Su firebase: navmesh tagga
+  **5 poligoni DANGER** (la danger zone a (9.4,-5,r=4)) e **7 COVER** (i 3 cover point); costo
+  filtro impostato; AI combatte normalmente (166 colpi), 0 crash, stuck ~33 (invariato = il
+  costo danger non introduce regressioni). L'avoidance del danger è il meccanismo standard
+  Detour (area cost); il tagging è confermato via telemetria.
+- **Aperti/rischi:** micro-movimento di combattimento via `requestMoveVelocity` (feel leggermente
+  diverso dal direct-position, con avoidance in più — da validare a mano); veicoli come ostacoli
+  dinamici non ancora nel navmesh (concern futuro); il residuo di congestione è tarabile
+  (separationWeight, soglia stuck); costi/filtri per-ruolo non ancora cablati (struttura pronta).
+  **Smoke manuale utente:** partita reale (non solo sim), feel del combattimento, mappa outpost.
+  ADR-017 completo (A+B+C) — la navigazione Recast è in force.

@@ -85,6 +85,7 @@ struct AiComponent
     bool  stationary  = false;
 
     float stuckTimer  = 0.0f;
+    bool  stuckReported = false;   // telemetria: una WARN per episodio (ADR-016)
     float prevX       = 0.0f;
     float prevZ       = 0.0f;
 
@@ -103,6 +104,11 @@ struct AiComponent
     // (scaglionata per entità); fra un sensing e l'altro l'AI riusa questo
     // bersaglio cachato per mirare/muoversi. 0 = nessun bersaglio.
     EntityId targetEntity = 0;
+
+    // ── Navigazione crowd (ADR-017 Phase B) ───────────────────────────
+    // Indice dell'agente dtCrowd; -1 = non registrato (o navmesh assente →
+    // fallback su aiMove). Registrato/reaped dal CrowdSystem.
+    int crowdAgentIdx = -1;
 };
 
 } // namespace mini

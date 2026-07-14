@@ -22,25 +22,33 @@ Loads all definitions from a data root. Loaders: `loadAbilities`, `loadWeapons`,
   speed, shootInterval, etc.
 - `HitboxProfile` + `HitZone` (`include/mini/ecs/components/HitboxComponent.hpp`): name,
   offset, halfExtents, damageMultiplier, boneName, eulerDeg.
-- `MapDef`: id, name, meshPath, spawnTeam1/2[3], maxTickets, enemyCount/allyCount,
-  enemyTypes[], allyTypes[], **`geometry` (vector<MapGeometryBox>)**, `commandPosts`.
-  **Planned additions (not yet implemented, see 15_MapMetadata):** `coverPoints[]`,
-  `patrolRoutes[]`, `dangerZones[]` — all optional, empty by default, zero impact on
-  existing maps until authored.
+- `MapDef`: id, name, meshPath, metadataPath, navmeshPath, spawnTeam1/2[3], maxTickets,
+  enemyCount/allyCount, enemyTypes[], allyTypes[], **`geometry` (vector<MapGeometryBox>)**,
+  `commandPosts`, e i **Map Metadata IMPLEMENTATI (15_MapMetadata, doc):** `coverPoints[]`
+  (`CoverPointDef`: x/y/z, facingDeg, height), `patrolRoutes[]` (`PatrolRouteDef`: id + points),
+  `dangerZones[]` (`DangerZoneDef`: x/y/z, radius, dangerLevel). Opzionali, vuoti di default.
+  Consumati a runtime: AiSystem (cover/danger/patrol, doc 18) e NavManager (aree navmesh
+  DANGER/COVER, ADR-017/doc 22). NB: `MapGeometryBox` runtime NON ha `type`/`label` (editor-only).
 - `MapGeometryBox`: x/y/z (center), ry, sx/sy/sz (full size), r/g/b, collider.
 - `AbilityDef`, `PlayerDef`.
 - **Planned addition (not yet implemented, see 14_ClassSystem):** `ClassDef`
   (id, name, primaryWeaponId, secondaryWeaponId, abilityIds[], role) + optional
   `PlayerDef.classId` reference.
 
-## Game modes (`src/game/game_modes/`)
-- **ConquestMode** (main): reads `MapDef` for spawn points + `enemyTypes`/`allyTypes`;
-  builds unit positions procedurally around spawns; builds geometry from `MapDef.geometry`
-  (fallback to a hardcoded box set if empty). `buildEnemySpawnList` fallback ids
-  `grunt/heavy/sniper` are DEAD (no such enemy files) — ~~see KnownIssues~~ RESOLVED
-  (ADR-007): fallback is now registry-derived.
-- **SandboxMode**: player at spawn_team1, loads firebase `MapDef.geometry`, spawns a line of
-  respawning dummies at spawn_team2 (stationary, damageable, 100 hp, 2s respawn).
+## Game modes (`src/game/game_modes/`, dietro `IGameMode` + factory ADR-008)
+Interfaccia `IGameMode`: `start()`, `update(World,dt)`, `outcome(World)` (Win/Lose/Ongoing —
+ADR-014), `getPlayerEntity/getSpawnPos`, `getTeam1/2Tickets`, `applySettings`, `commandPosts()`.
+- **ConquestMode** (base): legge `MapDef` per spawn + `enemyTypes`/`allyTypes`; posiziona le
+  unità a GRIGLIA attorno agli spawn (`genPositions`, `findFreeSpot`); costruisce la geometria
+  da `MapDef.geometry` (fallback arena hardcoded se vuota); spawn player posato a terra
+  (`groundedSpawn`). `updateObjectiveRules`: la maggioranza dei command post drena i ticket
+  avversari (ticket bleed). Fallback id registry-derived (ADR-007).
+- **AssaultMode / DefenseMode** (`ObjectiveModes.{hpp,cpp}`, ADR-014): derivano da ConquestMode
+  overridando `updateObjectiveRules` + `outcome` + ownership iniziale dei post. Assalto: post
+  ai nemici, ticket alleati calano, vittoria = tutti i post. Difesa: speculare.
+- **SandboxMode** (`--sandbox`): player allo spawn_team1 (posato a terra), geometria della mappa,
+  manichini a GRIGLIA su entrambi gli spawn (uno per definizione, respawn 15s), veicoli da
+  `vehicleSpawns`, command post. Menu prova TAB (17_SandboxTools) + simulazione osservatore.
 
 ## Rendering of unit meshes
 `Application` render applies `MeshRendererComponent.meshOffsetY` (translate Y) so GLB models
@@ -74,10 +82,12 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
   navigazione attiva + `!WantTextInput` (mai mentre si digita).
 - **UiWidgets** (`editor/include/util/UiWidgets.hpp`, header-only): `sliderRow`/`sliderRow3`
   (slider + campo numerico), `gizmoModeBar`. Da usare in ogni nuovo pannello proprietà.
-- **Telemetry** (`include/mini/core/Telemetry.hpp`, ADR-013): `init/shutdown`,
-  `logTrace/Info/Warn/Error`, `beginFrame`/`frame`, `recordInput`, `dumpGameState(json)`,
-  `memoryUsageMB`. Ogni nuovo sistema DEVE loggare qui i propri stati chiave (init,
-  errori, transizioni). Artefatti in `_telemetry_data/`; F12 = dump stato in partita.
+- **Telemetry** (`include/mini/core/Telemetry.hpp`, ADR-013+016 — dettagli doc 21):
+  `init/shutdown`, `logTrace/Info/Warn/Error` (→ `engine_run.log`), `beginFrame`/`frame`,
+  `recordInput`, `dumpGameState(json)` (→ `game_state.json`), `memoryUsageMB`; e il sink JSONL
+  LLM-observable: `event(Level, system, msg, json data)` + `flushEvents` (→ `session_latest.jsonl`,
+  una riga JSON per evento). `setStateDumpCallback` per il dump su crash. Ogni nuovo sistema DEVE
+  loggare qui i propri stati chiave (init, errori, transizioni). Artefatti in `_telemetry_data/`.
 - **Tooling ADR-010 — IMPLEMENTATO (2026-07-09):** comando "Rinomina" nei moduli
   (rename file + sweep cross-ref + reload; categorie incluse Vehicle) e `saveJsonRMW`
   centralizzato usato da ogni save path.
@@ -105,3 +115,20 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
   centro, hitmarker, crosshair-on-target, toast.
 - **Diagnostica**: heartbeat `ai:` (stati AI ogni ~10s), `[Conquest] spawn:`,
   `drive:`/`veicolo:` per la guida, `[Viewport] Realloc FBO` nell'editor.
+
+## Sistemi aggiunti 2026-07-11 → 07-14 (riferimento rapido; dettagli nei doc 20-22)
+- **Ottimizzazione loop/AI (ADR-015 → doc 20):** frame pacing a doppia precisione
+  (`SDL_GetPerformanceCounter`) + frame-cap di sicurezza; profiler **Tracy** opt-in
+  (`USE_TRACY_PROFILER`, `ZoneScoped`/`FrameMark`, solo GFEngine). AiSystem: ricerca target in
+  array **SoA** contigui; **time-slicing** della sensing (`AI_SENSE_INTERVAL`, bersaglio cachato
+  in `AiComponent`); **cap LOS ai K vicini** (`AI_MAX_LOS_CHECKS`). Stress test: `--stress N`
+  (cap `MAX_AI_PER_TEAM`), spawn a griglia.
+- **Telemetria JSONL (ADR-016 → doc 21):** vedi voce Telemetry sopra. Hook: GameMode (mode
+  created, ticket bleed), CommandPost (cattura), AI (state change, stuck WARN con coordinate).
+  Dump stato per-entità su F12/fine-partita/crash.
+- **Navigazione Recast/Detour (ADR-017 → doc 22):** `NavManager` (`src/game/nav/`) costruisce un
+  `dtNavMesh` dai box di `MapDef.geometry` al load; DetourCrowd muove le AI (traversata =
+  pathfinding che aggira gli ostacoli, combattimento = velocità tattica + avoidance);
+  `CrowdSystem` (dopo AiSystem) registra/reap/ticka/write-back; `World::nav` = puntatore opaco;
+  `AiComponent::crowdAgentIdx`. Aree semantiche DANGER/COVER dai metadata con costi
+  `dtQueryFilter`. Fallback su `aiMove` se il navmesh manca. Solo GFEngine (ADR-002).

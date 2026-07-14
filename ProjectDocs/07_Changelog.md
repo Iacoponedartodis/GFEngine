@@ -2,6 +2,132 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-14 (8) — Fix piedi-sottoterra (regressione crowd) + loadout abilità onesto
+- **Piedi sottoterra (regressione Phase B):** il write-back del `CrowdSystem` scriveva
+  `tr->y = npos.y` (superficie navmesh ≈ piedi), ma il transform.y è il CENTRO fisico
+  (spawn = suolo + `AI_HALF_Y`) → i modelli affondavano. Fix: `tr->y = agentPos.y + AI_HALF_Y`.
+  Inoltre la voxelizzazione mette la superficie navmesh ~`cellHeight` SOPRA il pavimento reale:
+  `agentPos` ora sottrae quella polarizzazione (e `cellHeight` 0.2→0.1 per Y più fine). Probe
+  runtime: transform.y = 0.60 esatto (= suolo 0.1 + AI_HALF_Y 0.5). Piedi a terra, niente float.
+- **Loadout abilità/gadget del giocatore:** verificato che `abilityIds`/`gadgetId` sono
+  selezionabili nel PreMatch ma **mai applicati all'entità player** (usati solo dalle AI). Le
+  righe sono marcate "(non attiva/o)" (convenzione KI #25) finché non esiste un sistema
+  abilità/gadget lato giocatore (lavoro futuro). NB: la schivata/roll è già un comando base
+  (tasto "Schivata"=Q, funzionante), NON un'abilità di loadout.
+- Build-verified, warning-free; smoke `--stress`: AI combatte, 0 crash. **Smoke visivo utente:**
+  confermare i piedi a terra in gioco.
+
+## 2026-07-14 (7) — Navigazione Recast/Detour, Phase C: aree semantiche (ADR-017) — COMPLETO
+- **Marking aree** in `NavManager::build` (dopo erosione, prima delle regioni): `rcMarkCylinderArea`
+  tagga le `dangerZones` come area DANGER e i `coverPoints` come COVER (id 1/2; ground=0). I
+  metadata vengono da `MapDef.dangerZones`/`coverPoints` (caricati a runtime; `MapGeometryBox`
+  non ha `type`, è editor-only).
+- **Costo filtro crowd** (`getEditableFilter(0)`): DANGER=10 → il pathfinding **aggira le danger
+  zone**; GROUND/COVER neutri. Aree extra restano WALKABLE (attraversabili se non c'è alternativa).
+  `findPath` usa lo stesso costo. Per-ruolo = estensione banale (filtri + `queryFilterType`).
+- **Build-verified**, zero warning. Su firebase: **5 poligoni DANGER + 7 COVER** taggati
+  (telemetria `navmesh built`); AI combatte (166 colpi), stuck ~33 (nessuna regressione), 0 crash.
+- **ADR-017 COMPLETO (Phase A+B+C)** — navigazione Recast in force. Resta: costi per-ruolo (dati),
+  veicoli come ostacoli dinamici, taratura congestione. **Smoke manuale utente:** partita reale +
+  feel combattimento + outpost.
+
+## 2026-07-14 (6) — Navigazione Recast/Detour, Phase B: DetourCrowd → movimento AI (ADR-017)
+- **CrowdSystem** (`src/ecs/systems/`, registrato dopo AiSystem): registra le AI come agenti
+  `dtCrowd`, reap dei morti (mappa idx→entità + generazione navmesh), tick del crowd 1×/step
+  fisso, write-back `npos`→transform. `World::nav` (puntatore opaco), `AiComponent::crowdAgentIdx`.
+- **AiSystem movimento** ora via crowd: traversata (Hunt/Search/Patrol) → `requestMoveTarget`
+  (pathfinding, aggira gli ostacoli); Alert/roll → `requestMoveVelocity` (velocità tattica +
+  avoidance). **Fallback `aiMove`** se il navmesh manca. Sensing/player/proiettili/veicoli
+  invariati. Salto anti-ostacolo e stuck-WARN in Alert disattivati col crowd (falsi positivi).
+- **Fix chiave:** `requestMoveTarget` non ripianifica se il target è ~invariato (chiamarlo ogni
+  frame rendeva il moto lento/a scatti → prima sembrava che l'AI non si muovesse).
+- **Build-verified**, zero warning. `--stress 20` (40 bot): 40/40 agenti on-mesh, traversano e
+  combattono (**168 colpi**), reap ok, **0 crash**. **Stuck: da ~80 a 35** e spostato via dal
+  cover z=-6 → obstacle-stuck RISOLTO dal pathfinding; il residuo è congestione crowd in mischia.
+- **Da fare:** Phase C (aree semantiche). **Smoke manuale utente:** partita reale + feel
+  combattimento + mappa outpost. Feel combat via velocity (avoidance in più) da validare.
+
+## 2026-07-14 (5) — Navigazione Recast/Detour, Phase A: navmesh da MapDef (ADR-017)
+- **CMake:** `recastnavigation` v1.6.0 via FetchContent (tag pinnato), demo/tests/examples OFF,
+  linkato SOLO a GFEngine (`Recast Detour`). Fix: `CMAKE_POLICY_VERSION_MINIMUM=3.5` (v1.6.0
+  ha un `cmake_minimum_required` che CMake 4.0 rifiuta).
+- **`NavManager`** (`include/mini/game/nav/` + `src/game/nav/`): costruisce un `dtNavMesh`
+  single-tile dai box collider di `MapDef.geometry` (box→12 triangoli con `ry`, pipeline
+  Recast solo-mesh); `findPath` via Detour. `walkableClimb=STEP_HEIGHT` scavalca scalini
+  bassi, muri/cover alti aggirati. Header leggero (tipi Detour forward-declared).
+- **Hook:** build in `Application::initWorld` al load mappa; **zero cambi di comportamento**
+  (AI ancora su `aiMove`). Validazione via telemetria JSONL (ADR-016): eventi `navmesh built`
+  e `sample path`.
+- **Build-verified**, zero warning (Recast esterno silenziato). Su firebase: **navmesh 74
+  poligoni** da 264 triangoli, bounds mappa corretti; **`findPath` spawn1→spawn2: 8 waypoint,
+  40.0m** (vs ~32m in retta) → il path **aggira** la geometria centrale = fix dell'AI-stuck
+  alla radice. 0 crash.
+- **Da fare:** Phase B (DetourCrowd → movimento AI, traversata-prima/combattimento-manuale),
+  Phase C (aree semantiche). **Smoke manuale utente:** avvio su mappa diversa (outpost).
+
+## 2026-07-14 (4) — Telemetria JSONL, Phase 4: dump stato completo (ADR-016) — piano COMPLETO
+- **Non creato `dumpFullState(EntityManager&)`** (non esiste `EntityManager`): **esteso** il
+  `dumpGameState`/F12 esistente (ADR-013). Nuovo builder condiviso `buildStateDump(reason)` in
+  Application: oltre a camera/player/ticket, aggiunge un array **`entities`** con OGNI entità
+  attiva — `{id, pos:[x,y,z], team, hp/hp_max, ai_state (Patrol/Alert/Hunt/Search), goal
+  (lastKnown), kind (bullet/vehicle)}` — più `dump_reason`.
+- **Trigger:** F12 (`reason=f12`), **fine partita** (rilevatore di transizione one-shot su
+  Win/Lose → `reason=match_win/lose` + evento `match end` nel JSONL), **crash** (callback
+  `setStateDumpCallback` registrata da Application; il crash net la invoca best-effort DOPO
+  `crash_report.txt`, con guardia di ri-entranza `g_dumping` + try/catch).
+- **Build-verified**, warning-free. Struttura del dump validata con parser JSON (46 entità:
+  AI con `ai_state=Alert`/`goal`, veicolo con hp, ecc.). Fine-partita non testabile headless
+  (in `--sim` l'outcome è forzato `Ongoing`, observer) e crash idem (serve un crash vero) —
+  meccanismo verificato via trigger temporaneo; **smoke reali in carico all'utente** (F12 in
+  partita, fine di una partita vera, crash indotto).
+- **Piano telemetria LLM-observable COMPLETO** (Phase 1-4). ADR-016 Accepted.
+
+## 2026-07-14 (3) — Telemetria JSONL, Phase 3: stato AI + stuck detection (ADR-016, 06_Todo #1)
+- **State change (INFO):** in `AiSystem::update`, log SOLO sulle transizioni reali di stato
+  (`oldState` catturato a inizio iterazione, confronto prima del blocco sparo che ha molti
+  `continue`). Payload come da piano: `{"bot_id","state","pos":[x,y,z],"target_pos":[tx,ty,tz]}`
+  (target = nearest se presente, altrimenti lastKnown).
+- **Stuck detection (WARN):** aggancio all'anti-stuck esistente (`stuckTimer > AI_STUCK_TIME`).
+  Nuovo flag `AiComponent::stuckReported` → **una WARN per episodio** (non per-frame), azzerato
+  quando l'AI torna a muoversi. Payload: `{"bot_id","state","pos":[x,y,z],"stuck_time"}`.
+- **Build-verified**, warning-free. Verificato `--stress 20`: 173 `state change`, 80 `stuck`
+  (WARN), tutti JSON validi. **La telemetria rivela subito il problema di #1:** le coordinate
+  stuck si addensano attorno a z≈-6 (= "Cover Centro N" del MapDef firebase) → i bot si
+  incastrano sulle coperture. Dato azionabile per il fix AI-stuck (che resta da fare: questa
+  fase lo rende OSSERVABILE, non lo risolve).
+- Nota volume: 80 stuck/20s a 40 bot indica bot che si bloccano ripetutamente (reale). Se
+  troppo rumoroso, alzare `AI_STUCK_TIME` o aggiungere un cooldown per-bot — non ora.
+
+## 2026-07-14 (2) — Telemetria JSONL, Phase 2: hook GameMode + CommandPost (ADR-016)
+- **GameMode (ADR-008):** `GameModeFactory::createGameMode` emette `mode created`
+  (`{"mode_id":...}`) e `WARN` su modalità sconosciuta. `ConquestMode::updateObjectiveRules`
+  emette **`Ticket bleed`** al drenaggio (`{"tickets_ally","tickets_enemy","posts_ally",
+  "posts_enemy","drained"}`).
+- **CommandPost (ADR-009):** `CommandPosts::update` emette eventi **discreti** (non per-frame,
+  per non inondare il log): `Capture started` (nuovo team in cattura) e `Capture update`
+  (cambio proprietario) con `{"cp_id"(=label),"progress","owner"}`.
+- **Build-verified**, warning-free. Verificato con `--sim` (30s): prodotti e validati
+  `mode created`, `Capture started`, `Capture update` (Alpha→Enemy), `Ticket bleed` (ally
+  3→1) — tutti JSON validi coi campi base `frame/time/system/level/msg/data`.
+- Hook solo in GFEngine (l'editor non compila questi TU). Phase 3 (AI state/stuck) e Phase 4
+  (dump stato su crash/fine partita, estendendo `dumpGameState`) in attesa di verifica.
+
+## 2026-07-14 — Telemetria JSONL LLM-observable, Phase 1 (ADR-016, estende ADR-013)
+- **Audit prima di agire:** il "basic text logger" da rifattorizzare del piano è in realtà il
+  sistema ADR-013 completo (`mini::telemetry`). Il piano assumeva `Application::tick()` ed
+  `EntityManager` inesistenti, un frame counter da aggiungere (esiste: `frame()`), e Phase 4
+  `dumpFullState` (esiste già: `dumpGameState`/F12). "No raw text logs" contraddice ADR-013.
+- **Fatto (additivo, non distruttivo):** aggiunto sink **JSONL** dentro `mini::telemetry` —
+  `session_latest.jsonl` (`editor_session.jsonl` per l'editor) accanto a `engine_run.log`,
+  NON al suo posto. API: `Level` enum, `event(Level, system, msg, json data)` (+ overload),
+  `flushEvents()`. Riusa nlohmann/json e il frame counter già presenti. Riga = un oggetto JSON
+  `{"frame","time","system","level","msg","data"}`. Flush a fine frame + immediato su ERROR/FATAL.
+- **NON fatto (contro ADR-013):** rinomina in `AITelemetry`, rimozione dei log testuali.
+  Segnalato: i log testuali e i ~centinaia di `logInfo/logTrace` restano.
+- **Build-verified**, warning-free; `session_latest.jsonl` prodotto e **validato con parser**
+  (`ConvertFrom-Json` OK). Phase 2-4 (hook GameMode/CommandPost/AI + dump stato) in attesa di
+  verifica dell'utente.
+
 ## 2026-07-13 (7) — Fase 4b ottimizzazione: cap LOS ai K vicini (invece della griglia spaziale)
 - **Finding che cambia la tecnica:** la griglia spaziale del piano rende solo se il raggio di
   query << mondo. Qui `aggroRange` = `sight_range` ≈ **20 m** e la mappa è **50×40 m** → un

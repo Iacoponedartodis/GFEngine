@@ -3,10 +3,12 @@
 #include "mini/ecs/World.hpp"
 #include "mini/core/Telemetry.hpp"
 #include "mini/game/data/Definitions.hpp"   // MapDef (18_AiMapConsumption)
+#include "mini/game/nav/NavManager.hpp"      // crowd/pathfinding (ADR-017 Phase B)
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
 
 #include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
+#include <nlohmann/json.hpp>   // event() data (ADR-016)
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
@@ -54,6 +56,18 @@ static float norm2D(float& dx, float& dz)
 static float aiRandRange(float lo, float hi)
 {
     return lo + (hi - lo) * aiRand01();
+}
+
+// Nome leggibile dello stato AI per la telemetria (ADR-016, 06_Todo #1).
+static const char* aiStateName(AiState s)
+{
+    switch (s) {
+        case AiState::Patrol: return "Patrol";
+        case AiState::Alert:  return "Alert";
+        case AiState::Hunt:   return "Hunt";
+        case AiState::Search: return "Search";
+    }
+    return "?";
 }
 
 // Ingresso in Hunt (16_AiBehavior): con probabilità flankChance l'AI
@@ -237,6 +251,7 @@ void AiSystem::update(World& world, float dt)
         auto* team = world.getTeam(e);
         if (!et || !team) continue;
 
+        const AiState oldState = ai->state;   // telemetria: log solo sul CAMBIO
         const int myTeam = team->teamId;
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
@@ -342,9 +357,21 @@ void AiSystem::update(World& world, float dt)
         if (movedDist < 0.05f && !ai->stationary)
             ai->stuckTimer += dt;
         else
-            ai->stuckTimer = 0.0f;
+            { ai->stuckTimer = 0.0f; ai->stuckReported = false; }  // si è mosso: reset
         ai->prevX = et->x; ai->prevZ = et->z;
         const bool isStuck = ai->stuckTimer > config::AI_STUCK_TIME;
+
+        // Telemetria (ADR-016 / 06_Todo #1): bot bloccato → WARN con coordinate
+        // esatte (cross-ref con la geometria MapDef). UNA per episodio: il flag
+        // si azzera sopra quando l'AI torna a muoversi. In Alert NON logga: uno
+        // strafe sul posto in mischia non è "bloccato" (falso positivo del crowd).
+        if (isStuck && !ai->stuckReported && ai->state != AiState::Alert)
+        {
+            ai->stuckReported = true;
+            telemetry::event(telemetry::Level::Warn, "AI", "stuck",
+                {{"bot_id", e}, {"state", aiStateName(ai->state)},
+                 {"pos", {et->x, et->y, et->z}}, {"stuck_time", ai->stuckTimer}});
+        }
 
         // ── Movimento ────────────────────────────────────────────────
         float moveDX = 0, moveDZ = 0, moveSpeed = 0;
@@ -563,25 +590,56 @@ void AiSystem::update(World& world, float dt)
             for (auto& s : ab->states)
                 if (s.cooldown > 0.0f) s.cooldown -= dt;
 
-        float nx, nz;
-        if (ai->rollTimer > 0.0f)
+        // Esecuzione movimento (ADR-017 Phase B): via crowd Detour se attivo,
+        // altrimenti fallback su aiMove (navmesh assente). Traversata (Hunt/
+        // Search/Patrol) → requestMoveTarget (pathfinding: AGGIRA gli ostacoli,
+        // i rami traversal impostano moveDX/DZ = destinazione − posizione).
+        // Alert/roll → requestMoveVelocity (velocità tattica + avoidance del
+        // crowd). Il write-back npos→transform lo fa CrowdSystem dopo il tick.
+        const bool useCrowd = world.nav && world.nav->crowdReady()
+                            && ai->crowdAgentIdx >= 0;
+        if (useCrowd)
         {
-            ai->rollTimer -= dt;
-            nx = et->x + ai->rollVX * dt;   // lo scatto vince sul movimento
-            nz = et->z + ai->rollVZ * dt;
+            NavManager& nv = *world.nav;
+            if (ai->rollTimer > 0.0f)
+            {
+                ai->rollTimer -= dt;
+                nv.requestMoveVelocity(ai->crowdAgentIdx, {ai->rollVX, 0.0f, ai->rollVZ});
+            }
+            else if (ai->state == AiState::Alert)
+            {
+                const float m = norm2D(moveDX, moveDZ);
+                nv.requestMoveVelocity(ai->crowdAgentIdx,
+                    m > 0.001f ? glm::vec3{moveDX/m*moveSpeed, 0.0f, moveDZ/m*moveSpeed}
+                               : glm::vec3{0.0f, 0.0f, 0.0f});
+            }
+            else if (moveSpeed > 0.0f && (moveDX != 0.0f || moveDZ != 0.0f))
+                nv.requestMoveTarget(ai->crowdAgentIdx,
+                                     {et->x + moveDX, et->y, et->z + moveDZ});
+            else
+                nv.requestMoveVelocity(ai->crowdAgentIdx, {0.0f, 0.0f, 0.0f});
         }
         else
         {
-            nx = et->x + moveDX * moveSpeed * dt;
-            nz = et->z + moveDZ * moveSpeed * dt;
+            float nx, nz;
+            if (ai->rollTimer > 0.0f)
+            {
+                ai->rollTimer -= dt;
+                nx = et->x + ai->rollVX * dt;   // lo scatto vince sul movimento
+                nz = et->z + ai->rollVZ * dt;
+            }
+            else
+            {
+                nx = et->x + moveDX * moveSpeed * dt;
+                nz = et->z + moveDZ * moveSpeed * dt;
+            }
+            aiMove(*et, nx, nz, *ai, dt, world);
         }
-        aiMove(*et, nx, nz, *ai, dt, world);
 
         // ── Salto anti-ostacolo (jump_enabled dal profilo AI) ─────────
-        // Se sta provando a muoversi ma è ferma da metà del tempo anti-stuck
-        // ed è a terra, tenta un salto PRIMA che scatti l'inversione di rotta:
-        // supera casse/coperture basse invece di rimbalzare avanti-indietro.
-        if (ai->jumpEnabled && !ai->stationary && moveSpeed > 0.0f
+        // Solo nel fallback aiMove: col crowd il pathfinding aggira gli
+        // ostacoli, il salto non serve (e velY non verrebbe integrato).
+        if (!useCrowd && ai->jumpEnabled && !ai->stationary && moveSpeed > 0.0f
             && ai->velY == 0.0f
             && ai->stuckTimer > config::AI_STUCK_TIME * 0.5f)
         {
@@ -593,6 +651,24 @@ void AiSystem::update(World& world, float dt)
         {
             ai->heat -= ai->cooldownRate * dt;
             if (ai->heat <= 0.0f) { ai->heat = 0.0f; ai->overheated = false; }
+        }
+
+        // Telemetria (ADR-016 / 06_Todo #1): transizione di stato AI. Solo sul
+        // CAMBIO (oldState catturato a inizio iterazione) → niente flooding.
+        // Piazzato PRIMA del blocco sparo, che ha molti `continue`. Lo stato è
+        // già finalizzato qui (le transizioni avvengono sopra).
+        if (ai->state != oldState)
+        {
+            nlohmann::json d;
+            d["bot_id"] = e;
+            d["state"]  = aiStateName(ai->state);
+            d["pos"]    = { et->x, et->y, et->z };
+            if (nearest != 0)
+            { if (const auto* tt2 = world.getTransform(nearest))
+                  d["target_pos"] = { tt2->x, tt2->y, tt2->z }; }
+            else if (ai->hasLastKnown)
+                d["target_pos"] = { ai->lastKnownX, 0.0f, ai->lastKnownZ };
+            telemetry::event(telemetry::Level::Info, "AI", "state change", d);
         }
 
         // ── Sparo (solo in Alert con LOS, mai in fase evasiva) ───────

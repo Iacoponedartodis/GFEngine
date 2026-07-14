@@ -445,12 +445,17 @@ void PreMatchMenu::renderLoadout() const
 
     // Sezioni del loadout
     struct LoadoutRow { const char* label; };
+    // Abilita'/Gadget del giocatore NON sono ancora cablate all'entità player
+    // (le abilita' esistono solo per le AI). Marcate "(non attivo)" — KI #25 —
+    // finche' non esiste un sistema abilita'/gadget lato giocatore (lavoro
+    // futuro). NB: la schivata/roll e' gia' un comando base (tasto "Schivata"),
+    // NON un'abilita' di loadout.
     const LoadoutRow lrows[] = {
-        { "Arma primaria"   },
-        { "Arma secondaria" },
-        { "Abilita' 1"      },
-        { "Abilita' 2"      },
-        { "Gadget"          },
+        { "Arma primaria"          },
+        { "Arma secondaria"        },
+        { "Abilita' 1 (non attiva)"},
+        { "Abilita' 2 (non attiva)"},
+        { "Gadget (non attivo)"    },
     };
 
     const auto weaponName = [&](int idx) -> const char* {

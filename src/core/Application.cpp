@@ -11,6 +11,7 @@
 #include "mini/ecs/systems/MovementSystem.hpp"
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/systems/AiSystem.hpp"
+#include "mini/ecs/systems/CrowdSystem.hpp"
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/CommandPosts.hpp"
 #include "mini/game/MatchSettings.hpp"
@@ -18,6 +19,7 @@
 #include "mini/game/Weapon.hpp"
 #include "mini/game/VehicleDrive.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/nav/NavManager.hpp"
 #include "mini/physics/Collision.hpp"
 #include "mini/physics/HitTest.hpp"
 #include "mini/render/Camera.hpp"
@@ -124,6 +126,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     telemetry::init("GFEngine");
     telemetry::logInfo(std::string("flag avvio: directPreMatch=")
         + (directPreMatch ? "si" : "no") + " sandbox=" + (sandbox ? "si" : "no"));
+    // Evento strutturato di avvio sessione (ADR-016): prima riga di session_latest.jsonl
+    telemetry::event(telemetry::Level::Info, "Engine", "session start",
+        { {"direct_prematch", directPreMatch}, {"sandbox", sandbox},
+          {"auto_sim", autoSim}, {"stress_ai", stressAiCount} });
 
     // ── Definition Registry ──────────────────────────────────────────
     // Usa percorso assoluto basato sull'exe, non CWD
@@ -227,6 +233,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     world.registerSystem(std::make_unique<MovementSystem>());
     world.registerSystem(std::make_unique<CombatSystem>());
     world.registerSystem(std::make_unique<AiSystem>());
+    world.registerSystem(std::make_unique<CrowdSystem>());   // ADR-017 Phase B: dopo AiSystem
 
     // ── Schermate ────────────────────────────────────────────────────
     LauncherScreen   launcher(W, H);
@@ -301,6 +308,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         std::cout << "[Application] Launcher avviato." << std::endl;
 
     // ── Lambda transizioni ───────────────────────────────────────────
+    NavManager nav;          // ADR-017: navmesh + crowd, ricostruiti al load mappa
+    world.nav = &nav;        // AiSystem/CrowdSystem lo usano via world (Phase B)
     auto initWorld = [&]()
     {
         mode->applySettings(currentSettings);
@@ -309,7 +318,87 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                      mode->getSpawnPos(), cam);
         drivenVehicle = 0;   // ogni restart parte a piedi
         worldReady = true;
+
+        // NavMesh (ADR-017 Phase A): costruito dai box collider della mappa;
+        // validato via telemetria JSONL. NON muove ancora l'AI (Phase B).
+        if (const MapDef* nm = registry.getMap(currentSettings.mapId))
+        {
+            const NavBuildStats st = nav.build(*nm);
+            telemetry::event(st.ok ? telemetry::Level::Info : telemetry::Level::Error,
+                "Nav", "navmesh built",
+                {{"ok", st.ok}, {"map", currentSettings.mapId},
+                 {"input_tris", st.inputTris}, {"polys", st.polyCount},
+                 {"verts", st.vertCount},
+                 {"danger_polys", st.dangerPolys}, {"cover_polys", st.coverPolys},
+                 {"bmin", {st.bmin.x, st.bmin.y, st.bmin.z}},
+                 {"bmax", {st.bmax.x, st.bmax.y, st.bmax.z}}});
+            if (st.ok)   // path di esempio spawn1→spawn2: valida il pathfinding
+            {
+                std::vector<glm::vec3> wp;
+                const glm::vec3 a = mode->getSpawnPos();
+                const glm::vec3 b = {nm->spawnTeam2[0], nm->spawnTeam2[1], nm->spawnTeam2[2]};
+                const bool found = nav.findPath(a, b, wp);
+                float len = 0.0f;
+                for (size_t i = 1; i < wp.size(); ++i) len += glm::length(wp[i] - wp[i-1]);
+                telemetry::event(telemetry::Level::Info, "Nav", "sample path",
+                    {{"found", found}, {"waypoints", (int)wp.size()}, {"length", len},
+                     {"from", {a.x, a.y, a.z}}, {"to", {b.x, b.y, b.z}}});
+            }
+        }
     };
+
+    // ── Dump stato completo (ADR-016 Phase 4) ─────────────────────────
+    // Snapshot JSON di OGNI entità attiva (pos/team/HP/goal-stato-AI), oltre a
+    // camera/player/ticket. Riusato da F12, fine partita e crash net. Scritto
+    // in game_state.json con "dump_reason" per distinguere il trigger.
+    auto buildStateDump = [&](const char* reason) -> nlohmann::json
+    {
+        const glm::vec3 cp = cam.getPosition();
+        const glm::vec3 cf = cam.getForward();
+        nlohmann::json js;
+        js["app"]         = "GFEngine";
+        js["dump_reason"] = reason;
+        js["game_state"]  = (int)state;
+        js["world_ready"] = worldReady;
+        js["camera"]["pos"]     = {cp.x, cp.y, cp.z};
+        js["camera"]["forward"] = {cf.x, cf.y, cf.z};
+        js["player"]["hp"]     = player.prevHp;
+        js["player"]["dead"]   = player.isDead;
+        js["player"]["weapon"] = player.weapon().name;
+        js["player"]["heat"]   = player.weapon().heat;
+        js["tickets"]["team1"] = mode ? mode->getTeam1Tickets() : 0;
+        js["tickets"]["team2"] = mode ? mode->getTeam2Tickets() : 0;
+        auto& ents = js["entities"] = nlohmann::json::array();
+        if (worldReady)
+            for (EntityId id : world.getEntities())
+            {
+                const auto* tr = world.getTransform(id);
+                if (!tr) continue;
+                nlohmann::json ent;
+                ent["id"]  = id;
+                ent["pos"] = {tr->x, tr->y, tr->z};
+                if (const auto* tm = world.getTeam(id))   ent["team"] = tm->teamId;
+                if (const auto* hp = world.getHealth(id)) { ent["hp"] = hp->current; ent["hp_max"] = hp->max; }
+                if (const auto* ai = world.getAi(id))
+                {
+                    switch (ai->state) {
+                        case AiState::Patrol: ent["ai_state"] = "Patrol"; break;
+                        case AiState::Alert:  ent["ai_state"] = "Alert";  break;
+                        case AiState::Hunt:   ent["ai_state"] = "Hunt";   break;
+                        case AiState::Search: ent["ai_state"] = "Search"; break;
+                    }
+                    if (ai->hasLastKnown) ent["goal"] = {ai->lastKnownX, ai->lastKnownZ};
+                }
+                if (world.getBullet(id))  ent["kind"] = "bullet";
+                if (world.getVehicle(id)) ent["kind"] = "vehicle";
+                ents.push_back(std::move(ent));
+            }
+        js["entity_count"] = (int)ents.size();
+        return js;
+    };
+    // Crash net (Phase 4): su crash, dump best-effort dello stato completo.
+    telemetry::setStateDumpCallback([&]() { telemetry::dumpGameState(buildStateDump("crash")); });
+    GameState endDumpState = GameState::Playing;   // per il dump one-shot a fine partita
 
     auto startGame = [&]()
     {
@@ -498,27 +587,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
 
                 if (sc == SDL_SCANCODE_F11) window.toggleFullscreen();
 
-                // ── F12: dump completo dello stato (ADR-013) ──────────
+                // ── F12: dump completo dello stato (ADR-013 + Phase 4) ─
                 if (sc == SDL_SCANCODE_F12)
                 {
-                    const glm::vec3 cp = cam.getPosition();
-                    const glm::vec3 cf = cam.getForward();
-                    nlohmann::json js;
-                    js["app"]            = "GFEngine";
-                    js["game_state"]     = (int)state;
-                    js["world_ready"]    = worldReady;
-                    js["entity_count"]   = worldReady
-                                           ? (int)world.getEntities().size() : 0;
-                    js["camera"]["pos"]     = {cp.x, cp.y, cp.z};
-                    js["camera"]["forward"] = {cf.x, cf.y, cf.z};
-                    js["player"]["hp"]      = player.prevHp;
-                    js["player"]["dead"]    = player.isDead;
-                    js["player"]["weapon"]  = player.weapon().name;
-                    js["player"]["heat"]    = player.weapon().heat;
-                    js["tickets"]["team1"]  = mode->getTeam1Tickets();
-                    js["tickets"]["team2"]  = mode->getTeam2Tickets();
-                    js["mouse_captured"]    = window.isMouseCaptured();
-                    telemetry::dumpGameState(js);
+                    telemetry::dumpGameState(buildStateDump("f12"));
                     hud.toast("F12: stato salvato in _telemetry_data/game_state.json");
                 }
 
@@ -1003,6 +1075,22 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             }
         }
 
+        // Fine partita (Phase 4): al PRIMO ingresso in Win/Lose, dump completo
+        // dello stato (qualunque path l'abbia deciso). Reset a Playing per la
+        // partita successiva.
+        if (state == GameState::Win || state == GameState::Lose)
+        {
+            if (endDumpState != state)
+            {
+                endDumpState = state;
+                telemetry::dumpGameState(buildStateDump(
+                    state == GameState::Win ? "match_win" : "match_lose"));
+                telemetry::event(telemetry::Level::Info, "GameMode", "match end",
+                    {{"outcome", state == GameState::Win ? "win" : "lose"}});
+            }
+        }
+        else endDumpState = GameState::Playing;
+
         // ── 6. RENDER ────────────────────────────────────────────────
         renderer.beginFrame();
 
@@ -1155,8 +1243,13 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             while (((double)(SDL_GetPerformanceCounter() - prevCounter) / perfFreq) < target)
             { /* busy-wait sub-ms finale */ }
         }
+
+        // Fine frame: svuota il buffer del log JSONL su disco (ADR-016), così
+        // session_latest.jsonl è sempre leggibile a valle di ogni frame.
+        telemetry::flushEvents();
     }
 
+    telemetry::setStateDumpCallback(nullptr);   // evita dangling dopo il loop
     telemetry::shutdown();
 }
 

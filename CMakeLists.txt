@@ -94,6 +94,24 @@ set(TRACY_ENABLE    ${USE_TRACY_PROFILER} CACHE BOOL "" FORCE)
 set(TRACY_ON_DEMAND ON                      CACHE BOOL "" FORCE)  # profila solo con GUI connessa
 FetchContent_MakeAvailable(tracy)
 
+# ── Recast Navigation (ADR-017, Fase navigazione) ─────────────────────────────
+# NavMesh + pathfinding + crowd. Solo le librerie core (Recast/Detour/DetourCrowd),
+# NIENTE demo/tests/examples (tirano dentro SDL/GL). Linkate SOLO a GFEngine
+# (ADR-002). Tag pinnato (KI #27). Phase A usa Recast+Detour; DetourCrowd in Phase B.
+FetchContent_Declare(recastnavigation
+    GIT_REPOSITORY https://github.com/recastnavigation/recastnavigation.git
+    GIT_TAG        v1.6.0
+    GIT_SHALLOW    TRUE
+)
+set(RECASTNAVIGATION_DEMO     OFF CACHE BOOL "" FORCE)
+set(RECASTNAVIGATION_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(RECASTNAVIGATION_TESTS    OFF CACHE BOOL "" FORCE)
+# v1.6.0 usa cmake_minimum_required < 3.5, rifiutato da CMake 4.0. Questo dice a
+# CMake di trattare il progetto come min 3.5 (workaround ufficiale, tag invariato).
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+FetchContent_MakeAvailable(recastnavigation)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
+
 # ── Sanitizers (opt-in: rallentano molto, non per il playtest) ────────────────
 # MSVC supporta solo ASan (/fsanitize=address); UBSan NON esiste su MSVC.
 option(GF_ENABLE_ASAN "Abilita AddressSanitizer (e UBSan dove supportato)" OFF)
@@ -172,11 +190,13 @@ add_executable(GFEngine
     src/ecs/systems/MovementSystem.cpp
     src/ecs/systems/CombatSystem.cpp
     src/ecs/systems/AiSystem.cpp
+    src/ecs/systems/CrowdSystem.cpp
     src/game/game_modes/ConquestMode.cpp
     src/game/game_modes/SandboxMode.cpp
     src/game/game_modes/GameModeFactory.cpp
     src/game/game_modes/ObjectiveModes.cpp
     src/game/CommandPosts.cpp
+    src/game/nav/NavManager.cpp
     src/core/Telemetry.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp
@@ -203,6 +223,7 @@ target_link_libraries(GFEngine PRIVATE
     spdlog::spdlog
     cpptrace::cpptrace
     TracyClient   # stub a costo nullo se USE_TRACY_PROFILER=OFF (ADR-015)
+    Recast Detour DetourCrowd   # navmesh + pathfinding + crowd (ADR-017)
 )
 gf_apply_sanitizers(GFEngine)
 if(MSVC)

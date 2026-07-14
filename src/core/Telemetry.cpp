@@ -32,7 +32,37 @@ bool                            g_initialized = false;
 std::string                     g_dir;                 // _telemetry_data/ assoluta
 std::shared_ptr<spdlog::logger> g_log;                 // engine_run.log + console
 std::shared_ptr<spdlog::logger> g_input;               // input_history.log
+std::shared_ptr<spdlog::logger> g_events;              // session_latest.jsonl (ADR-016)
 std::atomic<uint64_t>           g_frame{0};
+std::chrono::steady_clock::time_point g_start;         // per il campo "time" del JSONL
+std::function<void()>           g_stateDumpCb;         // dump stato su crash (Phase 4)
+std::atomic<bool>               g_dumping{false};       // guardia ri-entranza
+
+// ── Mappe Level (ADR-016) ─────────────────────────────────────────────────
+const char* levelStr(Level l)
+{
+    switch (l) {
+        case Level::Trace: return "TRACE";
+        case Level::Debug: return "DEBUG";
+        case Level::Info:  return "INFO";
+        case Level::Warn:  return "WARN";
+        case Level::Error: return "ERROR";
+        case Level::Fatal: return "FATAL";
+    }
+    return "INFO";
+}
+spdlog::level::level_enum toSpd(Level l)
+{
+    switch (l) {
+        case Level::Trace: return spdlog::level::trace;
+        case Level::Debug: return spdlog::level::debug;
+        case Level::Info:  return spdlog::level::info;
+        case Level::Warn:  return spdlog::level::warn;
+        case Level::Error: return spdlog::level::err;
+        case Level::Fatal: return spdlog::level::critical;
+    }
+    return spdlog::level::info;
+}
 
 // ── Risoluzione cartella: root progetto (3 livelli sopra l'exe, come data/),
 //    fallback accanto all'exe. Creata se assente. ─────────────────────────
@@ -82,6 +112,15 @@ void writeCrashReport(const std::string& reason)
         g_log->critical("CRASH: {} (frame {}) — stack trace in crash_report.txt",
                         reason, g_frame.load());
         g_log->flush();
+    }
+
+    // Dump stato completo su crash (Phase 4), best-effort: DOPO aver salvato la
+    // stack trace (già al sicuro), con guardia di ri-entranza + try/catch così
+    // un eventuale ri-crash del dump non manda in loop l'handler.
+    if (g_stateDumpCb && !g_dumping.exchange(true))
+    {
+        try { g_stateDumpCb(); }
+        catch (...) { fprintf(stderr, "[telemetry] dump stato su crash fallito\n"); }
     }
 }
 
@@ -151,6 +190,18 @@ void init(const char* appName)
     g_input->set_pattern("%v");
     spdlog::register_logger(g_input);
 
+    // ── Event log JSONL (ADR-016): una riga JSON per evento, pattern "%v"
+    //    (nessun prefisso spdlog), flush immediato su ERROR/FATAL ───────────
+    g_start = std::chrono::steady_clock::now();
+    auto eventsSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+        g_dir + "/" + (isEditor ? "editor_session.jsonl"
+                                : "session_latest.jsonl"), /*truncate=*/true);
+    g_events = std::make_shared<spdlog::logger>("events", eventsSink);
+    g_events->set_level(spdlog::level::trace);
+    g_events->set_pattern("%v");
+    g_events->flush_on(spdlog::level::err);   // ERROR/FATAL su disco subito
+    spdlog::register_logger(g_events);
+
     // ── Crash net ─────────────────────────────────────────────────────────
 #ifdef _WIN32
     SetUnhandledExceptionFilter(sehHandler);
@@ -170,7 +221,8 @@ void shutdown()
                     g_frame.load(), memoryUsageMB());
         g_log->flush();
     }
-    if (g_input) g_input->flush();
+    if (g_input)  g_input->flush();
+    if (g_events) g_events->flush();
     spdlog::shutdown();
     g_initialized = false;
 }
@@ -179,6 +231,36 @@ void logTrace(const std::string& m) { if (g_log) g_log->trace(m); }
 void logInfo (const std::string& m) { if (g_log) g_log->info(m); }
 void logWarn (const std::string& m) { if (g_log) g_log->warn(m); }
 void logError(const std::string& m) { if (g_log) g_log->error(m); }
+
+// ── Event log JSONL (ADR-016) ─────────────────────────────────────────────
+void event(Level level, const char* system, const std::string& msg,
+           const nlohmann::json& data)
+{
+    if (!g_events) return;
+    const double t = std::chrono::duration<double>(
+                         std::chrono::steady_clock::now() - g_start).count();
+    nlohmann::json j;
+    j["frame"]  = g_frame.load();
+    j["time"]   = t;
+    j["system"] = system ? system : "";
+    j["level"]  = levelStr(level);
+    j["msg"]    = msg;
+    j["data"]   = data;
+    // "{}" come format-string letterale: le graffe del JSON sono nell'ARGOMENTO,
+    // così fmt/spdlog non prova a interpretarle come segnaposto (una riga = un
+    // oggetto JSON). j.dump() senza indent = compatto, una sola riga.
+    g_events->log(toSpd(level), "{}", j.dump());
+    if (level >= Level::Error) g_events->flush();   // ERROR/FATAL: subito su disco
+}
+
+void event(Level level, const char* system, const std::string& msg)
+{
+    event(level, system, msg, nlohmann::json::object());
+}
+
+void flushEvents() { if (g_events) g_events->flush(); }
+
+void setStateDumpCallback(std::function<void()> cb) { g_stateDumpCb = std::move(cb); }
 
 void beginFrame()
 {

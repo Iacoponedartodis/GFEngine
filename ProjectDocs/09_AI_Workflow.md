@@ -4,10 +4,13 @@ For every non-trivial task:
 1. **Read memory first:** 05_CurrentState, 06_Todo, 08_KnownIssues, 10_ProjectMemory, 13_ADR.
    For architectural tasks also read 00/01/03/11/12.
 2. **Verify against live code.** Docs are a bridge; if code disagrees, code wins — fix the docs.
-   Especially re-check the two standing risks: hitbox inline-vs-profile split, and ConquestMode
-   fallback ids.
-3. **Name the impacted subsystems** explicitly from {ECS, game mode, render, DefinitionRegistry,
-   EntityEditor, WeaponEditor, HitboxEditor, MapEditor, FreeCameraViewport, build, data JSON}.
+   (Le due vecchie "standing risks" — split hitbox inline/profile e fallback id ConquestMode —
+   sono RISOLTE: ADR-006/012 e ADR-007. Nuove aree sensibili: movimento AI ora via crowd, non
+   `aiMove`; Y transform = centro; telemetria eventi discreti.)
+3. **Name the impacted subsystems** explicitly from {ECS (World + sistemi Movement/Combat/Ai/
+   Crowd), game mode, render, DefinitionRegistry, physics, nav (NavManager/CrowdSystem),
+   telemetria, EntityEditor, WeaponEditor, MapEditor, VehicleEditor, FreeCameraViewport, build,
+   data JSON}.
 4. **Trace global impact** for any id/schema/naming change: DefinitionRegistry loader + all
    editor UIs + all game-mode readers + cross-references (`EnemyDef.weaponIds/aiProfileId/
    hitboxProfileId`, `MapDef.enemyTypes/allyTypes`).

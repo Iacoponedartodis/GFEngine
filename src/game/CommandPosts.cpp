@@ -1,12 +1,18 @@
 #include "mini/game/CommandPosts.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/Components.hpp"
+#include "mini/core/Telemetry.hpp"
 
+#include <nlohmann/json.hpp>   // event() data (ADR-016)
 #include <cmath>
 #include <iostream>
 
 namespace mini
 {
+
+// Nome leggibile del team per la telemetria (ADR-016 / ADR-009).
+static const char* teamName(int team)
+{ return team == 1 ? "Ally" : team == 2 ? "Enemy" : "Neutral"; }
 
 // Colori per proprietario: neutrale grigio, team1 blu, team2 rosso
 static void ownerColor(int owner, float& r, float& g, float& b)
@@ -90,7 +96,13 @@ void CommandPosts::update(World& world, float dt)
         if (presentTeam != 0 && presentTeam != p.owner)
         {
             if (p.capturingTeam != presentTeam)
-            { p.capturingTeam = presentTeam; p.progress = 0.0f; }
+            {
+                p.capturingTeam = presentTeam; p.progress = 0.0f;
+                // Evento discreto (non per-frame): inizio cattura (ADR-016)
+                telemetry::event(telemetry::Level::Info, "CommandPost", "Capture started",
+                    {{"cp_id", p.def.label}, {"progress", 0.0f},
+                     {"owner", teamName(p.owner)}, {"capturing", teamName(presentTeam)}});
+            }
 
             p.progress += dt;
             if (p.progress >= p.def.captureTime)
@@ -99,6 +111,10 @@ void CommandPosts::update(World& world, float dt)
                 p.capturingTeam = 0;
                 p.progress      = 0.0f;
                 applyOwnerColor(world, p);
+                // Evento discreto: cambio proprietario (ADR-016)
+                telemetry::event(telemetry::Level::Info, "CommandPost", "Capture update",
+                    {{"cp_id", p.def.label}, {"progress", 1.0f},
+                     {"owner", teamName(p.owner)}});
                 std::cout << "[CommandPosts] '" << p.def.label
                           << "' catturato dal team " << p.owner << "!\n";
             }

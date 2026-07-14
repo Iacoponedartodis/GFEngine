@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace mini { class ISystem; struct MapDef; }
+namespace mini { class ISystem; struct MapDef; class NavManager; }
 
 namespace mini
 {
@@ -128,6 +128,11 @@ public:
     //    game mode in start(); l'AiSystem lo usa per cover/danger zone.
     //    L'ECS non include header di gioco: solo forward declaration.
     const MapDef* activeMap = nullptr;
+
+    // ── Navigazione (ADR-017 Phase B): puntatore opaco al NavManager, settato
+    //    da Application dopo la build del navmesh. AiSystem lo usa per il
+    //    pathfinding, CrowdSystem per tick+write-back. nullptr = fallback aiMove.
+    NavManager* nav = nullptr;
 
 private:
     std::uint64_t m_tickCount    = 0;

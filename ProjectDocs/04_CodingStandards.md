@@ -42,22 +42,25 @@
   - Reference implementation pattern: EntityEditor's weapon/ai_profile/hitbox_profile combos
     (see 03_SystemReference) — replicate this exact pattern for any new assignment field.
 
-- **Renaming a definition MUST go through the in-editor rename command, never through
-  manual file creation/deletion.** (See 13_ADR, ADR-010 — Proposed.) Manually duplicating a
-  JSON file with a new filename to "rename" a weapon/enemy/etc. is explicitly disallowed
-  once the rename command exists, because it leaves the old file as a silent duplicate and
-  does not update cross-references. Until ADR-010 is implemented, manual renames must be
-  followed by a full manual sweep: delete the old file, and grep every JSON in `data/` for
-  the old id string (`weaponIds`, `aiProfileId`, `hitboxProfileId`, `enemyTypes`, `allyTypes`).
+- **Renaming a definition MUST go through the in-editor rename command** (`util/DefinitionRename.hpp`,
+  ADR-010 — IMPLEMENTATO/Accepted), mai creando/cancellando file a mano: lascia il vecchio file
+  come duplicato silenzioso e non aggiorna i cross-reference. Il comando "Rinomina" esiste in
+  Weapon/Entity/Map/Vehicle editor.
 
-- **Any new JSON save path must use a shared RMW helper once introduced** (see 13_ADR,
-  ADR-010 candidate scope). Until the helper exists, every new `save*()` function must
-  manually implement read-modify-write and this must be called out explicitly in its own
-  code review / changelog entry.
+- **OGNI save path JSON dell'editor DEVE usare `saveJsonRMW`** (`util/JsonSave.hpp`, ADR-010 —
+  ESISTE): fa RMW + backup `.bak`. Nessun `ofstream` JSON diretto è ammesso. È un vincolo
+  strutturale, non una disciplina opzionale.
 
-- Respect the rendering constraint: client-side arrays only; do not introduce VAO/VBO.
+- **Ogni sistema nuovo DEVE loggare i suoi stati chiave via telemetria** (`mini::telemetry`,
+  doc 21): testo per gli umani (`logInfo`/`logWarn`/`logError`) + evento JSONL per il parsing
+  (`event(Level, system, msg, json)`). Eventi DISCRETI (transizioni/errori), MAI per-frame.
+
+- Respect the rendering constraint: client-side arrays only; do not introduce VAO/VBO (ADR-003).
 
 - Keep `TINYGLTF_IMPLEMENTATION` in exactly one TU (`src/vendor/tinygltf_impl.cpp`).
+
+- **Movimento AI:** con navmesh presente le AI si muovono via crowd Detour (doc 22) — passa per
+  `NavManager::requestMove*`, non scrivere direttamente il transform (lo fa il CrowdSystem).
 
 ## Change delivery
 This repo is edited **in place** with direct file writes + a verifying build. Files on disk

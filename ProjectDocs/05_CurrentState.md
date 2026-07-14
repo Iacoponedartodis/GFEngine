@@ -1,5 +1,35 @@
 # 05 — Current State
 
+## 2026-07-11 → 07-14 — Ottimizzazione + telemetria + navigazione (ADR-015/016/017)
+Tre grandi sistemi aggiunti, tutti verificati contro il codice live, build zero-warning,
+docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
+
+- **Profiling + frame pacing (ADR-015, Fasi 1-2):** Tracy opt-in (`USE_TRACY_PROFILER`,
+  solo GFEngine, no-op se OFF); main loop con dt a doppia precisione da
+  `SDL_GetPerformanceCounter` + frame-cap di sicurezza quando la VSync è spenta.
+- **Ottimizzazione AI (Fasi 3-4):** ricerca target in array SoA contigui; sensing pesante
+  (target+LOS) scaglionata per entità (`AI_SENSE_INTERVAL=6`, bersaglio cachato in
+  `AiComponent`); LOS limitata ai K bersagli più vicini (`AI_MAX_LOS_CHECKS=8`). Costo tick
+  a 100 AI: ~203 → ~36 ms (Debug). Stress test headless: `--stress N` (cap
+  `MAX_AI_PER_TEAM=50`/team), spawn a griglia in-mappa.
+- **Telemetria LLM-observable (ADR-016):** sink JSONL `session_latest.jsonl` ACCANTO a
+  `engine_run.log` (non lo sostituisce — ADR-013 resta); `telemetry::event(Level,system,msg,
+  json)` + `flushEvents`. Hook: GameMode (mode created, ticket bleed), CommandPost (cattura),
+  AI (cambio stato, stuck WARN con coordinate). Dump stato completo per-entità su
+  F12/fine-partita/crash (estende `dumpGameState`).
+- **Navigazione Recast/Detour (ADR-017, A+B+C):** navmesh single-tile da `MapDef.geometry`
+  al load (`NavManager`, solo GFEngine); DetourCrowd muove le AI — traversata = pathfinding
+  (aggira gli ostacoli → **AI-stuck su ostacoli risolto alla radice**), combattimento =
+  velocità tattica + avoidance, fallback `aiMove` se il navmesh manca. `CrowdSystem` (dopo
+  AiSystem) fa registra/reap/tick/write-back; `World::nav`, `AiComponent::crowdAgentIdx`.
+  Aree semantiche DANGER/COVER dai metadata del MapDef con costi `dtQueryFilter` (danger
+  aggirato). Il sensing ottimizzato resta ortogonale (decide CHI; il crowd decide COME muoversi).
+
+**Risultato misurato:** ~40 AI in simulazione ora fluidi (prima il limite di fluidità era
+~30-32); AI con pathfinding reale + crowd-avoidance + evita le danger zone.
+**Smoke manuali ancora dovuti** (headless non copre): restart sandbox dopo sim, glitch mouse
+primo-frame, partita REALE (feel movimento/combattimento AI via crowd), navmesh/aree su outpost.
+
 ## 2026-07-10 (24) — Robustezza tranche 2: arma attiva unica + A7/A9 chiusi
 - `PlayerController` senza più copia dell'arma attiva (accessor su weapons[active]) —
   KI #22 chiuso strutturalmente; resolve unità unico nemici/alleati in ConquestMode
@@ -114,13 +144,16 @@ _Last verified: 2026-07-04 (against live code)._
   La promessa Fase 1 "modalità come configurazioni" è implementata.
 
 ## Position vs Vision roadmap (00_Vision)
-**We are mid/late-Phase 1** ("core playable"). Present: 1 map (firebase, data-driven),
-infantry both factions, working weapons, spawns, base AI, **IGameMode + factory (ADR-008)**,
-**command post catturabili con ticket bleed (ADR-009, autorabili nel Map Editor)**, Conquest
-+ Sandbox, editor suite pro (gizmo 3 modalità, slider, camera Unreal-style). Missing for
-Phase 1 exit: Assault/Defense come registrazioni della factory, vehicles, runtime
-weapon-in-hand, HUD stato post, split-screen feasibility check, "is it fun" iteration.
-Phases 2-5 not started (by design).
+**Fase 1 ("core playable") essenzialmente completa.** Presente: 2 mappe data-driven
+(firebase, outpost), fanteria entrambe le fazioni, armi funzionanti, spawn, **IGameMode +
+factory (ADR-008)**, **Conquista/Assalto/Difesa (ADR-014)**, **command post con ticket bleed
+(ADR-009)**, **veicoli Fase A (19_Vehicles)**, **weapon-in-hand runtime + viewmodel**,
+**HUD stato post**, split-screen feasibility verificata (ADR-011, esito (a)), Sandbox + tools.
+Editor suite pro (gizmo 3 modalità, slider, camera Unreal-style, rename tooling ADR-010).
+Sopra la Fase 1 sono stati aggiunti sistemi di respiro Fase 2/3: **telemetria LLM-observable
+(ADR-016)**, **navigazione Recast/Detour con crowd (ADR-017)**, **ottimizzazione AI/loop
+(ADR-015)**. Resta l'iterazione "is it fun" e i debiti tracciati in 06_Todo. Fasi 3-5 non
+ancora avviate (by design), salvo la preparazione navigazione/AI appena fatta.
 
 ## Working
 - DefinitionRegistry loads weapons/enemies/allies/ai/hitboxes/maps/abilities/characters
@@ -137,12 +170,12 @@ Phases 2-5 not started (by design).
 - **EntityEditor:** mesh browse (+ saved), transform, rig bones visible/clickable, attach
   points (bone-bindable, rendered as boxes + text labels), inline hitbox zones (bone-bindable),
   weapon-in-hand pose persisted as `weapon_display`.
-- **HitboxEditor:** 3-column layout, 3D viewport (model+bones+wireframe zones), bone binding,
-  auto-snap of bone-bound zones, gizmo.
-- **MapEditor & HitboxEditor & EntityEditor:** gizmo a 3 modalità (Sposta/Ruota/Scala,
+- **(HitboxEditor RIMOSSO — ADR-012):** l'authoring hitbox è nell'EntityEditor (tab Hitbox);
+  il formato profilo runtime `data/hitboxes/*.json` resta invariato (ADR-006).
+- **MapEditor & EntityEditor & VehicleEditor:** gizmo a 3 modalità (Sposta/Ruota/Scala,
   scorciatoie 1/2/3, barra [Sposta][Ruota][Scala] per modulo) + selezione visibile attraverso
   i modelli; pannelli proprietà a slider+campo numerico (`UiWidgets::sliderRow`); wireframe
-  hitbox rotation-aware anche nell'EntityEditor.
+  hitbox rotation-aware nell'EntityEditor.
 - Weapon GLBs assigned: E5/E-5C -> e-5_blaster_rifle.glb, DC-17 -> dc-17.glb.
 - Enemy/ally meshes assigned (B1 droids, Clone Trooper).
 
@@ -160,11 +193,17 @@ Phases 2-5 not started (by design).
 - Clone Trooper scale: risolto dall'utente via editor (nuovo GLB + mesh_scale 0.011).
 
 ## Partial / fragile
-- **HitboxEditor/EntityEditor concurrency:** same profile file, last save wins (ADR-006 note).
-- **Mode id dal flag CLI:** la scelta modalità dovrebbe in futuro venire da MapDef/PreMatch
-  (nota in ADR-008).
+- **AI ignorano i veicoli** (KI #31, regressione nav Phase B): il crowd non conosce i veicoli.
+- **Nessun sistema abilità/gadget lato giocatore** (KI #32): loadout non cablato al player.
+- **Timestep misto:** world a fixedDt, player/sparo a dt variabile (A10 — rilevante per replay).
+- **Application.cpp ~1250 righe:** candidato refactor R2 (estrarre VehicleDriver/SandboxSession).
+- **Mode id dal flag CLI:** la scelta modalità dovrebbe venire da MapDef/PreMatch (nota ADR-008).
 
 ## Not implemented
-- AI Editor, Asset Manager, UI/Interface Editor modules.
-- Rename tooling for all definition types (partial in BalanceEditor history).
-- Weapon rendering in the actual runtime (weapon_display is editor-only preview so far).
+- AI Editor, Asset Manager, UI/Interface Editor modules (moduli editor futuri).
+- Sistema Classi giocatore (14_ClassSystem — schema definito, zero codice).
+- Sistema abilità/gadget lato GIOCATORE (le abilità esistono solo per le AI — KI #32).
+- Veicoli Fase B (armi di bordo, multi-posto, AI alla guida — 19_Vehicles).
+- Split-screen vero (input/HUD 2° giocatore; feasibility verificata, ADR-011).
+- Rename tooling: FATTO (ADR-010). Weapon-in-hand runtime + viewmodel: FATTO. (voci storiche
+  qui sotto aggiornate — vedi sezione di stato 07-11→07-14 in cima al documento.)

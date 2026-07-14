@@ -10,6 +10,8 @@
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
 
+#include <nlohmann/json.hpp>   // event() data (ADR-016)
+
 #include <iostream>
 #include <algorithm>
 #include <vector>
@@ -739,12 +741,18 @@ void ConquestMode::updateObjectiveRules(World& /*world*/, float dt)
     if (own1 > own2 && m_team2Tickets > 0)
     {
         --m_team2Tickets;
+        telemetry::event(telemetry::Level::Info, "GameMode", "Ticket bleed",
+            {{"tickets_ally", m_team1Tickets}, {"tickets_enemy", m_team2Tickets},
+             {"posts_ally", own1}, {"posts_enemy", own2}, {"drained", "enemy"}});
         std::cout << "[Conquest] Maggioranza post alleata: ticket nemici -> "
                   << m_team2Tickets << "\n";
     }
     else if (own2 > own1 && m_team1Tickets > 0)
     {
         --m_team1Tickets;
+        telemetry::event(telemetry::Level::Info, "GameMode", "Ticket bleed",
+            {{"tickets_ally", m_team1Tickets}, {"tickets_enemy", m_team2Tickets},
+             {"posts_ally", own1}, {"posts_enemy", own2}, {"drained", "ally"}});
         std::cout << "[Conquest] Maggioranza post nemica: ticket alleati -> "
                   << m_team1Tickets << "\n";
     }

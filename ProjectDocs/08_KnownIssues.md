@@ -209,3 +209,20 @@
   VIENE chiamato e ruota la camera. Possibile confusione col rimbalzo di spawn (#28, ora
   risolto) o col glitch mouse primo-frame (già mitigato dal flush in `Window::setMouseCaptured`).
   **Da ri-testare a mano** dopo questi fix; se persiste, catturare un caso concreto.
+
+## 31. AI attraversano i veicoli (regressione nav Phase B, LOW) — APERTO 2026-07-14
+- Con DetourCrowd (ADR-017) il movimento AI non usa più `hasCollision`; il navmesh è costruito
+  solo dalla geometria statica di `MapDef` e il crowd non conosce i veicoli (entità dinamiche
+  con collider). Quindi le AI ora CAMMINANO ATTRAVERSO gli speeder parcheggiati (prima `aiMove`
+  li bloccava). Il giocatore invece li collide ancora (usa `slideMoveWithStepUp`, non il crowd).
+- Fix futuro: veicoli come ostacoli dinamici del crowd (dtObstacleAvoidance / carve del navmesh
+  via tile-cache) oppure ri-aggiungere un check collisione veicolo nel movimento AI. Non
+  bloccante (i veicoli sono pochi e fermi); già notato in ADR-017 tra gli aperti.
+
+## 32. Nessun sistema abilità/gadget lato GIOCATORE (MEDIUM) — APERTO 2026-07-14
+- Il PreMatch fa scegliere `abilityIds`/`gadgetId` al giocatore ma NON vengono applicati
+  all'entità player (le abilità esistono solo per le AI: `ShieldComponent`/`AbilityComponent`
+  allo spawn da `def->abilityIds`). Righe loadout marcate "(non attiva/o)" (KI #25) finché il
+  sistema non esiste. Chiarimenti dall'utente per il futuro: la schivata/roll è un COMANDO BASE
+  (già funzionante via tasto), non un'abilità; lo shield va concepito come GADGET, non abilità.
+  Lavoro futuro (abilità/gadget player-side).

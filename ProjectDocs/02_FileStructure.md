@@ -13,15 +13,18 @@ assets/               binary assets
 docs/                 pre-existing loose docs (NOT the ProjectDocs memory set)
 editor/               GFEditor tool (separate target)
   include/{modules,ui,util,viewport}/   src/{modules,ui,util,viewport}/
-external/             vendored deps (SDL2, imgui, glm, tinygltf, tinyobj, nlohmann fetched)
+external/glm          glm vendorizzato (le altre deps sono FetchContent in build/_deps:
+                      SDL2, imgui, tinygltf, tinyobj, nlohmann/json, spdlog, cpptrace,
+                      Tracy [opt-in], recastnavigation)
 include/mini/         public engine headers mirroring src/
-  core/ ecs/{components,systems}/ game/{data,game_modes}/ physics/ platform/ render/
+  core/ ecs/{components,systems}/ game/{data,game_modes,nav}/ physics/ platform/ render/
 src/                  engine/game implementation (mirrors include/mini/)
-  core/ ecs/{systems}/ game/{data,game_modes}/ physics/ platform/ render/ vendor/
+  core/ ecs/{systems}/ game/{data,game_modes,nav}/ physics/ platform/ render/ vendor/
 tests/                test scaffolding
 ProjectDocs/          <-- this operational memory set
-_telemetry_data/      runtime-generated (ADR-013): engine_run.log, game_state.json,
-                      input_history.log, crash_report.txt — auto-creata, gitignored
+_telemetry_data/      runtime-generated (ADR-013/016): engine_run.log, session_latest.jsonl,
+                      game_state.json, input_history.log, crash_report.txt (+ varianti editor_*)
+                      — auto-creata, gitignored
 build/                generated (out of scope for architecture; should be gitignored)
 imgui.ini             runtime-generated ImGui layout (should be gitignored)
 presets.cfg           runtime-generated (should be gitignored)
@@ -51,5 +54,18 @@ ProjectDocs/17_SandboxTools.md    menu sandbox, log chat, sim osservatore (impl.
 ProjectDocs/18_AiMapConsumption.md  consumo Map Metadata dall'AI (impl.)
 ProjectDocs/19_Vehicles.md        veicoli Fase A (impl.) / Fase B (piano)
 ```
-Flag CLI runtime: `--sandbox`, `--direct-prematch`, `--sim` (sandbox + simulazione
-AI-vs-AI con osservatore, per test/debug).
+## Aggiunte 2026-07-11 → 07-14 (ottimizzazione + telemetria + navigazione)
+```
+src/game/nav/NavManager.cpp                navmesh Recast/Detour + crowd (ADR-017, doc 22)
+include/mini/game/nav/NavManager.hpp
+src/ecs/systems/CrowdSystem.cpp            tick crowd + write-back npos→transform (ADR-017)
+include/mini/ecs/systems/CrowdSystem.hpp
+include/mini/core/Telemetry.hpp            +event()/flushEvents/Level JSONL (ADR-016, doc 21)
+ProjectDocs/13_ADR.md                      +ADR-015 (Tracy/pacing), 016 (telemetria), 017 (nav)
+_telemetry_data/session_latest.jsonl       event log JSONL LLM-observable (runtime)
+```
+Costanti nuove in `core/GameConfig.hpp`: `MAX_UNCAPPED_FPS`, `AI_SENSE_INTERVAL`,
+`AI_MAX_LOS_CHECKS`, `MAX_AI_PER_TEAM`. Opzione CMake `USE_TRACY_PROFILER` (default OFF).
+
+Flag CLI runtime: `--sandbox`, `--direct-prematch`, `--sim` (sandbox + simulazione AI-vs-AI
+osservatore), `--map <id>` (mappa iniziale), `--stress N` (sim con N AI/team, per profilare).

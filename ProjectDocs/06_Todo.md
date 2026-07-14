@@ -1,5 +1,18 @@
 # 06 — Todo (reality-based, prioritized)
 
+## Done 2026-07-11 → 07-14 (ottimizzazione + telemetria + navigazione)
+- **Ottimizzazione loop/AI (ADR-015, doc 20):** frame pacing doppia precisione + cap sicurezza;
+  Tracy opt-in; ricerca target SoA; time-slicing sensing; cap LOS ai K vicini. Stress `--stress N`.
+  Risultato: ~40 AI fluidi in sim (prima ~30).
+- **Telemetria LLM-observable (ADR-016, doc 21):** sink JSONL `session_latest.jsonl` + hook
+  GameMode/CommandPost/AI + dump stato completo su F12/fine-partita/crash.
+- **Navigazione Recast/Detour (ADR-017, doc 22):** navmesh da MapDef.geometry, DetourCrowd muove
+  le AI (pathfinding → AI-stuck su ostacoli RISOLTO; crowd-avoidance), aree danger/cover.
+- **Fix:** spawn giocatore posato a terra (KI #28), glitch mouse primo-frame, piedi sottoterra AI
+  (regressione crowd). Aperti nuovi: KI #31 (AI attraversano veicoli), KI #32 (abilità player).
+- **Nuovi candidati a valore:** R2 (Application.cpp ~1250 righe → estrarre VehicleDriver/Sandbox),
+  KI #31 (AI-veicolo), sistema abilità/gadget player-side (KI #32).
+
 ## Robustezza (audit codice completo 2026-07-10 — ordine = gravità)
 
 A1. ~~FATTO 2026-07-10~~ **Preset partita: sopravvivenza alle build + formato robusto** (KI #19+#20).
@@ -37,7 +50,10 @@ A9. ~~FATTO 2026-07-10~~ **Campi fantasma marcati "(non attivo)"** negli editor
 A10. **Vincoli architetturali da tracciare (non da fixare ora):** team 1/2 hardcoded
     trasversale (nessun supporto 3+ fazioni/FFA); timestep misto (world a fixedDt,
     player/sparo a dt variabile — rilevante per determinismo/replay/split-screen);
-    nessuna broad-phase spaziale (collision/LOS O(N²) — muro alla scala fase 2/3);
+    ~~nessuna broad-phase spaziale (collision/LOS O(N²) — muro alla scala fase 2/3)~~
+    → MITIGATO 2026-07-14: sensing AI ora SoA + time-slicing + cap LOS ai K vicini (doc 20),
+    e il movimento AI usa il navmesh Detour invece di `hasCollision` (doc 22). Resta O(N²) solo
+    il broad-phase collisione di player/proiettili (pochi collider, non un muro);
     `MatchSettings.hpp` include ancora SDL in header condiviso.
     ~~Doppia rappresentazione weapon/weapons[2]~~ → RISOLTA 2026-07-10 (28):
     accessor `weapon()` su `weapons[activeWeapon]`, nessuna copia da sincronizzare.
