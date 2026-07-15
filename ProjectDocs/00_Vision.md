@@ -34,10 +34,11 @@ produzione solo-developer mantenuto su molte sessioni, non una demo.
 
 ## Requisiti funzionali dichiarati (non negoziabili)
 - **Split-screen locale a 2 giocatori** con scaling flessibile di UI/input, configurabile senza
-  codice. Stato attuale: **feasibility spike proposto ma non eseguito** — vedi ADR-011
-  (13_ADR, Status: Proposed) e 08_KnownIssues #12. Non verificato nel codice se la pipeline
-  camera/input regge un secondo viewport locale simultaneo — da verificare prima di espandere
-  ulteriormente sistemi che assumono un solo giocatore attivo.
+  codice. Stato attuale: **feasibility VERIFICATA** (spike ADR-011 eseguito 2026-07-09, esito
+  (a)): due viewport + seconda Camera sulla stessa scena live funzionano con sole aggiunte
+  minori al Renderer (`drawMeshFrom(const Camera&)`, `setViewportRect`); toggle debug F9.
+  08_KnownIssues #12 chiuso, il soft-gate ADR-011 decade. **Resta da fare**: input e HUD del
+  secondo giocatore (lavoro additivo, non strutturale).
 
 ## Roadmap a fasi (vincolante per le priorità di sviluppo)
 1. **Fase 1 — Core playable:** 1-2 mappe, fanteria (cloni/droidi), armi funzionanti, spawn,
@@ -65,13 +66,13 @@ produzione solo-developer mantenuto su molte sessioni, non una demo.
 - **Introdurre il concetto di Classe** (composizione arma+equipaggiamento+ruolo) distinto
   dalla singola arma, in preparazione della Fase 3. Documentato come Planned Feature in
   14_ClassSystem; non ancora implementato.
-- **Estendere le mappe con metadata tattici** (cover point/danger zone/patrol/settori) per
-  l'AI. Documentato come Planned Feature in 15_MapMetadata; non ancora implementato.
-- **Unificare naming/id e introdurre rename tooling in editor.** Un rename manuale (creazione
-  di un nuovo file invece di rinominare l'esistente) ha causato duplicati visibili in gioco
-  (08_KnownIssues #7, confermato 2026-07-09). Decisione registrata in ADR-010 (Proposed,
-  13_ADR): comando "Rinomina" per ogni tipo di definizione + helper di salvataggio RMW
-  centralizzato. Non ancora implementato — priorità P0 (06_Todo #1-#2).
+- ~~Estendere le mappe con metadata tattici (cover point/danger zone/patrol/settori) per
+  l'AI~~ — FATTO 2026-07-10: dati + authoring MapEditor (15_MapMetadata) e consumo dall'AI
+  (18_AiMapConsumption). Restano i settori e le pose alle coperture.
+- ~~Unificare naming/id e introdurre rename tooling in editor~~ — FATTO 2026-07-09 (ADR-010
+  Accepted): comando "Rinomina" con sweep cross-ref in Weapon/Entity/Map/Vehicle editor +
+  `saveJsonRMW` centralizzato con `.bak`. Resta la bonifica manuale dei near-duplicate storici
+  (08_KnownIssues #7) e, come presidio strutturale, il gate di validazione (ADR-018, doc 24).
 - Far crescere l'editor verso: Entity, Weapon, Hitbox, Map, **AI Editor**, **Asset Manager**,
   **Map Metadata** (cover point/danger zone/settori per l'AI — vedi 15_MapMetadata), e un
   futuro UI/Interface Editor.

@@ -1,4 +1,4 @@
-# 18 — AI Map Consumption: l'AI usa i Map Metadata (Planned Feature)
+# 18 — AI Map Consumption: l'AI usa i Map Metadata (Implementato)
 
 Status: **Implementato (scope 1-4)** — 2026-07-10. Le voci in Out of Scope restano
 pianificate (pose alle coperture → Todo #24; route multi-segmento; pathfinding).

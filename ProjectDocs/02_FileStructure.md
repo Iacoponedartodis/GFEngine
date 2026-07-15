@@ -54,6 +54,16 @@ ProjectDocs/17_SandboxTools.md    menu sandbox, log chat, sim osservatore (impl.
 ProjectDocs/18_AiMapConsumption.md  consumo Map Metadata dall'AI (impl.)
 ProjectDocs/19_Vehicles.md        veicoli Fase A (impl.) / Fase B (piano)
 ```
+## Aggiunte 2026-07-15 (solo documentazione, nessun file di codice)
+```
+ProjectDocs/23_GameDesignBridge.md      ponte GDD↔engine (Reference)
+ProjectDocs/24_ContentValidation.md     gate validazione + error model (Planned, ADR-018)
+ProjectDocs/25_ObjectivesAndMissions.md framework obiettivi/missioni (Planned, ADR-019)
+ProjectDocs/26_SquadAndCommand.md       squadra + ordini contestuali (Planned, ADR-020)
+ProjectDocs/27_Progression.md           carriera/gradi/specializzazioni (Planned, Fase 3)
+ProjectDocs/28_Persistence.md           CareerSave/CampaignSave (Planned, Fase 3/4, ADR-021)
+```
+
 ## Aggiunte 2026-07-11 → 07-14 (ottimizzazione + telemetria + navigazione)
 ```
 src/game/nav/NavManager.cpp                navmesh Recast/Detour + crowd (ADR-017, doc 22)

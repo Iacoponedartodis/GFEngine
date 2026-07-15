@@ -1,4 +1,4 @@
-# 16 — AI Behavior: profilo tattico completo + abilità runtime (Planned Feature)
+# 16 — AI Behavior: profilo tattico completo + abilità runtime (Implementato)
 
 Status: **Implementato (scope 1-5)** — 2026-07-10, Todo #3. Le voci in Out of Scope
 restano pianificate. Template come 14/15.

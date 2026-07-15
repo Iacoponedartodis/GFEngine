@@ -3,6 +3,9 @@
 For every non-trivial task:
 1. **Read memory first:** 05_CurrentState, 06_Todo, 08_KnownIssues, 10_ProjectMemory, 13_ADR.
    For architectural tasks also read 00/01/03/11/12.
+   **Per il "perché" di design** (cosa deve diventare il gioco, non cosa è): 23_GameDesignBridge
+   — mappa il GDD sui sistemi e dice quale doc tocca quale sistema. Precedenza: per lo **stato
+   reale** vincono 05 + il codice; per l'**intenzione di design** vince il GDD (doc 23).
 2. **Verify against live code.** Docs are a bridge; if code disagrees, code wins — fix the docs.
    (Le due vecchie "standing risks" — split hitbox inline/profile e fallback id ConquestMode —
    sono RISOLTE: ADR-006/012 e ADR-007. Nuove aree sensibili: movimento AI ora via crowd, non

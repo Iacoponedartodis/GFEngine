@@ -1,5 +1,47 @@
 # 06 — Todo (reality-based, prioritized)
 
+## PROSSIMO SALTO — derivato da GDD + master plan (2026-07-15)
+
+Contesto: la **Fase 1 è essenzialmente completa** (05_CurrentState) e sopra ci sono già sistemi
+di respiro Fase 2/3 (nav ADR-017, telemetria ADR-016, ottimizzazione ADR-015). Il confronto con
+il GDD (nuovo doc 23) dice che il gap non è più tecnico: **è di design**. Ordine proposto —
+discutibile, ma questa è la logica.
+
+**N1. Squad & Command (doc 26, ADR-020) — il salto più grande.**
+È **l'unico pilastro del GDD senza una riga di codice**, ed è quello che decide se Galactic Front
+è "uno sparatutto competente" o "il gioco del GDD": la vittoria deve nascere da decisioni
+tattiche e gestione della squadra, non dalla mira. Oggi nasce solo dalla mira.
+Perché **adesso** e non prima: tutte le fondamenta sono appena state completate —
+AI con profili tattici (16), pathfinding+crowd (22: un ordine "vai lì" è finalmente eseguibile),
+consumo dei metadata di mappa (18: "prendi copertura" ha dati veri sotto), telemetria
+osservabile (21: gli ordini si verificano in `--sim` senza giocare a mano). Prima di ADR-017
+questo sistema non era costruibile bene; ora sì.
+Nota: include lo **stato "a terra" + rianimazione** — è ciò che dà peso alle perdite.
+→ Lega con l'iterazione **"is it fun"** ancora aperta della Fase 1: è il candidato numero uno a
+farla passare.
+
+**N2. Framework obiettivi (doc 25, ADR-019) — sblocca la Fase 2.**
+La Vision chiede "obiettivi stratificati (principali/strategici/tattici)"; oggi l'unico obiettivo
+è il command post cablato nei mode. Senza questo, ogni obiettivo nuovo diventerebbe una modalità
+nuova — il fork che ADR-008/014 hanno evitato. Generalizza ADR-009, non lo riscrive.
+
+**N3. Gate di validazione contenuti (doc 24, ADR-018) — piccolo, strutturale, subito.**
+Chiude la classe di bug che il progetto paga da mesi (KI #7 near-duplicate, #25 campi fantasma,
+#26 fallback morti, incidente hitbox 07-09). ADR-010 ha reso strutturale la *scrittura* sicura;
+questo fa lo stesso per la *correttezza*. Costo basso, si può fare in parallelo.
+
+**N4. Class System (doc 14) — prerequisito della Fase 3.**
+Schema già scritto, zero codice (KI #10). Blocca la progressione (doc 27): agganciarla oggi a
+`weaponIds[]` significherebbe rifarla dopo. Si lega a KI #32 (nessun sistema abilità/gadget
+lato giocatore): la classe è il contenitore naturale di armi + gadget + ruolo.
+
+**N5. Progressione (27) e Persistenza (28) — Fase 3, dopo N4.** Non prima.
+
+**Debiti che restano validi in parallelo:** KI #31 (AI attraversano i veicoli — regressione nav),
+KI #32 (abilità/gadget player-side), R2 (Application.cpp ~1250 righe → estrarre
+VehicleDriver/SandboxSession), KI #7 (bonifica manuale near-duplicate), R7 (igiene `.bak`).
+
+
 ## Done 2026-07-11 → 07-14 (ottimizzazione + telemetria + navigazione)
 - **Ottimizzazione loop/AI (ADR-015, doc 20):** frame pacing doppia precisione + cap sicurezza;
   Tracy opt-in; ricerca target SoA; time-slicing sensing; cap LOS ai K vicini. Stress `--stress N`.

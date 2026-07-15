@@ -1,4 +1,4 @@
-# 15 — Map Metadata (Planned Feature)
+# 15 — Map Metadata (Implementato)
 
 **Status: Implementato (schema + loader + authoring) — 2026-07-10.**
 `MapDef.coverPoints/patrolRoutes/dangerZones` esistono, sono parse-ati dal

@@ -72,7 +72,7 @@ One entry per structural decision. Newest last.
   Assalto/Difesa riusano lo stesso blocco con regole diverse. KnownIssues #9 chiuso.
   Status: **in force.**
 
-## ADR-010 — In-editor rename command + centralized RMW save helper (Proposed, 2026-07-09)
+## ADR-010 — In-editor rename command + centralized RMW save helper (Accepted — IMPLEMENTATO 2026-07-09)
 
 ### Context
 `id = filename stem` (ADR-001) is a sound convention, but the tooling to change an id safely
@@ -280,7 +280,7 @@ nemico vivo), inestendibile a regole a obiettivi.
   con playtest. I preset partita NON salvano ancora modeIndex (persistenza preset da
   estendere — minor, tracciato).
 
-## ADR-011 — Split-screen feasibility verification as a gating spike (Proposed, 2026-07-09)
+## ADR-011 — Split-screen feasibility verification as a gating spike (Accepted — SPIKE ESEGUITO 2026-07-09, esito (a): fattibile)
 
 ### Context
 Local split-screen for 2 players is stated in 00_Vision as a **non-negotiable functional
@@ -495,3 +495,144 @@ rename tooling (fatto); l'AI-stuck non è un item numerato; "#11" = metadata AI 
   (separationWeight, soglia stuck); costi/filtri per-ruolo non ancora cablati (struttura pronta).
   **Smoke manuale utente:** partita reale (non solo sim), feel del combattimento, mappa outpost.
   ADR-017 completo (A+B+C) — la navigazione Recast è in force.
+## ADR-018 — Gate di validazione contenuti condiviso runtime/editor (Proposed, 2026-07-15)
+
+### Context
+Il progetto ha pagato ripetutamente la stessa classe di problema: **dati sbagliati che non
+falliscono, ma degradano in silenzio.** Casi confermati: near-duplicate da rename manuale
+(KI #7, P0); campi editabili mai consumati (KI #25, mitigato a mano); dati/fallback morti
+(KI #26); zone hitbox scritte dal profilo sbagliato (2026-07-09 #2, salvato dal `.bak`); id di
+fallback hardcoded (ADR-007, rimossi dopo aver fatto danno). Il pattern è invariante: un
+riferimento rotto non blocca nulla e il sintomo appare lontano dalla causa.
+ADR-010 ha reso strutturale la **scrittura** sicura (`saveJsonRMW`); nulla presidia la
+**correttezza** del contenuto.
+
+### Options Considered
+1. **Continuare con la disciplina documentata.** Rifiutato: è esattamente la scelta che ADR-010
+   ha già dovuto abbandonare dopo due incidenti — la disciplina da sola ha già fallito.
+2. **Validazione dentro i loader.** Rifiutato: i loader devono restare semplici e tolleranti
+   (pattern `gets/geti/getf`, 04_CodingStandards); mescolare parsing e regole di dominio rende
+   entrambi più difficili da cambiare, e non dà un punto unico per l'editor.
+3. **Validatore separato nell'editor.** Rifiutato: l'editor avrebbe una copia più debole delle
+   regole → contenuto accettato dall'editor e rifiutato dal runtime. È il bug che vogliamo togliere.
+4. **`validateContent(registry)` nel layer game/data, linkato da entrambi i binari.** Scelto.
+
+### Decision
+Un'unica funzione `validateContent(registry) -> vector<Diagnostic>` nel layer **game/data**
+(accanto a `DefinitionRegistry`), che gira **dopo** `loadAll()` e non fa I/O nuovo. Tre
+consumatori dello **stesso** codice: runtime (blocca il load su Error), editor (pannello
+cliccabile), headless (`--validate`, exit code ≠ 0). Ogni `Diagnostic` porta severity, categoria,
+file, messaggio e **suggerimento azionabile**, ed è emessa anche come evento JSONL (ADR-016).
+Contenuto critico invalido **blocca**; il non critico è Warning loggato; i fallback documentati
+(es. geometria firebase, ADR-004) restano ma **devono loggare di essere stati usati**.
+
+### Consequences
+- Positive: chiude strutturalmente la classe di bug di KI #7/#25/#26; l'errore diventa
+  azionabile e LLM-observable; l'editor non può più divergere dal runtime.
+- Costi: va deciso con cura cosa è "critico" (bloccare su un cosmetico renderebbe l'authoring
+  ostile); serve manutenzione dell'elenco dei gate quando nascono nuovi tipi di riferimento.
+- Non viola il contratto two-binary (ADR-002): vive sotto il gameplay, l'editor lo linka come già
+  fa con gli header engine.
+- Dettaglio in **24_ContentValidation.md**.
+
+## ADR-019 — Framework obiettivi generico; il command post ne è una configurazione (Proposed, 2026-07-15)
+
+### Context
+La Fase 2 (00_Vision) chiede **obiettivi stratificati** (principali/strategici/tattici). Oggi
+l'unico obiettivo è il command post (ADR-009), e le regole vivono dentro i mode. Aggiungere
+"distruggi il relè" o "scorta il convoglio" richiederebbe una modalità nuova per ogni obiettivo —
+esattamente il fork che ADR-008/ADR-014 hanno evitato per le modalità.
+
+### Options Considered
+1. **Un `IGameMode` per ogni tipo di missione.** Rifiutato: moltiplica la simulazione, contro la
+   verità guida "un solo core, molte configurazioni" (00_Vision).
+2. **Estendere `CommandPosts` a coprire tutto.** Rifiutato: modella *una* meccanica (cattura a
+   presenza + bleed); non ha attivazione, dipendenze, tier.
+3. **`ObjectiveDef` generico + `MissionDef`, con il command post come configurazione.** Scelto —
+   generalizza il pattern che ADR-009 ha già dimostrato corretto (obiettivo = dati nel MapDef).
+
+### Decision
+`ObjectiveDef` (type, target, activation, success, failure, **tier**, reward, consequence,
+linkedObjectives) e `MissionDef` (map, mode, obiettivi, regole di successo **e** fallimento)
+diventano definizioni nel registry (id = filename stem, ADR-001). Nuovo `ObjectiveSystem` dopo
+`AiSystem`/`CrowdSystem`. `IGameMode` resta e decide le **regole** (ticket, `outcome()`); gli
+obiettivi decidono **cosa fare**. `MapDef.commandPosts` resta valido: ADR-009 viene **avvolto,
+non riscritto**.
+
+### Consequences
+- Positive: un obiettivo nuovo = un JSON; la stratificazione della Fase 2 diventa un campo
+  (`tier`) invece di tre sistemi paralleli; il fallimento parziale abilita decisioni tattiche
+  emergenti invece di firefight lineari.
+- Costi: un sistema ECS in più nel tick; l'assorbimento dei mode esistenti va fatto
+  gradualmente ("smallest safe change", 09_AI_Workflow), non in un big-bang.
+- Dettaglio in **25_ObjectivesAndMissions.md**.
+
+## ADR-020 — Squad & Command: SquadSystem fra AiSystem e CrowdSystem (Proposed, 2026-07-15)
+
+### Context
+"La squadra è una risorsa, non decorazione" è un pilastro del GDD, ed è **l'unico senza alcuna
+traccia nel codice**: non esistono squadre né ordini. Il GDD è esplicito: la vittoria deve nascere
+da decisioni tattiche e gestione della squadra, non dalla mira. Oggi nasce solo dalla mira.
+Le fondamenta però esistono già: profili tattici AI (doc 16), pathfinding + crowd (ADR-017),
+consumo dei metadata di mappa (doc 18), telemetria osservabile (ADR-016).
+
+### Options Considered
+1. **Ordini che scrivono direttamente la destinazione/transform dell'AI.** Rifiutato: viola il
+   vincolo confermato sul codice reale (10_ProjectMemory / doc 22) — con navmesh presente il
+   movimento passa per `NavManager::requestMove*` e lo scrive il `CrowdSystem`.
+2. **SquadSystem DOPO AiSystem (override della decisione).** Rifiutato: renderebbe gli alleati
+   telecomandati; il GDD vuole che l'AI resti autonoma *dentro* il vincolo dell'ordine.
+3. **SquadSystem PRIMA di AiSystem** (l'ordine è un vincolo sulla decisione). Scelto.
+
+### Decision
+Nuovo `SquadSystem` in `World::tick` con ordine
+`MovementSystem → CombatSystem → SquadSystem → AiSystem → CrowdSystem`: la squadra assegna il
+task, l'AI individuale sceglie autonomamente movimento/copertura/micro-combattimento, il crowd
+esegue. `SquadComponent` sui membri; l'input del giocatore arriva via **pattern mailbox** sul
+World (10_ProjectMemory), senza accoppiare `ecs/` al codice di gioco. Set di ordini iniziale
+volutamente piccolo (Follow, HoldPosition, MoveTo, TakeCover, FocusFire, Revive, Regroup).
+Ogni ordine termina **completato o fallito con causa esplicita** — mai in silenzio.
+L'economia tattica (Punti Comando) si guadagna **completando obiettivi, non uccidendo**.
+
+### Consequences
+- Positive: realizza il pilastro mancante; riusa nav/crowd/metadata già in force; verificabile
+  headless in `--sim` via telemetria.
+- Costi: un sistema in più nel tick (impatto da misurare, doc 20); lo stato "a terra"+rianimazione
+  tocca `CombatSystem`.
+- Rischio: il comando deve funzionare **durante** il firefight — un sistema che obbliga a fermarsi
+  ha già fallito il requisito di design.
+- Dettaglio in **26_SquadAndCommand.md**.
+
+## ADR-021 — Save di carriera: snapshot di dominio + scrittura atomica (Proposed, 2026-07-15)
+
+### Context
+La Fase 3 richiede persistenza della carriera. Il progetto ha già una storia di **salvataggi
+distruttivi**: 2026-07-08 `BalanceEditor::saveMap` ha distrutto `geometry`/`command_posts` di
+firebase.json (partita ingiocabile, KI #15); KI #19 — ogni build cancellava i preset perché
+stavano dentro `data/`. ADR-010 ha risolto per gli editor con `saveJsonRMW`. Un save di carriera
+è la stessa classe di rischio ma **il danno è peggiore: non è un file rigenerabile, è il
+progresso dell'utente.**
+
+### Options Considered
+1. **Serializzare il World/ECS.** Rifiutato: il World contiene stato derivato e puntatori opachi
+   (`World::nav`, `crowdAgentIdx`, mailbox) — insalvabili per costruzione, e fragilissimi fra versioni.
+2. **Solo RMW come per gli editor.** Insufficiente: l'RMW protegge i campi altrui nello stesso
+   file, ma non dal crash **a metà scrittura**. Su una carriera servono entrambi.
+3. **Snapshot di dominio immutabile + temp → validate → `.bak` → rename atomico.** Scelto.
+
+### Decision
+Serializzare lo **stato di dominio** (`ProfileSave` / `CareerSave` / `CampaignSave` /
+`MissionSnapshot`) e **ricostruire** le entità da definizioni + stato persistente al load. Ogni
+scrittura: snapshot immutabile → file temporaneo → validazione → flush/close → rotazione `.bak` →
+**rename atomico** → evento `SaveCompleted`/`SaveFailed` (ADR-016). I save vivono in
+`<exe>/user_saves/`, **fuori da `data/`** (lezione KI #19). `nlohmann/json` resta il formato.
+
+### Consequences
+- Positive: perdere una carriera diventa strutturalmente difficile; save leggibili e diff-abili;
+  la serializzazione post-snapshot è l'unico candidato sano a un futuro async (mai leggere il
+  World live — coerente con la policy di threading del progetto).
+- Costi: ricostruire le entità al load richiede che ogni stato persistente sia esprimibile in
+  termini di definizioni + dominio (vincolo sano, ma va rispettato da chi aggiunge sistemi).
+- Versioning/migrazioni **volutamente fuori scope** finché non esistono save reali da migrare
+  (evita architettura speculativa, 00_Vision non-goals): aprire un ADR allora.
+- Dettaglio in **28_Persistence.md**.

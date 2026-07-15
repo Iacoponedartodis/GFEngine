@@ -1,4 +1,4 @@
-# 17 — Sandbox Tools: banco di prova completo (Planned Feature)
+# 17 — Sandbox Tools: banco di prova completo (Implementato)
 
 Status: **Implementato (scope 1-3)** — 2026-07-10. Le voci in Out of Scope restano
 pianificate. Template come 14/15/16.

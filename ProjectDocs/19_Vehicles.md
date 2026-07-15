@@ -1,4 +1,4 @@
-# 19 — Veicoli base (Planned Feature)
+# 19 — Veicoli base (Fase A implementata / Fase B pianificata)
 
 Status: **Fase A implementata** (2026-07-10, build-verified; smoke di guida manuale
 in carico allo sviluppatore). Fase B (armi di bordo, multi-posto, AI alla guida,

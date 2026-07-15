@@ -2,6 +2,32 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-15 — Allineamento al GDD: ponte di design + 4 sistemi pianificati (solo docs)
+Sessione **di sola documentazione** (zero codice toccato), a partire dal GDD consolidato e dai
+master plan engine/gioco.
+- **Nuovi doc:** 23_GameDesignBridge (ponte GDD↔engine: pilastri, bestiario tattico, matrice
+  ruoli armi, gerarchia GAR, i due stati persistenti), 24_ContentValidation (ADR-018),
+  25_ObjectivesAndMissions (ADR-019), 26_SquadAndCommand (ADR-020), 27_Progression,
+  28_Persistence (ADR-021).
+- **Nuovi ADR:** 018 (gate validazione condiviso runtime/editor), 019 (framework obiettivi
+  generico; command post = configurazione), 020 (SquadSystem fra AiSystem e CrowdSystem),
+  021 (save di carriera: snapshot di dominio + rename atomico). Numerazione continuata da 017.
+- **Drift corretto** (i doc contraddicevano sé stessi e il codice):
+  - ADR-010 e ADR-011 erano marcati "Proposed" pur essendo **fatti** → Accepted.
+  - 00_Vision dichiarava lo spike split-screen "non eseguito" (è del 07-09, esito (a)), i map
+    metadata "non ancora implementati" (fatti il 07-10) e il rename tooling "non implementato"
+    (ADR-010, fatto) → corretti.
+  - 10_ProjectMemory ripeteva gli stessi tre punti stale → corretti.
+  - Titoli di 15/16/17/18/19 dicevano "(Planned Feature)" pur dichiarando "Implementato" nel
+    corpo → allineati.
+- **Effetto architetturale:** nessuno sul codice. Sul processo: il *perché* di design ora è nel
+  repo (23), e i tre sistemi che il GDD chiede e che non esistono (squadra/comando, obiettivi
+  generici, classi→progressione) hanno un bersaglio preciso invece di essere impliciti.
+- **Nota importante:** i master plan usati come sorgente descrivono uno stato del progetto
+  antecedente al 07-09 (davano per mancanti Assault/Defense, HUD command post, spike
+  split-screen e AI tattica — tutti **già fatti**). Dove divergevano, ha vinto ProjectDocs +
+  codice. Le loro proposte di ADR-010..025 collidevano con la numerazione reale: ignorate.
+
 ## 2026-07-14 (8) — Fix piedi-sottoterra (regressione crowd) + loadout abilità onesto
 - **Piedi sottoterra (regressione Phase B):** il write-back del `CrowdSystem` scriveva
   `tr->y = npos.y` (superficie navmesh ≈ piedi), ma il transform.y è il CENTRO fisico

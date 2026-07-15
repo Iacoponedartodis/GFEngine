@@ -72,9 +72,9 @@
   fun on its own before any tactical/progression/strategic layer is added.
 - **Local split-screen co-op is a real functional requirement; online competitive multiplayer
   is explicitly out of scope.** Any future "scale" discussion (e.g. large battles) refers to
-  local simulation scale (AI/entity counts), not network session scale. Feasibility has not
-  yet been empirically verified — see ADR-011 (Proposed, 13_ADR): a time-boxed spike is
-  planned but not yet run.
+  local simulation scale (AI/entity counts), not network session scale. **Feasibility VERIFIED**
+  (spike ADR-011 eseguito 2026-07-09, esito (a)): due viewport + seconda Camera funzionano con
+  aggiunte minori al Renderer; resta input/HUD del 2° giocatore (additivo). KI #12 chiuso.
 - The editor's role extends beyond balancing: it is the **metadata authoring system** for the
   whole project — map metadata useful to AI (cover/patrol/danger zones — see 15_MapMetadata,
   Planned Feature, in addition to the already-implemented geometry/spawn/command-post data),
@@ -86,17 +86,18 @@
 ## User-stated long-term direction
 - **Dropdown-based data assignment everywhere (no free-text ids).** No longer just a stated
   preference — binding rule in 04_CodingStandards, audit tracked as P0 in 06_Todo #2.
-- **In-editor rename for all definition types with cross-reference awareness.** Design
-  registered in ADR-010 (Proposed, 13_ADR); implementation tracked as P0 in 06_Todo #1.
+- ~~In-editor rename for all definition types with cross-reference awareness~~ — IMPLEMENTATO
+  (ADR-010 Accepted, 2026-07-09): `util/DefinitionRename.hpp` + UI in Weapon/Entity/Map/Vehicle.
 - Future UI/Interface Editor to centralize menu text/layout/palette/fonts.
 - EntityEditor is the primary enemy/ally tool (BalanceEditor is now a redirect).
-- **Future Map Metadata layer** (cover/danger/patrol/sectors) consumed by tactical AI —
-  schema and authoring plan now documented in 15_MapMetadata (Planned Feature); AI
-  consumption logic still undesigned (deliberately, per that document's Out of Scope).
+- ~~Future Map Metadata layer (cover/danger/patrol/sectors) consumed by tactical AI~~ —
+  IMPLEMENTATO: dati + authoring (15_MapMetadata, 2026-07-10) e consumo AI (18_AiMapConsumption:
+  cover orientati, repulsione danger, pattuglie). Restano settori e pose alle coperture.
 - ~~Future GameMode interface/registry~~ — IMPLEMENTED (ADR-008): Assault/Defense/strategic
   modes are configurations via `createGameMode()`, not new hardcoded classes.
 - **Future Class concept** (weapon + equipment + role composition) distinct from a single
-  weapon — schema now documented in 14_ClassSystem (Planned Feature), ahead of Phase 3.
+  weapon — schema documented in 14_ClassSystem (Planned Feature), ahead of Phase 3. **Ancora
+  zero codice**: è il prerequisito strutturale della Fase 3 (KI #10; progressione in doc 27).
 
 ## Indice documenti di sistema (aggiornato 2026-07-14)
 - 14_ClassSystem.md — `ClassDef` + `PlayerDef.classId` — **ancora Planned, zero codice**.
@@ -110,6 +111,18 @@
 - **20_Optimization.md — IMPLEMENTATO (ADR-015 + Fasi 3-4): profiling, pacing, scaling AI.**
 - **21_Telemetry.md — IMPLEMENTATO (ADR-013+016): logging, crash net, dump, sink JSONL.**
 - **22_Navigation.md — IMPLEMENTATO (ADR-017 A+B+C): Recast/Detour/DetourCrowd.**
+- **23_GameDesignBridge.md — Reference**: ponte GDD↔engine (pilastri, bestiario, matrice armi,
+  gerarchia GAR, i due stati persistenti). Risponde a "il GDD chiede X — dove lo tocco?".
+- **24_ContentValidation.md — Planned (ADR-018)**: gate di validazione condiviso runtime/editor
+  + error model azionabile. Presidio strutturale per la classe di bug KI #7/#25/#26.
+- **25_ObjectivesAndMissions.md — Planned (ADR-019)**: framework obiettivi generico; il command
+  post (ADR-009) ne diventa una configurazione. Sblocca la Fase 2 ("obiettivi stratificati").
+- **26_SquadAndCommand.md — Planned (ADR-020)**: squadra + ordini contestuali. **L'unico
+  pilastro del GDD senza alcun codice**; le fondamenta (AI tattica/nav/metadata) ci sono già.
+- **27_Progression.md — Planned (Fase 3, ADR-021)**: carriera/gradi/specializzazioni.
+  **Non iniziare prima di 14_ClassSystem.**
+- **28_Persistence.md — Planned (Fase 3/4, ADR-021)**: CareerSave/CampaignSave, snapshot di
+  dominio + scrittura atomica (eredita la lezione di ADR-010/KI #19).
 - ADR-010 — FATTO. ADR-011 — spike FATTO, esito (a). ADR-012/013/014 — FATTI.
   ADR-015/016/017 — Accepted (in force).
 
