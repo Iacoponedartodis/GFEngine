@@ -24,6 +24,9 @@ public:
     [[nodiscard]] const HitboxProfile* getHitboxProfile(const std::string& id) const;
     [[nodiscard]] const PlayerDef*     getPlayerDef    (const std::string& id) const;
     [[nodiscard]] const VehicleDef*    getVehicle      (const std::string& id) const;
+    [[nodiscard]] const ClassDef*      getClass        (const std::string& id) const;
+    [[nodiscard]] const ObjectiveDef*  getObjective    (const std::string& id) const;
+    [[nodiscard]] const MissionDef*    getMission      (const std::string& id) const;
 
     [[nodiscard]] const auto& abilities()      const { return m_abilities; }
     [[nodiscard]] const auto& weapons()        const { return m_weapons; }
@@ -34,6 +37,10 @@ public:
     [[nodiscard]] const auto& hitboxProfiles() const { return m_hitboxProfiles; }
     [[nodiscard]] const auto& playerDefs()     const { return m_playerDefs; }
     [[nodiscard]] const auto& vehicles()       const { return m_vehicles; }
+    [[nodiscard]] const auto& classes()       const { return m_classes; }
+    [[nodiscard]] const auto& objectives()     const { return m_objectives; }
+    [[nodiscard]] const auto& missions()       const { return m_missions; }
+    [[nodiscard]] const auto& unknownKeys()    const { return m_unknownKeys; }
 
     // Filtra armi per fazione (Neutral = tutte)
     [[nodiscard]] std::vector<const WeaponDef*> weaponsForFaction(Faction f) const
@@ -55,6 +62,14 @@ private:
     std::unordered_map<std::string, MapDef>        m_maps;
     std::unordered_map<std::string, HitboxProfile> m_hitboxProfiles;
     std::unordered_map<std::string, PlayerDef>     m_playerDefs;
+    std::unordered_map<std::string, ClassDef>      m_classes;      // doc 14
+    std::unordered_map<std::string, ObjectiveDef>  m_objectives;   // ADR-019
+    std::unordered_map<std::string, MissionDef>    m_missions;     // ADR-019
+
+    // Chiavi JSON che nessun loader legge, per file (ADR-018 "campi fantasma").
+    // Popolata dai loader mentre il JSON e' ancora in mano: dopo il parsing
+    // l'informazione non esiste piu' nel registry.
+    std::unordered_map<std::string, std::vector<std::string>> m_unknownKeys;
     std::unordered_map<std::string, VehicleDef>    m_vehicles;
     bool m_loaded = false;
 
@@ -67,6 +82,9 @@ private:
     void loadHitboxProfiles (const std::string& dir);
     void loadPlayerDefs     (const std::string& dir);
     void loadVehicles       (const std::string& dir);
+    void loadClasses        (const std::string& dir);   // 14_ClassSystem
+    void loadObjectives     (const std::string& dir);   // ADR-019
+    void loadMissions       (const std::string& dir);   // ADR-019
 };
 
 } // namespace mini

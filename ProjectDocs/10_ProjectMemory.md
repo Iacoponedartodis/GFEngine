@@ -126,6 +126,96 @@
 - ADR-010 — FATTO. ADR-011 — spike FATTO, esito (a). ADR-012/013/014 — FATTI.
   ADR-015/016/017 — Accepted (in force).
 
+## Direttiva di lavoro permanente (utente, 2026-07-16) — come costruire
+
+> *"Andremo molto avanti ad esempi, perché certe cose non potrò sapere quanto vanno bene e quanto
+> mi piacciono senza averle provate un minimo; anche per il bilanciamento ci vuole molto. Noi in
+> generale dobbiamo costruire i **sistemi**, il più possibile **facilmente modificabili ed
+> espandibili**, ricordando sempre che **più cose posso modificare dall'editor meglio è**: quello
+> rimane lo strumento principale che IO posso usare per modificare il progetto, quindi deve essere
+> un tool molto forte e profondo — al codice puro ci pensi tu. Per adesso dobbiamo costruire le
+> basi dei sistemi, anche se vuol dire impostare **valori/obiettivi/conseguenze temporanei** da
+> rifinire più avanti, quando il gioco avrà una forma più delineata e potrò provare le meccaniche."*
+
+**Cosa cambia nel modo di lavorare (correzione di un mio errore di calibro):**
+- **Valori e contenuti temporanei sono LEGITTIMI e attesi.** Avevo bloccato `consequence` (doc 25)
+  dicendo "gli esempi non sono una specifica, serve design prima del codice". Sbagliato: il design
+  che l'utente non può decidere a tavolino è proprio quello che va **provato**. Ciò che va deciso
+  bene è la **struttura del sistema**, non i numeri.
+- **Come leggere GDD 21.4** (*"ridurre al minimo le decisioni progettuali prese scrivendo codice"*):
+  vieta di cablare **regole di design** nel codice (pesi, formule, id, comportamenti), **non** di
+  usare valori provvisori nei **dati**. Un valore nei dati non è una decisione: è un segnaposto che
+  l'utente cambierà. Un `if` nel codice sì.
+- **Il test decisivo per ogni nuovo sistema**: *l'utente può modificarlo senza di me?* Se la
+  risposta è "solo editando JSON a mano" è un risultato parziale; se è "no, serve ricompilare" è
+  un errore di progettazione.
+- **L'editor è il prodotto, non un accessorio.** È l'unico strumento con cui l'utente agisce sul
+  progetto. Ogni tipo di dato nuovo dovrebbe finire lì (dropdown dal registry, mai testo libero —
+  ADR-010/CLAUDE.md). **Debito attuale riconosciuto**: obiettivi, missioni e classi sono stati
+  aggiunti al runtime **senza alcun modulo editor** → oggi si autorano a mano nei JSON.
+
+## Vincoli confermati sul codice reale (sessione 2026-07-16)
+- **I sistemi ECS SOPRAVVIVONO a `World::initialize()`**: azzera entità, componenti e mailbox, ma
+  non tocca `m_systems`. Un sistema che tiene stato fra i tick (es. `ObjectiveSystem`) **deve**
+  gestire il restart del mondo da sé — il segnale è `getTickCount()` che torna a 0 (KI #38).
+- **`--direct-prematch` NON avvia la partita in modo affidabile.** Alcune run partono da sole,
+  altre no, a parità di comando e di durata — **non è un meccanismo su cui basare una verifica**
+  (l'affermazione "parte da solo dopo ~15-20 s", scritta prima nella stessa sessione, era una
+  generalizzazione da poche run fortunate: falsa). Per verificare headless il percorso
+  PreMatch→partita, aggiungere una sonda temporanea che chiama `startFromPreMatch()` — cioè **la
+  stessa funzione del tasto ENTER**, mai una copia della sua logica (una sonda che *replica* il
+  codice di produzione può passare mentre il gioco è rotto).
+- **`--stress`/`--sim` girano in modalità OSSERVATORE**, dove la partita **non finisce mai** per
+  design (`observerFly` → `MatchOutcome::Ongoing`). Non usarli per verificare vittoria/sconfitta:
+  serve `--direct-prematch`.
+- **`MatchSettings` è assegnata per intero in più punti** (es. dal PreMatch all'ENTER): ogni campo
+  che il PreMatch non possiede va preservato esplicitamente, altrimenti sparisce in silenzio
+  (KI #36 — stessa classe di guasto della regola RMW di ADR-010, ma in memoria).
+
+## Vincoli confermati sul codice reale (sessione 2026-07-15)
+- **Una mailbox deve essere AUTOSUFFICIENTE.** Se il produttore distrugge il soggetto, la
+  mailbox è l'unica fonte di verità: portare il solo `EntityId` non basta perché il consumatore
+  non può più interrogare l'entità. `World::killedThisTick` porta `{entity, team}` proprio per
+  questo — col solo id, `EliminateTarget` (ADR-019) avrebbe contato anche i propri morti.
+- **`CombatSystem` distrugge l'entità NELLO STESSO update in cui la uccide** (`toDestroy` →
+  `destroyEntity` a fine `update`). Ordine del tick: Movement → Combat → Squad → Ai → Crowd,
+  quindi **nessun sistema che gira dopo Combat può osservare la morte**: `getHealth(vittima)`
+  restituisce già nullptr, indistinguibile da "entità mai esistita". Chi deve reagire a una
+  morte usa la mailbox **`World::killedThisTick`** (svuotata da Application a fine frame, come
+  `combatFeedback`). Senza, si scrive codice morto che scambia un successo per un fallimento —
+  è già successo con FocusFire (ADR-020 Phase B).
+- **`groundedSpawn(..., eyeHeight)` → `player.transform.y = suolo + PLAYER_HALF_Y`.** Il suolo
+  sotto il giocatore è `y - PLAYER_HALF_Y`, non 0 (il pavimento di firebase ha top a ~0.1).
+  Il commento "altezza occhi da y=0" su `PLAYER_HALF_Y` è ambiguo: il valore è sia semi-altezza
+  del box sia offset occhi.
+- **I binding NON sono persistiti su file** (nessuna serializzazione in `InputManager`/
+  `OptionsMenu`): aggiungere una `Action` è sicuro, ma i rebind si perdono a ogni chiusura.
+- **`NavManager::findPath` non fallisce su bersaglio irraggiungibile**: Detour ritorna un path
+  **parziale** verso il poly raggiungibile più vicino. Per sapere se una meta è davvero
+  raggiungibile bisogna confrontare `path.back()` col punto richiesto (usato da ADR-020 Phase B
+  per rifiutare gli ordini impossibili).
+- **`norm2D(dx,dz)` NORMALIZZA in place e ritorna la lunghezza.** Dopo averla chiamata,
+  `moveDX/moveDZ` sono un **versore**: da soli non bastano più a ricostruire la destinazione.
+  Chi passa un punto a `requestMoveTarget` deve riscalare per la distanza reale (`moveDist`),
+  altrimenti chiede a Detour un bersaglio a 1 m e **il pathfinding non esiste** (KI #33, il bug
+  è vissuto non visto da ADR-017 Phase B perché il codice "funzionava" comunque, male).
+- **`requestMoveVelocity` NON pianifica.** Il ramo `Alert` la usa: va bene per lo strafe tattico
+  a corto raggio, ma qualunque comportamento che debba **percorrere distanza** (es. un ordine di
+  squadra) deve passare per `requestMoveTarget`, anche in Alert — altrimenti spinge contro i muri.
+- **In una sim densa le AI sono in `Alert` quasi sempre.** Qualunque logica che si escluda in
+  Alert è di fatto **inerte** e va misurata prima di crederla attiva (un vincolo di squadra
+  Alert-escluso ha prodotto distanze identiche al baseline: effetto zero).
+- **`AiState` = { Patrol=0, Alert=1, Hunt=2, Search=3 }** — l'ordine sorprende (Alert è 1, non
+  l'ultimo): leggere un `state` numerico dalla telemetria senza questa mappa porta a conclusioni
+  invertite.
+- **firebase: il centro mappa (0,0) è irraggiungibile** dal pavimento (piattaforma "Collina
+  Centrale" alta 1 m > `kAgentClimb`). Non usarlo come bersaglio nei test di movimento: usare un
+  punto libero, es. (12,0). Vedi KI #34.
+- **Un test che non discrimina non falsifica il sistema, falsifica sé stesso.** Due A/B di fila
+  hanno "bocciato" il sistema squadra mentre il difetto era nella metrica (bersaglio mobile, N=2)
+  e nel bersaglio irraggiungibile. Prima di concludere che una feature non funziona, verificare
+  che il test *possa* mostrarla funzionare.
+
 ## Vincoli confermati sul codice reale (sessione 2026-07-11 → 07-14)
 - **Movimento AI:** con navmesh presente le AI si muovono via **DetourCrowd**, NON via `aiMove`
   (fallback). Chi tocca il movimento AI deve passare per `requestMoveTarget`/`requestMoveVelocity`

@@ -495,7 +495,7 @@ rename tooling (fatto); l'AI-stuck non è un item numerato; "#11" = metadata AI 
   (separationWeight, soglia stuck); costi/filtri per-ruolo non ancora cablati (struttura pronta).
   **Smoke manuale utente:** partita reale (non solo sim), feel del combattimento, mappa outpost.
   ADR-017 completo (A+B+C) — la navigazione Recast è in force.
-## ADR-018 — Gate di validazione contenuti condiviso runtime/editor (Proposed, 2026-07-15)
+## ADR-018 — Gate di validazione contenuti condiviso runtime/editor (Accepted — in force, 2026-07-15)
 
 ### Context
 Il progetto ha pagato ripetutamente la stessa classe di problema: **dati sbagliati che non
@@ -535,7 +535,36 @@ Contenuto critico invalido **blocca**; il non critico è Warning loggato; i fall
   fa con gli header engine.
 - Dettaglio in **24_ContentValidation.md**.
 
-## ADR-019 — Framework obiettivi generico; il command post ne è una configurazione (Proposed, 2026-07-15)
+### Stato implementazione (2026-07-15) — in force
+`core/Result.hpp` (`Diagnostic` con **suggestion** azionabile) + `game/data/ContentValidation`
+(`validateContent` / `validateMission` / `reportDiagnostics`). Tre consumatori dello stesso
+codice: runtime (Error → **blocca l'avvio**), editor (*Moduli → Validazione contenuti*, linka la
+stessa funzione — `ContentValidation.cpp` è nella source list di **entrambi** i target), headless
+(`--validate`, exit code ≠ 0 + JSONL). Gate attivi: riferimenti, asset su disco, sanità armi,
+unità, mappe, near-duplicate sui nomi visualizzati, missioni/obiettivi, orfani.
+Verificato con guasti deliberati (6 errori / 3 warning / exit 1) e sui dati reali (0/0).
+**Campi fantasma** (aggiunto 2026-07-15, opzione (a)): i loader registrano in
+`DefinitionRegistry::unknownKeys()` le chiavi che non leggono, mentre il JSON è ancora in mano —
+zero I/O nuovo. Gli elenchi delle chiavi note stanno **accanto al parser**, l'unico posto dove
+non possono divergere da ciò che il codice legge davvero. Ha trovato subito un caso reale
+(`profile_id` residuo in `data/ai/B1 Heavy Droid.json`, rimosso).
+
+### Vincoli scoperti implementando
+1. **Un rilevatore che non è mai stato visto fallire non è verificato.** `--validate` dava
+   0 errori sui dati reali: risultato corretto, ma indistinguibile da un gate che non gira. La
+   prova è stata iniettare guasti deliberati e vederlo fallire con exit 1. Vale per ogni futuro
+   gate: aggiungerne uno **senza** un caso di guasto che lo attiva è aggiungere una spia verde.
+2. **Il near-duplicate si vede sui NOMI, non sugli id.** Con `id = filename stem` (ADR-001) due
+   file hanno per forza id diversi: è il nome visualizzato che rende il duplicato invisibile
+   all'utente (KI #7). Un gate sugli id non avrebbe trovato nulla.
+3. **Un gate sui DATI non può vedere un fatto sul CODICE.** "Campo dichiarato ma non consumato"
+   (KI #25) sono due problemi diversi che il doc 24 confondeva: le chiavi che il *loader ignora*
+   (refusi → default silenzioso) sono rilevabili e ora lo sono; i campi che il loader *legge* ma
+   nessun sistema consuma (`min_range`, `fov_deg`) non lo sono per costruzione — servirebbe
+   analisi statica. Prima di promettere un gate, verificare che l'informazione che gli serve
+   esista ancora nel punto in cui gira.
+
+## ADR-019 — Framework obiettivi generico; il command post ne è una configurazione (Accepted — Phase A in force, 2026-07-15)
 
 ### Context
 La Fase 2 (00_Vision) chiede **obiettivi stratificati** (principali/strategici/tattici). Oggi
@@ -567,7 +596,29 @@ non riscritto**.
   gradualmente ("smallest safe change", 09_AI_Workflow), non in un big-bang.
 - Dettaglio in **25_ObjectivesAndMissions.md**.
 
-## ADR-020 — Squad & Command: SquadSystem fra AiSystem e CrowdSystem (Proposed, 2026-07-15)
+### Stato implementazione (2026-07-15)
+**Phase A in force**: `ObjectiveDef`/`MissionDef` nel registry (id = filename stem);
+`ObjectiveSystem` dopo Ai/Crowd; tipi `ReachArea`/`EliminateTarget`/`HoldAreaForDuration`;
+attivazione dichiarativa (immediate/after_objective/after_time) → dipendenze senza scripting;
+`tier` come campo; regole di missione dichiarate; **gate** che rifiuta con causa le missioni
+invalide; mailbox `World::activeMission`/`objectiveDefs`; flag `--mission <id>`.
+**Inerte senza missione** → i mode esistenti sono intatti (verificato).
+**Restano**: `CaptureZone`/`DefendZone` (l'avvolgimento di ADR-009 — serve pubblicare gli stati
+dei command post in una mailbox, oggi vivono nel mode), gli altri 4 tipi, l'HUD obiettivi, la
+selezione della missione fuori da `--mission`, l'economia dei Punti Comando (doc 26).
+
+### Vincoli scoperti implementando
+1. **Una mailbox deve trasportare ciò che serve a chi la legge, non un riferimento.**
+   `killedThisTick` portava il solo `EntityId`, ma l'entità è già distrutta: `EliminateTarget`
+   non poteva filtrare per team e avrebbe contato anche i propri morti. Ora porta `{entity, team}`.
+   Regola generale: se il produttore distrugge il soggetto, la mailbox è l'**unica** fonte di
+   verità e deve essere autosufficiente.
+2. **Un dato invalido si respinge, non si interpreta.** Una regola di missione con stringa
+   sconosciuta non diventa un default silenzioso: la missione viene rifiutata con causa. Vale
+   anche per gli id non risolti e per il tier incoerente — è lo spirito di ADR-018 applicato
+   prima che il gate condiviso esista.
+
+## ADR-020 — Squad & Command: SquadSystem fra AiSystem e CrowdSystem (Accepted — Phase A+B in force, 2026-07-15)
 
 ### Context
 "La squadra è una risorsa, non decorazione" è un pilastro del GDD, ed è **l'unico senza alcuna
@@ -603,6 +654,43 @@ L'economia tattica (Punti Comando) si guadagna **completando obiettivi, non ucci
   ha già fallito il requisito di design.
 - Dettaglio in **26_SquadAndCommand.md**.
 
+### Stato implementazione (2026-07-15)
+**Phase A in force**: `SquadComponent` + `SquadSystem` registrato fra Combat e Ai; squadra alleata
+formata a runtime (i respawn creano entità nuove, quindi si ri-arruola ogni tick); ordine di default
+`Follow`; ciclo di vita completo con telemetria (`order issued/completed/failed`).
+
+**Phase B in force**: comando contestuale a un tasto (`Action::SquadOrder`, default G) risolto dal
+raycast del mirino — nemico → `FocusFire`, cover point reale del MapDef entro 4 m → `TakeCover`,
+altrimenti → `MoveTo`; intenzione via mailbox `World::squadOrder`; **raggiungibilità verificata
+prima di impartire** (`findPath` ritorna un path *parziale*, non un errore, quindi si confronta
+l'arrivo col punto chiesto → gli ordini impossibili sono rifiutati con causa); HUD con pannello
+SQUADRA (membri/ordine/distanza) letto dallo stato reale dei membri + esiti nel feed.
+**Restano**: la **ruota di comando** (livello 2 del doc 26: Regroup/Hold/Advance) e **Phase C**
+("a terra" + rianimazione, tocca CombatSystem). Revive e Regroup falliscono con causa esplicita.
+
+### Vincoli scoperti implementando (non erano previsti nel design)
+1. **L'ordine è un guinzaglio, non una destinazione continua.** Vincolare il movimento in ogni
+   frame telecomanda l'AI e ne annulla il comportamento tattico; escludere del tutto lo stato
+   `Alert` invece rende l'ordine **inerte**, perché in una sim densa le AI sono in Alert quasi
+   sempre (misurato: un vincolo Alert-escluso produceva distanze identiche al baseline, effetto
+   zero). Soluzione in force: l'ordine ha precedenza **solo fuori dal raggio di soddisfazione**
+   (Follow 8 m, HoldPosition 2 m, MoveTo 1.5 m); dentro il raggio l'AI è libera — è il senso
+   letterale di "autonoma dentro il vincolo".
+2. **Un ordine che fa percorrere distanza DEVE passare per il pathfinding, anche in Alert.** Il
+   ramo Alert usa `requestMoveVelocity`, che non pianifica: è pensato per lo strafe tattico a
+   corto raggio. Con un ordine di viaggio l'agente spingeva contro i muri senza aggirarli. In
+   force: flag `orderTravel` in `AiSystem` → `requestMoveTarget` anche in Alert. Il facing **non**
+   viene toccato in Alert: l'AI continua a mirare al nemico mentre si riposiziona.
+3. **Il movimento è vincolato, il combattimento no.** Mira e fuoco non passano dal ramo di
+   movimento: restano autonomi per costruzione. È ciò che soddisfa il requisito "il comando deve
+   funzionare *durante* il firefight". `FocusFire` è l'eccezione speculare: vincola il **bersaglio**
+   e NON il movimento.
+4. **Un sistema dopo `CombatSystem` non può osservare una morte** (Phase B). Combat distrugge
+   l'entità nello stesso update in cui la uccide: il ciclo di vita di FocusFire interrogava la
+   salute di un bersaglio già inesistente e riportava `failed` **proprio sul successo**. Serve la
+   mailbox `World::killedThisTick`. Regola generale: *un ciclo di vita che dipende da un evento
+   che il sistema non può osservare è codice morto* — verificarlo con la telemetria, non a vista.
+
 ## ADR-021 — Save di carriera: snapshot di dominio + scrittura atomica (Proposed, 2026-07-15)
 
 ### Context
@@ -636,3 +724,64 @@ scrittura: snapshot immutabile → file temporaneo → validazione → flush/clo
 - Versioning/migrazioni **volutamente fuori scope** finché non esistono save reali da migrare
   (evita architettura speculativa, 00_Vision non-goals): aprire un ADR allora.
 - Dettaglio in **28_Persistence.md**.
+
+## ADR-022 — Le classi sono professioni, non preset di armi: riconciliare 14_ClassSystem col GDD (Proposed, 2026-07-16)
+
+### Context
+Il GDD originale è entrato nel repo il 2026-07-16 (`Galactic_Front_GDD.docx`, sorgente di
+autoring; copia operativa leggibile in `29_GDD.md`, vedi doc 23). Al primo confronto,
+il **cap. 12** contraddice **14_ClassSystem** su cosa *sia* una classe:
+
+- **GDD 12, prima riga:** *"Rappresentare professioni militari, non semplici categorie di armi.
+  Ogni classe cambia comportamento sul campo, contributo alla squadra, approccio tattico."*
+- **GDD 12.3:** le classi definiscono *"le composizioni degli NPC, il loro comportamento IA e
+  loadout"*; una squadra mista (Trooper + Heavy + Recon + Engineer + Leader) *"deve essere più
+  efficace di una monoclasse, e deve comportarsi diversamente"* → lega le classi **direttamente
+  all'IA** (cap. 8) e al Sistema di Squadra (cap. 7, pilastro #4).
+- **GDD 12, Parametri:** una classe è *loadout base + abilità/perk sbloccabili + curva XP di classe
+  + comportamento IA associato (NPC) + affinità equipaggiamenti + requisiti di sblocco*.
+- **14_ClassSystem** modella `primaryWeaponId` + `secondaryWeaponId` + `abilityIds[]` + un `role`
+  esplicitamente **descrittivo e non consumato**, e mette fra gli Out of Scope: *"Do not couple
+  enemy AI archetypes to ClassDef without a separate ADR"*.
+
+Quindi il `ClassDef` implementato (Phase A, 2026-07-15) copre **1 dei 6 parametri** e **vieta**
+proprio il legame che il GDD indica come essenziale. Confermato dall'utente in modo indipendente:
+*"le classi nel design della mia idea del gioco non sarebbero preset di armi"*.
+La regola di precedenza di **23_GameDesignBridge** è netta: sull'**intento di design il GDD vince**,
+e i conflitti aprono un ADR. Questo è quel caso.
+
+### Options Considered
+1. **Lasciare `ClassDef` com'è e chiamarla "classe".** Rifiutato: il nome più importante del
+   sistema significherebbe una cosa che il GDD nega nella sua prima riga. È il tipo di deriva
+   nome↔concetto che questo progetto paga da mesi (KI #7/#25/#35).
+2. **Cancellare `ClassDef` e ridisegnare da zero a Fase 3.** Rifiutato: il *loadout base* È uno dei
+   sei parametri del GDD. Il codice non è sbagliato, è incompleto: cancellarlo distrugge lavoro
+   valido e la Fase 3 lo ricostruirebbe identico.
+3. **Rinominare l'attuale in `LoadoutDef` e creare più tardi una `ClassDef` vera.** Possibile, ma
+   produce due tipi dove il GDD ne vuole uno: la classe *contiene* il loadout, non lo affianca.
+4. **Tenere `ClassDef` come seme e farlo crescere verso il GDD, un parametro alla volta.** Scelto.
+
+### Decision (proposta, da approvare)
+`ClassDef` resta il tipo, e cresce nell'ordine dettato dal valore, non dallo schema:
+1. **`aiProfileId`** — il parametro che trasforma un elenco di armi in una professione: la classe
+   dice *come si comporta* chi la indossa. Sblocca GDD 12.3 (composizione NPC) e alimenta il
+   sistema di squadra già in force (ADR-020): una squadra Trooper+Heavy+Recon si comporta
+   diversamente da una monoclasse. **Richiede di superare l'Out of Scope del doc 14** — è
+   esattamente l'ADR che quel doc pretendeva.
+2. **`role` diventa un enum consumato** (assault/heavy/recon/engineer/support/leader) invece di un
+   tag libero: è ciò che il SquadSystem userà per assegnare i task per ruolo.
+3. **Perk/XP/sblocchi** (classi d'élite: ARC Trooper, Clone Commando, ruoli di comando) → **Fase 3**,
+   insieme a 27_Progression: non anticiparli (00_Vision, no architettura speculativa).
+4. **`EnemyDef` può referenziare una classe** — ma solo dopo (1) e (2), e senza rimuovere
+   `weaponIds[]`: additivo, come ogni altra migrazione di questo progetto.
+
+### Consequences
+- Positive: il concetto più importante del gioco torna a significare ciò che il GDD dice; le classi
+  alimentano il pilastro #4 (squadra) invece di essere un menu armi; la progressione (Fase 3) trova
+  un'unità di sblocco già viva.
+- Costi: tocca l'IA (cap. 8) e il SquadSystem; `role` come enum è un cambio di schema sui dati
+  esistenti (oggi 2 classi, costo nullo — farlo ora è molto più economico che dopo).
+- Rischio: la tentazione di implementare tutti e 6 i parametri insieme. Il valore è quasi tutto
+  in (1)+(2); il resto è Fase 3.
+- **14_ClassSystem va riscritto** su questa base: oggi il suo Problem Solved è falso su due punti
+  (vedi le note già inserite lì) e il suo Scope è più piccolo del GDD.

@@ -72,11 +72,6 @@ public:
     [[nodiscard]] Mesh*    getDefaultMesh()    const { return m_mesh; }
     [[nodiscard]] Texture* getDefaultTexture() const { return m_tex; }
 
-    int consumeTeam1Ticket() override
-    {
-        if (m_team1Tickets > 0) --m_team1Tickets;
-        return m_team1Tickets;
-    }
     void overridePlayerEntity(EntityId e) override { m_playerEntity = e; }
 
     int   initialTeam1Tickets = 5;

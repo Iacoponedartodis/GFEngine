@@ -6,10 +6,40 @@ consolidato di "Galactic Front") sui sistemi dell'engine, e dice per ogni sistem
 **dove vive nel codice**, **quale doc lo specifica** e **a quale fase appartiene**. Serve a
 rispondere a una domanda che finora nessun doc copriva: *"il GDD chiede X — dove lo tocco?"*.
 
+## Dove vive il GDD (aggiornato 2026-07-16)
+Due file, due ruoli distinti — **non sono lo stesso documento duplicato, sono sorgente e copia
+operativa**:
+
+- **`Galactic_Front_GDD.docx`** (root del repo) — **sorgente di autoring**. L'utente lo modifica
+  in Word/LibreOffice. Non leggerlo direttamente per lavorare: è un formato binario, ogni
+  sessione dovrebbe altrimenti riestrarne il testo da zero (costo di tool call ripetuto, e il
+  testo grezzo perde titoli/tabelle).
+- **`ProjectDocs/29_GDD.md`** — **copia operativa**, generata dal `.docx`. È questa la versione
+  da leggere, grep-are e citare: stesso formato di ogni altro ProjectDoc, diffabile in git,
+  titoli e tabelle preservati. **Non modificare `29_GDD.md` a mano**: si rigenera dal `.docx`.
+
+Rigenerazione (necessaria dopo ogni modifica dell'utente al `.docx`):
+```
+unzip -o Galactic_Front_GDD.docx -d <tmp>
+node tools/gdd_docx2md.js <tmp> <tmp>/out.md
+# verifica completezza (conteggio parole + ultima riga presente), poi:
+cp <tmp>/out.md ProjectDocs/29_GDD.md
+```
+`tools/gdd_docx2md.js` (non parte della build) mappa `w:pStyle` (Heading1/2/3) su
+`##`/`###`/`####` e ricostruisce le tabelle da `<w:tbl>`/`<w:tr>`/`<w:tc>` — un semplice strip
+dei tag XML appiattirebbe titoli e le 18 tabelle del documento (es. la matrice classi del
+cap. 12) in prosa continua. La verifica di completezza (conteggio parole del `.md` generato,
+tag rimossi, contro il testo grezzo; presenza dell'ultima riga del documento) è obbligatoria
+prima di sovrascrivere `29_GDD.md` — dettagli nel commento in testa allo script.
+
+**Prima del 2026-07-16 il GDD non era nel repo affatto**: la regola di precedenza sotto puntava a
+un documento assente, e nessun conflitto era verificabile. Appena entrato (prima come `.docx`,
+poi convertito) ne ha trovato uno reale: 14_ClassSystem vs GDD cap. 12 → **ADR-022**.
+
 ## Perché esiste
 I ProjectDocs sono (giustamente) engine-centrici e verificati sul codice. Ma il **perché** dei
 sistemi — la fantasia del clone, i pilastri di design, il ruolo tattico delle armi e dei nemici,
-la gerarchia GAR — vive solo nel GDD, che non è nel repo. Senza questo ponte, chi implementa
+la gerarchia GAR — vive nel GDD. Senza questo ponte, chi implementa
 vede *cosa* c'è ma non *cosa deve diventare*, e le decisioni di dettaglio (bilanciamento, ruoli,
 priorità) finiscono per essere prese durante la scrittura del codice invece che dal design.
 

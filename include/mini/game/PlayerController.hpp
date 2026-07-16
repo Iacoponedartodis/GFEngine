@@ -27,6 +27,17 @@ public:
     bool     isDead     = false;
     float    respawnTimer = -1.0f;
 
+    // ── Stat base del personaggio (14_ClassSystem / KI #35) ──────────
+    // Popolate da PlayerDef (data/characters/<id>.json) al load. I DEFAULT sono
+    // esattamente i valori che il gioco usava quando erano costanti: senza dati,
+    // o con dati assenti, il comportamento è identico a prima — per costruzione.
+    // Prima del 2026-07-15 questo tipo era autorato ma NON letto da nessuno: le
+    // stat regolate nell'editor non avevano alcun effetto (KI #35).
+    float    moveSpeed   = 5.0f;    // era config::PLAYER_SPEED
+    float    jumpMult    = 1.0f;    // moltiplicatore su config::JUMP_IMPULSE
+    float    sprintMult  = 1.65f;   // era la costante locale SPRINT_MULT
+    float    armorRating = 1.0f;    // divisore del danno (1 = nessuna riduzione)
+
     // ── Armi (0=primaria, 1=secondaria) ──────────────────────────────
     // L'arma attiva è SEMPRE weapons[activeWeapon]: niente copia separata
     // (la copia desincronizzata azzerava il calore allo switch — KI #22).

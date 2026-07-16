@@ -34,7 +34,6 @@ public:
     [[nodiscard]] int       getTeam2Tickets() const override { return 0;   }
     [[nodiscard]] bool hasVictoryCondition()  const override { return false; }
 
-    int consumeTeam1Ticket() override { return 999; }
     void overridePlayerEntity(EntityId e) override { m_playerEntity = e; }
 
     float playerHp   = 100.0f;

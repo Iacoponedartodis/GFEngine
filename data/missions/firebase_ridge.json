@@ -1,0 +1,10 @@
+{
+  "name": "Crinale di Firebase",
+  "briefing": "Raggiungi il crinale est e tienilo. Assottigliare la guarnigione e' opzionale.",
+  "map": "firebase",
+  "mode": "conquest",
+  "primary_objectives": ["reach_east_ridge", "hold_east_ridge"],
+  "optional_objectives": ["thin_the_garrison"],
+  "success_rules": { "rule": "all_primary_complete" },
+  "failure_rules": { "rule": "time_limit", "time_limit": 300.0 }
+}

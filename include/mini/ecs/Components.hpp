@@ -12,3 +12,4 @@
 #include "mini/ecs/components/AbilityComponent.hpp"
 #include "mini/ecs/components/ShieldComponent.hpp"
 #include "mini/ecs/components/VehicleComponent.hpp"
+#include "mini/ecs/components/SquadComponent.hpp"

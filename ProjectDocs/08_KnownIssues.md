@@ -108,7 +108,20 @@
   rewritten with real patterns. `build/` (1113 files), `imgui.ini`, `presets.cfg` untracked
   from the index (`git rm --cached`); files remain on disk. Ready to commit.
 
-## 7. Near-duplicate data files (ESCALATED to P0 — 2026-07-09)
+## 7. Near-duplicate data files (P0 — RILEVAMENTO AUTOMATICO dal 2026-07-15)
+- **Aggiornamento 2026-07-15 (ADR-018):** il near-duplicate non è più invisibile. Il gate
+  `validateContent` lo segnala automaticamente (Warning) confrontando i **nomi visualizzati**
+  — identici, o l'uno prefisso dell'altro, che è esattamente come si manifestò ("DC-15A Blaster"
+  / "DC-15A Blaster Rifle"). Un gate sugli **id** non avrebbe trovato nulla: con `id = filename
+  stem` (ADR-001) due file hanno per forza id diversi.
+  Visibile in tre posti: `GFEngine.exe --validate`, pannello editor, telemetria JSONL.
+  **Sui dati attuali del progetto: 0 near-duplicate** (verificato 2026-07-15) — la bonifica
+  manuale è stata fatta; ora la regressione viene intercettata da sola.
+  Resta **Warning e non Error** di proposito: due contenuti possono legittimamente avere nomi
+  simili, e bloccare l'avvio su un cosmetico renderebbe l'authoring ostile (policy doc 24).
+  La causa radice (rename senza tooling) è chiusa da ADR-010; questo chiude il *rilevamento*.
+
+### Storico (2026-07-09)
 - **Confirmed in production data (user-reported 2026-07-09):** renaming a weapon's name/id
   without a dedicated tool produced duplicate-looking entries in the in-game loadout menu
   (e.g. "DC-15A Blaster" / "DC-15A Blaster Rifle" appearing as near-identical separate rows).
@@ -226,3 +239,135 @@
   sistema non esiste. Chiarimenti dall'utente per il futuro: la schivata/roll è un COMANDO BASE
   (già funzionante via tasto), non un'abilità; lo shield va concepito come GADGET, non abilità.
   Lavoro futuro (abilità/gadget player-side).
+
+## 39. La morte del giocatore bruciava i rinforzi della squadra (HIGH) — RISOLTO 2026-07-16
+- **Disallineamento design↔codice**, emerso da un chiarimento dell'utente: i **ticket sono la
+  riserva di rinforzi della squadra** (il campo ha un cap di AI; il resto entra man mano che le
+  unità cadono), **non le vite del giocatore**.
+- **Com'era**: ogni morte del giocatore consumava un ticket (3 punti in Application, logica
+  duplicata), e a ticket 0 la morte era **sconfitta secca anche con la squadra intatta**.
+- **Com'è**: regola in **un solo posto** (`onPlayerDeath`) — il giocatore non consuma rinforzi;
+  si perde **solo** cadendo quando non resta né un alleato vivo né un rinforzo in arrivo. Vale
+  anche per il respawn volontario (K), che è una morte come le altre.
+- **`IGameMode::consumeTeam1Ticket()` rimosso**: era rimasto codice morto e la sua sola esistenza
+  invitava a rifare l'errore. Senza il metodo la regola è **strutturale**, non una convenzione.
+- Il meccanismo dei rinforzi era già corretto e **non è stato toccato**:
+  `ConquestMode::checkDeaths` (unità cade → ticket → rimpiazzo dalla riserva; a 0 → morte
+  permanente).
+- **Verificato**: morte del giocatore con 5 rinforzi → restano 5; alleati 0 + rinforzi 2 →
+  respawn; alleati 0 + rinforzi 0 → *"SCONFITTA: squadra annientata e nessun rinforzo"*.
+
+## 37. Framework obiettivi isolato: esito morto, invisibile, mappa scollegata (HIGH) — RISOLTO 2026-07-16
+- **Trovato per analisi guidata dal GDD** (21.2 "evitare i sistemi isolati"), non da un test.
+  Il sistema obiettivi (ADR-019, Phase A) era completo e verificato headless, ma per il giocatore
+  **non esisteva**:
+  1. `ObjectiveSystem::outcome()` non era chiamato da nessuno → **codice morto**: completare una
+     missione non faceva nulla. (Stesso difetto del ramo FocusFire, KI risolto il 07-15.)
+  2. **Nessun HUD**: gli obiettivi non erano visibili in partita.
+  3. `MissionDef.mapId` ignorato: la missione non imponeva la propria mappa → obiettivi a
+     coordinate arbitrarie su un'altra mappa.
+- **Fix**: puntatore non-proprietario al sistema in Application (i sistemi sopravvivono a
+  `World::initialize()`); esito missione → esito partita **con precedenza al mode** (doc 25);
+  pannello OBIETTIVI dallo stato reale; `mapId` della missione vince con avviso esplicito.
+- **Verificato**: fallimento a tempo → "SCONFITTA (obiettivo perso)"; primario completato →
+  "VITTORIA"; `--map` contraddittorio segnalato; non-regressione senza missione.
+
+## 38. Missione congelata al riavvio della partita (MEDIUM) — RISOLTO 2026-07-16
+- I sistemi **sopravvivono** a `World::initialize()` (che azzera solo entità e mailbox).
+  `ObjectiveSystem` ri-bindava solo se cambiava il *puntatore* alla missione: al riavvio della
+  stessa missione nessun rebind → obiettivi ancora "completati", e con `m_outcome != Ongoing`
+  l'update usciva subito **per sempre**. Riavviare una missione completata non la ricominciava.
+- **Fix**: rebind anche quando `getTickCount()` torna indietro — è il segnale di restart
+  (`initialize()` azzera `m_tickCount`). **Vincolo generale**: un sistema ECS che tiene stato
+  fra i tick deve gestire il restart del mondo, perché non viene distrutto con le entità.
+
+## 36. Classe e personaggio azzerati all'avvio partita (HIGH) — RISOLTO 2026-07-16
+- **Sintomo (segnalato dall'utente):** `--class marksman` non cambiava l'arma. Non era il design:
+  era un bug.
+- **Causa:** all'ENTER del PreMatch, `currentSettings = preMatchMenu.getSettings()` **sovrascriveva
+  la struct intera**, azzerando `classId` e `characterId` — campi che il PreMatch non possiede
+  (non ha selettori) e che erano stati risolti all'avvio. `startGame()` partiva coi campi vuoti.
+- **Classe del bug:** identica a quella della regola READ-MODIFY-WRITE (ADR-010) — costruire un
+  oggetto nuovo e sovrascrivere invece di modificare solo i propri campi. Lì su file, qui in
+  memoria: **la disciplina RMW è documentata per i save JSON, ma il pattern è più generale.**
+- **Conseguenza nascosta:** azzerava anche `characterId` → **nemmeno KI #35 funzionava in partita**.
+  La verifica era stata fatta in **sandbox**, che non passa da quella riga, e generalizzata al
+  percorso reale. Il "feeling identico" confermato dall'utente era corretto per il motivo
+  sbagliato: in partita il personaggio non veniva applicato e valevano i default del codice.
+- **Fix:** `startFromPreMatch()` come punto unico; se il PreMatch ha un valore (es. da un preset,
+  che serializza `"class"`) vince lui, altrimenti si tiene quello risolto all'avvio.
+- **Lezione di metodo:** la prima sonda di test **replicava** la logica del fix invece di
+  eseguirla — sarebbe passata anche col gioco rotto. Un test che non passa per il codice di
+  produzione non prova niente. Riscritta per chiamare la stessa funzione del tasto ENTER.
+- **Verificato sul percorso reale:** `--class marksman` → `primary: DC-15X`; `--class trooper` →
+  `DC-15A`; `character equipped` presente in entrambi.
+
+## 35. `PlayerDef` è autorato ma NESSUN sistema lo legge (HIGH) — RISOLTO 2026-07-15
+- **Decisione presa: opzione (a) — renderlo vivo, non cancellarlo.** Il fatto decisivo: i valori
+  autorati **coincidevano già** con quelli che il gioco usava, quindi consumarli è a variazione
+  **zero** — cambia qualcosa solo quando l'utente modifica i dati, che è lo scopo del pannello.
+  Cancellare (opzione b) avrebbe distrutto contenuto che la Fase 3 (personaggi/progressione,
+  doc 27) dovrà comunque ricreare.
+- **Fix:** `MatchSettings.characterId` → risolto in **`initWorld`** (non in `startGame`: vale per
+  partita *e* sandbox — il giocatore non può comportarsi diversamente a seconda di come è
+  entrato). `PlayerController` guadagna `moveSpeed`/`jumpMult`/`sprintMult`/`armorRating`, con
+  **default identici alle vecchie costanti** → senza personaggio il comportamento è invariato per
+  costruzione. `HealthComponent.armor` (generico, 1 = nessuna riduzione) applicato in CombatSystem.
+- **Selezione**: con **un solo** personaggio autorato non c'è nulla da scegliere → è il giocatore,
+  e il pannello diventa vivo senza UI. Con più personaggi la scelta è ambigua: **non si indovina**
+  (sceglierne uno a caso sarebbe il fallback hardcoded di ADR-007) — si logga che serve il
+  selettore nel PreMatch (14_ClassSystem Phase B).
+- **Trappola evitata**: i dati dicevano `sprint_mult: 1.5` ma il gioco girava con la costante
+  hardcoded `SPRINT_MULT = 1.65f` (in `PlayerController.cpp`, contro CLAUDE.md). Applicare i dati
+  alla cieca avrebbe cambiato il feel dello sprint. **La verità è il comportamento**: il dato è
+  stato allineato a 1.65, poi reso autoritativo; la costante è stata rimossa.
+- **Verificato**: `character equipped` in sandbox con hp 100 / move_speed 5.0 / sprint_mult 1.65 /
+  armor 1.0 = esattamente i valori storici. Gate ADR-018 esteso ai personaggi (hp/move_speed/
+  armor <= 0 → Error; sprint_mult < 1 → Warn).
+
+### Storico (diagnosi 2026-07-15)
+- **Verificato**: nessuna riga in `src/` o `include/` referenzia `PlayerDef` fuori da
+  `Definitions.hpp`/`DefinitionRegistry.cpp`. L'unico consumatore è il **BalanceEditor**, che lo
+  scrive. Il tipo si carica da `data/characters/<id>.json` (oggi: `clone_trooper.json`).
+- **Conseguenza per l'utente**: ogni stat regolata in quel pannello — `hp`, `move_speed`,
+  `jump_height`, `sprint_mult`, `armor_rating` — **non ha alcun effetto in partita**. L'hp del
+  giocatore viene da `MatchSettings.playerHp` (impostato nel PreMatch); velocità, salto e sprint
+  vivono in `core/GameConfig.hpp`/`PlayerController`.
+- È la classe di bug di KI #25 alla massima scala: non un campo fantasma, un **tipo intero**
+  fantasma. Il gate ADR-018 non può vederlo: i dati sono validi, è il *codice* che non li legge
+  (vedi il limite documentato in 24).
+- **Ha già deviato il design di un altro sistema**: 14_ClassSystem prescriveva
+  `PlayerDef.classId`; attaccarcelo avrebbe prodotto una funzionalità senza effetto. La classe è
+  stata messa su `MatchSettings` (che il gioco legge davvero) — vedi 07_Changelog 2026-07-15.
+- **Decisione da prendere** (non presa qui): (a) far consumare `PlayerDef` al runtime — il
+  PreMatch sceglie un personaggio e le sue stat si applicano davvero; oppure (b) eliminare il
+  tipo e il pannello, e tenere le stat dove sono. La (a) è coerente col GDD (personaggi/classi);
+  la (b) è onesta se il concetto non serve. Nel frattempo il pannello del BalanceEditor andrebbe
+  marcato "(non attivo)" come da convenzione KI #25.
+
+## 33. La traversata col crowd non ha mai avuto pathfinding (HIGH) — RISOLTO 2026-07-15
+- `AiSystem` passava a `requestMoveTarget` il punto `et + moveDX/moveDZ`, ma `norm2D()`
+  **normalizza `moveDX/DZ` in place**: Detour riceveva sempre una "carota" a **1 metro**
+  dall'agente, mai la destinazione reale. Un path a 1 m non può aggirare un ostacolo → l'agente
+  pianificava dentro il muro e ci spingeva contro. Presente da ADR-017 Phase B.
+- **Il commento nel codice affermava il contrario** ("i rami traversal impostano moveDX/DZ =
+  destinazione − posizione"): descriveva un'intenzione mai implementata. Hunt/Search/Patrol
+  chiamano tutti `norm2D` e ne scartavano il valore di ritorno.
+- **Fix:** variabile `moveDist` (distanza reale) valorizzata dai rami traversal; il crowd riceve
+  `et + moveDir * moveDist`. Più flag `orderTravel`: un ordine di squadra che fa percorrere
+  distanza usa `requestMoveTarget` **anche in Alert** (il ramo Alert usa `requestMoveVelocity`,
+  che non pianifica ed è pensato solo per lo strafe a corto raggio).
+- **Effetto misurato onesto:** sblocca la traversata a lungo raggio (dimostrato: squadra sotto
+  ordine converge 8.0 → 1.3 m, ordini completati 0 → 1915). Sugli eventi `stuck` l'effetto è
+  **modesto e non concludente** (`--stress 10`: 35 → 31, singolo run, entro il possibile rumore).
+- Da verificare manualmente: in partita vera le AI dovrebbero aggirare gli ostacoli grandi invece
+  di strisciarci contro. Possibile interazione con KI #31 (AI attraversano i veicoli), non misurata.
+
+## 34. Il centro di firebase (0,0) è irraggiungibile dal pavimento (INFO) — NON UN BUG 2026-07-15
+- La piattaforma **"Collina Centrale"** (10×10, `sy=1`, `collider: true`) è centrata esattamente in
+  (0,0). Con `kAgentClimb = STEP_HEIGHT` un gradino di 1 m non è scalabile → sul navmesh il centro
+  mappa **non è connesso** al pavimento circostante, e i 4 cover a ±6 lo recintano.
+- Non è un difetto: è design della mappa. È annotato perché ha **invalidato un A/B di movimento**
+  (un `MoveTo(0,0)` non può completarsi *per costruzione*, e gli agenti si accumulano su un anello
+  a ~7.5 m sembrando "bloccati"). Chi testa movimento/ordini su firebase usi un punto libero —
+  es. **(12,0)**, margine ≥2.5 m da ogni box — non il centro mappa.

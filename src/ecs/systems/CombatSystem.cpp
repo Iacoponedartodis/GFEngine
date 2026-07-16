@@ -168,7 +168,12 @@ void CombatSystem::update(World& world, float dt)
                     + "  [" + std::to_string((int)sh->current)
                     + "/" + std::to_string((int)sh->max) + "]");
             }
-            eh->current -= toHp;
+            // L'armatura divide il danno che arriva agli HP (dopo lo scudo, che
+            // e' una barriera a se'). armor = 1 → nessuna riduzione, cioe' il
+            // comportamento storico: il campo e' neutro finche' i dati non lo
+            // cambiano (KI #35). Guardia su <= 0: un dato assurdo non deve
+            // trasformarsi in danno infinito o negativo.
+            eh->current -= (eh->armor > 0.01f) ? (toHp / eh->armor) : toHp;
 
             // Feedback HUD (hitmarker) SOLO per i colpi del giocatore —
             // non per quelli degli alleati AI (stesso team).
@@ -213,6 +218,28 @@ void CombatSystem::update(World& world, float dt)
                 std::cout << "[Combat] Eliminato!\n";
                 world.pushEvent("KILL #" + std::to_string(eid)
                     + " eliminata dal team " + std::to_string(bullet->ownerTeam));
+                // L'entità sparisce sotto (destroyEntity): chi gira dopo la
+                // vedrebbe solo "non esiste più". Segnalare l'ELIMINAZIONE è
+                // ciò che permette a SquadSystem di completare un FocusFire.
+                {
+                    const auto* vt = world.getTeam(eid);   // ancora vivo QUI
+                    const int victimTeam = vt ? vt->teamId : 0;
+                    world.killedThisTick.push_back({eid, victimTeam});
+                    // Statistiche di missione (doc 25): si contano ORA, mentre il
+                    // fatto esiste — l'entità sta per essere distrutta e chi
+                    // l'ha uccisa è noto solo qui.
+                    if (victimTeam == 2)
+                    {
+                        ++world.missionStats.teamKills;
+                        if (bullet->fromPlayer) ++world.missionStats.playerKills;
+                    }
+                    // Il GIOCATORE è team 1: senza escluderlo finirebbe fra gli
+                    // "alleati persi", che sono un costo diverso dalle sue morti
+                    // (le conta Application, che conosce anche le morti non da
+                    // proiettile).
+                    else if (victimTeam == 1 && eid != world.playerEntity)
+                        ++world.missionStats.alliesLost;
+                }
                 toDestroy.push_back(eid);
             }
             break;

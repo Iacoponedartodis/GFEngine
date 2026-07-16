@@ -1,0 +1,9 @@
+{
+  "name": "Presidio Alpha",
+  "briefing": "Cattura il posto di comando Alpha e tienilo per 20 secondi.",
+  "map": "firebase",
+  "mode": "conquest",
+  "primary_objectives": ["capture_alpha", "hold_alpha"],
+  "success_rules": { "rule": "all_primary_complete" },
+  "failure_rules": { "rule": "any_primary_failed" }
+}

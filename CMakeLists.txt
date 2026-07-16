@@ -189,6 +189,9 @@ add_executable(GFEngine
     src/ecs/World.cpp
     src/ecs/systems/MovementSystem.cpp
     src/ecs/systems/CombatSystem.cpp
+    src/ecs/systems/SquadSystem.cpp
+    src/ecs/systems/ObjectiveSystem.cpp
+    src/game/data/ContentValidation.cpp
     src/ecs/systems/AiSystem.cpp
     src/ecs/systems/CrowdSystem.cpp
     src/game/game_modes/ConquestMode.cpp
@@ -251,6 +254,7 @@ add_executable(GFEditor
     editor/src/modules/VehicleEditor.cpp
     src/core/Telemetry.cpp
     src/game/data/DefinitionRegistry.cpp
+    src/game/data/ContentValidation.cpp   # ADR-018: STESSO gate del runtime, mai una copia
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
     src/render/Camera.cpp

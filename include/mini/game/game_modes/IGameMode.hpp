@@ -43,9 +43,16 @@ public:
 
     [[nodiscard]] virtual EntityId  getPlayerEntity() const = 0;
     [[nodiscard]] virtual glm::vec3 getSpawnPos()     const = 0;
+    // I ticket sono la RISERVA DI RINFORZI della squadra: li consuma la morte di
+    // un'UNITÀ (ConquestMode::checkDeaths → un rimpiazzo entra dalla riserva),
+    // non quella del giocatore. Qui si leggono soltanto: quanti rinforzi restano
+    // è ciò che decide se la caduta del giocatore è recuperabile (Application).
+    // `consumeTeam1Ticket()` è stato RIMOSSO il 2026-07-16: serviva solo a far
+    // pagare al giocatore le proprie morti — comportamento contrario al design.
+    // Non reintrodurlo: senza il metodo, la regola è strutturale invece che una
+    // convenzione da ricordare.
     [[nodiscard]] virtual int getTeam1Tickets() const = 0;
     [[nodiscard]] virtual int getTeam2Tickets() const = 0;
-    virtual int  consumeTeam1Ticket() = 0;
     virtual void overridePlayerEntity(EntityId e) = 0;
 
     // false = modalità senza vittoria/sconfitta (es. sandbox di prova)

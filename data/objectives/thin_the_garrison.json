@@ -1,0 +1,8 @@
+{
+  "name": "Assottiglia la guarnigione",
+  "type": "eliminate_target",
+  "tier": "tactical",
+  "target": { "target_team": 2, "count": 5 },
+  "activation": { "type": "immediate" },
+  "reward": 15
+}

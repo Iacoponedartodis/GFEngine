@@ -9,7 +9,9 @@
 #include <unordered_set>
 #include <vector>
 
-namespace mini { class ISystem; struct MapDef; class NavManager; }
+// Solo forward declaration: l'ECS non include header di gioco (ADR-002).
+namespace mini { class ISystem; struct MapDef; class NavManager;
+                 struct MissionDef; class DefinitionRegistry; }
 
 namespace mini
 {
@@ -96,6 +98,12 @@ public:
     VehicleComponent*       getVehicle(EntityId e);
     const VehicleComponent* getVehicle(EntityId e) const;
 
+    // Squad (26_SquadAndCommand, ADR-020): appartenenza + ordine corrente
+    void addSquad(EntityId e, const SquadComponent& c);
+    [[nodiscard]] bool hasSquad(EntityId e) const;
+    SquadComponent*       getSquad(EntityId e);
+    const SquadComponent* getSquad(EntityId e) const;
+
     // Abilities attive (16_AiBehavior est.: roll, ...)
     void addAbilities(EntityId e, const AbilityComponent& c);
     [[nodiscard]] bool hasAbilities(EntityId e) const;
@@ -118,6 +126,19 @@ public:
     };
     CombatFeedback combatFeedback;
 
+    // ── Entità eliminate in QUESTO tick (mailbox) ────────────────────────
+    //    CombatSystem distrugge l'entità nello stesso update in cui la uccide:
+    //    chi gira dopo (Squad/Ai) non può più interrogarla — getHealth() dà
+    //    nullptr. Senza questa lista è IMPOSSIBILE distinguere "bersaglio
+    //    ucciso" da "bersaglio sparito", e un ordine FocusFire (ADR-020)
+    //    segnalerebbe come fallimento ciò che è un successo.
+    //    Svuotata da Application a fine frame, come combatFeedback.
+    //    Porta con sé il TEAM: l'entità è distrutta, quindi chi legge non può
+    //    più interrogarla — un consumatore che volesse filtrare per squadra
+    //    (es. ObjectiveSystem/EliminateTarget) conterebbe anche i propri morti.
+    struct KilledUnit { EntityId entity = 0; int team = 0; };
+    std::vector<KilledUnit> killedThisTick;
+
     // ── Log chat in-game (17_SandboxTools): messaggi leggibili degli
     //    eventi di gioco. Mailbox: i sistemi accodano, Application drena
     //    ogni frame verso la HUD. Non sostituisce la telemetria su file.
@@ -129,10 +150,82 @@ public:
     //    L'ECS non include header di gioco: solo forward declaration.
     const MapDef* activeMap = nullptr;
 
+    // ── Missione attiva (25_ObjectivesAndMissions, ADR-019): puntatore opaco
+    //    settato da Application quando una missione è selezionata. nullptr =
+    //    nessuna missione → ObjectiveSystem non fa nulla e i mode esistenti
+    //    continuano a funzionare identici (il framework si affianca, non li
+    //    riscrive). Il registry serve a risolvere gli id degli obiettivi.
+    const MissionDef*         activeMission  = nullptr;
+    const DefinitionRegistry* objectiveDefs  = nullptr;
+
+    // ── Stato dei command post (ADR-009 → ADR-019) ───────────────────────
+    //    I post vivono nel game mode (`CommandPosts`), che `ecs/` non può
+    //    includere: Application pubblica qui lo stato ogni frame, come già fa
+    //    verso l'HUD. È ciò che permette a ObjectiveSystem di esprimere
+    //    CaptureZone/DefendZone **avvolgendo** ADR-009 invece di riscriverne la
+    //    logica (doc 25). Vuoto = mode senza post.
+    struct CommandPostState
+    {
+        std::string label;
+        int   owner      = 0;    // 0 = neutrale
+        float progress01 = 0.0f; // avanzamento cattura in corso
+    };
+    std::vector<CommandPostState> commandPostStates;
+
+    // ── Stato della battaglia (doc 25: conseguenze degli obiettivi) ──────
+    //    Gli obiettivi non sono caselle da spuntare: completarli **cambia la
+    //    battaglia**. ObjectiveSystem scrive QUI; ogni sistema competente legge
+    //    solo ciò che lo riguarda (ConquestMode i rinforzi, AiSystem la
+    //    precisione nemica...). È questo canale a permettere che le conseguenze
+    //    restino DATI dichiarativi invece di `if (objectiveId == ...)` sparsi.
+    //    Azzerato da `initialize()`: è stato per-missione.
+    struct BattleState
+    {
+        bool  enemyReinforcementsBlocked = false;  // il nemico non rimpiazza le perdite
+        float enemyAccuracyMult = 1.0f;            // <1 = nemici disorganizzati
+        std::string allySpawnPost;                 // post dove rinasce la squadra ("" = spawn mappa)
+        // Riserve da aggiungere alla squadra: un DELTA, perché i ticket li possiede
+        // il game mode. Il mode lo consuma e lo azzera.
+        int   pendingAllyReinforcements = 0;
+    };
+    BattleState battleState;
+
+    // ── Statistiche di missione (doc 25, GDD 9.6) ────────────────────────
+    //    Accumulate DURANTE la missione da chi conosce il fatto — nessuno le
+    //    ricostruisce a posteriori: gli eventi (una morte, una kill) esistono
+    //    solo nell'istante in cui accadono.
+    //    Servono al **debrief**: il giudizio non è un voto unico ma l'INSIEME dei
+    //    fattori — è la combinazione a raccontare com'è andata la missione, ed è
+    //    ciò che rende reale l'esperienza (progressione, doc 27).
+    //    Azzerate da `initialize()`: sono per-missione, non per-sessione.
+    struct MissionStats
+    {
+        int   playerKills   = 0;   // nemici uccisi DAL giocatore (bullet.fromPlayer)
+        int   teamKills     = 0;   // nemici uccisi dalla squadra (giocatore incluso)
+        int   alliesLost    = 0;   // alleati caduti (costo della missione)
+        int   playerDeaths  = 0;   // quante volte è caduto il giocatore
+        float missionTime   = 0.0f;
+        int   objectivesDone   = 0;
+        int   objectivesFailed = 0;
+    };
+    MissionStats missionStats;
+
     // ── Navigazione (ADR-017 Phase B): puntatore opaco al NavManager, settato
     //    da Application dopo la build del navmesh. AiSystem lo usa per il
     //    pathfinding, CrowdSystem per tick+write-back. nullptr = fallback aiMove.
     NavManager* nav = nullptr;
+
+    // ── Squadra (ADR-020, doc 26): entità del giocatore, settata dal game mode
+    //    via Application. Il SquadSystem la usa come leader della squadra alleata
+    //    quando è valida e di team 1 (in simulazione il player è neutro/parcheggiato
+    //    → il leader diventa un'AI). 0 = nessun giocatore attivo.
+    EntityId playerEntity = 0;
+
+    // ── Ordine contestuale del giocatore (ADR-020 Phase B): l'Application
+    //    risolve il contesto col raycast del mirino e deposita qui l'intenzione;
+    //    SquadSystem la consuma e azzera `pending`. Mailbox, non chiamata diretta:
+    //    è ciò che tiene `ecs/` indipendente dal codice di gioco.
+    SquadOrderRequest squadOrder;
 
 private:
     std::uint64_t m_tickCount    = 0;
@@ -153,6 +246,7 @@ private:
     std::unordered_map<EntityId, HitboxComponent>      m_hitboxes;
     std::unordered_map<EntityId, ShieldComponent>       m_shields;
     std::unordered_map<EntityId, VehicleComponent>      m_vehicles;
+    std::unordered_map<EntityId, SquadComponent>        m_squads;
     std::unordered_map<EntityId, AbilityComponent>      m_abilities;
 
     bool m_debugLogging = false;

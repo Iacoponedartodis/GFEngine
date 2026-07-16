@@ -46,6 +46,22 @@ struct MatchSettings
     std::string presetName;
 
     // ── Loadout giocatore ─────────────────────────────────────────────
+    // Una CLASSE (14_ClassSystem) è un loadout confezionato: se impostata, i tre
+    // campi sotto vengono riempiti risolvendola dal registry. Vuota = scelta
+    // libera arma per arma, come prima → il sistema è ADDITIVO, non breaking.
+    // Nota: la classe sta QUI e non su PlayerDef come ipotizzava il doc 14,
+    // perché PlayerDef non è letto da nessun sistema di gioco (KI #35): appenderla
+    // là avrebbe prodotto una funzionalità senza effetto.
+    // Personaggio: stat base (hp/velocita'/salto/sprint/armatura) da
+    // data/characters/<id>.json. Vuoto = costanti di default del codice.
+    // Fino al 2026-07-15 PlayerDef era autorato ma non letto da nessuno (KI #35).
+    std::string characterId;
+    std::string classId;                   // ID classe (vuoto = loadout manuale)
+
+    // Missione attiva (ADR-019). Vuota = partita libera (regole della modalità).
+    // Se impostata, IMPONE mappa e modalità: `MissionDef` le dichiara e gli
+    // obiettivi sono coordinate in quella mappa.
+    std::string missionId;
     std::string primaryWeaponId;           // ID arma primaria (da registry)
     std::string secondaryWeaponId;         // ID arma secondaria (vuoto = nessuna)
     std::vector<std::string> abilityIds;   // abilità attive scelte (max 2)
@@ -149,6 +165,8 @@ struct UserPresets
             // significato aggiungendo/rinominando una mappa.
             j["map_id"]           = s.mapId;
             // Loadout (KI #20: prima non era persistito affatto)
+            j["class"]            = s.classId;   // 14_ClassSystem
+            j["mission"]          = s.missionId; // ADR-019
             j["primary_weapon"]   = s.primaryWeaponId;
             j["secondary_weapon"] = s.secondaryWeaponId;
             j["abilities"]        = s.abilityIds;
@@ -208,6 +226,8 @@ struct UserPresets
             s.mapId    = j.value("map_id", std::string());
             s.mapIndex = std::max(0, j.value("map_index", 0));
 
+            s.classId           = j.value("class", std::string());   // 14_ClassSystem
+            s.missionId         = j.value("mission", std::string());  // ADR-019
             s.primaryWeaponId   = j.value("primary_weapon", std::string());
             s.secondaryWeaponId = j.value("secondary_weapon", std::string());
             s.gadgetId          = j.value("gadget", std::string());

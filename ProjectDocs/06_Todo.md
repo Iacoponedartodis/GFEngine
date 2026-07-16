@@ -7,7 +7,19 @@ di respiro Fase 2/3 (nav ADR-017, telemetria ADR-016, ottimizzazione ADR-015). I
 il GDD (nuovo doc 23) dice che il gap non è più tecnico: **è di design**. Ordine proposto —
 discutibile, ma questa è la logica.
 
-**N1. Squad & Command (doc 26, ADR-020) — il salto più grande.**
+**N1. Squad & Command (doc 26, ADR-020) — il salto più grande. → Phase A+B FATTE 2026-07-15.**
+Stato: `SquadComponent` + `SquadSystem` (fra Combat e Ai) in force; squadra alleata, default
+`Follow`, ciclo di vita con telemetria, ordini non implementati che falliscono con causa. **Phase B**:
+comando contestuale a un tasto (G) risolto dal mirino → `FocusFire`/`TakeCover`/`MoveTo`, mailbox
+`World::squadOrder`, raggiungibilità verificata prima di impartire, HUD pannello SQUADRA + esiti nel
+feed. 4 criteri di accettazione del doc 26 su 5 soddisfatti (vedi 07_Changelog per i numeri).
+**Restano:** la **ruota di comando** (livello 2: Regroup/Hold/Advance) e **Phase C** ("a terra" +
+rianimazione, tocca `CombatSystem`). L'economia tattica (Punti Comando) resta bloccata su N2 —
+come il 5° criterio di accettazione ("la missione è più difficile senza ordini"), che richiede una
+missione vera: **è l'argomento più forte per fare N2 adesso**.
+→ **Playtest confermato dall'utente 2026-07-15** (tasto G, contesto dal mirino, pannello HUD:
+"funziona perfettamente"). N1 è chiuso per quanto costruibile senza obiettivi.
+
 È **l'unico pilastro del GDD senza una riga di codice**, ed è quello che decide se Galactic Front
 è "uno sparatutto competente" o "il gioco del GDD": la vittoria deve nascere da decisioni
 tattiche e gestione della squadra, non dalla mira. Oggi nasce solo dalla mira.
@@ -20,26 +32,146 @@ Nota: include lo **stato "a terra" + rianimazione** — è ciò che dà peso all
 → Lega con l'iterazione **"is it fun"** ancora aperta della Fase 1: è il candidato numero uno a
 farla passare.
 
-**N2. Framework obiettivi (doc 25, ADR-019) — sblocca la Fase 2.**
-La Vision chiede "obiettivi stratificati (principali/strategici/tattici)"; oggi l'unico obiettivo
-è il command post cablato nei mode. Senza questo, ogni obiettivo nuovo diventerebbe una modalità
-nuova — il fork che ADR-008/014 hanno evitato. Generalizza ADR-009, non lo riscrive.
+**N2. Framework obiettivi (doc 25, ADR-019) → Phase A + B FATTE (07-15 / 07-16).**
+**Phase B (07-16) — collegamento, scelto leggendo il GDD 21.2 "evitare i sistemi isolati"**: il
+framework era completo ma per il giocatore **non esisteva** (KI #37). Ora: esito missione → esito
+partita (con precedenza al mode); **HUD OBIETTIVI**; la missione impone la sua mappa; rebind al
+riavvio (KI #38). Verificato in partita vera: fallimento → SCONFITTA, successo → VITTORIA.
+**Selezione dal PreMatch FATTA (07-16)**: righe Missione e Classe nel menu; la missione impone
+mappa/modalita' e il menu le mostra.
+**CaptureZone/DefendZone FATTE (07-16)**: ADR-009 **avvolto** via mailbox `commandPostStates`
+(zero duplicazione della logica di cattura); riferimento per label validato dal gate nella mappa
+della missione. Missione esempio: `firebase_alpha`. Ora il framework sa esprimere la meccanica
+principale del gioco.
+**Restano**: `DestroyTarget`/`EscortEntity`/`SurviveWave`/`InteractHack` (nessuno urgente: nascono
+quando serve una missione che li usa) e i **Punti Comando**.
+→ **Punti Comando — serve una decisione di design prima del codice.** Il GDD 5.4 dà la direzione
+("guadagnati completando obiettivi, NON con le kill; spesi per rinforzi/veicoli/supporto orbitale")
+ma lascia aperti **sink e prezzi**, e il GDD 21.4 vieta di deciderli scrivendo codice.
+**Chiarimento dell'utente (07-16): i ticket SONO già il sistema di rinforzi** (cap di AI in campo +
+riserva che entra man mano) → "comprare rinforzi" coi Punti Comando sarebbe un **doppione**. Se il
+sistema si farà, il sink dovrà essere altro (veicoli? supporto orbitale?). Implementare solo il
+guadagno = numero sull'HUD che non si spende (sistema isolato, GDD 21.2).
 
-**N3. Gate di validazione contenuti (doc 24, ADR-018) — piccolo, strutturale, subito.**
-Chiude la classe di bug che il progetto paga da mesi (KI #7 near-duplicate, #25 campi fantasma,
-#26 fallback morti, incidente hitbox 07-09). ADR-010 ha reso strutturale la *scrittura* sicura;
-questo fa lo stesso per la *correttezza*. Costo basso, si può fare in parallelo.
+**Statistiche di missione + debrief — FATTE 2026-07-16** (la domanda di design l'ha sciolta
+l'utente: *"narrativo"* = il giudizio nasce dall'**insieme dei fattori**, non da un voto unico).
+`World::missionStats` accumulato da chi conosce il fatto; debrief sulle schermate Win/Lose +
+evento JSONL `match end`. **Nessun punteggio calcolato di proposito**: i pesi → esperienza sono
+progressione (doc 27) e restano design.
+**`consequence` degli obiettivi — FATTO 2026-07-16.** 4 tipi agganciati a sistemi reali
+(`block_enemy_reinforcements`, `enemy_accuracy`, `ally_reinforcements`, `unlock_spawn`) via
+`World::battleState`; valori segnaposto da bilanciare provando; gate ADR-018 esteso.
+Verificato con **effetto reale** (2× "RINFORZI INTERROTTI", 0 rimpiazzi).
 
-**N4. Class System (doc 14) — prerequisito della Fase 3.**
-Schema già scritto, zero codice (KI #10). Blocca la progressione (doc 27): agganciarla oggi a
-`weaponIds[]` significherebbe rifarla dopo. Si lega a KI #32 (nessun sistema abilità/gadget
-lato giocatore): la classe è il contenitore naturale di armi + gadget + ruolo.
+## ⚠️ DEBITO PRINCIPALE — l'editor non conosce i sistemi nuovi
+Direttiva utente 2026-07-16 (vedi 10_ProjectMemory): *"più cose posso modificare dall'editor meglio
+è; quello rimane lo strumento principale che IO posso usare, deve essere un tool molto forte e
+profondo"*. Oggi **obiettivi, missioni, classi e conseguenze si autorano a mano nei JSON**: nessun
+modulo editor. Il doc 25 stesso prevedeva "prima lo schema e il runtime, poi l'authoring" — schema
+e runtime **ci sono**, quindi l'authoring è il passo dovuto.
+Da fare (in ordine): **modulo "Missioni"** (missione + obiettivi + conseguenze, dropdown-only dal
+registry: post dalla mappa della missione, obiettivi dal registry, tipi da enum) e **modulo
+"Classi"** (doc 14). Vincoli non negoziabili: `saveJsonRMW` (ADR-010), comando Rinomina,
+dropdown mai testo libero, e il gate ADR-018 già pronto come pannello di verifica.
+
+**Altro su questo filone:**
+1. **`DestroyTarget`** — serve per "bersagli distrutti" (parametro del giudizio) e per i "bersagli
+   strategici" che ogni mappa avrà.
+2. **Pesi/esperienza** del giudizio → doc 27 (Fase 3), dopo aver provato.
+
+**Storico — candidato ormai chiuso:**
+L'utente lo indica come necessario: *"dopo ogni missione si ottengono punti grazie a un sistema di
+giudizio basato su parametri e statistiche — obiettivi completati, alleati morti, kill, morti"*.
+Il GDD lo specifica al **9.6**: *"la valutazione finale pesa obiettivi (primari/secondari/falliti),
+prestazione tattica (gestione squadra, uso risorse, efficacia decisioni) e costi (perdite, tempo,
+risorse). **Il risultato è narrativo, non un semplice voto**"* (vedi anche 5.2, "debrief: successo
+militare + prestazione personale + costi; deve raccontare una storia").
+**Già disponibile**: obiettivi con tier e stato (ADR-019), tempo di missione, morti/kill via
+`killedThisTick` + telemetria, perdite alleate via `checkDeaths`.
+**Serve una decisione di design PRIMA del codice** (GDD 21.4): quali parametri pesano e quanto, e
+soprattutto cosa significa "narrativo invece che un voto". Raccogliere statistiche senza il
+consumatore = ennesimo sistema isolato (GDD 21.2).
+
+**Nota di metodo (07-16):** `--direct-prematch` **NON** avvia la partita in modo affidabile (a
+volte sì, a volte no, stesso comando): non è un meccanismo di verifica. Per testare headless il
+percorso PreMatch→partita serve una **sonda temporanea che chiami `startFromPreMatch()`** — la
+stessa funzione del tasto ENTER, mai una copia della sua logica. `--stress`/`--sim` girano in
+osservatore e **non finiscono mai**: inutili per testare gli esiti. Vedi 10_ProjectMemory.
+
+**Storico Phase A (2026-07-15):**
+Stato: `ObjectiveDef`/`MissionDef` nel registry, `ObjectiveSystem` dopo Ai/Crowd, 3 tipi
+implementati, attivazione/dipendenze/tier, regole di missione dichiarate, gate che rifiuta con
+causa, flag `--mission`. Inerte senza missione → mode intatti. Tutti e 5 i criteri di accettazione
+del doc 25 soddisfatti (07_Changelog per i numeri). **Restano**: CaptureZone/DefendZone
+(avvolgimento ADR-009, serve la mailbox degli stati dei post), gli altri 4 tipi, HUD obiettivi,
+selezione missione, Punti Comando.
+
+**N3. Gate di validazione contenuti (doc 24, ADR-018) — FATTO 2026-07-15.**
+In force: `core/Result.hpp` + `game/data/ContentValidation`, tre consumatori dello **stesso**
+codice (runtime blocca su Error, pannello editor *Moduli → Validazione contenuti*, `--validate`
+con exit code ≠ 0 + JSONL). Verificato con guasti deliberati (6 errori/3 warning/exit 1) e sui
+dati reali (0/0). Chiusa anche la duplicazione del gate missioni introdotta da N2:
+`validateMission` è ora condivisa fra runtime ed editor.
+Tutti i criteri del doc 24 soddisfatti, **campi fantasma incluso** (opzione (a): i loader
+registrano le chiavi che non leggono → `unknownKeys()`, zero I/O nuovo). Ha trovato subito un
+caso vero: `profile_id` residuo in `data/ai/B1 Heavy Droid.json`, rimosso.
+Limite documentato: cattura le chiavi IGNORATE dal loader, non i campi letti-ma-non-consumati
+(la lista storica di KI #25) — quelli sono codice, non dati, e restano annotati a mano.
+→ **Smoke dovuto**: aprire GFEditor → Moduli → Validazione contenuti.
+
+**N4. Class System — Phase A fatta, ma il doc 14 CONTRADDICE il GDD → ADR-022 (Proposed).**
+Il GDD cap. 12 apre con *"professioni militari, non semplici categorie di armi"* e in 12.3 lega le
+classi al **comportamento IA degli NPC** e alla composizione di squadra; il doc 14 modella una
+categoria di armi e **vieta** il legame con l'IA. Il `ClassDef` implementato copre **1 dei 6
+parametri** del GDD: seme valido, incorniciato male. **Decisione da approvare (ADR-022)**: far
+crescere `ClassDef` verso il GDD partendo da `aiProfileId` + `role` come enum consumato — è ciò che
+lo rende una professione e alimenta il sistema di squadra (ADR-020). Perk/XP/sblocchi → Fase 3.
+**Il doc 14 va riscritto** su quella base.
+
+**Dettaglio di quanto già in force (Phase A):**
+`ClassDef` nel registry (id = filename stem) + `MatchSettings.classId` risolto in `startGame()`,
+additivo (vuoto = loadout manuale invariato) + persistenza nei preset + flag `--class` + gate
+ADR-018 sulle classi. Esempi: `trooper`, `marksman`.
+**Il doc 14 partiva da due premesse false** (PlayerDef con `weaponIds`; `PlayerDef.classId`):
+`PlayerDef` non e' letto da nessuno → **KI #35**. La classe e' andata su `MatchSettings`; doc corretto.
+**Restano**: selettore classe nel PreMatch (oggi solo `--class`/preset) e modulo editor "Classi".
+`abilityIds` e' trasportato ma senza effetto finche' esiste KI #32.
+→ ~~Playtest dovuto~~ **FATTO dall'utente 2026-07-16: non funzionava.** Era un **bug reale**
+(KI #36), non il design: all'ENTER il PreMatch azzerava `classId` e `characterId` sovrascrivendo
+la struct intera — stessa classe di guasto della regola RMW (ADR-010), in memoria invece che su
+file. Azzerava anche il personaggio, quindi **nemmeno KI #35 funzionava in partita** (verificato
+solo in sandbox e generalizzato: errore di metodo). Corretto e verificato sul percorso reale:
+marksman → DC-15X, trooper → DC-15A.
+
+**KI #35 — `PlayerDef` morto → RISOLTO 2026-07-15** (decisione delegata: opzione (a), renderlo
+vivo). Le stat del personaggio ora atterrano sul giocatore in `initWorld` (partita **e** sandbox);
+default in codice = costanti storiche → variazione zero. Con un solo personaggio autorato viene
+scelto da solo, senza UI. Rimossa la costante hardcoded `SPRINT_MULT` (viveva in
+`PlayerController.cpp` contro CLAUDE.md); il dato è stato allineato al comportamento reale (1.65),
+non viceversa. Gate ADR-018 esteso a personaggi e classi.
+
+**Restano da fare (in ordine di valore):**
+1. ~~Selettore PreMatch per classe~~ **FATTO 07-16** (riga "Classe" nel menu, insieme a
+   "Missione"). Resta il **selettore personaggio**: serve solo quando esisterà un secondo
+   personaggio autorato — con uno solo la scelta è automatica e il pannello dell'editor è già vivo.
+2. **Modulo editor "Classi"** (doc 14): oggi le classi si autorano a mano nei JSON. Il gate
+   ADR-018 protegge già i riferimenti, quindi l'urgenza è bassa ma il doc lo chiede (dropdown-only).
+3. **KI #32 — abilità/gadget lato giocatore**: `ClassDef.abilityIds` è trasportato correttamente
+   ma **nessuno lo consuma**. Volutamente NON affrontato ora: l'utente ha chiesto di non
+   complicare abilità/gadget ("ci lavoreremo meglio in futuro"), ed è un sistema, non una patch.
 
 **N5. Progressione (27) e Persistenza (28) — Fase 3, dopo N4.** Non prima.
 
+**R8 (nuovo, 2026-07-15).** La risoluzione della data dir sorgente e' duplicata in ogni modulo
+dell'editor (BalanceEditor, EntityEditor, MapEditor, ... e ora EditorApp per il pannello
+validazione). Se una copia divergesse, quel modulo lavorerebbe su una `data/` diversa da quella
+che il gioco carica — e il pannello di validazione mentirebbe. Estrarre in una helper unica.
+
 **Debiti che restano validi in parallelo:** KI #31 (AI attraversano i veicoli — regressione nav),
 KI #32 (abilità/gadget player-side), R2 (Application.cpp ~1250 righe → estrarre
-VehicleDriver/SandboxSession), KI #7 (bonifica manuale near-duplicate), R7 (igiene `.bak`).
+VehicleDriver/SandboxSession), R7 (igiene `.bak`).
+~~KI #7 (bonifica manuale near-duplicate)~~ → non è più un lavoro manuale: dal 2026-07-15 il gate
+ADR-018 li rileva da solo, e sui dati attuali non ce ne sono.
 
 
 ## Done 2026-07-11 → 07-14 (ottimizzazione + telemetria + navigazione)

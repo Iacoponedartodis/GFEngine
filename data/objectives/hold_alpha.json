@@ -1,0 +1,12 @@
+{
+  "name": "Tieni Alpha per 20s",
+  "type": "defend_zone",
+  "tier": "primary",
+  "target": { "post": "Alpha", "actor_team": 1, "hold_seconds": 20.0 },
+  "activation": { "type": "after_objective", "objective": "capture_alpha" },
+  "reward": 30,
+  "on_success": [
+    { "type": "block_enemy_reinforcements" },
+    { "type": "enemy_accuracy", "value": 0.6 }
+  ]
+}

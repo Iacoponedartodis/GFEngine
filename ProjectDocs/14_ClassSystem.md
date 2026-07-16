@@ -6,6 +6,17 @@ Claude Code (or a human developer) a precise target to implement against, ahead 
 Do not treat any field/struct name below as already present until 05_CurrentState confirms
 it and this header is updated to "Current Implementation".
 
+> ## ⚠️ QUESTO DOC CONTRADDICE IL GDD — vedi ADR-022 (Proposed, 2026-07-16)
+> Il GDD (`29_GDD.md`, cap. 12) apre con: *"Rappresentare **professioni militari,
+> non semplici categorie di armi**"*, e in 12.3 lega le classi al **comportamento IA degli NPC** e
+> alla composizione di squadra. Questo doc modella esattamente una categoria di armi e **vieta**
+> il legame con l'IA. Per la regola di precedenza di 23_GameDesignBridge, sull'intento di design
+> **il GDD vince**: quindi è questo doc a essere sbagliato, non il GDD.
+> Il `ClassDef` implementato (Phase A, 2026-07-15) copre **1 dei 6 parametri** che il GDD elenca
+> per una classe (loadout base; mancano perk sbloccabili, curva XP, comportamento IA associato,
+> affinità equipaggiamenti, requisiti di sblocco). Non è codice sbagliato: è un **seme incorniciato
+> male**. **Non estendere questo doc: va riscritto** sulla base di ADR-022, una volta approvato.
+
 ## Overview
 A **Class** is a named, authorable composition of one primary weapon, optional secondary
 equipment, and a role tag, assignable to a `PlayerDef` (and later to progression unlocks).
@@ -17,7 +28,22 @@ Let content authors define "Trooper", "Heavy Gunner", "Marksman", etc. as reusab
 packages, instead of wiring a single `weaponIds[]` entry directly onto `PlayerDef`.
 
 ## Problem Solved
-`EnemyDef`/`PlayerDef` currently reference `weaponIds[]` directly (08_KnownIssues #10). This
+> **CORREZIONE 2026-07-15 (verificata sul codice live).** Questa sezione era **falsa in due
+> punti**, e le correzioni hanno cambiato il disegno del sistema:
+> 1. **`PlayerDef` NON referenzia `weaponIds[]`**: contiene solo stat base (hp, move_speed,
+>    jump_height, sprint_mult, armor_rating). Le armi del giocatore vivono in
+>    `MatchSettings.primaryWeaponId`/`secondaryWeaponId`, scelte nel PreMatch.
+> 2. **`PlayerDef` non è letto da NESSUN sistema di gioco** — è autorato dal BalanceEditor e mai
+>    consumato (**KI #35**). Quindi `PlayerDef.classId`, come prescritto sotto in Scope/Data Flow,
+>    sarebbe stato **una funzionalità senza effetto**.
+>
+> **Cosa è stato fatto invece**: `classId` vive su **`MatchSettings`** (il loadout che il gioco
+> legge davvero) e si risolve in `startGame()`, cioè esattamente "the same point where weapon
+> selection already happens today" come chiede la sezione Integration — solo con il proprietario
+> del campo corretto. Il resto del doc (schema, loader, accessor, dropdown-only, additività)
+> è stato implementato alla lettera.
+
+`EnemyDef` references `weaponIds[]` directly (08_KnownIssues #10). This
 conflates "which weapon can this unit use" with "what identity/loadout does this unit have."
 Phase 3 (military career progression, grade unlocks) needs the latter as a first-class,
 independently unlockable/swappable concept. Without this, progression work would require
@@ -39,7 +65,18 @@ retrofitting `PlayerDef`/`EnemyDef` under time pressure later.
 - New editor module OR new tab in an existing module (decision deferred to implementation
   time — see Technical Decisions below) to author `ClassDef` with dropdown-only weapon/
   ability assignment (04_CodingStandards: no free-text id fields, no exceptions).
-- `PlayerDef` gains an optional `classId` reference (dropdown from `registry.classes()`).
+- ~~`PlayerDef` gains an optional `classId` reference~~ → **NON fatto di proposito**: `PlayerDef`
+  non è consumato da nessun sistema (KI #35). `classId` è su **`MatchSettings`**, con fallback al
+  loadout manuale se vuoto. Se un giorno KI #35 verrà risolto facendo consumare `PlayerDef` al
+  runtime, allora `PlayerDef.classId` avrà senso — non prima.
+
+### Stato implementazione (2026-07-15) — Phase A
+Fatto: schema, `loadClasses()`, `getClass()`/`classes()`, `MatchSettings.classId` + risoluzione in
+`startGame()` (additiva: vuota = comportamento identico a prima), persistenza nei preset, flag
+`--class <id>`, gate ADR-018 sulle classi, esempi `trooper`/`marksman`.
+Restano: **selettore di classe nel PreMatch** (oggi solo `--class`/preset) e **modulo editor
+"Classi"**. Nota: `abilityIds` viene trasportato correttamente ma **non ha effetto** — le abilità
+del giocatore non sono applicate da nessuno (KI #32), che è un problema a valle di questo sistema.
 
 ## Out of Scope
 - Grade/rank progression logic (Phase 3 feature, this document only introduces the

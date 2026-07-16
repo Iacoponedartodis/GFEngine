@@ -1,0 +1,8 @@
+{
+  "name": "Raggiungi il crinale est",
+  "type": "reach_area",
+  "tier": "primary",
+  "target": { "x": 12.0, "y": 0.0, "z": 0.0, "radius": 4.0, "actor_team": 1 },
+  "activation": { "type": "immediate" },
+  "reward": 10
+}

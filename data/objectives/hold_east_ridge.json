@@ -1,0 +1,8 @@
+{
+  "name": "Tieni il crinale est",
+  "type": "hold_area_for_duration",
+  "tier": "primary",
+  "target": { "x": 12.0, "y": 0.0, "z": 0.0, "radius": 5.0, "actor_team": 1, "hold_seconds": 8.0 },
+  "activation": { "type": "after_objective", "objective": "reach_east_ridge" },
+  "reward": 25
+}

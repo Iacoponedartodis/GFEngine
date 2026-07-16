@@ -11,6 +11,9 @@
 #include "mini/ecs/systems/MovementSystem.hpp"
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/systems/AiSystem.hpp"
+#include "mini/ecs/systems/SquadSystem.hpp"
+#include "mini/ecs/systems/ObjectiveSystem.hpp"
+#include "mini/game/data/ContentValidation.hpp"   // gate contenuti (ADR-018)
 #include "mini/ecs/systems/CrowdSystem.hpp"
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/CommandPosts.hpp"
@@ -76,7 +79,9 @@ inline Weapon weaponFromDef(const WeaponDef& def)
 // Prima prova 3 livelli su dall'exe (build/config/Debug -> project root),
 // identico alla logica usata dal Balance Editor.
 // Fallback: data/ accanto all'exe (copia da CMake).
-static std::string getDataPath()
+// Esposta (ADR-018): la usa anche `--validate` in main.cpp. Duplicarla
+// significherebbe che il gate valida una cartella diversa da quella caricata.
+std::string getDataPath()
 {
     char* base = SDL_GetBasePath();
     std::filesystem::path exeDir = base ? base : ".";
@@ -117,7 +122,9 @@ static glm::mat4 toModelMatrix(const TransformComponent& t)
 // (la verifica "nemici vivi" ora vive nelle regole dei mode — ADR-014)
 
 void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
-                      const std::string& mapOverride, int stressAiCount)
+                      const std::string& mapOverride, int stressAiCount,
+                      const std::string& missionId,
+                      const std::string& classId)
 {
     using namespace config;
     initialize();
@@ -141,6 +148,65 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         + std::to_string(registry.enemies().size()) + " nemici, "
         + std::to_string(registry.allies().size()) + " alleati, "
         + std::to_string(registry.maps().size()) + " mappe");
+
+    // ── Gate di validazione contenuti (ADR-018, doc 24) ──────────────
+    // Gira DOPO loadAll(), sullo stesso registry, con le STESSE regole di
+    // `--validate` e dell'editor. Un Error è contenuto critico invalido: si
+    // blocca con diagnostica azionabile invece di degradare in silenzio — è
+    // l'intera ragione per cui questo gate esiste (KI #7/#24/#25/#26).
+    {
+        const Diagnostics diags = validateContent(registry, dataPath);
+        const bool critical = reportDiagnostics(diags, /*printToStdout=*/true);
+        telemetry::event(critical ? telemetry::Level::Error : telemetry::Level::Info,
+                         "Content", "content validated",
+                         {{"errors",   countBy(diags, telemetry::Level::Error)},
+                          {"warnings", countBy(diags, telemetry::Level::Warn)}});
+        if (critical)
+        {
+            std::cerr << "\n[Content] Avvio BLOCCATO: contenuto critico invalido.\n"
+                         "[Content] Correggi gli errori sopra, oppure esegui "
+                         "GFEngine.exe --validate per rivederli.\n";
+            telemetry::flushEvents();
+            return;
+        }
+    }
+
+    // ── Missione attiva (ADR-019, doc 25) ────────────────────────────
+    // Risolta UNA volta dal registry. Un id inesistente non deve avviare una
+    // partita "senza missione" in silenzio: chi ha chiesto una missione deve
+    // sapere che non c'è (stessa disciplina degli ordini di squadra).
+    // `--mission <id>` SEMINA soltanto la scelta: la missione vera si risolve in
+    // initWorld da `currentSettings.missionId`, perché dal 2026-07-16 può cambiare
+    // anche dal PreMatch. Risolverla una volta all'avvio la congelerebbe al flag.
+    const MissionDef* cliMission = nullptr;
+    if (!missionId.empty())
+    {
+        cliMission = registry.getMission(missionId);
+        if (!cliMission)
+        {
+            std::cerr << "[Mission] id sconosciuto: '" << missionId
+                      << "' — nessuna missione attiva\n";
+            telemetry::logWarn("mission id sconosciuto: " + missionId);
+        }
+        else
+            telemetry::logInfo("missione da CLI: " + cliMission->id);
+    }
+
+    // La missione IMPONE la sua mappa (MissionDef.mapId, doc 25). Gli obiettivi
+    // sono coordinate in quella mappa: giocarli altrove li renderebbe assurdi
+    // (es. "raggiungi (12,0)" su una mappa dove quel punto è dentro un muro).
+    // Un `--map` esplicito che contraddice la missione è un errore dell'utente:
+    // si segnala, non si sceglie in silenzio. (Dal PreMatch il problema non si
+    // pone: scegliendo la missione il menu aggiorna a vista la riga Mappa.)
+    std::string requestedMapId = mapOverride;
+    if (cliMission && !cliMission->mapId.empty())
+    {
+        if (!requestedMapId.empty() && requestedMapId != cliMission->mapId)
+            std::cerr << "[Mission] --map '" << requestedMapId << "' ignorato: la missione '"
+                      << cliMission->id << "' impone la mappa '"
+                      << cliMission->mapId << "'\n";
+        requestedMapId = cliMission->mapId;
+    }
 
     // Popola la lista armi del PreMatchMenu — solo Republic e Neutral (non Separatist)
     std::vector<PreMatchMenu::WeaponEntry> wList;
@@ -232,8 +298,18 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     World world;
     world.registerSystem(std::make_unique<MovementSystem>());
     world.registerSystem(std::make_unique<CombatSystem>());
-    world.registerSystem(std::make_unique<AiSystem>());
-    world.registerSystem(std::make_unique<CrowdSystem>());   // ADR-017 Phase B: dopo AiSystem
+    world.registerSystem(std::make_unique<SquadSystem>());   // ADR-020: PRIMA di AiSystem
+    world.registerSystem(std::make_unique<AiSystem>());      // (l'ordine è un vincolo,
+    world.registerSystem(std::make_unique<CrowdSystem>());   //  non un override)
+    // ADR-019: DOPO Ai/Crowd — gli obiettivi valutano lo stato quando le unità
+    // si sono già mosse in questo tick. Application tiene un puntatore NON
+    // proprietario per leggerne esito e stato (HUD + fine partita): i sistemi
+    // sopravvivono a World::initialize(), quindi resta valido per tutta la run.
+    // Senza questo il framework obiettivi sarebbe un sistema ISOLATO — vietato
+    // dal GDD 21.2 — e `outcome()` resterebbe codice morto.
+    auto objectiveSystemOwned = std::make_unique<ObjectiveSystem>();
+    ObjectiveSystem* objectives = objectiveSystemOwned.get();
+    world.registerSystem(std::move(objectiveSystemOwned));
 
     // ── Schermate ────────────────────────────────────────────────────
     LauncherScreen   launcher(W, H);
@@ -257,11 +333,77 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     preMatchMenu.setAbilityList(aList);
     preMatchMenu.setMapList(mList);
 
+    // ── Missioni (ADR-019) e classi (doc 14) nel PreMatch ─────────────
+    //    Senza questo il giocatore non può SCEGLIERE una missione: il sistema
+    //    obiettivi resterebbe raggiungibile solo da `--mission`, cioè invisibile
+    //    in partita normale (GDD 23.1 lo mette fra i sistemi Core).
+    //    La missione porta con sé mappa e modalità: sono sue e il menu le mostra.
+    {
+        std::vector<PreMatchMenu::MissionEntry> misList;
+        for (const auto& [id, m] : registry.missions())
+            misList.push_back({id, m.name.empty() ? id : m.name, m.mapId, m.modeId});
+        std::sort(misList.begin(), misList.end(),
+                  [](const auto& a, const auto& b) { return a.name < b.name; });
+        preMatchMenu.setMissionList(misList);
+
+        std::vector<PreMatchMenu::ClassEntry> clsList;
+        for (const auto& [id, c] : registry.classes())
+            clsList.push_back({id, c.name.empty() ? id : c.name});
+        std::sort(clsList.begin(), clsList.end(),
+                  [](const auto& a, const auto& b) { return a.name < b.name; });
+        preMatchMenu.setClassList(clsList);
+    }
+
     // ── Game mode (ADR-008: Application parla solo con IGameMode) ─────
     MatchSettings currentSettings;
-    // --map <id>: override della mappa (test/debug, R3)
-    if (!mapOverride.empty() && registry.getMap(mapOverride))
-        currentSettings.mapId = mapOverride;
+
+    // ── Personaggio attivo (KI #35) ──────────────────────────────────
+    // PlayerDef era autorato e mai letto: le stat dell'editor non avevano effetto.
+    // Ora vengono applicate. Con UN solo personaggio autorato non c'è nulla da
+    // scegliere — quello È il giocatore, e il pannello dell'editor diventa vivo
+    // senza bisogno di UI. Con più personaggi la scelta diventa ambigua: NON si
+    // indovina (sceglierne uno a caso è come i fallback hardcoded di ADR-007),
+    // si dichiara che serve una selezione esplicita.
+    if (currentSettings.characterId.empty())
+    {
+        const auto& chars = registry.playerDefs();
+        if (chars.size() == 1)
+            currentSettings.characterId = chars.begin()->first;
+        else if (chars.size() > 1)
+            telemetry::logWarn("piu' personaggi autorati (" + std::to_string(chars.size())
+                + ") ma nessun selettore nel PreMatch: si usano le stat di default. "
+                  "Serve la selezione esplicita (14_ClassSystem Phase B).");
+    }
+
+    // ── Classe e missione iniziali da CLI ────────────────────────────
+    // Dal 2026-07-16 entrambe si scelgono anche dal PreMatch: questi flag
+    // SEMINANO solo il valore di partenza (utili per test e avvio diretto).
+    // Un id sconosciuto non degrada in silenzio.
+    if (!classId.empty())
+    {
+        if (registry.getClass(classId))
+        {
+            currentSettings.classId = classId;
+            telemetry::logInfo("classe iniziale: " + classId);
+        }
+        else
+            std::cerr << "[Class] id sconosciuto: '" << classId
+                      << "' — loadout manuale\n";
+    }
+    if (cliMission) currentSettings.missionId = cliMission->id;
+    // Il PreMatch deve PARTIRE da questi valori, altrimenti li azzera al primo
+    // avvio: possiede lui missione e classe, e getSettings() sovrascriverebbe
+    // ciò che il CLI ha seminato (è la stessa trappola di KI #36).
+    preMatchMenu.setSettings(currentSettings);
+    // Mappa: --map <id> (test/debug, R3) oppure quella imposta dalla missione.
+    if (!requestedMapId.empty())
+    {
+        if (registry.getMap(requestedMapId))
+            currentSettings.mapId = requestedMapId;
+        else
+            std::cerr << "[Map] id sconosciuto: '" << requestedMapId
+                      << "' — resta '" << currentSettings.mapId << "'\n";
+    }
     sbMenu.allyCount    = std::max(1, currentSettings.team1AiCount);
     sbMenu.enemyCount   = std::max(1, currentSettings.team2AiCount);
     sbMenu.team1Tickets = currentSettings.team1Tickets;
@@ -314,9 +456,65 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     {
         mode->applySettings(currentSettings);
         mode->start(world, mesh.get(), albedo.get(), &registry, &meshCache);
+
+        // ── Personaggio (KI #35): le stat base diventano DATI ──────────
+        // Sta in initWorld e NON in startGame perché vale per OGNI percorso
+        // (partita e sandbox): il giocatore non può comportarsi diversamente a
+        // seconda di come è entrato. PlayerDef era autorato dal BalanceEditor e
+        // letto da nessuno — ogni stat regolata lì non aveva effetto. I default
+        // di PlayerController sono identici alle vecchie costanti, quindi senza
+        // personaggio il comportamento è invariato per costruzione.
+        if (!currentSettings.characterId.empty())
+        {
+            if (const PlayerDef* pd = registry.getPlayerDef(currentSettings.characterId))
+            {
+                player.moveSpeed   = pd->moveSpeed;
+                player.jumpMult    = pd->jumpHeight;
+                player.sprintMult  = pd->sprintMult;
+                player.armorRating = pd->armorRating;
+                currentSettings.playerHp = pd->hp;   // il personaggio definisce gli HP base
+                telemetry::event(telemetry::Level::Info, "Content", "character equipped",
+                                 {{"character", currentSettings.characterId},
+                                  {"hp", pd->hp}, {"move_speed", pd->moveSpeed},
+                                  {"sprint_mult", pd->sprintMult},
+                                  {"armor", pd->armorRating}});
+            }
+            else
+            {
+                std::cerr << "[Character] id sconosciuto: "
+                          << currentSettings.characterId << " — stat di default\n";
+                telemetry::logWarn("personaggio sconosciuto: " + currentSettings.characterId);
+                currentSettings.characterId.clear();
+            }
+        }
+
         player.reset(mode->getPlayerEntity(), currentSettings.playerHp,
                      mode->getSpawnPos(), cam);
+        // Armatura del personaggio → HealthComponent (KI #35). Il mode ha appena
+        // creato l'entità: l'armatura è l'unica stat che non vive sul controller,
+        // perché il danno lo applica CombatSystem. 1.0 = nessuna riduzione.
+        if (auto* ph = world.getHealth(mode->getPlayerEntity()))
+            ph->armor = player.armorRating;
         drivenVehicle = 0;   // ogni restart parte a piedi
+        // Mailbox squadra (ADR-020): il SquadSystem usa il giocatore come leader
+        // degli alleati quando è un'entità valida di team 1 (in sim è neutro).
+        world.playerEntity = mode->getPlayerEntity();
+        // Mailbox missione (ADR-019): il mode ha appena fatto start() e World
+        // ::initialize() ha azzerato le mailbox, quindi si (ri)collega qui.
+        // Nessuna missione → ObjectiveSystem inerte, i mode restano identici.
+        // Risolta QUI (non all'avvio) perché la missione può venire dal PreMatch,
+        // da un preset o dal flag CLI: il campo autoritativo è uno solo.
+        const MissionDef* mission = currentSettings.missionId.empty()
+                                  ? nullptr
+                                  : registry.getMission(currentSettings.missionId);
+        if (!mission && !currentSettings.missionId.empty())
+        {
+            std::cerr << "[Mission] id sconosciuto: '" << currentSettings.missionId
+                      << "' — partita libera\n";
+            currentSettings.missionId.clear();
+        }
+        world.activeMission = mission;
+        world.objectiveDefs = mission ? &registry : nullptr;
         worldReady = true;
 
         // NavMesh (ADR-017 Phase A): costruito dai box collider della mappa;
@@ -410,15 +608,42 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         telemetry::logInfo(std::string("game mode da PreMatch: ") + modeId
                            + " su mappa '" + currentSettings.mapId + "'");
 
+        // ── Classe (14_ClassSystem): un loadout confezionato ───────────
+        // Se è impostata, la classe DECIDE le armi; altrimenti vale la scelta
+        // manuale del PreMatch. Additivo: senza classe il comportamento è
+        // identico a prima. La risoluzione avviene qui, cioè nello stesso punto
+        // in cui l'arma viene già scelta oggi (14_ClassSystem, Integration).
+        std::string primaryId = preMatchMenu.getSelectedWeaponId();
+        std::string secId     = preMatchMenu.getSettings().secondaryWeaponId;
+        if (!currentSettings.classId.empty())
+        {
+            if (const ClassDef* cls = registry.getClass(currentSettings.classId))
+            {
+                primaryId = cls->primaryWeaponId;
+                secId     = cls->secondaryWeaponId;
+                currentSettings.abilityIds = cls->abilityIds;
+                telemetry::event(telemetry::Level::Info, "Content", "class equipped",
+                                 {{"class", cls->id}, {"primary", primaryId},
+                                  {"secondary", secId}});
+            }
+            else
+            {
+                // Il gate ADR-018 non può vederlo (la classe arriva da un preset
+                // salvato, non dai dati): non degradare in silenzio.
+                std::cerr << "[Game] Classe sconosciuta: " << currentSettings.classId
+                          << " — loadout manuale\n";
+                telemetry::logWarn("classe sconosciuta: " + currentSettings.classId);
+                currentSettings.classId.clear();
+            }
+        }
+
         // ── Arma primaria ─────────────────────────────────────────────
-        const std::string& primaryId = preMatchMenu.getSelectedWeaponId();
         const auto* wDef = registry.getWeapon(primaryId);
         player.weapons[0] = wDef ? weaponFromDef(*wDef) : makeBlasterRifle();
         if (!wDef)
             std::cerr << "[Game] Arma primaria non trovata: " << primaryId << " — fallback\n";
 
         // ── Arma secondaria ───────────────────────────────────────────
-        const std::string& secId = preMatchMenu.getSettings().secondaryWeaponId;
         const auto* wDef2 = secId.empty() ? nullptr : registry.getWeapon(secId);
         player.weapons[1] = wDef2 ? weaponFromDef(*wDef2) : Weapon{};
 
@@ -435,6 +660,29 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         stateChanged = true;
         window.setMouseCaptured(true);
         std::cout << "[Game] Partita iniziata — " << player.weapon().name << std::endl;
+    };
+
+    // Avvio partita DAL PreMatch — punto UNICO, di proposito.
+    // Il PreMatch NON possiede personaggio e classe (non ha ancora i selettori):
+    // assegnare la sua struct intera li azzererebbe in silenzio. È la stessa
+    // modalità di guasto che ha prodotto la regola READ-MODIFY-WRITE (ADR-010) —
+    // costruire un oggetto nuovo e sovrascrivere invece di modificare solo i
+    // propri campi — qui in memoria invece che su file. Il bug era reale: fino al
+    // 2026-07-16 né la classe né le stat del personaggio arrivavano in partita.
+    // Se il PreMatch HA un valore (es. da un preset caricato, che serializza
+    // "class") vince lui; mai il contrario. Quando il PreMatch avrà i selettori,
+    // questi campi diventeranno suoi e questa funzione sparirà.
+    auto startFromPreMatch = [&]()
+    {
+        MatchSettings s = preMatchMenu.getSettings();
+        // Dal 2026-07-16 il PreMatch POSSIEDE missione e classe: non vanno più
+        // ripristinate da currentSettings — se il giocatore sceglie "(nessuna)"
+        // dopo un `--class`, la sua scelta esplicita deve vincere. Preservare a
+        // forza il valore vecchio sarebbe la toppa che distrugge una decisione.
+        // `characterId` invece NON è nel menu (nessun selettore): quello sì.
+        if (s.characterId.empty()) s.characterId = currentSettings.characterId;
+        currentSettings = s;
+        startGame();
     };
 
     // ── Simulazione AI-vs-AI (17_SandboxTools): condivisa tra il menu
@@ -481,33 +729,64 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         window.setMouseCaptured(false);
     };
 
+    // ── Regola della morte del giocatore: UN SOLO POSTO ──────────────────
+    // I ticket sono la RISERVA DI RINFORZI della squadra — le truppe che entrano
+    // man mano che quelle in campo cadono (il campo ha un cap di AI). NON sono le
+    // vite del giocatore: morendo non ne consuma. Si perde solo cadendo quando non
+    // resta né un alleato vivo né un rinforzo in arrivo: lì la squadra non esiste
+    // più e non arriverà nessuno.
+    // Prima: ogni morte del giocatore bruciava un rinforzo della squadra, e a
+    // ticket 0 la morte era sconfitta secca anche con la squadra intatta.
+    // Vale anche per il respawn volontario: è una morte come le altre.
+    auto onPlayerDeath = [&]()
+    {
+        ++world.missionStats.playerDeaths;   // costo della missione (doc 25)
+        int alliedAiAlive = 0;
+        for (EntityId id : world.getEntities())
+        {
+            if (id == player.entity) continue;   // sta morendo: non conta
+            const auto* tm = world.getTeam(id);
+            const auto* hp = world.getHealth(id);
+            if (tm && tm->teamId == 1 && hp && hp->current > 0.0f
+                && !world.getBullet(id)) { ++alliedAiAlive; break; }
+        }
+        const int reinforcements = mode->getTeam1Tickets();
+        if (alliedAiAlive > 0 || reinforcements > 0)
+        {
+            player.respawnTimer = currentSettings.respawnDelay;
+            std::cout << "[Game] Eliminato! Respawn in "
+                      << currentSettings.respawnDelay << "s (alleati vivi: "
+                      << alliedAiAlive << ", rinforzi: " << reinforcements << ")"
+                      << std::endl;
+        }
+        else
+        {
+            state = GameState::Lose; stateChanged = true;
+            window.setMouseCaptured(false);
+            telemetry::event(telemetry::Level::Info, "GameMode", "last stand lost",
+                             {{"allied_ai_alive", 0}, {"reinforcements", 0}});
+            std::cout << "[Game] SCONFITTA: squadra annientata e nessun rinforzo."
+                      << std::endl;
+        }
+    };
+
     auto doVoluntaryRespawn = [&]()
     {
         if (player.isDead) return;
-        int t1 = mode->getTeam1Tickets();
-        if (t1 <= 0)
-        {
-            state = GameState::Lose;
-            stateChanged = true;
-            window.setMouseCaptured(false);
-            std::cout << "[Game] Nessun ticket per il respawn volontario. SCONFITTA!" << std::endl;
-            return;
-        }
-        mode->consumeTeam1Ticket();
         player.isDead = true;
         player.prevHp = 0.0f;
-        player.respawnTimer = currentSettings.respawnDelay;
         if (world.isValidEntity(player.entity))
         {
             auto* hp = world.getHealth(player.entity);
             if (hp) hp->current = 0.0f;
         }
+        onPlayerDeath();   // stessa regola delle altre morti: mai due criteri
+        // onPlayerDeath può aver deciso la sconfitta: tornare a Playing la
+        // cancellerebbe. Suicidarsi da ultimo superstite senza rinforzi È perdere.
+        if (state == GameState::Lose) return;
         state = GameState::Playing;
         stateChanged = true;
         window.setMouseCaptured(true);
-        std::cout << "[Respawn volontario] Ticket rimasti: "
-                  << mode->getTeam1Tickets()
-                  << " — respawn in " << currentSettings.respawnDelay << "s" << std::endl;
     };
 
     // ── Bootstrap Sandbox: salta i menu, entra subito in gioco ────────
@@ -632,7 +911,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 {
                     auto res = preMatchMenu.handleKey(sc);
                     if (res == PreMatchMenu::Result::StartGame)
-                    { currentSettings = preMatchMenu.getSettings(); startGame(); }
+                    {
+                        // Il PreMatch NON possiede personaggio e classe (non ha
+                        // ancora un selettore): assegnare la struct intera li
+                        // azzererebbe in silenzio. È la stessa modalità di guasto
+                        // dell'incidente che ha prodotto la regola READ-MODIFY-WRITE
+                        // (ADR-010) — costruire un oggetto nuovo e sovrascrivere
+                        // invece di modificare solo i propri campi — qui in memoria
+                        // invece che su file. Quando il PreMatch avrà i selettori,
+                        // questi campi passeranno a lui e questa toppa sparirà.
+                        startFromPreMatch();
+                    }
                     else if (res == PreMatchMenu::Result::Back)
                     { goMainMenu(); }
                 }
@@ -867,12 +1156,27 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         {
             accumulator += frameDt;
             while (accumulator >= SIMULATION_STEP)
-            { mode->update(world, fixedDt); world.tick(fixedDt); accumulator -= SIMULATION_STEP; }
+            {
+                mode->update(world, fixedDt);
+                // Stati dei command post → mailbox, FRA il mode (che li aggiorna)
+                // e i sistemi (che li leggono): ObjectiveSystem vede lo stato di
+                // QUESTO tick, non di quello prima. È ciò che permette a
+                // CaptureZone/DefendZone di avvolgere ADR-009 senza duplicarne
+                // la logica di cattura (doc 25); `ecs/` non può includere
+                // CommandPosts, che vive nel game mode.
+                world.commandPostStates.clear();
+                if (const CommandPosts* cps = mode->commandPosts())
+                    for (const auto& s : cps->status())
+                        world.commandPostStates.push_back({s.label, s.owner, s.progress01});
+                world.tick(fixedDt);
+                accumulator -= SIMULATION_STEP;
+            }
 
             // Feedback colpi a segno del giocatore → hitmarker sul mirino
             if (world.combatFeedback.team1Kill)     hud.hitmarker(true);
             else if (world.combatFeedback.team1Hit) hud.hitmarker(false);
             world.combatFeedback.reset();
+            world.killedThisTick.clear();   // mailbox per-tick (ADR-020)
 
             // Log chat: drena gli eventi dei sistemi verso la HUD
             for (auto& msg : world.eventFeed) hud.pushFeed(msg);
@@ -893,6 +1197,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     player.updateRespawn(world, cam, currentSettings.respawnDelay,
                                           mode->getSpawnPos(), currentSettings.playerHp);
                     mode->overridePlayerEntity(player.entity);
+                    world.playerEntity = player.entity;   // respawn = entità NUOVA (ADR-020)
                 }
             }
         }
@@ -956,36 +1261,11 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             {
                 player.isDead = true;
                 player.prevHp = 0.0f;
-                int t1 = mode->getTeam1Tickets();
-                if (t1 > 0)
-                {
-                    mode->consumeTeam1Ticket();
-                    player.respawnTimer = currentSettings.respawnDelay;
-                    std::cout << "[Game] Eliminato! Respawn in "
-                              << currentSettings.respawnDelay << "s" << std::endl;
-                }
-                else
-                {
-                    state = GameState::Lose; stateChanged = true;
-                    window.setMouseCaptured(false);
-                    std::cout << "[Game] SCONFITTA!" << std::endl;
-                }
+                onPlayerDeath();
             }
-
+            // updateHealth() imposta già isDead/prevHp da sé quando rileva la morte.
             if (!observerFly && player.updateHealth(world, audio))
-            {
-                int t1 = mode->getTeam1Tickets();
-                if (t1 > 0)
-                {
-                    mode->consumeTeam1Ticket();
-                    player.respawnTimer = currentSettings.respawnDelay;
-                }
-                else
-                {
-                    state = GameState::Lose; stateChanged = true;
-                    window.setMouseCaptured(false);
-                }
-            }
+                onPlayerDeath();
 
             // Alla guida non si spara (19_Vehicles Fase A: niente armi di bordo)
             if (!observerFly && !sbMenuOpen && drivenVehicle == 0)
@@ -996,8 +1276,13 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             //    hitbox nemica reale. USA LO STESSO test OBB dei proiettili
             //    (physics/HitTest.hpp, KI #13): il raggio è un segmento di
             //    80m — mirino e colpi concordano per costruzione. ──────────
+            EntityId aimEntity = 0;   // nemico inquadrato (0 = nessuno)
             {
                 bool aimOn = false;
+                // Entità inquadrata: la risolve GIÀ questo loop: riusarla per
+                // l'ordine contestuale (ADR-020 Phase B) garantisce che ciò che
+                // il mirino segna sia ciò che la squadra riceve come bersaglio.
+                aimEntity = 0;
                 const glm::vec3 ro = cam.getPosition();
                 const glm::vec3 rd = cam.getForward();
                 const glm::vec3 re = ro + rd * 80.0f;
@@ -1040,9 +1325,185 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                             && glm::length(ep - (ro + rd * t)) < 0.7f)
                             aimOn = true;
                     }
-                    if (aimOn) break;
+                    if (aimOn) { aimEntity = id; break; }
                 }
                 hud.setAimOnTarget(aimOn);
+            }
+
+            // ── Ordine contestuale alla squadra (ADR-020 Phase B, doc 26) ──
+            //    Un tasto, nessun menu: la tattica sta DENTRO il flusso
+            //    dell'azione (un comando che obbliga a fermarsi ha già fallito
+            //    il requisito di design). Il contesto lo decide il mirino:
+            //    nemico → FocusFire; cover point vicino → TakeCover; else MoveTo.
+            //    L'intenzione va in una MAILBOX sul World: `ecs/` non conosce
+            //    l'input (ADR-002/doc 10). ────────────────────────────────────
+            if (!observerFly && !sbMenuOpen && drivenVehicle == 0
+                && window.isMouseCaptured() && input.isPressed(Action::SquadOrder))
+            {
+                SquadOrderRequest req;
+                if (aimEntity != 0)
+                {
+                    req.order        = OrderType::FocusFire;
+                    req.targetEntity = aimEntity;
+                    req.pending      = true;
+                }
+                else
+                {
+                    // Punto mirato a terra: interseca il raggio col piano
+                    // orizzontale dei piedi del giocatore (il terreno su cui la
+                    // squadra cammina), non con y=0 — il pavimento non è a 0.
+                    const glm::vec3 ro = cam.getPosition();
+                    const glm::vec3 rd = cam.getForward();
+                    const auto* ptr = world.getTransform(player.entity);
+                    const float planeY = ptr ? (ptr->y - config::PLAYER_HALF_Y) : 0.0f;
+                    if (rd.y < -0.05f)   // deve puntare verso il basso
+                    {
+                        const float t = (planeY - ro.y) / rd.y;
+                        const glm::vec3 gp = ro + rd * t;
+                        req.targetX = gp.x; req.targetZ = gp.z;
+
+                        // Cover point REALE del MapDef entro 4m dal punto mirato
+                        // (doc 15/18) → l'intenzione diventa TakeCover.
+                        req.order = OrderType::MoveTo;
+                        if (const MapDef* md = world.activeMap)
+                        {
+                            float best2 = 4.0f * 4.0f;
+                            for (const auto& c : md->coverPoints)
+                            {
+                                const float dx = c.x - gp.x, dz = c.z - gp.z;
+                                const float d2 = dx*dx + dz*dz;
+                                if (d2 < best2)
+                                { best2 = d2; req.targetX = c.x; req.targetZ = c.z;
+                                  req.order = OrderType::TakeCover; }
+                            }
+                        }
+                        req.pending = true;
+                    }
+                    else
+                        hud.toast("Ordine: punta una posizione a terra");
+                }
+
+                // Raggiungibilità PRIMA di impartire: findPath restituisce un path
+                // PARZIALE se il bersaglio è irraggiungibile (non fallisce), quindi
+                // si confronta l'arrivo col punto chiesto. Senza questo si possono
+                // ordinare mete impossibili — es. la "Collina Centrale" di firebase,
+                // 1m > agentClimb, scollegata dal pavimento (KI #34).
+                if (req.pending && req.order != OrderType::FocusFire && nav.crowdReady())
+                {
+                    const auto* ptr = world.getTransform(player.entity);
+                    std::vector<glm::vec3> path;
+                    const glm::vec3 from = ptr ? glm::vec3{ptr->x, ptr->y, ptr->z}
+                                               : cam.getPosition();
+                    const bool ok = nav.findPath(from, {req.targetX, from.y, req.targetZ}, path)
+                        && !path.empty()
+                        && glm::length(glm::vec2{path.back().x - req.targetX,
+                                                 path.back().z - req.targetZ}) < 2.0f;
+                    if (!ok)
+                    {
+                        req.pending = false;
+                        hud.toast("Ordine rifiutato: posizione irraggiungibile");
+                        world.pushEvent("Ordine rifiutato: posizione irraggiungibile");
+                    }
+                }
+                if (req.pending) world.squadOrder = req;
+            }
+
+            // ── Debrief di fine missione (doc 25 / GDD 9.6) ───────────────
+            //    "Il risultato è narrativo, non un semplice voto": qui NON si
+            //    calcola un punteggio — si mostra l'INSIEME dei fattori, che è
+            //    ciò che racconta com'è andata. I pesi (→ esperienza) sono
+            //    progressione (doc 27) e vanno decisi dal design, non qui.
+            //    Si mostrano solo i fatti REALI: niente riga per ciò che non è
+            //    successo, e niente statistiche che non sappiamo misurare.
+            {
+                const auto& st = world.missionStats;
+                std::vector<std::string> lines;
+                char b[96];
+                if (world.activeMission)
+                {
+                    std::snprintf(b, sizeof(b), "Obiettivi: %d completati, %d falliti",
+                                  st.objectivesDone, st.objectivesFailed);
+                    lines.emplace_back(b);
+                    const int mm = (int)(st.missionTime / 60.0f);
+                    const int ss = (int)st.missionTime % 60;
+                    std::snprintf(b, sizeof(b), "Tempo: %d:%02d", mm, ss);
+                    lines.emplace_back(b);
+                }
+                std::snprintf(b, sizeof(b), "Nemici eliminati: %d  (tuoi: %d)",
+                              st.teamKills, st.playerKills);
+                lines.emplace_back(b);
+                std::snprintf(b, sizeof(b), "Alleati persi: %d", st.alliesLost);
+                lines.emplace_back(b);
+                std::snprintf(b, sizeof(b), "Tue cadute: %d", st.playerDeaths);
+                lines.emplace_back(b);
+                hud.setDebrief(std::move(lines));
+            }
+
+            // ── Obiettivi → HUD (ADR-019) ─────────────────────────────────
+            //    Letti dallo STATO REALE del sistema: l'HUD non deve mai mostrare
+            //    un obiettivo che il runtime non ha davvero. Gli inattivi (non
+            //    ancora sbloccati) non si mostrano: rivelerebbero la struttura
+            //    della missione prima del tempo.
+            {
+                std::vector<HUD::ObjectiveLine> lines;
+                for (const auto& r : objectives->objectives())
+                {
+                    if (!r.def || r.state == ObjectiveSystem::State::Inactive) continue;
+                    HUD::ObjectiveLine l;
+                    l.primary = (r.def->tier == ObjectiveTier::Primary);
+                    l.state   = (r.state == ObjectiveSystem::State::Completed) ? 1
+                              : (r.state == ObjectiveSystem::State::Failed)    ? 2 : 0;
+                    // Il progresso si mostra solo dove ESISTE davvero un conteggio:
+                    // inventarne uno per gli altri tipi sarebbe un numero falso.
+                    char buf[96];
+                    if (r.def->type == ObjectiveType::EliminateTarget)
+                        std::snprintf(buf, sizeof(buf), "%s  %d/%d",
+                                      r.def->name.c_str(), r.progress, r.def->count);
+                    else if (r.def->type == ObjectiveType::HoldAreaForDuration
+                             && r.state == ObjectiveSystem::State::Active)
+                        std::snprintf(buf, sizeof(buf), "%s  %.0f/%.0fs",
+                                      r.def->name.c_str(), r.holdTime, r.def->holdSeconds);
+                    else
+                        std::snprintf(buf, sizeof(buf), "%s", r.def->name.c_str());
+                    l.label = buf;
+                    lines.push_back(std::move(l));
+                }
+                hud.setObjectives(std::move(lines));
+            }
+
+            // ── Pannello squadra → HUD (doc 26: ordine, stato, distanza) ───
+            //    Legge lo stato reale dei membri: la HUD non deve MAI mostrare
+            //    un ordine che i membri non hanno davvero.
+            {
+                int members = 0;
+                bool found = false;
+                OrderType ord = OrderType::None;
+                float dist = 0.0f;
+                for (EntityId id : world.getEntities())
+                {
+                    const auto* sq = world.getSquad(id);
+                    if (!sq || sq->squadId == 0 || sq->isLeader) continue;
+                    ++members;
+                    if (found || !sq->hasActiveOrder()) continue;
+                    ord = sq->order; found = true;
+                    if (const auto* t = world.getTransform(id))
+                        dist = glm::length(glm::vec2{sq->targetX - t->x,
+                                                     sq->targetZ - t->z});
+                }
+                if (members == 0) hud.setSquadOrder("");
+                else
+                {
+                    char sb[96];
+                    // FocusFire non ha una destinazione: mostrarne una distanza
+                    // sarebbe un numero inventato.
+                    if (found && ord != OrderType::FocusFire)
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s  %.0fm",
+                                      members, orderName(ord), dist);
+                    else
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s",
+                                      members, orderName(ord));
+                    hud.setSquadOrder(sb);
+                }
             }
 
             // ── Stato command post → HUD (ADR-014/#6) ─────────────────
@@ -1054,10 +1515,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 hud.setPosts(ps);
             }
 
-            // ── Esito: deciso dal MODE (ADR-014). In osservazione la
-            //    partita non finisce mai (si guarda la battaglia AI) ────
-            const MatchOutcome oc = observerFly ? MatchOutcome::Ongoing
-                                                : mode->outcome(world);
+            // ── Esito: MODE (ADR-014) + MISSIONE (ADR-019) ────────────
+            //    In osservazione la partita non finisce mai (si guarda la
+            //    battaglia AI). Divisione di doc 25: il mode decide le REGOLE
+            //    (ticket), gli obiettivi decidono COSA fare — quindi entrambi
+            //    possono chiudere la partita. Il mode ha la precedenza: se ha
+            //    già deciso (ticket esauriti) la missione non lo ribalta;
+            //    altrimenti l'esito della missione È l'esito della partita.
+            //    Senza questo, `ObjectiveSystem::outcome()` era codice morto e
+            //    completare una missione non faceva assolutamente nulla.
+            MatchOutcome oc = observerFly ? MatchOutcome::Ongoing
+                                          : mode->outcome(world);
+            if (!observerFly && oc == MatchOutcome::Ongoing)
+            {
+                switch (objectives->outcome())
+                {
+                case ObjectiveSystem::Outcome::Success: oc = MatchOutcome::Team1Win; break;
+                case ObjectiveSystem::Outcome::Failure: oc = MatchOutcome::Team2Win; break;
+                default: break;
+                }
+            }
             if (oc == MatchOutcome::Team1Win)
             {
                 state = GameState::Win; stateChanged = true;
@@ -1085,8 +1562,21 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 endDumpState = state;
                 telemetry::dumpGameState(buildStateDump(
                     state == GameState::Win ? "match_win" : "match_lose"));
+                // Debrief anche su JSONL (doc 21): il "giudizio" è un insieme di
+                // fattori, e deve essere leggibile da un tool/LLM senza guardare
+                // lo schermo — è da qui che la progressione (doc 27) prenderà
+                // l'esperienza quando esisterà.
+                const auto& st = world.missionStats;
                 telemetry::event(telemetry::Level::Info, "GameMode", "match end",
-                    {{"outcome", state == GameState::Win ? "win" : "lose"}});
+                    {{"outcome", state == GameState::Win ? "win" : "lose"},
+                     {"mission", world.activeMission ? currentSettings.missionId : ""},
+                     {"objectives_done",   st.objectivesDone},
+                     {"objectives_failed", st.objectivesFailed},
+                     {"mission_time",      st.missionTime},
+                     {"team_kills",        st.teamKills},
+                     {"player_kills",      st.playerKills},
+                     {"allies_lost",       st.alliesLost},
+                     {"player_deaths",     st.playerDeaths}});
             }
         }
         else endDumpState = GameState::Playing;

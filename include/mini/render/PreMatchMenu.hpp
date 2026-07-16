@@ -28,13 +28,23 @@ public:
     struct WeaponEntry  { std::string id; std::string name; };
     struct AbilityEntry { std::string id; std::string name; std::string type; };
     struct MapEntry     { std::string id; std::string name; };
+    // La missione porta con sé mappa e modalità: sono SUE (MissionDef, doc 25) e
+    // servono qui per aggiornare a vista le righe Mappa/Modalità quando la si
+    // sceglie — il menu non deve mai mostrare una mappa diversa da quella che si
+    // giocherà davvero.
+    struct MissionEntry { std::string id; std::string name; std::string mapId; std::string modeId; };
+    struct ClassEntry   { std::string id; std::string name; };
 
     void setWeaponList (const std::vector<WeaponEntry>&  weapons);
     void setAbilityList(const std::vector<AbilityEntry>& abilities);
     void setMapList    (const std::vector<MapEntry>&     maps);   // R3
+    void setMissionList(const std::vector<MissionEntry>& missions);   // ADR-019
+    void setClassList  (const std::vector<ClassEntry>&   classes);    // doc 14
 
     [[nodiscard]] const std::string& getSelectedWeaponId()    const;
     [[nodiscard]] const std::string& getSelectedMapId()       const;
+    [[nodiscard]] const std::string& getSelectedMissionId()   const;
+    [[nodiscard]] const std::string& getSelectedClassId()     const;
     [[nodiscard]] int getSelectedWeapon() const { return m_weaponIdx; }
 
 private:
@@ -61,6 +71,24 @@ private:
     std::vector<MapEntry>     m_mapList;
     std::vector<std::string>  m_mapNames;
     std::vector<const char*>  m_mapNamePtrs;
+
+    // ── Missioni (ADR-019) e Classi (doc 14): stesso pattern delle mappe.
+    //    L'indice vive QUI e non in MatchSettings: è stato di UI, e KI #20 ha già
+    //    insegnato che l'indice è fragile — quello che si persiste è l'ID.
+    //    Indice 0 = "(nessuna)" → partita libera / loadout manuale: il default
+    //    resta il comportamento storico.
+    std::vector<MissionEntry> m_missionList;
+    std::vector<std::string>  m_missionNames;
+    std::vector<const char*>  m_missionNamePtrs;
+    int m_missionIdx = 0;
+
+    std::vector<ClassEntry>   m_classList;
+    std::vector<std::string>  m_classNames;
+    std::vector<const char*>  m_classNamePtrs;
+    int m_classIdx = 0;
+
+    // Allinea le righe Mappa/Modalità alla missione scelta (se ne impone una).
+    void syncRowsToMission();
 
     // ── Abilità & Gadget ─────────────────────────────────────────────
     std::vector<AbilityEntry> m_abilityList;

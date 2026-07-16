@@ -97,11 +97,30 @@ di gioco.
   valgono più di venti che nessuno usa in mezzo a un firefight.
 
 ## Acceptance
-- [ ] Un ordine contestuale si impartisce con un tasto senza fermare l'azione.
-- [ ] Gli alleati eseguono usando cover reali (doc 15/18) e pathfinding (doc 22).
-- [ ] Ogni ordine finisce completato o fallito **con causa**, visibile in `session_latest.jsonl`.
-- [ ] Verificabile in `--sim`: una squadra sotto ordini si comporta diversamente da una libera.
+Stato al 2026-07-15 (Phase A+B). "Implementato" ≠ "verificato": marcato solo ciò che è stato
+davvero misurato — vedi 07_Changelog per i numeri.
+- [x] Un ordine contestuale si impartisce con un tasto senza fermare l'azione. — tasto **G**
+      (rimappabile), contesto dal mirino. Catena a valle della mailbox verificata headless;
+      **tasto, contesto dal mirino e HUD confermati dal playtest dell'utente il 2026-07-15**.
+- [x] Gli alleati eseguono usando cover reali (doc 15/18) e pathfinding (doc 22). — `TakeCover`
+      punta i `coverPoints` del MapDef; movimento via `requestMoveTarget` (destinazione reale,
+      KI #33). Misurato: 8 emessi / 3 completati in `--stress`.
+- [x] Ogni ordine finisce completato o fallito **con causa**, visibile in `session_latest.jsonl`.
+      — eventi `order issued/completed/failed` con `reason`. Revive/Regroup falliscono con causa.
+- [x] Verificabile in `--sim`: una squadra sotto ordini si comporta diversamente da una libera.
+      — dimostrato con `MoveTo` deterministico: 8.0 → 1.3 m contro ~6-7 m di una squadra libera.
 - [ ] Misurabile: la missione è più difficile senza usare gli ordini (la squadra è utile davvero).
+      — **non ancora misurabile**: serve il framework obiettivi (N2/doc 25) per avere una
+      "missione" da fallire. È il criterio che conta di più: gli altri dicono che il sistema
+      funziona, questo direbbe che **serve**.
+
+### Non ancora fatto
+- **Ruota di comando** (livello 2): `Regroup`/`Hold`/`Advance`.
+- **Phase C**: stato "a terra" + rianimazione (tocca CombatSystem) → `Revive`.
+- **Punti Comando**: bloccati su N2 (si guadagnano completando obiettivi, non uccidendo).
+- `FocusFire` resta Active finché il designato vive: se la squadra non lo vede mai, l'ordine non
+  scade. È coerente col contratto (l'ordine è visibile sull'HUD e il giocatore può sostituirlo),
+  ma se in playtest risultasse fastidioso serve un timeout con causa.
 
 ## Interconnessioni
 Vincola l'AI (doc 16) · usa nav/crowd (doc 22) e i metadata (doc 15/18) · consuma gli obiettivi

@@ -18,7 +18,8 @@ namespace mini
 static constexpr float DEG2RAD = glm::pi<float>() / 180.0f;
 
 // Costanti gameplay
-static constexpr float SPRINT_MULT    = 1.65f;
+// SPRINT_MULT rimossa: il valore vive in PlayerDef.sprint_mult (KI #35). Era una
+// costante di gameplay hardcoded qui invece che nei dati (CLAUDE.md).
 static constexpr float CROUCH_MULT    = 0.55f;
 static constexpr float AIM_MULT       = 0.75f;
 static constexpr float ROLL_DURATION  = 0.32f;  // secondi
@@ -182,7 +183,7 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
 
     float speedMult = 1.0f;
     if (isRolling)        speedMult = 1.0f;  // roll ha velocità propria
-    else if (isSprinting) speedMult = SPRINT_MULT;
+    else if (isSprinting) speedMult = sprintMult;   // dal personaggio (KI #35)
     else if (isCrouching) speedMult = CROUCH_MULT;
     else if (isAiming)    speedMult = AIM_MULT;
 
@@ -207,7 +208,7 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
         }
         else
         {
-            const float spd = PLAYER_SPEED * speedMult;
+            const float spd = moveSpeed * speedMult;   // dal personaggio (KI #35)
             if (input.isDown(Action::MoveForward)) { move.x += fwdX; move.z += fwdZ; }
             if (input.isDown(Action::MoveBack))    { move.x -= fwdX; move.z -= fwdZ; }
             if (input.isDown(Action::MoveLeft))    { move.x -= rgtX; move.z -= rgtZ; }
@@ -224,7 +225,7 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
 
         if (onGround && input.isDown(Action::Jump) && !isRolling && !isCrouching)
         {
-            velY     = JUMP_IMPULSE;
+            velY     = JUMP_IMPULSE * jumpMult;   // dal personaggio (KI #35)
             onGround = false;
             airVelX  = (elapsed > 0.0f) ? move.x / elapsed : 0.0f;
             airVelZ  = (elapsed > 0.0f) ? move.z / elapsed : 0.0f;
@@ -272,12 +273,12 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
             }
             else
             {
-                cam.setSpeed(PLAYER_SPEED * speedMult);
+                cam.setSpeed(moveSpeed * speedMult);   // dal personaggio (KI #35)
                 cam.processKeyboard(
                     input.isDown(Action::MoveForward), input.isDown(Action::MoveBack),
                     input.isDown(Action::MoveLeft),    input.isDown(Action::MoveRight),
                     false, false, elapsed);
-                cam.setSpeed(PLAYER_SPEED);
+                cam.setSpeed(moveSpeed);
             }
 
             // Forza la Y alla eye height corretta (non si accumula tra frame)
@@ -293,7 +294,7 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
 
             if (input.isDown(Action::Jump) && !isRolling && !isCrouching)
             {
-                velY     = JUMP_IMPULSE;
+                velY     = JUMP_IMPULSE * jumpMult;   // dal personaggio (KI #35)
                 onGround = false;
             }
         }

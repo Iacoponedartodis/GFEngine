@@ -1,4 +1,5 @@
 #pragma once
+#include "mini/game/data/ContentValidation.hpp"   // ADR-018
 #include <memory>
 #include <string>
 
@@ -28,6 +29,7 @@ enum class ActiveModule
     VehicleEditor,
     AssetManager,
     AiEditor,
+    ContentValidation,   // ADR-018: pannello gate contenuti
 };
 
 // Applicazione principale di GFEditor.
@@ -55,6 +57,11 @@ private:
     std::unique_ptr<WeaponEditor>        m_weaponEditor;
     std::unique_ptr<VehicleEditor>       m_vehicleEditor;
 
+    // Pannello validazione (ADR-018): diagnostiche calcolate su richiesta —
+    // mai per-frame (loadAll + validate fanno I/O).
+    mini::Diagnostics m_diags;
+    bool        m_diagsDirty = true;
+
     void init();
     void shutdown();
     void processEvents();
@@ -62,6 +69,7 @@ private:
     void render();
 
     void renderMenuBar();
+    void renderValidationPanel();   // ADR-018 (usa validateContent, mai una copia)
     void renderDockSpace();
 
     void launchGame();    // Lancia GFEngine.exe con --direct-prematch

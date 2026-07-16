@@ -111,6 +111,47 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                           aliveAllies, team1Tickets);
             m_ui.text(axr - PW + 10, PY + 17, 1.6f, buf, 0.9f, 0.93f, 1.0f);
 
+            // Obiettivi della missione (ADR-019) — colonna a sinistra, sotto i
+            // pannelli in alto. Un obiettivo che il giocatore non vede non
+            // esiste: senza questo pannello il framework era un sistema isolato
+            // (GDD 21.2). I primari sono in evidenza — sono quelli che decidono
+            // la missione; gli opzionali restano leggibili ma defilati.
+            if (!m_objectives.empty())
+            {
+                const float OX = 14.0f, OY = PY + PH + 34.0f, OW = 250.0f;
+                const float rowH = 17.0f;
+                const float boxH = 22.0f + rowH * (float)m_objectives.size();
+                m_ui.rect(OX, OY, OW, boxH, 0.06f, 0.07f, 0.12f, 0.72f);
+                m_ui.rect(OX, OY, 3, boxH, 0.95f, 0.80f, 0.35f);
+                m_ui.text(OX + 10, OY + 4, 1.3f, "OBIETTIVI", 0.95f, 0.85f, 0.45f);
+
+                float y = OY + 18.0f;
+                for (const auto& o : m_objectives)
+                {
+                    // Il colore porta lo stato senza aggiungere testo: verde =
+                    // fatto, rosso = fallito, chiaro = da fare.
+                    float r = 0.88f, g = 0.92f, b = 1.0f;
+                    if      (o.state == 1) { r = 0.45f; g = 0.90f; b = 0.55f; }
+                    else if (o.state == 2) { r = 1.00f; g = 0.45f; b = 0.40f; }
+                    else if (!o.primary)   { r = 0.62f; g = 0.66f; b = 0.75f; }
+                    m_ui.text(OX + 10, y, o.primary ? 1.5f : 1.3f,
+                              o.label.c_str(), r, g, b);
+                    y += rowH;
+                }
+            }
+
+            // Squadra: ordine corrente (ADR-020 Phase B) — sotto gli alleati,
+            // stessa colonna. Un ordine non deve mai essere invisibile: se il
+            // giocatore non vede cosa ha chiesto, non sta comandando niente.
+            if (!m_squadOrder.empty())
+            {
+                const float SY = PY + PH + 4.0f;
+                m_ui.rect(axr - PW, SY, PW, 22.0f, 0.06f, 0.16f, 0.14f, 0.78f);
+                m_ui.rect(axr - PW, SY, 3, 22.0f, 0.30f, 0.85f, 0.60f);
+                m_ui.text(axr - PW + 10, SY + 5, 1.5f, m_squadOrder.c_str(),
+                          0.75f, 1.0f, 0.88f);
+            }
+
             // Nemici (rosso) — a destra del centro
             const float exl = cx + half;             // bordo sinistro pannello
             m_ui.rect(exl, PY, PW, PH, 0.22f, 0.07f, 0.06f, 0.78f);
@@ -273,19 +314,41 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
         }
 
         // ── Overlay Win/Lose ─────────────────────────────────────────
-        if (state == 1)
+        if (state == 1 || state == 2)
         {
-            m_ui.rect(0, 0, W, H, 0, 0.22f, 0, 0.52f);
-            m_ui.text(cx - 215, cy - 55, 5.0f, "MISSIONE COMPLETATA!", 0.2f, 1.0f, 0.3f);
-            m_ui.text(cx - 170, cy + 15, 2.3f, "Tutti i nemici eliminati.", 0.8f, 0.95f, 0.8f);
-            m_ui.text(cx - 155, cy + 50, 2.3f, "R = ricomincia  |  Q = menu", 0.7f, 0.9f, 0.7f);
-        }
-        else if (state == 2)
-        {
-            m_ui.rect(0, 0, W, H, 0.32f, 0, 0, 0.52f);
-            m_ui.text(cx - 115, cy - 55, 5.0f, "GAME OVER", 1.0f, 0.2f, 0.15f);
-            m_ui.text(cx - 125, cy + 15, 2.3f, "Sei stato eliminato.", 0.95f, 0.75f, 0.75f);
-            m_ui.text(cx - 155, cy + 50, 2.3f, "R = ricomincia  |  Q = menu", 0.9f, 0.6f, 0.6f);
+            const bool win = (state == 1);
+            if (win) m_ui.rect(0, 0, W, H, 0,     0.22f, 0,     0.52f);
+            else     m_ui.rect(0, 0, W, H, 0.32f, 0,     0,     0.52f);
+
+            if (win)
+                m_ui.text(cx - 215, cy - 130, 5.0f, "MISSIONE COMPLETATA!", 0.2f, 1.0f, 0.3f);
+            else
+                m_ui.text(cx - 115, cy - 130, 5.0f, "GAME OVER", 1.0f, 0.2f, 0.15f);
+
+            // ── Debrief (doc 25 / GDD 9.6) ────────────────────────────
+            // Il vecchio testo qui era CABLATO ("Tutti i nemici eliminati." /
+            // "Sei stato eliminato.") ed era diventato falso: si vince anche
+            // completando una missione e si perde anche fallendo un obiettivo.
+            // Ora si raccontano i fatti veri. Nessun voto: è l'insieme dei
+            // fattori a dire com'è andata.
+            if (!m_debrief.empty())
+            {
+                float y = cy - 70;
+                for (const auto& line : m_debrief)
+                {
+                    if (win) m_ui.text(cx - 180, y, 2.0f, line.c_str(), 0.85f, 0.97f, 0.85f);
+                    else     m_ui.text(cx - 180, y, 2.0f, line.c_str(), 0.97f, 0.82f, 0.80f);
+                    y += 26.0f;
+                }
+            }
+            else if (win)
+                m_ui.text(cx - 170, cy - 70, 2.3f, "Obiettivi raggiunti.", 0.8f, 0.95f, 0.8f);
+            else
+                m_ui.text(cx - 125, cy - 70, 2.3f, "Sei stato eliminato.", 0.95f, 0.75f, 0.75f);
+
+            const float hy = cy + 130;
+            if (win) m_ui.text(cx - 155, hy, 2.3f, "R = ricomincia  |  Q = menu", 0.7f, 0.9f, 0.7f);
+            else     m_ui.text(cx - 155, hy, 2.3f, "R = ricomincia  |  Q = menu", 0.9f, 0.6f, 0.6f);
         }
     }
 

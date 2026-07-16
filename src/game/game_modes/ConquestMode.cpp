@@ -351,6 +351,19 @@ void ConquestMode::checkDeaths(World& world)
             const auto& tpl = it->second;
             int& tickets = (tpl.teamId == 1) ? m_team1Tickets : m_team2Tickets;
 
+            // Conseguenza di un obiettivo (doc 25): se la squadra ha tagliato i
+            // rinforzi nemici (es. presa la base d'atterraggio), il team 2 non
+            // rimpiazza più le perdite — le sue riserve restano a terra.
+            // Il dato arriva da `battleState`: qui non si sa QUALE obiettivo
+            // l'abbia deciso, e non deve saperlo.
+            if (tpl.teamId == 2 && world.battleState.enemyReinforcementsBlocked)
+            {
+                std::cout << "[Respawn] Nemico eliminato. RINFORZI INTERROTTI — "
+                             "nessun rimpiazzo.\n";
+                it = m_trackedUnits.erase(it);
+                continue;
+            }
+
             if (tickets > 0)
             {
                 --tickets;
@@ -780,6 +793,16 @@ MatchOutcome ConquestMode::outcome(const World& world) const
 
 void ConquestMode::update(World& world, float dt)
 {
+    // Riserve extra da una conseguenza (doc 25): il mode possiede i ticket, quindi
+    // è lui a consumare il delta e ad azzerarlo — chi lo ha prodotto non conosce
+    // il numero attuale delle riserve.
+    if (world.battleState.pendingAllyReinforcements != 0)
+    {
+        m_team1Tickets = std::max(0, m_team1Tickets
+                                   + world.battleState.pendingAllyReinforcements);
+        world.battleState.pendingAllyReinforcements = 0;
+    }
+
     checkDeaths(world);
 
     // Respawn dei veicoli distrutti (19_Vehicles Fase B)

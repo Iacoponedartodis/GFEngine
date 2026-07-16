@@ -1,0 +1,12 @@
+{
+  "name": "Cattura il posto Alpha",
+  "type": "capture_zone",
+  "tier": "primary",
+  "target": { "post": "Alpha", "actor_team": 1 },
+  "activation": { "type": "immediate" },
+  "reward": 20,
+  "on_success": [
+    { "type": "unlock_spawn", "target": "Alpha" },
+    { "type": "ally_reinforcements", "value": 2 }
+  ]
+}

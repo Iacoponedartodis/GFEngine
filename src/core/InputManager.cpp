@@ -21,6 +21,7 @@ InputManager::InputManager()
     m_bindings[(int)Action::Crouch]       = SDL_SCANCODE_LCTRL;
     m_bindings[(int)Action::Roll]         = SDL_SCANCODE_Q;
     m_bindings[(int)Action::SwitchWeapon] = SDL_SCANCODE_F;
+    m_bindings[(int)Action::SquadOrder]   = SDL_SCANCODE_G;   // ADR-020 Phase B
     m_bindings[(int)Action::Pause]        = SDL_SCANCODE_ESCAPE;
     m_bindings[(int)Action::Restart]      = SDL_SCANCODE_R;
     m_bindings[(int)Action::StartGame]    = SDL_SCANCODE_RETURN;
@@ -129,6 +130,7 @@ const char* InputManager::actionName(Action a)
         case Action::Sprint:       return "Corsa";
         case Action::Crouch:       return "Accovacciato";
         case Action::Roll:         return "Schivata";
+        case Action::SquadOrder:   return "Ordine squadra";
         case Action::SwitchWeapon: return "Cambia arma";
         case Action::Pause:        return "Pausa";
         case Action::Restart:      return "Riavvia";
@@ -145,6 +147,7 @@ static const Action s_rebindable[] = {
     Action::Jump,
     Action::Sprint, Action::Crouch, Action::Roll, Action::SwitchWeapon,
     Action::Reload,
+    Action::SquadOrder,
     Action::ToggleMouse,
 };
 

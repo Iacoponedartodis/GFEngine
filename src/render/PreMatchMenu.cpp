@@ -23,6 +23,18 @@ PreMatchMenu::PreMatchMenu(int screenW, int screenH)
 void PreMatchMenu::setSettings(const MatchSettings& s)
 {
     m_settings = s;
+    // Gli indici delle righe enum sono stato di UI e NON vivono in MatchSettings:
+    // vanno ricostruiti dagli id, altrimenti una missione/classe impostata altrove
+    // (flag CLI, preset) resterebbe invisibile nel menu pur essendo attiva.
+    m_missionIdx = 0;
+    if (!s.missionId.empty())
+        for (int i = 0; i < (int)m_missionList.size(); ++i)
+            if (m_missionList[i].id == s.missionId) { m_missionIdx = i + 1; break; }
+    m_classIdx = 0;
+    if (!s.classId.empty())
+        for (int i = 0; i < (int)m_classList.size(); ++i)
+            if (m_classList[i].id == s.classId) { m_classIdx = i + 1; break; }
+    if (m_missionIdx > 0) syncRowsToMission();
     buildRows();
 }
 
@@ -43,6 +55,63 @@ const std::string& PreMatchMenu::getSelectedMapId() const
     if (m_settings.mapIndex < 0 || m_settings.mapIndex >= (int)m_mapList.size())
         return fallback;
     return m_mapList[m_settings.mapIndex].id;
+}
+
+// ── Missioni (ADR-019) e Classi (doc 14) ─────────────────────────────────
+// Stesso pattern delle mappe. Indice 0 = "(nessuna)": senza selezione il gioco
+// si comporta esattamente come prima — additivo, non breaking.
+void PreMatchMenu::setMissionList(const std::vector<MissionEntry>& missions)
+{
+    m_missionList = missions;
+    m_missionNames.clear();
+    m_missionNamePtrs.clear();
+    m_missionNames.push_back("(nessuna - partita libera)");
+    for (const auto& m : m_missionList) m_missionNames.push_back(m.name);
+    for (const auto& n : m_missionNames) m_missionNamePtrs.push_back(n.c_str());
+    if (m_missionIdx > (int)m_missionList.size()) m_missionIdx = 0;
+    buildRows();
+}
+
+void PreMatchMenu::setClassList(const std::vector<ClassEntry>& classes)
+{
+    m_classList = classes;
+    m_classNames.clear();
+    m_classNamePtrs.clear();
+    m_classNames.push_back("(nessuna - loadout manuale)");
+    for (const auto& c : m_classList) m_classNames.push_back(c.name);
+    for (const auto& n : m_classNames) m_classNamePtrs.push_back(n.c_str());
+    if (m_classIdx > (int)m_classList.size()) m_classIdx = 0;
+    buildRows();
+}
+
+const std::string& PreMatchMenu::getSelectedMissionId() const
+{
+    static const std::string none;
+    if (m_missionIdx <= 0 || m_missionIdx > (int)m_missionList.size()) return none;
+    return m_missionList[m_missionIdx - 1].id;   // -1: lo 0 è "(nessuna)"
+}
+
+const std::string& PreMatchMenu::getSelectedClassId() const
+{
+    static const std::string none;
+    if (m_classIdx <= 0 || m_classIdx > (int)m_classList.size()) return none;
+    return m_classList[m_classIdx - 1].id;
+}
+
+// La missione IMPONE mappa e modalità (MissionDef, doc 25). Il menu deve mostrare
+// quelle vere: se lasciasse le righe com'erano, il giocatore leggerebbe "outpost"
+// e giocherebbe "firebase" — Application forza comunque la mappa della missione.
+// Meglio aggiornare a vista che mentire e correggere di nascosto.
+void PreMatchMenu::syncRowsToMission()
+{
+    if (m_missionIdx <= 0 || m_missionIdx > (int)m_missionList.size()) return;
+    const MissionEntry& e = m_missionList[m_missionIdx - 1];
+    if (!e.mapId.empty())
+        for (int i = 0; i < (int)m_mapList.size(); ++i)
+            if (m_mapList[i].id == e.mapId) { m_settings.mapIndex = i; break; }
+    if (!e.modeId.empty())
+        for (int i = 0; i < MATCH_MODE_COUNT; ++i)
+            if (e.modeId == matchModeId(i)) { m_settings.modeIndex = i; break; }
 }
 
 void PreMatchMenu::setWeaponList(const std::vector<WeaponEntry>& weapons)
@@ -70,6 +139,14 @@ const std::string& PreMatchMenu::getSelectedWeaponId() const
 
 void PreMatchMenu::syncLoadoutToSettings()
 {
+    // Missione (ADR-019) e classe (doc 14): passano da qui perché questo è il
+    // punto unico chiamato sia all'avvio partita sia al salvataggio del preset —
+    // così finiscono anche nei preset, che li serializzano già entrambi.
+    m_settings.missionId = getSelectedMissionId();
+    m_settings.classId   = getSelectedClassId();
+    if (!m_settings.missionId.empty()) syncRowsToMission();   // mappa/modalità della missione
+    m_settings.mapId = getSelectedMapId();
+
     m_settings.primaryWeaponId = getSelectedWeaponId();
 
     // Arma secondaria (indice 0 = nessuna)
@@ -110,6 +187,19 @@ void PreMatchMenu::applyPreset(const MatchSettings& p)
     }
     if (m_settings.mapIndex >= (int)m_mapList.size()) m_settings.mapIndex = 0;
 
+    // Missione (ADR-019) e classe (doc 14): per ID come tutto il resto (KI #20).
+    // Un id che non risolve più (definizione cancellata) torna a "(nessuna)":
+    // è la degradazione onesta — meglio partita libera che una missione fantasma.
+    m_missionIdx = 0;
+    if (!p.missionId.empty())
+        for (int i = 0; i < (int)m_missionList.size(); ++i)
+            if (m_missionList[i].id == p.missionId) { m_missionIdx = i + 1; break; }
+    m_classIdx = 0;
+    if (!p.classId.empty())
+        for (int i = 0; i < (int)m_classList.size(); ++i)
+            if (m_classList[i].id == p.classId) { m_classIdx = i + 1; break; }
+    if (m_missionIdx > 0) syncRowsToMission();   // la missione impone mappa/modalità
+
     // Arma primaria (indice diretto nella lista)
     if (!p.primaryWeaponId.empty())
         for (int i = 0; i < (int)m_weaponList.size(); ++i)
@@ -137,12 +227,21 @@ void PreMatchMenu::applyPreset(const MatchSettings& p)
 void PreMatchMenu::buildRows()
 {
     m_rows.clear();
+    // Missione (ADR-019) in cima: è la scelta che vincola le due sotto (impone
+    // mappa e modalità). Senza missioni autorate la riga non compare affatto.
+    if (m_missionNamePtrs.size() > 1)
+        m_rows.push_back({"Missione",                    true,  &m_missionIdx,            nullptr,   1,   0,
+                          (float)(m_missionNamePtrs.size() - 1), m_missionNamePtrs.data()});
     m_rows.push_back({"Modalita' di gioco",              true,  &m_settings.modeIndex,    nullptr,   1,   0,
                       (float)(MATCH_MODE_COUNT - 1), matchModeNames()});
     // Mappa (R3): nomi dinamici dal registry via setMapList
     if (!m_mapNamePtrs.empty())
         m_rows.push_back({"Mappa",                       true,  &m_settings.mapIndex,     nullptr,   1,   0,
                           (float)(m_mapNamePtrs.size() - 1), m_mapNamePtrs.data()});
+    // Classe (doc 14): un loadout confezionato. "(nessuna)" = scelta manuale.
+    if (m_classNamePtrs.size() > 1)
+        m_rows.push_back({"Classe",                      true,  &m_classIdx,              nullptr,   1,   0,
+                          (float)(m_classNamePtrs.size() - 1), m_classNamePtrs.data()});
     m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"Vite nemici    (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  config::MAX_AI_PER_TEAM});
@@ -276,6 +375,11 @@ PreMatchMenu::Result PreMatchMenu::handleRules(int sc)
 
     if (sc == SDL_SCANCODE_RIGHT || sc == SDL_SCANCODE_D) clampApply(+1.0f);
     if (sc == SDL_SCANCODE_LEFT  || sc == SDL_SCANCODE_A) clampApply(-1.0f);
+    // Cambiata la missione → mappa e modalità mostrate devono diventare le sue.
+    // Riconosciuta dal puntatore, non dall'indice di riga: le righe sono
+    // condizionali (missioni/classi possono non esistere) e un indice fisso
+    // sarebbe sbagliato in silenzio al primo cambio di composizione.
+    if (r.iVal == &m_missionIdx) syncRowsToMission();
 
     if (sc == SDL_SCANCODE_F5)
     { m_page = Page::SavePreset; m_presetSlot = 0; m_textInput.clear(); SDL_StartTextInput(); return Result::None; }

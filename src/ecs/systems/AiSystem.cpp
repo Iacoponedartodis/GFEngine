@@ -252,6 +252,7 @@ void AiSystem::update(World& world, float dt)
         if (!et || !team) continue;
 
         const AiState oldState = ai->state;   // telemetria: log solo sul CAMBIO
+        auto* sq = world.getSquad(e);         // ordine di squadra (ADR-020), può mancare
         const int myTeam = team->teamId;
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
@@ -303,6 +304,23 @@ void AiSystem::update(World& world, float dt)
             for (int j = 0; j < kn; ++j)
                 if (physics::hasLineOfSight(ePos, tgtPos[kIdx[j]], world))
                 { nearest = targets[kIdx[j]]; break; }
+
+            // ── Vincolo FocusFire (ADR-020 Phase B) ──────────────────────
+            // L'ordine cambia la SCELTA del bersaglio, non la mira: se il
+            // designato è vivo e visibile l'AI lo preferisce al più vicino.
+            // Se NON lo vede resta autonoma — un ordine non deve farle sparare
+            // a un muro. Sta qui dentro (ramo di sensing) per non violare il
+            // time-slicing: il vincolo viaggia nella cache come ogni bersaglio.
+            if (const auto* sqf = world.getSquad(e))
+                if (sqf->hasActiveOrder() && sqf->order == OrderType::FocusFire
+                    && sqf->targetEntity != 0)
+                {
+                    const auto* ft = world.getTransform(sqf->targetEntity);
+                    const auto* fh = world.getHealth(sqf->targetEntity);
+                    if (ft && fh && fh->current > 0.0f
+                        && physics::hasLineOfSight(ePos, {ft->x, ft->y, ft->z}, world))
+                        nearest = sqf->targetEntity;
+                }
             ai->targetEntity = nearest;   // cache per i tick non-sensing
         }
         else
@@ -375,6 +393,16 @@ void AiSystem::update(World& world, float dt)
 
         // ── Movimento ────────────────────────────────────────────────
         float moveDX = 0, moveDZ = 0, moveSpeed = 0;
+        // Distanza REALE alla destinazione. norm2D() normalizza moveDX/DZ in
+        // place, quindi da soli non bastano a ricostruire il punto d'arrivo: senza
+        // questa, requestMoveTarget riceve una "carota" a 1 m e Detour non può
+        // pianificare nulla (non aggira gli ostacoli). I rami traversal la
+        // impostano; default 1.0 = comportamento storico per chi non la imposta.
+        float moveDist = 1.0f;
+        // true quando un ordine di squadra sta facendo PERCORRERE distanza all'AI:
+        // richiede pathfinding (requestMoveTarget) anche in Alert, perché la
+        // modalità velocità dell'Alert non pianifica e si incastra sui muri.
+        bool orderTravel = false;
 
         if (!ai->stationary)
         {
@@ -485,6 +513,7 @@ void AiSystem::update(World& world, float dt)
                 moveDX = destX - et->x;
                 moveDZ = destZ - et->z;
                 float dist = norm2D(moveDX, moveDZ);
+                moveDist = dist;
 
                 if (ai->flankActive && (dist < 1.5f || isStuck))
                 {
@@ -528,6 +557,7 @@ void AiSystem::update(World& world, float dt)
                 moveDX = ai->searchX - et->x;
                 moveDZ = ai->searchZ - et->z;
                 float dist = norm2D(moveDX, moveDZ);
+                moveDist = dist;
 
                 if (dist < 1.5f || isStuck)
                 {
@@ -559,7 +589,7 @@ void AiSystem::update(World& world, float dt)
                     if (ai->waitTimer <= 0.0f)
                         ai->goingToB = !ai->goingToB;
                 }
-                else if (norm2D(moveDX, moveDZ) < 0.6f)
+                else if ((moveDist = norm2D(moveDX, moveDZ)) < 0.6f)
                 {
                     if (ai->patrolDwell > 0.0f)
                         ai->waitTimer = ai->patrolDwell;
@@ -578,6 +608,38 @@ void AiSystem::update(World& world, float dt)
             const auto* tt = world.getTransform(nearest);
             if (tt)
                 et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+        }
+
+        // ── Vincolo di squadra: modello a GUINZAGLIO (ADR-020 / doc 26) ──
+        // L'ordine vincola il MOVIMENTO, mai il combattimento: mirare e sparare
+        // restano autonomi (codice sotto). E vincola SOLO quando non è
+        // soddisfatto: dentro il raggio l'AI è libera di strafare, coprirsi e
+        // fare micro-combattimento — è il "autonoma DENTRO il vincolo" del doc.
+        // Fuori dal raggio l'ordine ha precedenza su qualunque stato (anche
+        // Alert: è ciò che impedisce agli alleati di inseguire i nemici lontano
+        // dal leader). Non scrive mai il transform: passa per il crowd (doc 22).
+        // FocusFire è escluso di proposito: vincola il BERSAGLIO (sopra), non il
+        // movimento — l'AI continua a manovrare come sa mentre concentra il fuoco.
+        if (sq && sq->hasActiveOrder() && !ai->stationary
+            && sq->order != OrderType::FocusFire)
+        {
+            float ox = sq->targetX - et->x, oz = sq->targetZ - et->z;
+            const float od = norm2D(ox, oz);   // normalizza ox/oz, ritorna la distanza
+            const float leash = (sq->order == OrderType::Follow)       ? 8.0f
+                              : (sq->order == OrderType::HoldPosition) ? 2.0f
+                                                                       : 1.5f;  // MoveTo/TakeCover
+            if (od > leash)
+            {
+                moveDX = ox; moveDZ = oz;      // direzione unitaria verso il target
+                moveDist = od;                 // destinazione reale per il pathfinding
+                moveSpeed = ai->seekSpeed;
+                orderTravel = true;
+                // In Alert NON si tocca il facing: l'AI continua a mirare al
+                // nemico mentre si riposiziona (il combattimento resta suo).
+                if (ai->state != AiState::Alert)
+                    et->ry = std::atan2(moveDX, moveDZ) * (180.0f / PI);
+            }
+            // dentro il guinzaglio: nessun override — decide l'AI.
         }
 
         // Danger zone (doc 18): fuori dall'ingaggio il movimento evita le
@@ -606,7 +668,7 @@ void AiSystem::update(World& world, float dt)
                 ai->rollTimer -= dt;
                 nv.requestMoveVelocity(ai->crowdAgentIdx, {ai->rollVX, 0.0f, ai->rollVZ});
             }
-            else if (ai->state == AiState::Alert)
+            else if (ai->state == AiState::Alert && !orderTravel)
             {
                 const float m = norm2D(moveDX, moveDZ);
                 nv.requestMoveVelocity(ai->crowdAgentIdx,
@@ -614,8 +676,13 @@ void AiSystem::update(World& world, float dt)
                                : glm::vec3{0.0f, 0.0f, 0.0f});
             }
             else if (moveSpeed > 0.0f && (moveDX != 0.0f || moveDZ != 0.0f))
+                // Destinazione REALE (moveDX/DZ è un versore: va riscalato per
+                // moveDist). Con la destinazione vera Detour pianifica un path e
+                // aggira gli ostacoli; col vecchio +moveDX puntava a 1 m e spingeva
+                // dritto contro i muri.
                 nv.requestMoveTarget(ai->crowdAgentIdx,
-                                     {et->x + moveDX, et->y, et->z + moveDZ});
+                                     {et->x + moveDX * moveDist, et->y,
+                                      et->z + moveDZ * moveDist});
             else
                 nv.requestMoveVelocity(ai->crowdAgentIdx, {0.0f, 0.0f, 0.0f});
         }
@@ -691,7 +758,15 @@ void AiSystem::update(World& world, float dt)
 
         // Dispersione dal profilo AI: accuracy 1 = perfetto, 0 = max spread.
         // Perturba la direzione normalizzata di un angolo casuale.
-        const float spread = (1.0f - ai->accuracy) * config::AI_SPREAD_MAX;
+        // Conseguenza di un obiettivo (doc 25): un nemico "disorganizzato" (es.
+        // torre delle comunicazioni distrutta) spara peggio. Vale solo per il
+        // team 2 e solo se un obiettivo l'ha deciso — di default il
+        // moltiplicatore è 1 e il comportamento è identico a prima.
+        float effAccuracy = ai->accuracy;
+        if (team->teamId == 2 && world.battleState.enemyAccuracyMult != 1.0f)
+            effAccuracy = std::clamp(effAccuracy * world.battleState.enemyAccuracyMult,
+                                     0.0f, 1.0f);
+        const float spread = (1.0f - effAccuracy) * config::AI_SPREAD_MAX;
         if (spread > 0.0f)
         {
             dx += (aiRand01() - 0.5f) * 2.0f * spread * len;

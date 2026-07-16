@@ -17,7 +17,13 @@ void World::initialize()
     m_healths.clear(); m_meshRenderers.clear(); m_bullets.clear(); m_ais.clear();
     m_colliders.clear();
     m_hitboxes.clear(); m_shields.clear(); m_vehicles.clear(); m_abilities.clear();
+    m_squads.clear();
     activeMap = nullptr;
+    commandPostStates.clear();
+    battleState = {};           // conseguenze: stato PER-MISSIONE (doc 25)
+    missionStats = {};          // statistiche PER-MISSIONE, non per-sessione
+    activeMission = nullptr;   // mailbox missione (ADR-019)
+    objectiveDefs = nullptr;
     std::cout << "[World] Inizializzato." << std::endl;
 }
 
@@ -43,6 +49,7 @@ bool World::destroyEntity(EntityId e)
     m_transforms.erase(e); m_teams.erase(e); m_velocities.erase(e);
     m_healths.erase(e); m_meshRenderers.erase(e); m_bullets.erase(e); m_ais.erase(e);
     m_hitboxes.erase(e); m_shields.erase(e); m_vehicles.erase(e); m_abilities.erase(e);
+    m_squads.erase(e);
     m_aliveEntities.erase(e);
     // Swap-and-pop O(1)
     auto it = std::find(m_entities.begin(), m_entities.end(), e);
@@ -70,6 +77,7 @@ IMPL(Collider,     m_colliders)
 IMPL(Hitbox,       m_hitboxes)
 IMPL(Shield,       m_shields)
 IMPL(Vehicle,      m_vehicles)
+IMPL(Squad,        m_squads)
 #undef IMPL
 
 // A mano: il nome plurale non combacia con la macro (AbilityComponent)

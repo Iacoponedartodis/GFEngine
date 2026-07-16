@@ -2,6 +2,702 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-16 (8) — `consequence`: gli obiettivi smettono di essere caselle da spuntare
+
+### La direttiva che ha sbloccato il lavoro (e corretto un mio errore)
+Avevo rifiutato di implementare `consequence` dicendo *"gli esempi non sono una specifica, serve
+design prima del codice"*. **Sbagliato**, e l'utente l'ha chiarito:
+> *"Andremo molto avanti ad esempi, perché certe cose non potrò sapere quanto vanno bene senza
+> averle provate. Dobbiamo costruire i **sistemi**, più possibile modificabili ed espandibili...
+> anche se vuol dire impostare valori/obiettivi/**conseguenze temporanei** da rifinire più avanti."*
+
+Correzione di calibro registrata in **10_ProjectMemory** (direttiva permanente): GDD 21.4 vieta di
+cablare **regole di design nel codice** (pesi, formule, id, comportamenti), **non** di usare valori
+provvisori nei **dati**. Un valore nei dati è un segnaposto che l'utente cambierà; un `if` nel
+codice no. Il design che l'utente non può decidere a tavolino è proprio quello **da provare**.
+
+### Il sistema
+`ObjectiveDef` guadagna `on_success[]` / `on_failure[]`: liste di `ConsequenceDef {type, value,
+target}`. Quando un obiettivo si conclude, `ObjectiveSystem` le applica **scrivendo solo su
+`World::battleState`** — da lì le legge il sistema competente. **Nessun `if (objectiveId == ...)`**:
+aggiungere un tipo = un enum + un `case` + un lettore nel sistema giusto, senza toccare gli altri.
+È il vincolo che ADR-019 impone e che rende il sistema espandibile.
+
+Tipi implementati (dagli esempi dell'utente), tutti agganciati a sistemi **reali**:
+| Tipo | Effetto | Chi lo legge |
+| --- | --- | --- |
+| `block_enemy_reinforcements` | il nemico non rimpiazza più le perdite | `ConquestMode::checkDeaths` |
+| `enemy_accuracy` | moltiplica la precisione nemica (<1 = disorganizzati) | `AiSystem` (solo team 2) |
+| `ally_reinforcements` | aggiunge riserve alla squadra | `ConquestMode::update` (possiede i ticket) |
+| `unlock_spawn` | la squadra rinasce al post catturato | `battleState.allySpawnPost` |
+
+**I valori sono segnaposto da bilanciare provando**: `capture_alpha` → sblocca lo spawn + 2 riserve;
+`hold_alpha` → taglia i rinforzi nemici + precisione nemica a 0.6.
+`enemy_accuracy` è **moltiplicativo**: due obiettivi che disorganizzano il nemico si sommano invece
+di sovrascriversi.
+
+### Gate ADR-018 esteso
+Un `type` con refuso resterebbe `None` e non farebbe **nulla** — l'obiettivo sembrerebbe avere un
+effetto e invece è una casella. Ora è **Error**. Validati anche: `enemy_accuracy` fuori da (0,1]
+(non disorganizza, o migliora il nemico), `unlock_spawn` senza target o verso un post inesistente
+nella mappa della missione, `ally_reinforcements` a 0 (Warn).
+
+### Verifiche (sonda deterministica, poi rimossa)
+- **Applicazione**: tutte e 4 le conseguenze emesse su JSONL (`consequence applied`).
+- **EFFETTO REALE misurato**: con `block_enemy_reinforcements` attivo, 2 nemici uccisi →
+  **2× "RINFORZI INTERROTTI"** e **0 rimpiazzi**. La battaglia cambia davvero.
+- **Gate**: type inesistente + `enemy_accuracy: 2.5` + `unlock_spawn` verso post "Zulu" → 3 Error,
+  exit 1.
+- **Due scenari di test inadatti scartati onestamente** prima di concludere: (1) in Conquista gli
+  alleati non catturano mai Alpha (8 s continui, seguono il giocatore fermo); (2) con la missione
+  che finisce **nell'istante** in cui applica la conseguenza, l'effetto non può manifestarsi; (3) 1
+  alleato contro 6 non uccide nessun nemico → serviva una battaglia bilanciata. Nessuno dei tre era
+  un bug del codice.
+- Build **0 errori, 0 warning**; `--validate` 0/0; `--stress 6` pulito; nessuno scaffold né dato di
+  test rimasto.
+
+### Debito esplicito (direttiva utente: l'editor è lo strumento principale)
+Obiettivi, missioni, classi **e ora le conseguenze** si autorano **a mano nei JSON**: nessun modulo
+editor. Con la direttiva del 2026-07-16 questo è il debito **più importante** aperto — vedi 06_Todo.
+
+## 2026-07-16 (7) — Statistiche di missione + debrief: le fondamenta del "giudizio"
+
+### La domanda di design era bloccante, l'utente l'ha sciolta
+Avevo lasciato il sistema di giudizio in attesa perché il GDD 9.6 dice *"il risultato è narrativo,
+non un semplice voto"* e non sapevo cosa significasse in pratica. Chiarimento dell'utente:
+> *"È narrativo perché c'è un **insieme di fattori e di scelte** che portano a dei risultati,
+> valutati insieme a tutte le statistiche. Così l'esperienza risulta vera: piccole scelte tattiche
+> influenzano il giudizio finale, proprio perché sono un insieme di cose."*
+
+**"Narrativo" non significa prosa generata**: significa che il giudizio nasce dalla *combinazione*
+dei fattori, non da un numero unico. Questo rende il sistema progettabile — e dice anche cosa
+**non** fare: nessun voto, nessun peso inventato qui (i pesi diventano esperienza → progressione,
+doc 27, e sono design: GDD 21.4).
+
+### Cosa c'è ora
+- **`World::missionStats`** (mailbox): `playerKills`, `teamKills`, `alliesLost`, `playerDeaths`,
+  `missionTime`, `objectivesDone/Failed`. **Accumulate mentre i fatti accadono** — una kill esiste
+  solo nell'istante in cui avviene, e l'entità viene distrutta subito dopo: ricostruirle a
+  posteriori è impossibile. Azzerate da `World::initialize()`: sono per-missione, non per-sessione.
+- Ognuno registra **ciò che sa lui**: CombatSystem (kill/perdite, con `bullet.fromPlayer` per
+  attribuire quelle del giocatore), ObjectiveSystem (tempo + esiti obiettivi, in **tutti e tre** i
+  punti di fallimento), Application (morti del giocatore, incluse quelle non da proiettile).
+- **Debrief a fine partita**: sostituisce il testo **cablato e ormai falso** delle schermate
+  Win/Lose (*"Tutti i nemici eliminati"* / *"Sei stato eliminato"* — si vince anche completando una
+  missione e si perde anche fallendo un obiettivo). Ora racconta i fatti veri.
+- **Debrief anche su JSONL** (`match end`): il giudizio dev'essere leggibile da un tool/LLM senza
+  guardare lo schermo, ed è da lì che la progressione prenderà l'esperienza quando esisterà.
+- **Nessun punteggio calcolato**, di proposito: si mostra la scomposizione. È il consumatore che
+  mancava — senza, sarebbe stato l'ennesimo sistema isolato (GDD 21.2).
+
+### Un difetto colto scrivendo
+`alliesLost` contava anche il **giocatore** (è team 1!), che l'utente distingue esplicitamente
+("alleati morti" ≠ "numero di morti"). Escluso via `world.playerEntity`.
+
+### Verifiche (sonda deterministica sul percorso reale, poi rimossa)
+- **Statistiche reali, non zeri**: missione da 20 s → `allies_lost: 2, mission_time: 20.03,
+  objectives_done: 2, outcome: win`. Missione da 60 s, 1 alleato vs 6 → `allies_lost: 5,
+  **player_deaths: 3**, outcome: lose`.
+- **Contatore kill verificato**: restava 0 anche dopo 48 s. Non era un bug: **1 alleato contro 6
+  non uccideva nessuno**. Con squadre bilanciate → `team_kills: 1`. *Un contatore mai visto
+  contare non è verificato* — è la lezione di ADR-018 applicata a sé stessa.
+- **NON esercitato**: `player_kills` (nei test headless il giocatore è fermo e non spara mai) e
+  l'aspetto grafico del debrief.
+- Build **0 errori, 0 warning**; `--validate` 0/0; nessuno scaffold né dato di test rimasto.
+
+### Registrato in doc 25 (intento dell'utente, non implementato)
+1. **Gli obiettivi hanno un VANTAGGIO tattico**: *"ogni mappa avrà posti di comando, bersagli
+   strategici, zone strategiche — ognuno con un suo vantaggio"* (posto catturato → nuovo punto di
+   spawn; torre comunicazioni distrutta → nemici disorganizzati; base d'atterraggio presa → niente
+   rinforzi nemici). È il campo **`consequence`** dello schema doc 25 — **mai implementato, e non
+   segnalato come mancante**: doc↔codice drift, ammesso e ora documentato. Gli esempi sono
+   illustrativi, non una specifica → serve design prima del codice.
+2. Vincolo architetturale da rispettare: ogni consequence tocca un sistema diverso → dato
+   dichiarativo, **mai** `if (objectiveId == ...)`, o si reintroduce il fork che ADR-019 evita.
+
+## 2026-07-16 (6) — I ticket sono RINFORZI, non le vite del giocatore (KI #39)
+
+### Il contesto che ha rivelato il disallineamento
+Chiarimento dell'utente sul design: **i ticket sono la riserva di rinforzi della squadra** — non
+potendo avere centinaia di truppe in campo, c'è un cap di AI e il resto entra man mano che quelle
+in campo cadono. *"Idealmente il giocatore non dovrebbe consumare ticket alla morte, ma se muore
+quando non rimane più nessun alleato vivo e nessun rinforzo allora perde."*
+Verificato contro il codice: **il contrario**. Ogni morte del giocatore bruciava un rinforzo della
+squadra (3 punti in Application), e a ticket 0 la morte era **sconfitta secca anche con la squadra
+intatta**. Il meccanismo dei rinforzi invece esisteva già ed era corretto:
+`ConquestMode::checkDeaths` → un'unità cade → consuma un ticket → un rimpiazzo entra dalla riserva;
+a 0 ticket, **morte permanente**.
+
+### Fix
+- **Regola in UN SOLO POSTO** (`onPlayerDeath`, prima era duplicata in due rami + un terzo nel
+  respawn volontario): il giocatore **non consuma rinforzi** morendo; si perde **solo** cadendo
+  quando non resta né un alleato vivo né un rinforzo in arrivo.
+- Vale anche per il **respawn volontario** (K): è una morte come le altre — niente più "nessun
+  ticket → SCONFITTA" immediata, ma nemmeno un suicidio gratis da ultimo superstite.
+  Attenzione al dettaglio: `onPlayerDeath` può decidere la sconfitta, quindi il ritorno a
+  `Playing` è condizionato — altrimenti la cancellerebbe.
+- **`IGameMode::consumeTeam1Ticket()` RIMOSSO** (interfaccia + 2 implementazioni): serviva solo a
+  far pagare al giocatore le proprie morti, ed era rimasto **codice morto**. Rimuoverlo rende la
+  regola **strutturale** invece che una convenzione da ricordare: non si può più far consumare un
+  rinforzo al giocatore per sbaglio, perché il metodo non esiste. Nota nell'header per chi
+  fosse tentato di reintrodurlo.
+
+### Verifiche (sonda deterministica sul percorso reale, poi rimossa)
+- **Il giocatore muore → i rinforzi NON calano**: `[PBTEST] rinforzi PRIMA: 5` →
+  *"Eliminato! Respawn in 4s (alleati vivi: 1, **rinforzi: 5**)"*.
+- **Alleati a 0 ma rinforzi in arrivo → respawn**: *"(alleati vivi: 0, rinforzi: 2)"*.
+- **Catena completa fino alla sconfitta** (1 ticket, 1 alleato): morte del giocatore → respawn
+  (rinforzi invariati) → *"[Respawn] Alleato eliminato. NESSUN ticket — morte permanente"* →
+  morte del giocatore → *"[Game] SCONFITTA: squadra annientata e nessun rinforzo"*. **Entrambi i
+  rami della regola nuova verificati.**
+- Build Debug completa **0 errori, 0 warning**; `--validate` 0/0; `--stress 6` e `--sandbox`
+  senza crash.
+
+### Nota di design registrata (non implementata)
+Le **statistiche di missione** (kill, morti, alleati persi, obiettivi completati, tempo) servono
+al sistema di **giudizio/debrief** post-missione. Il GDD lo specifica al **9.6**: *"La valutazione
+finale pesa obiettivi (primari/secondari/falliti), prestazione tattica e costi (perdite, tempo,
+risorse). **Il risultato è narrativo, non un semplice voto**"*, e al 5.2 *"il risultato deve
+raccontare una storia"*. Pesi e forma del debrief sono **decisioni di design**, che il GDD 21.4
+vieta di prendere scrivendo codice → serve un giro di design prima. Vedi 06_Todo.
+
+## 2026-07-16 (5) — `CaptureZone`/`DefendZone`: il framework obiettivi sa finalmente esprimere i command post
+
+### Perché questo e non i Punti Comando
+Il candidato naturale era l'**economia tattica** (doc 26 / GDD 5.4), ma il GDD definisce solo la
+direzione (*"spendibile per rinforzi, veicoli o supporto orbitale"*) e lascia aperti **sink e
+prezzi** — cioè decisioni di design che il GDD 21.4 dice espressamente di non prendere mentre si
+scrive codice. Inoltre implementarne solo il *guadagno* darebbe un numero sull'HUD che non si
+spende: un altro sistema isolato, l'errore appena corretto.
+Il collegamento **già deciso** (doc 25: *"il command post diventa generabile come ObjectiveDef di
+tipo CaptureZone/DefendZone. Non riscrivere ADR-009: avvolgerlo"*) era invece più urgente di
+quanto sembrasse: **il framework obiettivi non sapeva esprimere la meccanica principale del
+gioco.** Una missione non poteva dire "cattura Alpha" — l'obiettivo più ovvio di Galactic Front.
+
+### Come (avvolgere, non riscrivere)
+- **Mailbox `World::commandPostStates`**: i post vivono in `CommandPosts` dentro il game mode, che
+  `ecs/` non può includere. Application li pubblica **fra `mode->update()` e `world.tick()`**, così
+  ObjectiveSystem legge lo stato di *questo* tick e non di quello prima.
+- `CaptureZone` legge **solo chi possiede** il post; `DefendZone` richiede di tenerlo per
+  `hold_seconds` e **fallisce subito se il post si perde** (un post perso è perso, non un timer che
+  si azzera). La logica di cattura resta interamente in ADR-009: zero duplicazione.
+- **Riferimento per LABEL** (`target.post`): i command post non hanno un id — la label è il loro
+  unico nome autorato. Il **gate ADR-018** la risolve **nella mappa della missione** (è l'unico
+  riferimento incrociato che dipende da una definizione scelta altrove) e segnala label ambigue
+  (duplicate nella stessa mappa).
+- Contenuto nuovo in repo: `capture_alpha`, `hold_alpha`, missione **`firebase_alpha`**
+  ("cattura Alpha, poi tienilo 20s") — la prima missione che usa la meccanica vera del gioco.
+
+### Bug corretto durante il lavoro
+`evaluate()` ora può concludere da sé con un fallimento proprio del tipo (DefendZone: post
+perduto), ma il chiamante proseguiva con il controllo del `timeLimit` → **due eventi
+`objective failed`** per lo stesso obiettivo. Aggiunta la guardia `if (r.state != Active) continue;`.
+Verificato: **1 solo evento**.
+
+### Verifiche (sonda deterministica sul percorso reale, poi rimossa)
+- **Build**: Debug completa, **0 errori, 0 warning**. `--validate` 0/0.
+- **Catena completa** (missione in modalità Difesa, dove i post partono agli alleati):
+  `capture_alpha` attivato → **completato** → `hold_alpha` si attiva **solo dopo** (dipendenza) →
+  tenuto 20 s → **completato** → `mission success` → **VITTORIA**.
+- **Fallimento** (modalità Assalto, post in mano nemica): `objective failed` (**uno solo**) →
+  `mission failed` → **SCONFITTA**.
+- **Gate**: post `Zulu` inesistente nella mappa → *"post 'Zulu' non esiste nella mappa 'firebase'"*
+  + exit 1.
+- **Diagnosi onesta di un test che sembrava fallire**: in Conquista gli alleati *iniziano* a
+  catturare Alpha ma non finiscono (servono 8 s continui; seguono il giocatore fermo e escono dal
+  raggio) → nessuna cattura, nessun completamento: **comportamento corretto**, scenario inadatto.
+  Il primo grep dava "cattura" per via di *"Mouse catturato"* — falso positivo del test, non del codice.
+- **Non-regressione**: senza missione zero eventi Objective, `--stress 6` invariato, nessun crash.
+
+## 2026-07-16 (4) — Missioni e classi selezionabili dal PreMatch: fine dell'ultima isolazione
+
+Stessa lente del giro precedente (GDD 21.2 "evitare i sistemi isolati", confermata dall'utente:
+*"un sistema base stabile e ben fatto prima di aggiungere altro"*). Restava una isolazione grossa:
+il **sistema di missioni è Core per il GDD 23.1**, ma era raggiungibile solo da `--mission` — cioè
+in partita normale HUD ed esiti appena collegati non si vedevano mai. Stesso problema per le classi.
+
+### Cosa c'è ora
+- **Riga "Missione"** in cima al PreMatch (solo se esistono missioni autorate) e **riga "Classe"**
+  (solo se esistono classi). Indice 0 = *"(nessuna)"* → **partita libera / loadout manuale**: il
+  default è il comportamento storico, il sistema resta additivo.
+- **La missione impone mappa e modalità, e il menu lo MOSTRA**: scegliendola, le righe Mappa e
+  Modalità si aggiornano a vista (`syncRowsToMission`). L'alternativa — lasciare il menu su
+  "outpost" e far correggere Application di nascosto — avrebbe fatto leggere al giocatore una
+  cosa e giocarne un'altra.
+- Riuso esatto del pattern delle mappe (`MapEntry`/`m_mapNamePtrs`/riga enum), non un meccanismo
+  nuovo. Gli indici vivono nella UI, **non** in `MatchSettings`: si persiste l'**ID** (lezione
+  KI #20 — l'indice cambia significato se si aggiunge o rinomina una definizione).
+- `missionId` persistito nei preset; `applyPreset`/`setSettings` ricostruiscono gli indici dagli
+  id. Un id che non risolve più (definizione cancellata) torna a "(nessuna)": degradazione onesta.
+- `--mission`/`--class` ora **seminano** solo la scelta iniziale; la missione si risolve in
+  `initWorld` da `currentSettings.missionId` (prima era congelata al flag CLI all'avvio).
+
+### Due bug della stessa famiglia, trovati e corretti durante il lavoro
+1. **Il menu azzerava la missione seminata dal CLI**: `setSettings()` copiava la struct senza
+   ricostruire gli indici delle righe enum → `getSelectedMissionId()` tornava vuoto e la missione
+   spariva. È di nuovo **KI #36** (un campo posseduto da un componente che ne sovrascrive un altro).
+   Fix: `setSettings` risolve id→indice, e Application chiama `setSettings(currentSettings)` dopo
+   aver seminato i valori CLI.
+2. **La toppa di KI #36 è diventata sbagliata**: `startFromPreMatch` ripristinava `classId` da
+   `currentSettings` se il menu ne aveva uno vuoto. Ora che il menu **possiede** classe e missione,
+   quel ripristino distruggerebbe una scelta esplicita ("(nessuna)" dopo un `--class`). Rimosso;
+   resta solo per `characterId`, che nel menu non c'è. *Una toppa va rimossa quando sparisce il
+   buco che copriva.*
+
+### Correzione di un'affermazione sbagliata di ieri (nello stesso giorno)
+Avevo scritto — e detto all'utente — che **`--direct-prematch` avvia la partita da solo** dopo
+~15-20 s. **Falso**: è **non deterministico** (stesso comando, stessa durata: a volte parte, a
+volte no). Era una generalizzazione da poche run fortunate. Il modo corretto di verificare il
+percorso PreMatch→partita headless è una **sonda temporanea che chiama `startFromPreMatch()`**,
+cioè la stessa funzione del tasto ENTER. 10_ProjectMemory corretto.
+
+### Verifiche (tutte con sonda deterministica, poi rimossa)
+- **Build**: Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**. `--validate` 0/0.
+- `--mission firebase_ridge` → percorso PreMatch → partita: `mission started`, **2 obiettivi
+  attivati**. (Prima della correzione del bug 1: **0** — regressione colta e chiusa.)
+- `--class marksman` → `primary: DC-15X`; `--class trooper` → `DC-15A`.
+- `--mission firebase_ridge --map outpost` → *"--map 'outpost' ignorato: la missione impone
+  'firebase'"*.
+- **Non-regressione**: senza missione/classe, zero eventi Objective, `--stress 6` invariato,
+  nessun crash.
+- **NON verificato**: l'aspetto delle nuove righe nel menu (posizione, leggibilità) e il
+  comportamento a vista di Mappa/Modalità che cambiano quando si scorre la missione.
+
+## 2026-07-16 (3) — N2 Phase B: il sistema obiettivi smette di essere un sistema ISOLATO
+
+**Prossimo passo scelto leggendo il GDD**, non i soli ProjectDocs — ed è il primo giro in cui il
+GDD (ora in `29_GDD.md`) ha guidato la priorità invece di limitarsi a validarla:
+- **GDD 21.1**: *"Prima le fondamenta, poi l'espansione. **Meglio pochi sistemi solidi che molti
+  incompleti**"* e *"Profondità tramite sistemi **collegati**, non tramite quantità"*.
+- **GDD 21.2**: *"**Evitare i sistemi isolati.** I sistemi principali devono comunicare."*
+- **GDD 23.2** (criteri di successo): *"le funzionalità sono **integrate tra loro**"*.
+Verdetto sullo stato reale: in tre giorni erano stati aggiunti **tre sistemi a Phase A** (squadra,
+obiettivi, classi) e il framework obiettivi era **isolato al 100%** — quindi la scelta giusta non
+era un quarto sistema (né ADR-022), ma **collegare**.
+
+### Tre connessioni mancanti, tutte trovate per analisi (nessun test le avrebbe viste)
+1. **`ObjectiveSystem::outcome()` non lo chiamava NESSUNO** → codice morto: completare una
+   missione non faceva assolutamente nulla. Stesso difetto del ramo FocusFire (2026-07-15).
+   **Fix**: Application tiene un puntatore non-proprietario al sistema (i sistemi sopravvivono a
+   `World::initialize()`, verificato) e l'esito della missione chiude la partita. Divisione di
+   doc 25 rispettata: **il mode ha la precedenza** (se i ticket hanno già deciso, la missione non
+   ribalta); la missione decide solo quando il mode è ancora `Ongoing`.
+2. **Nessun HUD obiettivi** → il giocatore non poteva *vedere* la missione. Un obiettivo che non
+   si vede non esiste. **Fix**: pannello OBIETTIVI (colonna sinistra) letto dallo **stato reale**
+   del sistema; primari in evidenza, opzionali defilati; colore = stato (verde fatto / rosso
+   fallito). Progresso mostrato **solo dove esiste davvero** (`EliminateTarget` N/M,
+   `HoldAreaForDuration` s/s): inventarlo per gli altri tipi sarebbe un numero falso. Gli
+   obiettivi `Inactive` non si mostrano — rivelerebbero la struttura della missione in anticipo.
+3. **La missione non imponeva la sua mappa** → `--mission firebase_ridge --map outpost` avrebbe
+   piazzato obiettivi a coordinate senza senso su un'altra mappa. **Fix**: `MissionDef.mapId`
+   vince; un `--map` contraddittorio viene **segnalato**, non risolto in silenzio.
+
+### Bug trovato per analisi: missione congelata al riavvio
+I sistemi sopravvivono a `World::initialize()`, e `ObjectiveSystem` ri-bindava solo se il
+*puntatore* alla missione cambiava. Al riavvio della stessa missione: nessun rebind → obiettivi
+ancora "completati" e `m_outcome != Ongoing` → early-return **per sempre**. Riavviare una missione
+completata non la ricominciava. **Fix**: rebind anche quando il tick torna indietro (è il segnale
+di restart — `initialize()` azzera `m_tickCount`).
+
+### Correzione di un mio errore di metodo (importante)
+`--direct-prematch` **avvia la partita da solo** dopo ~15-20 s. I miei test dei giorni scorsi
+usavano `timeout 12-14` e concludevano "non verificabile headless, serve un playtest" — **falso**:
+erano solo troppo corti. Conseguenza: **il test della classe chiesto all'utente era inutile**, e
+ora è verificato headless (`--class marksman` → `primary: DC-15X`; `--class trooper` → `DC-15A`;
+`character equipped` presente). Lezione: prima di dichiarare qualcosa non verificabile, verificare
+che il *tentativo* di verifica fosse valido.
+
+### Verifiche
+- **Build-verified**: Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Esito missione → partita, in ENTRAMBE le direzioni** (test deterministico, partita vera):
+  fallimento a tempo → **"SCONFITTA (obiettivo perso)"**; obiettivo primario completato →
+  **"VITTORIA"**. Prima: nessuno dei due, `outcome()` era morto.
+  *Nota*: il primo test usava `--stress`, che gira in **osservatore** (dove per design la partita
+  non finisce mai) → invalido. Stessa trappola del "verificato in sandbox" di ieri.
+- **Mappa imposta**: `--mission firebase_ridge --map outpost` → *"--map 'outpost' ignorato: la
+  missione impone 'firebase'"*.
+- **Non-regressione**: senza missione, **zero** eventi Objective, nessun pannello, `--stress 6`
+  invariato, nessun crash; `--validate` 0/0.
+- **NON verificato**: l'aspetto grafico del pannello OBIETTIVI (posizione/leggibilità) — build-ok
+  ma non guardato a schermo.
+
+## 2026-07-16 (2) — GDD convertito in `29_GDD.md`: sorgente `.docx` + copia operativa `.md`
+Su richiesta dell'utente ("come sfruttare al meglio il GDD"): il `.docx` restava leggibile solo
+riestraendo XML da uno zip a ogni sessione — costo di tool call ripetuto, e il testo grezzo
+appiattiva titoli e le 18 tabelle del documento (es. la matrice classi del cap. 12) in prosa
+continua, rendendo fragile citare una sezione con precisione.
+- **Convertitore** (Node, `docx2md.js`, non versionato — è uno script una tantum, non parte della
+  build): legge `word/document.xml`, mappa `w:pStyle` (Heading1/2/3) su `##`/`###`/`####`,
+  ricostruisce le tabelle da `<w:tbl>`/`<w:tr>`/`<w:tc>` in Markdown, preserva grassetto/corsivo
+  dai run `w:r`. Un semplice strip dei tag XML (il metodo usato il 2026-07-15 per la prima
+  lettura) avrebbe perso questa struttura.
+- **Verifica di completezza prima di pubblicare**: conteggio parole del `.md` generato (tag
+  rimossi) confrontato col testo grezzo — **11.800 / 11.800**, identico; ultima riga del
+  documento presente (*"Fine del documento."*, dopo il Glossario in Appendice E).
+- **`Galactic_Front_GDD.docx`** resta la sorgente di autoring (l'utente lo modifica in Word);
+  **`ProjectDocs/29_GDD.md`** è la copia operativa da leggere/citare, con nota di provenienza in
+  testa che vieta di modificarlo a mano. Rigenerazione documentata in 23_GameDesignBridge
+  ("Dove vive il GDD"). Riferimenti in 13_ADR e 14_ClassSystem aggiornati a puntare al `.md`.
+
+## 2026-07-16 — Classe e personaggio non arrivavano MAI in partita (KI #36) + il GDD entra nel repo
+
+### Il bug (segnalato dall'utente: "le classi non funzionano")
+`currentSettings = preMatchMenu.getSettings()` all'ENTER del PreMatch **sovrascriveva la struct
+intera**, azzerando `classId` e `characterId` — che il PreMatch non possiede (non ha selettori) e
+che erano stati risolti all'avvio. Un istante dopo partiva `startGame()` con i campi vuoti.
+- È **la stessa modalità di guasto della regola READ-MODIFY-WRITE** (ADR-010): costruire un
+  oggetto nuovo e sovrascrivere invece di modificare solo i propri campi. Lì era su file, qui in
+  memoria. La disciplina RMW è documentata per i save JSON; **il pattern è più generale**.
+- **Conseguenza peggiore, e mia colpa**: azzerava anche `characterId` → **nemmeno le stat del
+  personaggio (KI #35) arrivavano in partita**. Avevo verificato in **sandbox**, che non passa da
+  quella riga, e generalizzato al percorso reale. Il "feeling identico" confermato dall'utente era
+  corretto **per il motivo sbagliato**: in partita il personaggio non veniva applicato affatto e
+  il gioco usava i default del codice.
+- **Fix**: `startFromPreMatch()`, punto unico. Se il PreMatch ha un valore (es. da un preset, che
+  serializza `"class"`) **vince lui**; altrimenti si tiene quello risolto all'avvio — mai il
+  contrario, sarebbe la toppa a distruggere una scelta esplicita.
+- **Verificato sul percorso REALE** (non più solo sandbox): `--class marksman` → `class equipped`
+  con `primary: DC-15X`; `--class trooper` → `DC-15A`; `character equipped` presente in entrambi.
+  *Nota di metodo*: la sonda di test iniziale **replicava** la logica del fix invece di eseguirla —
+  avrebbe potuto passare con il gioco rotto. Riscritta per esercitare **la stessa funzione** del
+  tasto ENTER. Un test che non passa per il codice di produzione non prova niente.
+
+### Il GDD originale è ora nel repo — ed è l'autorità di design
+`Galactic_Front_GDD.docx` (53 KB, ~11.800 parole, 7 parti + appendici, indicizzato — dal
+2026-07-16 anche come `ProjectDocs/29_GDD.md`, la copia operativa; vedi il changelog del giorno
+dopo). Leggibile
+estraendone il testo (`.docx` = zip; `word/document.xml`). **Va tenuto**: 23_GameDesignBridge
+stabilisce che sull'*intento di design* il GDD vince, ma finora il GDD non era nel repo — la
+regola di precedenza puntava a un documento assente. Al primo controllo ha già trovato un errore
+di design reale (sotto).
+
+### Conflitto trovato: 14_ClassSystem contraddice il GDD cap. 12
+GDD 12, prima riga: *"Rappresentare **professioni militari, non semplici categorie di armi**."*
+Doc 14 modella esattamente una categoria di armi (primaria + secondaria + abilità), con `role`
+come tag che nessuno consuma, e **vieta** il legame con l'IA — mentre GDD 12.3 dice che le classi
+definiscono *"composizioni degli NPC, il loro comportamento IA e loadout"* e che una squadra mista
+"deve comportarsi diversamente" (è il pilastro #4, la squadra come risorsa).
+Il `ClassDef` implementato copre **1 dei 6 parametri** che il GDD elenca (loadout base; mancano
+perk sbloccabili, curva XP, comportamento IA associato, affinità equipaggiamento, requisiti di
+sblocco). Non è sbagliato: è un **seme incorniciato male** dal doc 14.
+→ **ADR-022 (Proposed)**: riconciliazione. Vedi 13_ADR. Nessun codice scritto in quella direzione:
+è una decisione di design, non di implementazione.
+
+## 2026-07-15 — KI #35 risolto: `PlayerDef` da tipo morto a dati vivi
+
+Decisione delegata dall'utente, presa così: **(a) renderlo vivo, non cancellarlo.**
+
+**Perché (a).** Fatto decisivo: i valori autorati **coincidevano già** con quelli che il gioco
+usava (`move_speed 5.0` = `PLAYER_SPEED`, `hp 100` = `playerHp` default, moltiplicatori neutri) →
+consumarli è a **variazione zero**: cambia qualcosa solo quando l'utente modifica i dati, che è
+esattamente lo scopo di quel pannello. Cancellare avrebbe distrutto contenuto che la Fase 3
+(personaggi/progressione, doc 27) dovrà comunque ricreare.
+
+**La trappola che ha quasi rovinato il fix.** I dati dicevano `sprint_mult: 1.5`, ma il gioco
+girava con `SPRINT_MULT = 1.65f` — costante **hardcoded in `PlayerController.cpp`** (contro
+CLAUDE.md: le costanti di gameplay vanno nei dati o in GameConfig). Applicare i dati alla cieca
+avrebbe **cambiato il feel dello sprint**, appena validato dall'utente. **La verità è il
+comportamento, non il dato**: il dato è stato allineato a 1.65, poi reso autoritativo, e la
+costante rimossa. Stessa logica per i default in codice: `PlayerController` e il loader hanno
+default **identici alle vecchie costanti** → senza personaggio, comportamento invariato per
+costruzione.
+
+**Implementazione.** `MatchSettings.characterId` → risolto in **`initWorld`**, non in
+`startGame()`: vale per **partita e sandbox**, perché il giocatore non può comportarsi
+diversamente a seconda di come è entrato (era un difetto del mio primo tentativo).
+`PlayerController` guadagna `moveSpeed`/`jumpMult`/`sprintMult`/`armorRating`;
+`HealthComponent.armor` (generico, 1 = nessuna riduzione, guardia su <= 0) applicato in
+`CombatSystem` dopo lo scudo. Gate ADR-018 esteso ai personaggi + campi fantasma sul loro loader.
+
+**Selezione senza indovinare.** Con **un solo** personaggio autorato non c'è nulla da scegliere →
+è il giocatore, e il pannello dell'editor diventa vivo **senza UI**. Con più personaggi la scelta
+è ambigua e **non si indovina** (sceglierne uno a caso è il fallback hardcoded che ADR-007 ha già
+fatto pagare): si logga che serve il selettore nel PreMatch.
+
+**Verificato**: build Debug completa **0 errori / 0 warning**; `character equipped` in sandbox con
+hp 100 / move_speed 5.0 / sprint_mult 1.65 / armor 1.0 = **esattamente i valori storici**;
+personaggio rotto (hp/move_speed/armor ≤ 0, sprint_mult < 1, campo `id`) → Error + Warn + exit 1;
+`--stress 8 --mission firebase_ridge` senza crash con squad/objective/character tutti attivi.
+
+## 2026-07-15 — N4 Class System Phase A (doc 14) + scoperta: `PlayerDef` è un tipo morto
+
+### La scoperta che ha cambiato il disegno
+Il doc 14 parte da due premesse **false rispetto al codice live**, verificate prima di costruirci
+sopra: (1) *"`EnemyDef`/`PlayerDef` referenziano `weaponIds[]` direttamente"* — `PlayerDef` non ha
+`weaponIds`, ha solo stat base; (2) *"`PlayerDef` guadagna un `classId`"* — ma **nessuna riga in
+`src/`/`include/` legge `PlayerDef`**: è autorato dal BalanceEditor e mai consumato.
+Attaccarci la classe avrebbe prodotto una funzionalità **provatamente senza effetto**.
+Il codice vince sulla documentazione (CLAUDE.md §1.2): la classe è andata su **`MatchSettings`**,
+che il gioco legge davvero, e il doc 14 è stato corretto. → **KI #35** (nuovo, HIGH).
+
+### ClassDef (esattamente lo scope del doc 14)
+- `ClassDef` {id, name, primary_weapon, secondary_weapon, abilities[], role} in
+  `Definitions.hpp`; `loadClasses()` + `getClass()`/`classes()` col pattern identico agli altri
+  tipi (id = filename stem, ADR-001). `role` resta **tag descrittivo**: nessun sistema AI lo
+  consuma, come impone l'Out of Scope del doc.
+- **Consumo reale**: `MatchSettings.classId` → risolto in `startGame()`, **nello stesso punto in
+  cui l'arma viene già scelta oggi** (Integration del doc 14): la classe riempie primaria,
+  secondaria e abilità. Vuota = loadout manuale, comportamento **identico a prima** → additivo,
+  non breaking. Persistito nei preset (`"class"`).
+- Un `classId` sconosciuto **avverte e ricade sul manuale**, non degrada in silenzio.
+- Nuovo flag `--class <id>`: il PreMatch non ha ancora un selettore, e senza un consumatore
+  `ClassDef` sarebbe stato dato morto — cioè il difetto appena diagnosticato in KI #35.
+- **Gate ADR-018 esteso alle classi**: arma primaria obbligatoria e risolta, secondaria e
+  abilità risolte, primaria == secondaria → Warn, near-duplicate sui nomi.
+- Esempi in repo: `trooper` (DC-15A + DC-17 + Combat Roll), `marksman` (DC-15X + DC-17 + Shield).
+
+### Verifiche
+- **Build-verified**: Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Verificato headless**: le 2 classi si caricano; `--validate` 0/0 sui dati reali; classi rotte
+  (arma inesistente, abilità fantasma, nessuna primaria) → **Error + exit 1**; `--class marksman`
+  risolto ("classe iniziale: marksman"); `--class` inesistente → avviso esplicito;
+  **non-regressione**: senza `--class`, `--stress 6` invariato e nessun crash.
+- **NON verificato — serve playtest**: che la classe **equipaggi** davvero l'arma in partita. La
+  risoluzione vive in `startGame()`, raggiungibile solo confermando il PreMatch con ENTER, e gli
+  input sintetici non arrivano alla finestra SDL (vincolo doc 10). Comando:
+  `GFEngine.exe --direct-prematch --class marksman` → avviando la partita l'arma primaria deve
+  essere la **DC-15X** (con `--class trooper`: **DC-15A**).
+
+### Non fatto (Phase B)
+- **Selettore di classe nel PreMatch**: oggi la classe si sceglie solo da `--class` o da un
+  preset salvato. È il pezzo che la rende una feature per il giocatore.
+- **Modulo editor "Classi"**: il doc 14 lo chiede (dropdown-only). Le classi si autorano ancora
+  a mano nei JSON — ma il gate ADR-018 protegge già i riferimenti.
+- **`abilityIds` della classe non ha effetto**: le abilità del giocatore non sono applicate da
+  nessuno (KI #32). La classe le trasporta correttamente; manca il consumatore.
+
+## 2026-07-15 — N3 Gate di validazione contenuti (ADR-018)
+
+Chiude strutturalmente la classe di bug che il progetto paga da mesi: **dati sbagliati che non
+falliscono, ma degradano in silenzio**, col sintomo lontano dalla causa (KI #7 near-duplicate,
+#24/#26 id e fallback morti, incidente hitbox 2026-07-09). ADR-010 aveva reso strutturale la
+*scrittura* sicura; questo fa lo stesso per la *correttezza*.
+
+### Un solo posto per le regole, tre consumatori
+- **`include/mini/core/Result.hpp`**: `Diagnostic` {severity, category, file, message,
+  **suggestion**}. Il suggerimento non è decorazione: senza "cosa fare" una diagnostica è solo
+  un altro messaggio da ignorare. Distinzione esplicita da assert (= bug di codice).
+- **`game/data/ContentValidation.{hpp,cpp}`**: `validateContent(registry, dataRoot)`. Vive
+  accanto a `DefinitionRegistry`, non nell'editor → entrambi i binari la linkano senza violare
+  ADR-002. Legge solo il registry già caricato (nessun re-parse dei JSON); unica eccezione, i
+  gate sugli asset, che devono guardare il disco.
+- **Runtime**: gira dopo `loadAll()`; un Error **blocca l'avvio** con diagnostica azionabile —
+  niente fallback silenzioso. **Editor**: nuovo pannello *Moduli → Validazione contenuti*
+  (tabella gravità/file/problema+correzione, bottone Rivalida) che **linka la stessa funzione**.
+  **Headless**: `GFEngine.exe --validate` → stampa + JSONL + **exit code ≠ 0** (niente finestra,
+  niente mondo: usabile da CI e da un LLM).
+
+### I gate (ognuno da un problema realmente occorso, non teorici)
+Riferimenti risolti (`ai_profile`, `hitbox_profile`, `weapons[]`, `abilities[]`, archetipi di
+mappa, veicoli) · asset mesh esistenti su disco ("modello invisibile") · armi con i campi che il
+runtime consuma sensati (damage/fire_rate/bullet_speed/effective_range > 0, min_range coerente) ·
+unità con hp > 0 e almeno un'arma (Warn) · mappe con geometry non vuota e command post catturabili ·
+**near-duplicate sui NOMI VISUALIZZATI** — è così che si manifestò KI #7 ("DC-15A Blaster" /
+"DC-15A Blaster Rifle"): gli id sono per forza diversi (= filename), è il nome che tradisce il
+duplicato · missioni/obiettivi (ADR-019) · obiettivi orfani (Warn).
+
+### Rimossa una duplicazione appena introdotta
+Il gate che avevo scritto dentro `ObjectiveSystem` ieri è stato **estratto** in
+`validateMission(mission, registry)`, ora usata da **entrambi**: runtime (missione attiva) e
+validateContent (editor/`--validate`). Le regole vivono in un posto solo — se vivessero in due,
+divergerebbero, che è precisamente il bug che ADR-018 esiste per togliere. Il debito annotato in
+doc 25 è chiuso.
+
+### Verifiche
+- **Build-verified:** Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Sui dati reali del progetto: 0 errori, 0 warning, exit 0.** Un risultato verde da un
+  rilevatore mai messo alla prova non vale niente, quindi il gate è stato verificato **con
+  guasti deliberati** su file temporanei (i dati veri non sono mai stati toccati):
+  riferimenti rotti (ai_profile/hitbox/arma inesistenti), asset mancante, arma con
+  `fire_rate`/`effective_range` = 0, e due near-duplicate stile KI #7 → **6 errori, 3 warning,
+  exit code 1**, ognuno con file, causa e azione. Il near-duplicate ha agganciato anche l'arma
+  reale "DC-15A" già in repo: l'euristica sul prefisso funziona sul caso vero.
+- **Runtime blocca**: con quel contenuto rotto, `GFEngine.exe` rifiuta di avviarsi
+  ("Avvio BLOCCATO: contenuto critico invalido") invece di degradare.
+- **Non-regressione**: rimossi i guasti, dati reali di nuovo validi; partita e missione partono.
+- **NON verificato:** il pannello dell'editor è build-verified ma **non aperto a mano** — serve
+  un tuo giro in GFEditor (Moduli → Validazione contenuti).
+
+### Gate "campi fantasma" — aggiunto in seconda battuta (opzione (a), decisa dall'utente)
+I loader registrano in `DefinitionRegistry::unknownKeys()` le chiavi che **non leggono**, mentre
+il JSON è ancora in mano (dopo il parsing l'informazione non esiste più) → nessun I/O nuovo,
+nessun re-parse. Gli elenchi delle chiavi note stanno **accanto al parser**: l'unico posto dove
+non possono divergere dal codice che legge davvero. Copre weapons/ai/abilities/enemies/allies/
+objectives/missions, primo livello. `id`/`profile_id` hanno un messaggio dedicato (non è un
+refuso: è il campo che ADR-001 ignora di proposito, e che causò KI #21).
+- **Verificato**: file di prova con `"fire_rat"` (refuso), `campo_obsoleto`, `id` → 3 Warning
+  distinti; rimosso il file, di nuovo 0/0.
+- **Trovato un caso VERO al primo colpo sui dati reali**: `data/ai/B1 Heavy Droid.json` conteneva
+  `profile_id: "B1 Heavy Droid"` — residuo pre-ADR-001. Inerte oggi (il valore coincideva col
+  filename e il loader lo ignora già), ma una trappola: al primo rename avrebbe mentito.
+  **Rimosso** con edit chirurgico — `git diff` conferma **1 riga, nient'altro**.
+  *Nota di metodo:* il primo tentativo (riscrittura via `JSON.stringify`) aveva anche convertito
+  `110.0`→`110`, `12.0`→`12`, `4.0`→`4`: numericamente identico, ma è esattamente il danno
+  collaterale che la regola READ-MODIFY-WRITE esiste per impedire. Ripristinato e rifatto a mano.
+- **Limite documentato** (verificato sul codice): cattura le chiavi che il loader **ignora**, non
+  i campi che il loader legge ma nessun sistema consuma (`min_range`, `fov_deg`, `hearing_range`
+  — la lista storica di KI #25). Quelli sono un fatto sul *codice*, non sui *dati*: nessun gate
+  sul registry può vederli. La formulazione originale del doc 24 confondeva i due casi — corretta.
+
+## 2026-07-15 — N2 Framework obiettivi Phase A (ADR-019)
+
+Primo codice del framework che sblocca la Fase 2: prima l'unico obiettivo era il command post
+cablato nei mode, e "distruggi il relè" avrebbe richiesto una **modalità nuova**.
+
+### Definizioni (solo dati, id = filename stem per ADR-001)
+- `ObjectiveDef` (`data/objectives/<id>.json`): type, tier, target (zona/team/count/hold),
+  activation (immediate | after_objective | after_time), time_limit opzionale, reward,
+  linked_objectives. `MissionDef` (`data/missions/<id>.json`): map, mode, briefing,
+  primary/optional objectives, **success_rules e failure_rules**.
+- Caricati dal `DefinitionRegistry` con lo stesso pattern degli altri tipi; getter
+  `getObjective`/`getMission` + accessor `objectives()`/`missions()`.
+- Una regola con stringa sconosciuta **non** diventa un default silenzioso: è un dato invalido
+  e la missione viene rifiutata (spirito del gate, doc 24).
+- Esempio reale in repo: `firebase_ridge` (raggiungi il crinale → **poi** tienilo 8 s; assottiglia
+  la guarnigione come opzionale; fallimento a tempo).
+
+### `ObjectiveSystem` (dopo Ai/Crowd)
+- Valuta lo stato quando le unità si sono già mosse nel tick. **Inerte senza missione**: i mode
+  esistenti (ADR-008/009/014) continuano identici — il framework si affianca, non li riscrive.
+- Tipi implementati (valutabili leggendo **solo il World**): `ReachArea`, `EliminateTarget`,
+  `HoldAreaForDuration` (presenza **continuativa**: uscire azzera il progresso). Gli altri 6 tipi
+  del doc 25 sono dichiarati ma **falliscono con causa esplicita** — stessa disciplina di ADR-020.
+- Attivazione dichiarativa → dipendenze fra obiettivi **senza scripting**. `tier` è un campo, non
+  tre sistemi paralleli. Esiti di missione dalle regole dichiarate nel MissionDef.
+- **Gate**: missione senza success/failure rules valide, con un id di obiettivo inesistente, con
+  un obiettivo elencato fra i primari ma di tier diverso, o senza obiettivi → **rifiutata** con
+  causa (telemetria ERROR + messaggio a schermo), non avviata a metà.
+- Mailbox `World::activeMission` + `World::objectiveDefs` (pattern doc 10): `ecs/` non include
+  header di gioco. Nuovo flag `--mission <id>` per verificarlo headless.
+
+### Fix collaterale: la mailbox delle uccisioni non bastava
+`World::killedThisTick` portava solo l'`EntityId`, ma l'entità è **già distrutta**: un consumatore
+non può più leggerne il team. `EliminateTarget` avrebbe contato **anche i propri morti**, ignorando
+`target_team`. Ora la mailbox porta `{entity, team}` — il team viene letto in CombatSystem mentre
+la vittima esiste ancora. (`SquadSystem` adeguato.)
+
+### Verifiche
+- **Build-verified:** Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Verificato headless** (`--stress N --mission <id>`):
+  - `firebase_ridge`: 3 obiettivi + missione caricati dai dati; `mission started`; i due
+    `immediate` attivati; **`hold_east_ridge` NON attivato** finché il suo prerequisito non è
+    completo (dipendenza rispettata); `thin_the_garrison` **completato** contando 5 uccisioni del
+    solo team 2 (filtro per team corretto).
+  - **Successo di missione** end-to-end: obiettivo primario completato → `mission success`.
+  - **Gate**: missione senza `failure_rules` → `mission rejected` con causa; obiettivo elencato
+    fra i primari ma `tier != primary` → rifiutata con causa.
+  - **Non-regressione**: senza `--mission`, **zero** eventi Objective, squadre e mode intatti,
+    nessun crash.
+  - Acceptance #4 (`nessun if (missionId == ...)`) verificata per grep oltre che per costruzione.
+- **NON verificato:** nessuna UI di selezione missione (oggi solo `--mission`, come da doc 25 che
+  mette l'authoring fuori scope) e nessun pannello HUD degli obiettivi — gli esiti passano dal feed.
+
+## 2026-07-15 — N1 Squad & Command Phase B: ordine contestuale + HUD (ADR-020)
+
+Il giocatore ora **comanda** la squadra: fino a ieri `Follow` era automatico e non esisteva modo
+di esprimere un'intenzione.
+
+### Comando contestuale (un tasto, nessun menu)
+- Nuova `Action::SquadOrder`, default **G**, rimappabile dalle Opzioni ("Ordine squadra"). I
+  binding non sono persistiti su file → aggiungere un'azione non ha rischi di dati.
+- Il contesto lo decide il **mirino**: nemico inquadrato → `FocusFire`; punto a terra vicino a un
+  **cover point reale del MapDef** (≤4 m, doc 15/18) → `TakeCover`; altrimenti → `MoveTo`.
+  Riusa l'entità già risolta dal loop del mirino → **ciò che il mirino segna è ciò che la squadra
+  riceve**, per costruzione (stessa disciplina di KI #13).
+- L'intenzione passa da una **mailbox** `World::squadOrder` consumata da SquadSystem: `ecs/` non
+  conosce l'input (ADR-002, doc 10).
+- **Raggiungibilità verificata PRIMA di impartire** (`NavManager::findPath`): Detour restituisce un
+  path **parziale** se il bersaglio è irraggiungibile — non fallisce — quindi si confronta l'arrivo
+  col punto chiesto. Ordine impossibile → rifiutato subito con causa a schermo. È la trappola
+  "Collina Centrale" (KI #34) resa strutturalmente impossibile da ordinare.
+
+### Ordini nuovi
+- **`TakeCover`**: MoveTo su un cover point reale; stessa condizione di completamento.
+- **`FocusFire`**: vincola la **scelta del bersaglio**, non la mira — se l'AI non vede il designato
+  resta autonoma (un ordine non deve farla sparare a un muro). Applicato dentro il ramo di sensing
+  di `AiSystem` per non violare il time-slicing (ADR-015). **Non** vincola il movimento: l'AI
+  continua a manovrare mentre concentra il fuoco.
+- `Revive` (Phase C) e `Regroup` (ruota di comando) restano non eseguiti → falliscono **con causa
+  esplicita**, mai in silenzio.
+
+### Fix: un successo veniva segnalato come fallimento
+`CombatSystem` **distrugge l'entità nello stesso update in cui la uccide**, e gira PRIMA di
+SquadSystem: interrogare la salute di un bersaglio ucciso dà "non esiste più". Il ciclo di vita di
+FocusFire riportava quindi `order failed: bersaglio non più esistente` **proprio quando la squadra
+aveva fatto ciò che il giocatore aveva ordinato** — e il ramo di completamento era codice morto
+(misurato: 1 failed / 0 completed).
+- **Fix:** nuova mailbox `World::killedThisTick` (scritta da CombatSystem, svuotata da Application
+  a fine frame come `combatFeedback`) → SquadSystem distingue "ucciso" da "sparito".
+- **Dopo il fix:** 5 FocusFire emessi → **4 completati, 0 falliti**.
+
+### HUD (doc 26: ordine, stato, distanza, esito)
+- Pannello **SQUADRA** sotto gli alleati: numero membri, ordine corrente, distanza dal task —
+  letto dallo **stato reale dei membri**, mai da ciò che si crede di aver ordinato. Nessuna
+  distanza mostrata per FocusFire (sarebbe un numero inventato).
+- Completamento e **causa del fallimento** vanno nel feed via `World::pushEvent`, annunciati **una
+  volta per ordine** e non una per membro (5 alleati = 5 righe identiche).
+- `orderName()` spostato in `SquadComponent.hpp`: telemetria e HUD condividono l'unica tabella.
+
+### Verifiche
+- **Build-verified:** Debug completa (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Verificato headless** iniettando l'ordine direttamente nella mailbox (il tasto G non è
+  testabile senza finestra — doc 10): `TakeCover` 8 emessi / 3 completati; `FocusFire` 5 emessi /
+  4 completati; 0 fallimenti spuri; nessun crash; `--stress 10` pulito.
+- **NON verificato — richiede playtest:** il tasto G, la risoluzione del contesto dal mirino
+  (nemico vs cover vs terra), il rifiuto per irraggiungibilità e il pannello HUD. Tutta la catena
+  a valle della mailbox è invece verificata sopra.
+
+## 2026-07-15 — N1 Squad & Command Phase A + fix del pathfinding di traversata (ADR-020, ADR-017)
+
+### Squad & Command Phase A (ADR-020, doc 26)
+Primo codice per il pilastro GDD "la squadra è una risorsa, non decorazione".
+- **Nuovi:** `SquadComponent.hpp` (squadId/isLeader/order/state/target/issuedTick/failureReason),
+  `SquadSystem.hpp/.cpp`, registrato in `Application` fra Combat e Ai — **l'ordine dei sistemi è
+  un vincolo, non uno stile** (se girasse dopo Ai gli alleati sarebbero telecomandati).
+- **Mailbox** `World::playerEntity` (pattern 10_ProjectMemory): l'AI legge chi è il leader senza
+  che `ecs/` dipenda dal codice di gioco. Riscritta a ogni respawn (il respawn crea un'entità NUOVA).
+- Squadra alleata formata e ri-arruolata a runtime; leader = giocatore se è entità valida di team 1,
+  altrimenti la prima AI alleata (in `--sim` il player è team 0 e parcheggiato fuori campo).
+- Ordine di default `Follow`; ciclo di vita completo con telemetria discreta (`order issued /
+  completed / failed`, doc 21). Gli ordini non ancora eseguiti (TakeCover/FocusFire/Revive/Regroup)
+  **falliscono con causa esplicita**, non spariscono in silenzio.
+- **Modello a guinzaglio** (vedi ADR-020 "Vincoli scoperti implementando"): l'ordine ha precedenza
+  solo *fuori* dal raggio di soddisfazione; dentro, l'AI è autonoma. Il movimento è vincolato, mira
+  e fuoco no — è ciò che fa funzionare il comando *durante* il firefight.
+
+### Fix: la traversata col crowd non ha mai avuto pathfinding (ADR-017)
+Trovato mentre si validava Phase A. `AiSystem` chiamava
+`requestMoveTarget(et + moveDX, et + moveDZ)`, ma **`norm2D()` normalizza `moveDX/DZ` in place**:
+a Detour arrivava sempre un bersaglio a **1 metro** davanti all'agente, mai la destinazione reale.
+Un pathfinder a cui chiedi un punto a 1 m non può aggirare nulla — pianificava dentro l'ostacolo e
+ci spingeva contro. Il commento nel codice dichiarava "i rami traversal impostano moveDX/DZ =
+destinazione − posizione": **descriveva un'intenzione che il codice non implementava** (Hunt,
+Search e Patrol chiamano tutti `norm2D`).
+- **Fix:** nuova `moveDist` (distanza reale, default 1.0 = comportamento storico per i rami che non
+  la impostano) valorizzata da Hunt/Search/Patrol/ordine; `requestMoveTarget` riceve
+  `et + moveDir * moveDist` = la destinazione vera.
+- **Fix correlato:** flag `orderTravel` → un ordine che fa percorrere distanza usa
+  `requestMoveTarget` **anche in Alert** (il ramo Alert usa `requestMoveVelocity`, che non pianifica).
+
+### Verifiche
+- **Build-verified:** build completa Debug (GFEngine + GFEditor), **0 errori, 0 warning**.
+- **Verificato headless:** `--stress 10` senza crash/assert, navmesh ok, 10 ordini emessi per 10
+  alleati, 0 fallimenti.
+- **Criterio di accettazione doc 26** ("una squadra sotto ordini si comporta diversamente da una
+  libera") **dimostrato** con un `MoveTo` deterministico su punto raggiungibile: distanza media dal
+  bersaglio **8.0 → 2.6 → 1.3 → 1.5 m** e ordini completati **0 → 1915**, contro i ~6-7 m di
+  dispersione di una squadra libera.
+- **Effetto sullo stuck: modesto e non concludente** — `--stress 10`, 35 → 31 eventi su singolo run,
+  plausibilmente entro il rumore. Il valore del fix è la traversata a lungo raggio, non lo stuck.
+- **Nota di metodo:** i primi A/B erano invalidi, non il sistema. Il bersaglio di test (0,0) è il
+  centro della piattaforma **"Collina Centrale"** (10×10, alta 1 m, collider): con
+  `kAgentClimb = STEP_HEIGHT` un gradino di 1 m non è scalabile → **(0,0) è irraggiungibile dal
+  pavimento** e nessun `MoveTo` poteva completarsi. Gli agenti si fermavano su un anello a ~7.5 m =
+  il perimetro dei cover a ±6. Chi testa il movimento su firebase deve scegliere punti liberi
+  (es. **(12,0)**), non il centro mappa.
+- **Da smoke-testare manualmente:** in partita vera, che gli alleati seguano il giocatore in modo
+  leggibile e continuino a combattere mentre lo seguono (headless il leader è un'AI, non il player).
+
 ## 2026-07-15 — Allineamento al GDD: ponte di design + 4 sistemi pianificati (solo docs)
 Sessione **di sola documentazione** (zero codice toccato), a partire dal GDD consolidato e dai
 master plan engine/gioco.

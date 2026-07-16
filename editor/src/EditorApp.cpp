@@ -6,11 +6,13 @@
 #include "modules/MapEditor.hpp"
 #include "modules/WeaponEditor.hpp"
 #include "modules/VehicleEditor.hpp"
+#include <mini/game/data/DefinitionRegistry.hpp>   // ADR-018: pannello validazione
 
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <SDL2/SDL.h>
+#include <filesystem>
 #include <mini/platform/OpenGL.hpp>
 #include <mini/core/Telemetry.hpp>
 
@@ -222,6 +224,8 @@ void EditorApp::renderMenuBar()
         if (ImGui::MenuItem("Map Editor"))      m_active = ActiveModule::MapEditor;
         if (ImGui::MenuItem("Weapon Editor"))   m_active = ActiveModule::WeaponEditor;
         if (ImGui::MenuItem("Vehicle Editor"))  m_active = ActiveModule::VehicleEditor;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Validazione contenuti")) m_active = ActiveModule::ContentValidation;
         if (ImGui::MenuItem("Asset Manager (presto)"))  {}
         if (ImGui::MenuItem("AI Editor (presto)"))      {}
         ImGui::EndMenu();
@@ -278,6 +282,97 @@ void EditorApp::renderDockSpace()
     ImGui::End();
 }
 
+// Radice dati sorgente, stessa logica di BalanceEditor/EntityEditor/MapEditor.
+// DEBITO NOTO: questa risoluzione è duplicata in ogni modulo dell'editor (vedi
+// 06_Todo R8). Qui pesa più che altrove: se divergesse, il pannello validerebbe
+// una data/ diversa da quella che il gioco carica — cioè mentirebbe.
+static std::string editorDataPath()
+{
+    char* base = SDL_GetBasePath();
+    std::filesystem::path exeDir = base ? base : ".";
+    SDL_free(base);
+    std::error_code ec;
+    std::filesystem::path sourceData =
+        std::filesystem::canonical(exeDir / "../../../data", ec);
+    if (!ec && std::filesystem::exists(sourceData / "weapons", ec))
+        return sourceData.string();
+    return (exeDir / "data").string();
+}
+
+// ── Pannello Validazione contenuti (24_ContentValidation, ADR-018) ────────
+// Terzo consumatore dello STESSO `validateContent()` che usano il runtime e
+// `--validate`. È il punto centrale dell'ADR: se l'editor avesse una copia più
+// debole delle regole, esisterebbe contenuto che l'editor accetta e il gioco
+// rifiuta — cioè esattamente il bug che il gate serve a togliere.
+void EditorApp::renderValidationPanel()
+{
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 10, vp->WorkPos.y + 25),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x - 20, vp->WorkSize.y - 40),
+                             ImGuiCond_FirstUseEver);
+    ImGui::Begin("Validazione contenuti");
+
+    if (m_diagsDirty)
+    {
+        mini::DefinitionRegistry reg;
+        reg.loadAll(editorDataPath());
+        m_diags = mini::validateContent(reg, editorDataPath());
+        m_diagsDirty = false;
+    }
+
+    const int errors   = mini::countBy(m_diags, mini::telemetry::Level::Error);
+    const int warnings = mini::countBy(m_diags, mini::telemetry::Level::Warn);
+
+    if (ImGui::Button("Rivalida"))  m_diagsDirty = true;
+    ImGui::SameLine();
+    if (errors > 0)
+        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.3f, 1.0f),
+                           "%d errori (bloccano l'avvio del gioco), %d warning",
+                           errors, warnings);
+    else if (warnings > 0)
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                           "Nessun errore, %d warning", warnings);
+    else
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Contenuto valido");
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Stesse regole del runtime e di GFEngine.exe --validate.");
+    ImGui::Spacing();
+
+    if (ImGui::BeginTable("##diags", 3,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+          | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable))
+    {
+        ImGui::TableSetupColumn("Gravita'", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+        ImGui::TableSetupColumn("File",     ImGuiTableColumnFlags_WidthFixed, 260.0f);
+        ImGui::TableSetupColumn("Problema e correzione");
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+
+        for (const auto& d : m_diags)
+        {
+            const bool err = (d.severity == mini::telemetry::Level::Error);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextColored(err ? ImVec4(1.0f, 0.35f, 0.3f, 1.0f)
+                                   : ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                               err ? "ERRORE" : "warning");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(d.file.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextWrapped("%s", d.message.c_str());
+            // Il suggerimento è la parte che rende la diagnostica azionabile:
+            // senza "cosa fare", è solo un altro messaggio da ignorare.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.8f, 1.0f, 1.0f));
+            ImGui::TextWrapped("-> %s", d.suggestion.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
 void EditorApp::render()
 {
     ImGui_ImplOpenGL3_NewFrame();
@@ -294,6 +389,10 @@ void EditorApp::render()
         if (wantsLaunch)   launchGame();
         if (wantsSandbox)  launchSandbox();
         if (next != ActiveModule::Home) m_active = next;
+    }
+    else if (m_active == ActiveModule::ContentValidation)
+    {
+        renderValidationPanel();
     }
     else if (m_active == ActiveModule::FreeCameraViewport)
     {

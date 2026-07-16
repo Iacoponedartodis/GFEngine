@@ -35,6 +35,29 @@ static std::array<float,3> getColor(const json& j, const char* k,
     if (!j.contains(k) || !j[k].is_array() || j[k].size() < 3) return d;
     return {j[k][0].get<float>(), j[k][1].get<float>(), j[k][2].get<float>()};
 }
+// ── Campi fantasma (24_ContentValidation, ADR-018) ───────────────────────
+// Registra le chiavi presenti nel JSON che NESSUN loader legge. È il modo in cui
+// un refuso degrada in silenzio: "fire_rat": 4.5 non fallisce — l'arma prende il
+// default e il sintomo appare lontano dalla causa.
+//
+// LIMITE, da conoscere: cattura le chiavi che il loader IGNORA, non i campi che
+// il loader legge ma nessun sistema consuma (min_range, fov_deg, hearing_range —
+// la lista di KI #25). Quelli sono un problema di CODICE, non di dati: nessun gate
+// che guardi il registry può vederli. Vedi la nota in 24_ContentValidation.
+static void noteUnknownKeys(const json& j, const std::string& owner,
+                            std::initializer_list<const char*> known,
+                            std::unordered_map<std::string, std::vector<std::string>>& out)
+{
+    if (!j.is_object()) return;
+    for (auto it = j.begin(); it != j.end(); ++it)
+    {
+        bool found = false;
+        for (const char* k : known)
+            if (it.key() == k) { found = true; break; }
+        if (!found) out[owner].push_back(it.key());
+    }
+}
+
 static std::vector<std::string> getStrArray(const json& j, const char* k)
 {
     std::vector<std::string> out;
@@ -64,6 +87,9 @@ void DefinitionRegistry::loadAbilities(const std::string& dir)
         a.param3  = getf(*j, "param3", 0);
         a.cooldown= getf(*j, "cooldown", 5);
         a.passive = getb(*j, "passive", false);
+        noteUnknownKeys(*j, "abilities/" + a.id + ".json",
+            {"name","type","param1","param2","param3","cooldown","passive",
+             "description"}, m_unknownKeys);
         std::cout << "[Registry] Ability: " << a.id << " (" << a.type << ")\n";
         m_abilities[a.id] = std::move(a);
     }
@@ -113,6 +139,13 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
             readPt("right_hand", w.gripAttach);  // right_hand ha precedenza
             readPt("muzzle",     w.muzzleAttach);
         }
+        noteUnknownKeys(*j, "weapons/" + w.id + ".json",
+            {"name","faction","damage","fire_rate","bullet_speed","bullet_lifetime",
+             "bullet_scale","bullet_color","heat_per_shot","cooldown_rate",
+             "overheat_penalty","effective_range","min_range","spread_base",
+             "spread_ads","spread_move","spread_sprint","spread_jump","mesh",
+             "projectile_mesh","mesh_scale","mesh_rot_x","mesh_rot_y",
+             "attach_points","description"}, m_unknownKeys);
         std::cout << "[Registry] Weapon: " << w.id
                   << " [" << factionToString(w.faction) << "]\n";
         m_weapons[w.id] = std::move(w);
@@ -148,6 +181,13 @@ void DefinitionRegistry::loadAiProfiles(const std::string& dir)
         a.patrolSpeed      = getf(*j, "patrol_speed", 2.5f);
         a.seekSpeed        = getf(*j, "seek_speed", 4);
         a.jumpEnabled      = getb(*j, "jump_enabled", true);
+        noteUnknownKeys(*j, "ai/" + a.id + ".json",
+            {"role","sight_range","fov_deg","hearing_range","reaction_time",
+             "aggression","accuracy","cover_preference","retreat_hp_threshold",
+             "peek_duration_min","peek_duration_max","hide_duration_min",
+             "hide_duration_max","reposition_chance","flank_chance","shoot_interval",
+             "patrol_speed","seek_speed","jump_enabled","name","description"},
+            m_unknownKeys);
         std::cout << "[Registry] AI Profile: " << a.id << " (role:" << a.role << ")\n";
         m_aiProfiles[a.id] = std::move(a);
     }
@@ -215,6 +255,15 @@ static EnemyDef parseUnitDef(const nlohmann::json& j, const fs::path& path, int 
     return e;
 }
 
+// Chiavi lette da parseUnitDef: tenerle QUI accanto al parser è ciò che impedisce
+// alla lista di divergere dal codice che legge davvero (ADR-018).
+static const std::initializer_list<const char*> kUnitKeys = {
+    "name","faction","team","color","texture","mesh","mesh_scale","mesh_rot_x",
+    "mesh_rot_y","attach_points","offset","rot","stats","weapon","weapons",
+    "weapon_display","abilities","ai_profile","hitbox_profile","bullet_color",
+    "description"
+};
+
 void DefinitionRegistry::loadEnemies(const std::string& dir)
 {
     fs::path folder = dir + "/enemies";
@@ -224,6 +273,7 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         EnemyDef e = parseUnitDef(*j, entry.path(), 2);
+        noteUnknownKeys(*j, "enemies/" + e.id + ".json", kUnitKeys, m_unknownKeys);
         std::cout << "[Registry] Enemy: " << e.id
                   << " (weapons:" << e.weaponIds.size()
                   << " abilities:" << e.abilityIds.size() << ")\n";
@@ -430,6 +480,7 @@ void DefinitionRegistry::loadAllies(const std::string& dir)
         if (entry.path().extension() != ".json") continue;
         auto j = readJson(entry.path()); if (!j) continue;
         EnemyDef e = parseUnitDef(*j, entry.path(), 1);
+        noteUnknownKeys(*j, "allies/" + e.id + ".json", kUnitKeys, m_unknownKeys);
         std::cout << "[Registry] Ally: " << e.id << "\n";
         m_allies[e.id] = std::move(e);
     }
@@ -452,16 +503,204 @@ void DefinitionRegistry::loadPlayerDefs(const std::string& dir)
             p.hp          = getf(s, "hp",           100.0f);
             p.moveSpeed   = getf(s, "move_speed",     5.0f);
             p.jumpHeight  = getf(s, "jump_height",    1.0f);
-            p.sprintMult  = getf(s, "sprint_mult",    1.5f);
+            p.sprintMult  = getf(s, "sprint_mult",   1.65f);   // = comportamento storico
             p.armorRating = getf(s, "armor_rating",   1.0f);
         }
+        noteUnknownKeys(*j, "characters/" + p.id + ".json",
+            {"name","description","stats"}, m_unknownKeys);
         std::cout << "[Registry] PlayerDef: " << p.id << "\n";
         m_playerDefs[p.id] = std::move(p);
     }
 }
 
+// ── Obiettivi e missioni (ADR-019, doc 25) ───────────────────────────────
+namespace {
+
+ObjectiveType parseObjectiveType(const std::string& s)
+{
+    if (s == "reach_area")             return ObjectiveType::ReachArea;
+    if (s == "eliminate_target")       return ObjectiveType::EliminateTarget;
+    if (s == "hold_area_for_duration") return ObjectiveType::HoldAreaForDuration;
+    if (s == "capture_zone")           return ObjectiveType::CaptureZone;
+    if (s == "defend_zone")            return ObjectiveType::DefendZone;
+    if (s == "destroy_target")         return ObjectiveType::DestroyTarget;
+    if (s == "escort_entity")          return ObjectiveType::EscortEntity;
+    if (s == "survive_wave")           return ObjectiveType::SurviveWave;
+    if (s == "interact_hack")          return ObjectiveType::InteractHack;
+    return ObjectiveType::ReachArea;
+}
+
+ObjectiveTier parseTier(const std::string& s)
+{
+    if (s == "primary")   return ObjectiveTier::Primary;
+    if (s == "strategic") return ObjectiveTier::Strategic;
+    return ObjectiveTier::Tactical;
+}
+
+// Un tipo sconosciuto NON diventa un default silenzioso: resta None e il gate
+// ADR-018 lo respinge — un refuso qui produrrebbe un obiettivo che sembra avere
+// una conseguenza e invece non ne ha nessuna.
+ConsequenceType parseConsequenceType(const std::string& s)
+{
+    if (s == "block_enemy_reinforcements") return ConsequenceType::BlockEnemyReinforcements;
+    if (s == "enemy_accuracy")             return ConsequenceType::EnemyAccuracy;
+    if (s == "ally_reinforcements")        return ConsequenceType::AllyReinforcements;
+    if (s == "unlock_spawn")               return ConsequenceType::UnlockSpawn;
+    return ConsequenceType::None;
+}
+
+std::vector<ConsequenceDef> parseConsequences(const json& j, const char* key)
+{
+    std::vector<ConsequenceDef> out;
+    if (!j.contains(key) || !j[key].is_array()) return out;
+    for (const auto& e : j[key])
+    {
+        if (!e.is_object()) continue;
+        ConsequenceDef c;
+        c.type   = parseConsequenceType(gets(e, "type"));
+        c.value  = getf(e, "value", 0.0f);
+        c.target = gets(e, "target");
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
+ActivationType parseActivation(const std::string& s)
+{
+    if (s == "after_objective") return ActivationType::AfterObjective;
+    if (s == "after_time")      return ActivationType::AfterTime;
+    return ActivationType::Immediate;
+}
+
+// Ritorna false se la stringa non è una regola nota: un typo in un JSON non
+// deve diventare silenziosamente "AllPrimaryComplete" (doc 24: i dati sbagliati
+// vanno respinti, non interpretati).
+bool parseMissionRule(const std::string& s, MissionRule& out)
+{
+    if (s == "all_primary_complete") { out = MissionRule::AllPrimaryComplete; return true; }
+    if (s == "any_primary_complete") { out = MissionRule::AnyPrimaryComplete; return true; }
+    if (s == "any_primary_failed")   { out = MissionRule::AnyPrimaryFailed;   return true; }
+    if (s == "time_limit")           { out = MissionRule::TimeLimit;          return true; }
+    return false;
+}
+
+} // namespace
+
+void DefinitionRegistry::loadClasses(const std::string& dir)
+{
+    fs::path folder = dir + "/classes";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        ClassDef c;
+        c.id                = entry.path().stem().string();   // ADR-001
+        c.name              = gets(*j, "name", c.id);
+        c.primaryWeaponId   = gets(*j, "primary_weapon");
+        c.secondaryWeaponId = gets(*j, "secondary_weapon");
+        c.role              = gets(*j, "role");
+        c.abilityIds        = getStrArray(*j, "abilities");
+        noteUnknownKeys(*j, "classes/" + c.id + ".json",
+            {"name","primary_weapon","secondary_weapon","abilities","role",
+             "description"}, m_unknownKeys);
+        std::cout << "[Registry] Class: " << c.id << "\n";
+        m_classes[c.id] = std::move(c);
+    }
+}
+
+void DefinitionRegistry::loadObjectives(const std::string& dir)
+{
+    fs::path folder = dir + "/objectives";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        ObjectiveDef o;
+        o.id   = entry.path().stem().string();   // ADR-001: mai dal JSON
+        o.name = gets(*j, "name", o.id);
+        o.type = parseObjectiveType(gets(*j, "type", "reach_area"));
+        o.tier = parseTier(gets(*j, "tier", "tactical"));
+        if ((*j).contains("target"))
+        {
+            auto& t = (*j)["target"];
+            o.x = getf(t, "x", 0.0f); o.y = getf(t, "y", 0.0f); o.z = getf(t, "z", 0.0f);
+            o.radius      = getf(t, "radius", 5.0f);
+            o.actorTeam   = geti(t, "actor_team",  1);
+            o.targetTeam  = geti(t, "target_team", 2);
+            o.count       = geti(t, "count", 1);
+            o.holdSeconds = getf(t, "hold_seconds", 10.0f);
+            o.targetPost  = gets(t, "post");   // CaptureZone/DefendZone (ADR-009)
+        }
+        if ((*j).contains("activation"))
+        {
+            auto& a = (*j)["activation"];
+            o.activation          = parseActivation(gets(a, "type", "immediate"));
+            o.activationObjective = gets(a, "objective");
+            o.activationTime      = getf(a, "time", 0.0f);
+        }
+        o.onSuccess = parseConsequences(*j, "on_success");   // doc 25
+        o.onFailure = parseConsequences(*j, "on_failure");
+        o.timeLimit = getf(*j, "time_limit", 0.0f);
+        o.reward    = geti(*j, "reward", 0);
+        if ((*j).contains("linked_objectives"))
+            for (auto& l : (*j)["linked_objectives"])
+                if (l.is_string()) o.linkedObjectives.push_back(l.get<std::string>());
+        noteUnknownKeys(*j, "objectives/" + o.id + ".json",
+            {"name","type","tier","target","activation","time_limit","reward",
+             "linked_objectives","description","on_success","on_failure"}, m_unknownKeys);
+        std::cout << "[Registry] Objective: " << o.id << "\n";
+        m_objectives[o.id] = std::move(o);
+    }
+}
+
+void DefinitionRegistry::loadMissions(const std::string& dir)
+{
+    fs::path folder = dir + "/missions";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        MissionDef m;
+        m.id       = entry.path().stem().string();   // ADR-001
+        m.name     = gets(*j, "name", m.id);
+        m.briefing = gets(*j, "briefing");
+        m.mapId    = gets(*j, "map");
+        m.modeId   = gets(*j, "mode", "conquest");
+        if ((*j).contains("primary_objectives"))
+            for (auto& o : (*j)["primary_objectives"])
+                if (o.is_string()) m.primaryObjectives.push_back(o.get<std::string>());
+        if ((*j).contains("optional_objectives"))
+            for (auto& o : (*j)["optional_objectives"])
+                if (o.is_string()) m.optionalObjectives.push_back(o.get<std::string>());
+        // Regole obbligatorie: si registra se erano PRESENTI e VALIDE — il gate
+        // a runtime rifiuta la missione, qui non si inventano default.
+        if ((*j).contains("success_rules"))
+            m.hasSuccessRule = parseMissionRule(gets((*j)["success_rules"], "rule"),
+                                                m.successRule);
+        if ((*j).contains("failure_rules"))
+        {
+            auto& f = (*j)["failure_rules"];
+            m.hasFailureRule   = parseMissionRule(gets(f, "rule"), m.failureRule);
+            m.failureTimeLimit = getf(f, "time_limit", 0.0f);
+        noteUnknownKeys(*j, "missions/" + m.id + ".json",
+            {"name","briefing","map","mode","primary_objectives","optional_objectives",
+             "success_rules","failure_rules","reward_profile","persistence_policy"},
+            m_unknownKeys);
+        }
+        std::cout << "[Registry] Mission: " << m.id << "\n";
+        m_missions[m.id] = std::move(m);
+    }
+}
+
 void DefinitionRegistry::loadAll(const std::string& dataRoot)
 {
+    m_classes.clear();
+    m_objectives.clear();
+    m_missions.clear();
+    m_unknownKeys.clear();
     m_abilities.clear();
     m_weapons.clear();
     m_aiProfiles.clear();
@@ -484,6 +723,9 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadMaps(dataRoot);
     loadPlayerDefs(dataRoot);
     loadVehicles(dataRoot);
+    loadClasses(dataRoot);
+    loadObjectives(dataRoot);
+    loadMissions(dataRoot);
 
     m_loaded = true;
     std::cout << "[Registry] " << m_weapons.size() << " armi, "
@@ -511,6 +753,9 @@ GETTER(m_maps,           MapDef,           getMap)
 GETTER(m_vehicles,       VehicleDef,       getVehicle)
 GETTER(m_hitboxProfiles, HitboxProfile,    getHitboxProfile)
 GETTER(m_playerDefs,     PlayerDef,        getPlayerDef)
+GETTER(m_classes,        ClassDef,         getClass)
+GETTER(m_objectives,     ObjectiveDef,     getObjective)
+GETTER(m_missions,       MissionDef,       getMission)
 #undef GETTER
 
 } // namespace mini

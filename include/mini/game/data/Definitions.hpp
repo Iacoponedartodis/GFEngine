@@ -290,7 +290,157 @@ struct MapDef
     std::vector<VehicleSpawnDef> vehicleSpawns;
 };
 
+// ── Obiettivi e missioni (25_ObjectivesAndMissions, ADR-019) ─────────────
+// Il framework generico che sostituisce "un mode per ogni tipo di missione".
+// L'IGameMode continua a decidere le REGOLE (ticket, outcome); gli obiettivi
+// decidono COSA fare. I command post (ADR-009) restano validi e intoccati:
+// vengono avvolti, non riscritti.
+
+enum class ObjectiveType
+{
+    // Valutabili leggendo solo il World → implementati (Phase A)
+    ReachArea,            // un'unità del team entra nella zona
+    EliminateTarget,      // eliminare N unità del team bersaglio
+    HoldAreaForDuration,  // presenza continuativa nella zona per holdSeconds
+    // Command post (ADR-009) espressi come obiettivi: la logica di cattura resta
+    // in `CommandPosts`, qui se ne legge solo l'esito — doc 25 dice di avvolgere
+    // ADR-009, non riscriverlo.
+    CaptureZone,          // il post `targetPost` diventa di actorTeam
+    DefendZone,           // il post resta di actorTeam per holdSeconds; perderlo = fallito
+    // Dichiarati dal doc 25 ma NON ancora eseguiti: falliscono con causa
+    DestroyTarget, EscortEntity, SurviveWave, InteractHack
+};
+
+// La stratificazione chiesta dalla Fase 2 (00_Vision) è un CAMPO, non tre
+// sistemi paralleli: tre sistemi sarebbero il fork che ADR-008/014 evitano.
+enum class ObjectiveTier { Primary, Strategic, Tactical };
+
+enum class ActivationType
+{
+    Immediate,        // attivo dall'inizio
+    AfterObjective,   // dopo il completamento di activationObjective
+    AfterTime         // dopo activationTime secondi dall'inizio missione
+};
+
+// ── Conseguenze (doc 25: "cosa cambia se riesce/fallisce") ───────────────
+// Il punto di design: un obiettivo NON è una casella da spuntare, è una mossa che
+// **cambia la battaglia**. Catturare un posto sblocca uno spawn, distruggere una
+// torre disorganizza il nemico, prendere una base gli taglia i rinforzi.
+//
+// Regola architetturale (ADR-019): ogni conseguenza tocca un sistema DIVERSO, e
+// va espressa come DATO dichiarativo che quel sistema legge da `World::battleState`
+// — mai come `if (objectiveId == ...)`, o si reintroduce il fork che il framework
+// obiettivi esiste per evitare.
+//
+// I VALORI sono segnaposto da bilanciare provando (direttiva utente 2026-07-16):
+// aggiungere un tipo qui = un enum + un lettore nel sistema competente, niente
+// tocca gli altri.
+enum class ConsequenceType
+{
+    None = 0,
+    BlockEnemyReinforcements,  // il nemico non rimpiazza più le perdite
+    EnemyAccuracy,             // moltiplica la precisione nemica (<1 = disorganizzati)
+    AllyReinforcements,        // aggiunge riserve alla squadra (value = quante)
+    UnlockSpawn                // il team rinasce al post `target` invece che allo spawn mappa
+};
+
+struct ConsequenceDef
+{
+    ConsequenceType type  = ConsequenceType::None;
+    float           value = 0.0f;   // parametro (moltiplicatore/quantità); ignorato da alcuni tipi
+    std::string     target;         // label del post (UnlockSpawn); vuoto altrimenti
+};
+
+// data/objectives/<id>.json — id = filename stem (ADR-001)
+struct ObjectiveDef
+{
+    std::string   id;
+    std::string   name;
+    ObjectiveType type = ObjectiveType::ReachArea;
+    ObjectiveTier tier = ObjectiveTier::Tactical;
+
+    // Bersaglio: zona (x/z/radius) e/o team di riferimento.
+    float x = 0, y = 0, z = 0;
+    float radius     = 5.0f;
+    int   actorTeam  = 1;   // chi deve eseguire (ReachArea/HoldArea)
+    int   targetTeam = 2;   // chi va eliminato (EliminateTarget)
+    int   count      = 1;   // quante unità (EliminateTarget)
+    float holdSeconds = 10.0f;   // HoldAreaForDuration / DefendZone
+    // Command post bersaglio, per LABEL (CaptureZone/DefendZone). I post non hanno
+    // un id: la label è il loro unico nome autorato nel MapEditor. Il gate ADR-018
+    // verifica che esista nella mappa della missione e che sia univoca.
+    std::string targetPost;
+
+    ActivationType activation = ActivationType::Immediate;
+    std::string    activationObjective;   // AfterObjective
+    float          activationTime = 0.0f; // AfterTime
+
+    // Fallimento OPZIONALE: non tutti gli obiettivi falliscono. Il fallimento
+    // parziale è ciò che produce decisioni tattiche invece di firefight lineari.
+    float timeLimit = 0.0f;   // 0 = non fallisce mai per tempo
+
+    int reward = 0;           // punti comando (doc 26) — economia non ancora attiva
+    std::vector<std::string> linkedObjectives;
+
+    // Cosa cambia nella BATTAGLIA quando l'obiettivo si conclude (doc 25).
+    // Entrambe opzionali: un obiettivo può non cambiare nulla (resta una casella).
+    std::vector<ConsequenceDef> onSuccess;
+    std::vector<ConsequenceDef> onFailure;
+};
+
+// Regole di missione: dichiarative, mai codice. "Nessun if (missionId == ...)".
+enum class MissionRule
+{
+    AllPrimaryComplete,   // successo: tutti i primari completati
+    AnyPrimaryComplete,   // successo: almeno un primario
+    AnyPrimaryFailed,     // fallimento: un primario fallito
+    TimeLimit             // fallimento: scaduto il tempo di missione
+};
+
+// data/missions/<id>.json — id = filename stem (ADR-001)
+struct MissionDef
+{
+    std::string id, name, briefing;
+    std::string mapId, modeId;
+    std::vector<std::string> primaryObjectives;
+    std::vector<std::string> optionalObjectives;
+
+    MissionRule successRule = MissionRule::AllPrimaryComplete;
+    MissionRule failureRule = MissionRule::AnyPrimaryFailed;
+    float       failureTimeLimit = 0.0f;   // usato da failureRule == TimeLimit
+
+    // Entrambe le regole sono OBBLIGATORIE (doc 25 + gate doc 24): una missione
+    // che non sa dire quando è vinta o persa non è una missione. Questi flag
+    // dicono se erano presenti nel JSON — il gate rifiuta la missione se mancano.
+    bool hasSuccessRule = false;
+    bool hasFailureRule = false;
+};
+
+// ── ClassDef (14_ClassSystem) ────────────────────────────────────────────
+// Composizione autorabile di un loadout: "Trooper", "Heavy Gunner", "Marksman".
+// Serve a smettere di cablare le armi una per una e a dare alla progressione
+// (Fase 3, doc 27) un'unità di sblocco già esistente — retrofittarla dopo, sotto
+// pressione, è precisamente ciò che questo doc vuole evitare.
+// data/classes/<id>.json — id = filename stem (ADR-001).
+struct ClassDef
+{
+    std::string id;
+    std::string name;
+    std::string primaryWeaponId;     // riferimento singolo (dropdown dal registry)
+    std::string secondaryWeaponId;   // opzionale (vuoto = nessuna)
+    std::vector<std::string> abilityIds;
+    // Tag descrittivo ("assault", "support", "sniper"). NON è un enum e NESSUN
+    // sistema AI lo consuma: accoppiarlo al comportamento senza un ADR
+    // reintrodurrebbe l'accoppiamento che questo sistema esiste per evitare
+    // (14_ClassSystem, Out of Scope).
+    std::string role;
+};
+
 // ── PlayerDef ─────────────────────────────────────────────────────────────
+// ATTENZIONE (verificato 2026-07-15): questo tipo è autorato dal BalanceEditor ma
+// NESSUN sistema di gioco lo legge — l'hp del giocatore viene da
+// MatchSettings.playerHp, non da qui. Vedi KI #35. Non appendere campi nuovi a
+// questa struct aspettandoti che abbiano effetto: oggi non ne hanno.
 // Stat BASE del personaggio giocabile. Non contiene equipaggiamento né
 // visuale: armi, armatura e colori vengono scelti nel PreMatch/loadout.
 // data/characters/<id>.json
@@ -304,7 +454,7 @@ struct PlayerDef
     float hp          = 100.0f;
     float moveSpeed   = 5.0f;
     float jumpHeight  = 1.0f;   // moltiplicatore impulso base
-    float sprintMult  = 1.5f;   // moltiplicatore velocità scatto
+    float sprintMult  = 1.65f;  // moltiplicatore scatto (= costante storica)
     float armorRating = 1.0f;   // riduzione danni passiva (1=standard)
 };
 

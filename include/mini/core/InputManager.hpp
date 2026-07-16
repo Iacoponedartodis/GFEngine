@@ -17,6 +17,7 @@ enum class Action : int
     Crouch,          // accovacciato
     Roll,            // schivata rapida
     SwitchWeapon,    // cambia arma primaria/secondaria
+    SquadOrder,      // ordine contestuale alla squadra (ADR-020 Phase B, doc 26)
     Pause,           // toggle pausa
     Restart,         // riavvia partita
     StartGame,       // ENTER per iniziare
