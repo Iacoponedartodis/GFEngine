@@ -84,6 +84,18 @@ struct WeaponDef
     float meshRotY  = 0.0f;   // raddrizza GLB orientati lateralmente (yaw)
     std::array<float,3> gripAttach   = {0.0f, 0.0f, 0.0f};
     std::array<float,3> muzzleAttach = {0.0f, 0.0f, 0.0f};
+
+    // ── Posa in mano (KI #49) ─────────────────────────────────────────────
+    // Come l'arma sta nella mano, indipendente da CHI la impugna: la scala
+    // compensa la dimensione nativa del mesh (Z-6 nativo minuscolo → ~80,
+    // DC-15A → ~0.4), rot/offset allineano il grip. Prima stava su ogni ENTITÀ
+    // (weapon_display), tarata su un'arma fissa: quando la classe cambiava
+    // l'arma, la posa restava per quella sbagliata → arma gigante/minuscola.
+    // `handScale <= 0` = NON autorata → si usa il fallback legacy weapon_display
+    // dell'entità (transizione). Il personaggio fornisce solo l'attach point.
+    float handScale = 0.0f;
+    std::array<float,3> handRot    = {0.0f, 0.0f, 0.0f};
+    std::array<float,3> handOffset = {0.0f, 0.0f, 0.0f};
 };
 
 // ── AiProfileDef ─────────────────────────────────────────────────────────
@@ -151,6 +163,11 @@ struct EnemyDef
     WeaponDisplay weaponDisplay;
 
     // Composizione comportamentale
+    // `classId` (ADR-022, metà NPC): se impostato, la CLASSE fornisce loadout,
+    // profilo AI e abilità — l'unità smette di ripeterli. È ciò che permette una
+    // squadra Trooper+Heavy+Recon che si comporta davvero diversamente (GDD 12.3).
+    // Vuoto = i campi sotto valgono come sempre → additivo, non breaking.
+    std::string classId;
     std::string aiProfileId;
     std::string hitboxProfileId;
     std::vector<std::string> weaponIds;
@@ -198,6 +215,21 @@ struct CommandPostDef
     float radius      = 4.0f;    // raggio di cattura (XZ)
     int   initialTeam = 0;       // 0 = neutrale, 1 = alleati, 2 = nemici
     float captureTime = 8.0f;    // secondi di presenza per catturare
+};
+
+// ── Bersaglio strategico (doc 25, DestroyTarget) ─────────────────────────
+// Struttura statica DISTRUTTIBILE sulla mappa (torre comunicazioni, generatore,
+// deposito...). Un obiettivo DestroyTarget la referenzia per LABEL; distruggerla
+// completa l'obiettivo e ne scatena la conseguenza (es. nemici disorganizzati →
+// enemy_accuracy). È il "bersaglio strategico da distruggere" del GDD.
+struct StrategicTargetDef
+{
+    std::string label = "Bersaglio";
+    float x = 0, z = 0;          // posizione (y = suolo della mappa)
+    float hp = 300.0f;           // resistenza: si distrugge a fuoco
+    std::string meshPath;        // vuoto = box di fallback
+    float meshScale = 1.0f;
+    std::array<float,3> color = {0.7f, 0.5f, 0.2f};
 };
 
 // ── VehicleDef (19_Vehicles, Fase A) ─────────────────────────────────────
@@ -270,7 +302,9 @@ struct MapDef
     std::string name;
     std::string meshPath;
     std::string metadataPath;
-    std::string navmeshPath;
+    // Nessun navmeshPath: ADR-004 — la navmesh la GENERA Recast a runtime dai box
+    // di `geometry`, non si carica da file. Il campo esisteva scritto-e-mai-letto
+    // (BalanceEditor lo salvava, nessun loader lo rileggeva): rimosso 2026-07-16.
     std::array<float,3> spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3> spawnTeam2 = {0.f, 0.86f, -8.f};
     int maxTickets = 10;
@@ -280,6 +314,7 @@ struct MapDef
     std::vector<std::string> allyTypes;
     std::vector<MapGeometryBox> geometry;
     std::vector<CommandPostDef> commandPosts;
+    std::vector<StrategicTargetDef> strategicTargets;   // DestroyTarget (doc 25)
 
     // Map Metadata (15_MapMetadata) — opzionali, vuoti finché non autorati
     std::vector<CoverPointDef>  coverPoints;
@@ -370,6 +405,9 @@ struct ObjectiveDef
     // un id: la label è il loro unico nome autorato nel MapEditor. Il gate ADR-018
     // verifica che esista nella mappa della missione e che sia univoca.
     std::string targetPost;
+    // Bersaglio strategico da distruggere, per LABEL (DestroyTarget). Stessa
+    // convenzione di targetPost: il gate verifica che esista nella mappa.
+    std::string targetStructure;
 
     ActivationType activation = ActivationType::Immediate;
     std::string    activationObjective;   // AfterObjective
@@ -429,10 +467,15 @@ struct ClassDef
     std::string primaryWeaponId;     // riferimento singolo (dropdown dal registry)
     std::string secondaryWeaponId;   // opzionale (vuoto = nessuna)
     std::vector<std::string> abilityIds;
-    // Tag descrittivo ("assault", "support", "sniper"). NON è un enum e NESSUN
-    // sistema AI lo consuma: accoppiarlo al comportamento senza un ADR
-    // reintrodurrebbe l'accoppiamento che questo sistema esiste per evitare
-    // (14_ClassSystem, Out of Scope).
+    // Il COMPORTAMENTO: è ciò che rende la classe una **professione** e non un
+    // pacchetto di armi (GDD 12.1: "professioni militari, non semplici categorie
+    // di armi"; 12.3: le classi definiscono il comportamento IA degli NPC, e una
+    // squadra mista "deve comportarsi diversamente" da una monoclasse).
+    // Vuoto = l'unità tiene il proprio profilo → additivo, niente cambia.
+    std::string aiProfileId;
+    // Tag descrittivo ("assault", "support", "sniper"). Ancora NON consumato da
+    // nessun sistema: diventerà un enum quando il SquadSystem assegnerà i task
+    // per ruolo (ADR-022).
     std::string role;
 };
 

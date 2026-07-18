@@ -39,6 +39,27 @@ constexpr float AI_SPREAD_MAX   = 0.12f;  // dispersione colpi AI a accuracy 0 (
 // ── Combat ────────────────────────────────────────────────────────────────
 constexpr float HIT_RADIUS    = 0.7f;     // raggio collisione proiettile
 
+// ── Squadra: stato "a terra" + rianimazione (Phase C, doc 26) ───────────────
+// Valori segnaposto da rifinire provando (il todo: "impostare valori temporanei
+// da rifinire più avanti"). Globali, non per-definizione → stanno qui (CLAUDE.md).
+constexpr float SQUAD_BLEEDOUT_TIME = 20.0f;  // s a terra prima della morte definitiva
+constexpr float SQUAD_REVIVE_RADIUS =  2.5f;  // distanza per rianimare un compagno (m)
+constexpr float SQUAD_REVIVE_TIME   =  3.0f;  // s di vicinanza per completare la rianimazione
+constexpr float SQUAD_REVIVE_HP     =  0.5f;  // frazione di HP max al risveglio
+
+// Command post: ogni post posseduto da una squadra RALLENTA il respawn della
+// squadra AVVERSARIA di questa frazione (additivo per post). Sostituisce il
+// vecchio "ticket bleed a tempo": conquistare posti non consuma le riserve
+// nemiche, le fa RIENTRARE più lentamente (doc 25/GDD 5.4, direttiva utente
+// 2026-07-18). Es. 0.15 + 3 post nemici → respawn +45%.
+constexpr float POST_RESPAWN_SLOW = 0.15f;
+
+// Ruota di comando: quanto rallenta il tempo di GIOCO mentre è aperta (stile
+// Bannerlord). NON pausa: la simulazione avanza a questa frazione della velocità
+// reale, così si sceglie un ordine senza perdere tempo prezioso ma mantenendo un
+// minimo di immersione. Camera e selezione restano a velocità reale.
+constexpr float WHEEL_TIME_SCALE    = 0.15f;  // ~1/7 → tempo molto rallentato (non pausa)
+
 // ── Camera ────────────────────────────────────────────────────────────────
 constexpr float CAMERA_FOV    = 60.0f;    // gradi
 constexpr float CAMERA_NEAR   =  0.1f;

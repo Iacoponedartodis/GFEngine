@@ -2,6 +2,7 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/MapQuery.hpp"
 #include "mini/game/WeaponAttach.hpp"
+#include "mini/game/ClassResolve.hpp"   // ADR-022: unica fonte di "la classe vince"
 #include "mini/game/VehicleSpawn.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
@@ -101,9 +102,36 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
     out.aiProfileId = enemy->aiProfileId;
     out.abilityIds  = enemy->abilityIds;
 
+    // ── Classe (ADR-022, metà NPC) ───────────────────────────────────
+    // La classe è una PROFESSIONE: fornisce loadout, comportamento e abilità
+    // all'unità che la referenzia — è ciò che rende una squadra Trooper+Heavy+
+    // Recon diversa da una monoclasse (GDD 12.3). Ogni campo della classe vince
+    // solo se è VALORIZZATO: così un'unità può referenziare una classe e tenersi
+    // comunque una particolarità. Nessuna classe → tutto come prima (additivo).
+    // Arma e profilo passano da `classres`, NON da una copia locale della regola:
+    // averla scritta solo qui è ciò che ha lasciato divergere il modello in mano
+    // e i bullet stats (2026-07-17). Le abilità restano qui perché nessun altro
+    // consumatore le legge grezze.
     if (registry)
     {
-        const AiProfileDef* ai = registry->getAiProfile(enemy->aiProfileId);
+        out.weaponId    = classres::primaryWeaponId(*registry, *enemy);
+        out.aiProfileId = classres::aiProfileId(*registry, *enemy);
+        if (!enemy->classId.empty())
+        {
+            if (const ClassDef* cls = registry->getClass(enemy->classId))
+            {
+                if (!cls->abilityIds.empty()) out.abilityIds = cls->abilityIds;
+            }
+            else
+                std::cerr << "[ConquestMode] Classe '" << enemy->classId
+                          << "' non trovata per unita' '" << enemy->id
+                          << "'. Uso i campi propri dell'unita'.\n";
+        }
+    }
+
+    if (registry)
+    {
+        const AiProfileDef* ai = registry->getAiProfile(out.aiProfileId);
         if (ai)
         {
             out.moveSpeed = ai->patrolSpeed;
@@ -112,13 +140,19 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
         }
         else
         {
-            std::cerr << "[ConquestMode] AI profile '" << enemy->aiProfileId
+            // out.aiProfileId, non enemy->aiProfileId: col classId impostato il
+            // profilo viene dalla CLASSE, e stampare l'altro indicherebbe il
+            // dato sbagliato da correggere.
+            std::cerr << "[ConquestMode] AI profile '" << out.aiProfileId
                       << "' non trovato per enemy '" << enemy->id
                       << "'. Uso fallback AI.\n";
         }
 
-        // Bullet stats dall'arma primaria
-        const WeaponDef* wpn = registry->getWeapon(enemy->primaryWeaponId());
+        // Bullet stats dall'arma primaria EFFETTIVA (`out.weaponId`, già risolta
+        // dalla classe) — NON da `enemy->primaryWeaponId()`: leggere il campo
+        // grezzo qui faceva sparare all'unità l'arma della classe con i danni,
+        // la velocità e il colore del proiettile dell'arma dell'entità.
+        const WeaponDef* wpn = registry->getWeapon(out.weaponId);
         if (wpn)
         {
             out.bulletSpeed    = wpn->bulletSpeed;
@@ -130,12 +164,35 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
         }
     }
 
+    // `weapon` e `class` nella diagnostica: la risoluzione della classe era
+    // invisibile: si poteva leggere hp/move/range e non accorgersi che l'arma
+    // effettiva divergeva da quella impugnata (bug 2026-07-17). Un valore che
+    // nessun log mostra è un valore che nessuno controlla.
     std::cout << "[ConquestMode] Enemy resolved: " << enemy->id
+              << " class=" << (enemy->classId.empty() ? "(nessuna)" : enemy->classId)
+              << " weapon=" << (out.weaponId.empty() ? "(nessuna)" : out.weaponId)
+              << " ai=" << out.aiProfileId
               << " hp=" << out.hp
               << " move=" << out.moveSpeed
               << " interval=" << out.interval
               << " range=" << out.range
               << " color=(" << out.mr << ", " << out.mg << ", " << out.mb << ")\n";
+
+    // Telemetria solo per le unità CON una classe (ADR-016: eventi discreti, e
+    // così non fa rumore per le classless). È il canale che sopravvive a un run
+    // interrotto: `std::cout` è bufferizzato e un kill lo perde, quindi la riga
+    // qui sopra non è verificabile in un run headless (10_ProjectMemory).
+    if (registry && !enemy->classId.empty())
+        telemetry::event(telemetry::Level::Info, "Content", "unit class resolved",
+                         {{"unit",   enemy->id},
+                          {"class",  enemy->classId},
+                          {"weapon", out.weaponId},
+                          {"ai",     out.aiProfileId},
+                          // `damage` è il campo che RENDE VISIBILE il bug del
+                          // 2026-07-17: prima veniva dall'arma dell'entità mentre
+                          // `weapon` veniva dalla classe. Due campi incoerenti nello
+                          // stesso evento sono la sua firma.
+                          {"damage", out.bulletDamage}});
 
     return out;
 }
@@ -189,9 +246,33 @@ static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* re
 void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 {
     EntityId e = world.createEntity();
+
+    // ── unlock_spawn (doc 25): i RINFORZI alleati arrivano al post conquistato ──
+    // Conseguenza di un obiettivo CaptureZone: `battleState.allySpawnPost` nomina
+    // il command post da cui la squadra rinasce, invece che dallo spawn di mappa.
+    // Vale solo per gli ALLEATI (team 1) e solo se un obiettivo l'ha deciso (vuoto
+    // = comportamento invariato). Piccolo spread per non impilarli sul punto.
+    // Senza questo, la conseguenza scriveva un valore che nessuno leggeva (gap).
+    float sx = info.x, sz = info.z;
+    if (info.teamId == 1 && m_map && !world.battleState.allySpawnPost.empty())
+    {
+        for (const auto& cp : m_map->commandPosts)
+            if (cp.label == world.battleState.allySpawnPost)
+            {
+                m_spawnSpread = (m_spawnSpread + 1) % 8;
+                const float ang = m_spawnSpread * 0.785398f;   // 8 direzioni
+                sx = cp.x + std::cos(ang) * 2.0f;
+                sz = cp.z + std::sin(ang) * 2.0f;
+                telemetry::event(telemetry::Level::Info, "Objective",
+                                 "reinforcement at unlocked spawn",
+                                 {{"post", cp.label}, {"x", sx}, {"z", sz}});
+                break;
+            }
+    }
+
     // A livello del suolo REALE della mappa (il pavimento può non essere a
     // y=0: firebase ha il top a +0.1 — prima le unità affondavano di 0.1).
-    const float ground = mapquery::groundHeightAt(m_map, info.x, info.z);
+    const float ground = mapquery::groundHeightAt(m_map, sx, sz);
     float yPos = ground + AI_GND_Y;
 
     // Trasformazione modello dall'EnemyDef, solo per mesh custom:
@@ -204,7 +285,7 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     // Fuori dalle ENTITÀ solide (veicoli): la decollisione findFreeSpot vede
     // solo la geometria della mappa, non i mezzi già spawnati.
     const glm::vec3 freePos = physics::nudgeOutOfColliders(
-        {info.x, yPos, info.z}, config::aiHalf(), world);
+        {sx, yPos, sz}, config::aiHalf(), world);
 
     world.addTransform(e, {freePos.x, yPos, freePos.z, mrx, mry, 0, msc, msc, msc});
     world.addTeam(e, {info.teamId});
@@ -343,6 +424,19 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
 
 void ConquestMode::checkDeaths(World& world)
 {
+    // Bersagli strategici (DestroyTarget): non respawnano (una torre distrutta
+    // resta distrutta), quindi non sono in m_trackedUnits. Segnala la distruzione
+    // una volta sola (entity azzerata dopo il report). L'obiettivo l'ha già
+    // rilevata nel tick della morte via killedThisTick; questo è solo osservabilità.
+    for (auto& st : world.strategicTargets)
+        if (st.entity != 0 && !world.isValidEntity(st.entity))
+        {
+            telemetry::event(telemetry::Level::Info, "Objective", "strategic target destroyed",
+                             {{"label", st.label}});
+            world.pushEvent("BERSAGLIO DISTRUTTO: " + st.label);
+            st.entity = 0;
+        }
+
     auto it = m_trackedUnits.begin();
     while (it != m_trackedUnits.end())
     {
@@ -369,12 +463,19 @@ void ConquestMode::checkDeaths(World& world)
                 --tickets;
                 // Copia integrale dello spawn spec, solo il timer cambia (A4)
                 RespawnEntry entry = tpl;
-                entry.timer = respawnDelay;
+                // Controllo dei command post (direttiva utente 07-18): ogni post
+                // posseduto dal NEMICO rallenta il rientro di questa unità. È il
+                // vantaggio della conquista — non svuota le riserve avversarie
+                // (i ticket restano), le fa rientrare più piano. Con `unlock_spawn`
+                // (rinforzi al fronte) è l'altra faccia del controllo territoriale.
+                const int foePosts = m_commandPosts.countOwnedBy(tpl.teamId == 1 ? 2 : 1);
+                entry.timer = respawnDelay * (1.0f + config::POST_RESPAWN_SLOW * foePosts);
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
                 std::cout << "[Respawn] " << team << " eliminato. Ticket rimasti: "
-                          << tickets << " — respawn in " << respawnDelay << "s\n";
+                          << tickets << " — respawn in " << entry.timer
+                          << "s (post nemici: " << foePosts << ")\n";
             }
             else
             {
@@ -721,9 +822,58 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     }
 
     // ── Command post (ADR-009) ────────────────────────────────────────────
-    m_bleedTimer = 0.0f;
+    m_bleedTimer = 0.0f;   // usato da Assalto/Difesa (ObjectiveModes); Conquest no
     if (map)
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
+    // ── Bersagli strategici distruttibili (doc 25, DestroyTarget) ─────────
+    // Struttura statica di team 2: colpibile da giocatore e alleati, niente AI
+    // (non spara). Distruggerla completa un obiettivo DestroyTarget e ne scatena
+    // la conseguenza. La mailbox entità→label lascia l'ObjectiveSystem agnostico.
+    world.strategicTargets.clear();
+    if (map && registry)
+    {
+        for (const auto& t : map->strategicTargets)
+        {
+            const float gy = mapquery::groundHeightAt(map, t.x, t.z);
+            EntityId e = world.createEntity();
+
+            Mesh* useMesh = mesh;   // box di fallback
+            if (m_meshCache && !t.meshPath.empty())
+            {
+                auto it = m_meshCache->find(t.meshPath);
+                if (it != m_meshCache->end()) useMesh = it->second;
+            }
+            const bool box = (useMesh == mesh);
+            // Fallback box: dimensione FISSA visibile (2.5 m), scala uniforme così
+            // la hitbox (che usa sx) resta coerente. Mesh reale: usa meshScale.
+            const float sc = box ? 2.5f
+                                 : ((t.meshScale > 0.0001f) ? t.meshScale : 1.0f);
+            world.addTransform(e, {t.x, gy, t.z, 0, 0, 0, sc, sc, sc});
+            world.addTeam(e, {2});
+            world.addHealth(e, {t.hp, t.hp});
+
+            MeshRendererComponent mrc;
+            mrc.mesh = useMesh; mrc.texture = tex;
+            mrc.r = t.color[0]; mrc.g = t.color[1]; mrc.b = t.color[2];
+            // Grounding: il cubo di fallback è centrato (±0.5), quindi va alzato di
+            // mezza altezza (0.5·scala) perché la base tocchi il suolo — NON floti.
+            // La hitbox sintetica usa lo stesso meshOffsetY → resta allineata.
+            // Mesh reale (base a Y=0, come i GLB): nessun offset.
+            mrc.meshOffsetY = box ? (0.5f * sc) : 0.0f;
+            world.addMeshRenderer(e, mrc);
+
+            if (const auto* hp = registry->getHitboxProfile("__strategic_target"))
+                world.addHitbox(e, HitboxComponent{hp});
+
+            world.strategicTargets.push_back({e, t.label});
+            std::cout << "[ConquestMode] Bersaglio strategico '" << t.label
+                      << "' (hp " << (int)t.hp << ") a (" << t.x << ", " << t.z << ")\n";
+            telemetry::event(telemetry::Level::Info, "Objective", "strategic target spawned",
+                             {{"label", t.label}, {"hp", t.hp},
+                              {"x", t.x}, {"z", t.z}});
+        }
+    }
 
     // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ────────────
     // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
@@ -739,36 +889,30 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         + std::to_string(world.getEntities().size()));
 }
 
-// Regole obiettivo di Conquista: maggioranza dei post → drena i ticket
-// avversari. Le modalità derivate (Assalto/Difesa) sostituiscono questo hook.
-void ConquestMode::updateObjectiveRules(World& /*world*/, float dt)
+// Regole obiettivo di Conquista: nessuna regola per-tick (il vantaggio dei post
+// e' il respawn-slow in checkDeaths, non un drenaggio a tempo). Gancio vuoto —
+// le modalità derivate (Assalto/Difesa) lo sostituiscono col proprio bleed.
+void ConquestMode::updateObjectiveRules(World& /*world*/, float /*dt*/)
 {
-    if (m_commandPosts.count() == 0) return;
+    // Il "ticket bleed a tempo" (chi ha più post drenava i ticket avversari) è
+    // stato RIMOSSO (direttiva utente 07-18): consumare le riserve nemiche era
+    // punitivo e poco leggibile. Ora il controllo dei post agisce sul RITMO dei
+    // rinforzi, non sul loro numero — vedi `checkDeaths` (respawn più lento per
+    // il team con meno post) e `spawnUnit` (unlock_spawn: rinforzi al fronte).
+    // Funzione lasciata come gancio per future regole per-tick della modalità.
+}
 
-    m_bleedTimer += dt;
-    if (m_bleedTimer < m_bleedInterval) return;
-    m_bleedTimer -= m_bleedInterval;
-
-    const int own1 = m_commandPosts.countOwnedBy(1);
-    const int own2 = m_commandPosts.countOwnedBy(2);
-    if (own1 > own2 && m_team2Tickets > 0)
-    {
-        --m_team2Tickets;
-        telemetry::event(telemetry::Level::Info, "GameMode", "Ticket bleed",
-            {{"tickets_ally", m_team1Tickets}, {"tickets_enemy", m_team2Tickets},
-             {"posts_ally", own1}, {"posts_enemy", own2}, {"drained", "enemy"}});
-        std::cout << "[Conquest] Maggioranza post alleata: ticket nemici -> "
-                  << m_team2Tickets << "\n";
-    }
-    else if (own2 > own1 && m_team1Tickets > 0)
-    {
-        --m_team1Tickets;
-        telemetry::event(telemetry::Level::Info, "GameMode", "Ticket bleed",
-            {{"tickets_ally", m_team1Tickets}, {"tickets_enemy", m_team2Tickets},
-             {"posts_ally", own1}, {"posts_enemy", own2}, {"drained", "ally"}});
-        std::cout << "[Conquest] Maggioranza post nemica: ticket alleati -> "
-                  << m_team1Tickets << "\n";
-    }
+// Punti di respawn selezionabili: lo spawn base (indice 0, coincide con
+// getSpawnPos come richiede il contratto IGameMode) + ogni command post
+// posseduto dagli alleati. Conquistare un post avanza quindi anche il punto
+// da cui si può rientrare — base della futura mappa tattica (doc 25).
+std::vector<IGameMode::SpawnPoint> ConquestMode::availableSpawns() const
+{
+    std::vector<SpawnPoint> out;
+    out.push_back({"Base", m_spawnPos});
+    for (const auto& op : m_commandPosts.ownedByTeam(1))
+        out.push_back({op.label, glm::vec3(op.x, m_spawnPos.y, op.z)});
+    return out;
 }
 
 // Esito Conquista: vittoria quando i nemici non hanno più ticket né unità.

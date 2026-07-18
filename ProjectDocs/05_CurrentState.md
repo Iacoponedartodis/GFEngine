@@ -14,7 +14,7 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   `MAX_AI_PER_TEAM=50`/team), spawn a griglia in-mappa.
 - **Telemetria LLM-observable (ADR-016):** sink JSONL `session_latest.jsonl` ACCANTO a
   `engine_run.log` (non lo sostituisce — ADR-013 resta); `telemetry::event(Level,system,msg,
-  json)` + `flushEvents`. Hook: GameMode (mode created, ticket bleed), CommandPost (cattura),
+  json)` + `flushEvents`. Hook: GameMode (mode created, respawn-slow/rinforzi), CommandPost (cattura),
   AI (cambio stato, stuck WARN con coordinate). Dump stato completo per-entità su
   F12/fine-partita/crash (estende `dumpGameState`).
 - **Navigazione Recast/Detour (ADR-017, A+B+C):** navmesh single-tile da `MapDef.geometry`
@@ -49,18 +49,65 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   Mailbox `World::killedThisTick` (CombatSystem → Squad): senza, un bersaglio ucciso è
   indistinguibile da uno sparito e il successo verrebbe riportato come fallimento.
   HUD: pannello SQUADRA (membri/ordine/distanza) dallo stato reale dei membri; esiti e cause nel
-  feed via `pushEvent`, una volta per ordine. **Non esistono ancora**: ruota di comando (livello 2)
-  e Phase C ("a terra" + rianimazione).
+  feed via `pushEvent`, una volta per ordine.
 
-- **Class System — Phase A (doc 14, 2026-07-15):** `ClassDef` (`data/classes/<id>.json`:
-  primary/secondary weapon, abilities[], role) nel registry, id = filename stem. Consumo reale:
-  **`MatchSettings.classId`** → risolto in `startGame()` dove l'arma viene già scelta; la classe
-  riempie primaria/secondaria/abilità. Vuota = loadout manuale, **comportamento identico a prima**
-  (additivo). Persistito nei preset; flag `--class <id>` (il PreMatch **non ha ancora un
-  selettore**). `role` è solo un tag: nessun sistema AI lo consuma. Esempi: `trooper`, `marksman`.
-  **Attenzione**: `classId` NON sta su `PlayerDef` (il doc 14 lo prescriveva): la classe e' il
-  LOADOUT, il personaggio sono le STAT — due concetti distinti. `abilityIds` e' trasportato ma
-  senza effetto (KI #32).
+- **Stato "a terra" + rianimazione — Phase C (doc 26, 2026-07-17):** un membro della squadra alleata
+  (non il giocatore) invece di morire va **a terra** con bleed-out 20s (`CombatSystem` intercetta il
+  colpo letale, additivo; un colpo su un già-a-terra lo finisce). Rianimazione per **prossimità**
+  (compagno/giocatore entro 2.5m per 3s → 50% HP) e **auto-soccorso** (il membro libero più vicino
+  è dispacciato con un ordine `Revive`). Nessun soccorso in tempo → morte, contata come perdita solo
+  allora (`missionStats`). Unità a terra inerme in `AiSystem` (fermata anche nel crowd, KI #50);
+  **tint ROSSO** sul caduto + HUD `[A TERRA n — Xs]`; costanti in `GameConfig`. Verificato in
+  `--sim`: down/revive/bleed-out tutti e tre.
+
+- **Comandi mirati + ruota di comando (doc 26, 2026-07-17):** oltre a FocusFire (nemico) e agli
+  ordini a terra, il mirino su un COMPAGNO dà `Revive` (a terra) o `CoveringFire` (vivo); il
+  **mirino è verde** sugli alleati. **Ruota di comando** (tasto `CommandWheel`, default B, tenuto):
+  camera congelata, il mouse sceglie Regroup/Hold/Advance, HUD radiale. `SquadOrderRequest` distingue
+  ordine di squadra e ordine a un singolo membro (`directedMember`).
+
+- **Input configurabile esteso (2026-07-17):** `InputBinding{type, code}` — un'azione può stare su
+  tasto, PULSANTE MOUSE o ROTELLA (su/giù). Rimappabile dalle opzioni (cattura anche mouse/rotella),
+  persistito in `<exe>/user_presets/keybindings.json` per nome azione (retrocompatibile col vecchio
+  formato solo-tastiera). `getKeyName` descrive ogni tipo, nome mostrato anche per mouse/rotella
+  (KI #52). `CoveringFire` = soppressione (l'alleato non si copre e spara di più).
+  **Non esistono ancora**: posa prone (in attesa di pose/animazioni, tooling dell'utente),
+  bilanciamento tempi/raggio Phase C.
+
+- **Classi — meta' NPC (ADR-022 riscritto, 2026-07-16):** il modello reale ha **tre parti**:
+  (1) **NPC** — la classe da' abilita', **comportamento**, loadout, aspetto → si instanzia;
+  (2) **giocatore** — **non ne sceglie una**: tutte esistono insieme e si **livellano** giocando
+  (GDD 11.3 "la classe non e' una scelta rigida all'inizio, ma un'identita' che emerge dal
+  comportamento") → Fase 3; (3) **specializzazioni** (ARC, Commando) sbloccate da obiettivi,
+  **non livellate** → terzo asse, non ancora progettato.
+  **In force**: `ClassDef.aiProfileId` (e' cio' che la rende una PROFESSIONE e non un pacchetto di
+  armi) + `EnemyDef.classId` → l'unita' referenzia una classe invece di ripetere
+  loadout+profilo+abilita'. Ogni campo della classe vince **solo se valorizzato**; nessuna classe
+  → tutto come prima (additivo). Gate ADR-018 su entrambi i riferimenti; dropdown nell'editor.
+  Verificato: un alleato con `weapons:["DC-15A"]`+`ai_profile:"B1 Battle Droid"` referenziando una
+  classe Heavy risolve `arma=Z-6 Rotary Blaster profiloAI=B1 Heavy Droid`.
+  **`mini::classres` (`ClassResolve.hpp`) e' l'UNICA fonte della regola "la classe vince"**: la
+  usano ConquestMode, WeaponAttach (modello in mano) e l'EntityEditor (anteprima). Averla scritta
+  solo dentro `resolveUnitArchetype` aveva prodotto KI #43: unita' che **impugnava un'arma e ne
+  sparava un'altra, coi danni di una terza**.
+  **Stato dei dati (2026-07-17)**: i due alleati hanno `class: trooper`; i **due droidi nemici sono
+  ancora senza classe** (il gate li segnala) e usano i campi legacy.
+
+- **Il giocatore NON sceglie una classe (2026-07-17, ADR-022 §4):** la riga **"Classe" del PreMatch
+  e' stata RIMOSSA**, insieme a `setClassList`/`getSelectedClassId`/`ClassEntry` — senza i metodi la
+  regola e' **strutturale**. Contraddiceva GDD 11.3 (*"non e' una scelta rigida all'inizio"*) e
+  **sovrascriveva in silenzio** le righe *Arma primaria/secondaria* dello stesso menu. Il loadout del
+  giocatore **sono** quelle righe: non si e' persa nessuna funzione.
+  **`MatchSettings.classId` sopravvive** solo come **override di test** via `--class <id>`,
+  dichiarato tale nel codice e annunciato in telemetria; e' preservato in `startFromPreMatch()`
+  come `characterId` (lasciarlo assegnare da un indice rimosso lo avrebbe azzerato — KI #36 in
+  miniatura). La meta' giocatore (XP/livelli/perk) e' Fase 3, doc 27.
+
+- **Class System — schema (doc 14):** `ClassDef` (`data/classes/<id>.json`: primary/secondary
+  weapon, abilities[], **ai_profile**, role) nel registry, id = filename stem.
+  `role` è solo un tag: **nessun sistema lo consuma** (fantasma di secondo tipo, invisibile al gate
+  — classe KI #25). Esempi: `trooper`, `marksman`. `abilityIds` per il giocatore e' trasportato ma
+  senza effetto (KI #32). Doc 14 riscritto il 2026-07-17: dichiara stato **MISTO**.
 
 - **Personaggio del giocatore (KI #35, risolto 2026-07-15):** `PlayerDef`
   (`data/characters/<id>.json`: hp, move_speed, jump_height, sprint_mult, armor_rating) era
@@ -101,13 +148,29 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   **Nota**: `characterId` NON ha ancora un selettore (con un solo personaggio autorato è
   automatico, KI #35).
 
+- **Editor — modulo "Missioni e obiettivi" (2026-07-16):** authoring di missioni, obiettivi e
+  **conseguenze** (Moduli → "Missioni e obiettivi"). Due tab: un obiettivo esiste di per se' e puo'
+  essere usato da piu' missioni. **Dropdown-only dal registry** (CLAUDE.md): obiettivi composti da
+  lista, mappa dal registry, **command post dalla mappa DELLA MISSIONE** (il riferimento e' una
+  label: a mano sarebbe un riferimento rotto in attesa). `saveJsonRMW` (ADR-010) per ogni
+  scrittura; **`id` mai scritto nel JSON** (ADR-001). **Rinomina con sweep**: nuove categorie
+  `rename::Category::Objective` (→ missions.primary/optional_objectives[],
+  objectives.activation.objective, linked_objectives[]) e `::Mission`.
+  Ogni tipo mostra solo i campi che USA; i tipi dichiarati ma non eseguiti dal runtime sono
+  selezionabili **con avviso**. Creazione = minimo valido per il gate ADR-018.
+  Modulo **"Classi"** (2026-07-16): nome, ruolo, armi e abilita' da dropdown; avvisi espliciti su
+  `role` non consumato (ADR-022) e abilita' senza effetto (KI #32). **Authoring dei contenuti
+  completo**: nessun tipo di definizione richiede piu' di scrivere JSON a mano.
+
 - **Conseguenze degli obiettivi (doc 25, 2026-07-16):** `ObjectiveDef.on_success[]`/`on_failure[]`
   = liste di `{type, value, target}`. `ObjectiveSystem` le applica scrivendo **solo** su
   **`World::battleState`**; ogni sistema competente legge cio' che lo riguarda → nessun
   `if (objectiveId == ...)`, e aggiungere un tipo = enum + case + un lettore.
   Tipi: `block_enemy_reinforcements` (→ ConquestMode::checkDeaths: il nemico non rimpiazza piu'),
   `enemy_accuracy` (→ AiSystem, solo team 2; moltiplicativo), `ally_reinforcements` (→ delta
-  consumato da ConquestMode, che possiede i ticket), `unlock_spawn`.
+  consumato da ConquestMode, che possiede i ticket), `unlock_spawn` (→ ConquestMode::spawnUnit:
+  i rinforzi alleati nascono al post conquistato invece che allo spawn di mappa — completato
+  2026-07-18, prima scriveva un valore che nessuno leggeva). **Tutte e 4 con un consumatore reale.**
   **I valori nei dati sono segnaposto da bilanciare provando** (direttiva utente 07-16).
   Gate ADR-018: type sconosciuto = Error (resterebbe None → obiettivo che sembra avere un effetto
   e non ce l'ha). Verificato con effetto reale: 2 nemici uccisi col blocco attivo → 0 rimpiazzi.
@@ -131,6 +194,27 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   solo cadendo quando non resta ne' un alleato vivo ne' un rinforzo in arrivo. Regola in un solo
   posto (`onPlayerDeath` in Application), valida anche per il respawn volontario (K).
   `IGameMode::consumeTeam1Ticket()` **rimosso**: rendeva possibile l'errore opposto.
+
+- **Vantaggio dei command post = respawn-slow, non ticket-bleed (2026-07-18):** il vecchio
+  "chi ha più post drena i ticket avversari" e' **rimosso** da Conquista (`updateObjectiveRules`
+  ora e' un gancio vuoto). Il vantaggio ora e' sul **ritmo dei rinforzi**: in
+  `ConquestMode::checkDeaths` il timer di respawn di un'unita' e'
+  `respawnDelay * (1 + POST_RESPAWN_SLOW * postiNemici)` — ogni post avversario aggiunge il 15%
+  (`config::POST_RESPAWN_SLOW`). **Assalto/Difesa (ObjectiveModes, ADR-014) NON toccate**: usano
+  `m_bleedTimer/m_bleedInterval` come proprio timer di vittoria — i membri restano nella base.
+
+- **Scelta del punto di respawn — mappa top-down (2026-07-18, doc 30 Phase 1):** stile Battlefront II
+  2005. `IGameMode::availableSpawns()` → `[{label,pos}]` (default = spawn base; `ConquestMode` = base +
+  ogni post **posseduto dagli alleati** via `CommandPosts::ownedByTeam`). Da morti (con 2+ punti),
+  `Application` mostra una **mappa dall'alto** (tutta 2D in `Ui2D`, nessuna telecamera 3D → ADR-003
+  intatto): pannello mappa, pareti dai box `geometry`, marker dei punti disponibili proiettati, marker
+  "caduto". La cattura mouse è rilasciata: **hover + click** seleziona e schiera; `A/D`/frecce + Invio
+  come fallback tastiera. Proiezione mondo→schermo unica (`rmProj`) condivisa fra render e picking.
+  Il rientro **NON è automatico** con 2+ punti (il timer è solo l'attesa minima, così `respawnDelay`
+  resta basso per le AI): si schiera alla **conferma** via `deployPlayerRespawn` (KI #56). Con un solo
+  punto (nessun post) resta il respawn automatico. Posizione de-clippata con `nudgeOutOfColliders`
+  (KI #57); HP dal setting partita (KI #55). Out of scope (doc 30): mappa tattica generale con pausa,
+  post nemici sulla mappa, ordini dalla mappa.
 
 - **Command post come obiettivi (2026-07-16):** `CaptureZone` (il post e' di actor_team) e
   `DefendZone` (tenerlo per hold_seconds; perderlo = fallimento immediato) **avvolgono ADR-009**
@@ -165,8 +249,18 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   regole mancanti/invalide, id inesistenti, tier incoerenti o zero obiettivi → missione
   **rifiutata con causa**, non avviata a metà. Mailbox `World::activeMission`/`objectiveDefs`;
   flag `--mission <id>` (unica selezione esistente: nessuna UI, come da scope doc 25).
-  Esempio in repo: `firebase_ridge`. **Non esistono ancora**: CaptureZone/DefendZone
-  (avvolgimento ADR-009), HUD obiettivi, Punti Comando.
+  Esempio in repo: `firebase_ridge`.
+  **Tipi implementati**: ReachArea, EliminateTarget, HoldAreaForDuration, CaptureZone, DefendZone,
+  e **DestroyTarget** (2026-07-18). Un bersaglio strategico (`MapDef.strategicTargets[]`) è una
+  struttura statica distruttibile team 2 (Health + hitbox sintetico `__strategic_target`); l'obiettivo
+  la referenzia per label, la distruzione (via mailbox `World::strategicTargets` + `killedThisTick`)
+  lo completa e scatena la conseguenza. Esempio: `firebase_sabotage` (torre → `enemy_accuracy`).
+  Bersagli autorati nel **MapEditor** (lista + gizmo + label/HP, KI #53); box di fallback grounded
+  con hitbox coincidente (KI #54). **Non esistono ancora**: EscortEntity/SurviveWave/InteractHack,
+  Punti Comando.
+- **Ruota di comando in slow-motion (2026-07-18):** con la ruota aperta il tempo di gioco rallenta a
+  `WHEEL_TIME_SCALE = 0.15×` (non pausa) — si scala il tempo reale che alimenta l'accumulatore a
+  timestep fisso; camera/selezione a velocità reale.
 
 **Risultato misurato:** ~40 AI in simulazione ora fluidi (prima il limite di fluidità era
 ~30-32); AI con pathfinding reale + crowd-avoidance + evita le danger zone. Squadra sotto ordine
@@ -292,8 +386,8 @@ _Last verified: 2026-07-04 (against live code)._
 ## Position vs Vision roadmap (00_Vision)
 **Fase 1 ("core playable") essenzialmente completa.** Presente: 2 mappe data-driven
 (firebase, outpost), fanteria entrambe le fazioni, armi funzionanti, spawn, **IGameMode +
-factory (ADR-008)**, **Conquista/Assalto/Difesa (ADR-014)**, **command post con ticket bleed
-(ADR-009)**, **veicoli Fase A (19_Vehicles)**, **weapon-in-hand runtime + viewmodel**,
+factory (ADR-008)**, **Conquista/Assalto/Difesa (ADR-014)**, **command post con respawn-slow +
+scelta del punto di respawn (ADR-009)**, **veicoli Fase A (19_Vehicles)**, **weapon-in-hand runtime + viewmodel**,
 **HUD stato post**, split-screen feasibility verificata (ADR-011, esito (a)), Sandbox + tools.
 Editor suite pro (gizmo 3 modalità, slider, camera Unreal-style, rename tooling ADR-010).
 Sopra la Fase 1 sono stati aggiunti sistemi di respiro Fase 2/3: **telemetria LLM-observable
@@ -314,8 +408,11 @@ ancora avviate (by design), salvo la preparazione navigazione/AI appena fatta.
 - **GLB pipeline:** node-hierarchy baking (non-skinned) / identity (skinned), multi-primitive
   merge, byteStride-correct accessor reads. `meshOffsetY` applied in render (no floating models).
 - **EntityEditor:** mesh browse (+ saved), transform, rig bones visible/clickable, attach
-  points (bone-bindable, rendered as boxes + text labels), inline hitbox zones (bone-bindable),
-  weapon-in-hand pose persisted as `weapon_display`.
+  points (bone-bindable, rendered as boxes + text labels), inline hitbox zones (bone-bindable).
+  L'arma in mano è sola-lettura (la mostra risolta dalla classe); la MANO (attach point) resta
+  editabile. La POSA/scala dell'arma è sull'`WeaponDef` (`hand_scale`/`hand_rot`/`hand_offset`,
+  KI #49), autorata nel Weapon Editor → "Posa in mano"; `weapon_display` sull'entità è il fallback
+  legacy quando l'arma non ha posa. Runtime e anteprima risolvono con la stessa formula (WeaponAttach).
 - **(HitboxEditor RIMOSSO — ADR-012):** l'authoring hitbox è nell'EntityEditor (tab Hitbox);
   il formato profilo runtime `data/hitboxes/*.json` resta invariato (ADR-006).
 - **MapEditor & EntityEditor & VehicleEditor:** gizmo a 3 modalità (Sposta/Ruota/Scala,

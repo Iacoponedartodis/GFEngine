@@ -2,6 +2,7 @@
 // Layout: [lista | viewport 3D | proprietà]. Salvataggio RMW (ADR-010),
 // id = nome file (ADR-001), rinomina con sweep vehicle_spawns nelle mappe.
 
+#include "util/DataPath.hpp"
 #include "modules/VehicleEditor.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "util/FileDialog.hpp"
@@ -24,17 +25,9 @@ using json   = nlohmann::json;
 namespace editor
 {
 
-static std::string getDataDir()
-{
-    char* base = SDL_GetBasePath();
-    std::string exeDir = base ? base : "./";
-    SDL_free(base);
-    std::error_code ec;
-    fs::path sourceData = fs::canonical(fs::path(exeDir) / "../../../data", ec);
-    if (!ec && fs::exists(sourceData, ec))
-        return sourceData.string() + "/";
-    return exeDir + "data/";
-}
+// R8 chiuso: unica risoluzione in util/DataPath (era una delle copie col
+// controllo debole: accettava qualunque cartella di nome data).
+static std::string getDataDir() { return editor::datapath::dir(); }
 
 VehicleEditor::VehicleEditor()
 {
@@ -273,16 +266,16 @@ void VehicleEditor::drawProperties()
         char nameBuf[64];
         std::snprintf(nameBuf, sizeof(nameBuf), "%s", d.name.c_str());
         ImGui::SetNextItemWidth(w);
-        if (ImGui::InputText("Nome", nameBuf, sizeof(nameBuf)))
+        if (editor::ui::textRow("Nome", nameBuf, sizeof(nameBuf)))
         { d.name = nameBuf; changed = true; }
     }
 
     ImGui::Separator();
     ImGui::TextDisabled("Statistiche");
-    changed |= ImGui::DragFloat("HP",             &d.hp,          1.0f, 10.0f, 5000.0f, "%.0f");
-    changed |= ImGui::DragFloat("Vel. max m/s",   &d.maxSpeed,    0.2f,  2.0f,   60.0f, "%.1f");
-    changed |= ImGui::DragFloat("Accelerazione",  &d.accel,       0.2f,  1.0f,   60.0f, "%.1f");
-    changed |= ImGui::DragFloat("Sterzata deg/s", &d.turnRateDeg, 1.0f, 10.0f,  360.0f, "%.0f");
+    changed |= editor::ui::dragRow("HP", d.hp,          1.0f, 10.0f, 5000.0f, "%.0f");
+    changed |= editor::ui::dragRow("Vel. max m/s", d.maxSpeed,    0.2f,  2.0f,   60.0f, "%.1f");
+    changed |= editor::ui::dragRow("Accelerazione", d.accel,       0.2f,  1.0f,   60.0f, "%.1f");
+    changed |= editor::ui::dragRow("Sterzata deg/s", d.turnRateDeg, 1.0f, 10.0f,  360.0f, "%.0f");
 
     ImGui::Separator();
     ImGui::TextDisabled("Modello 3D");
@@ -326,7 +319,7 @@ void VehicleEditor::drawProperties()
     changed |= dragRow("Hit Half Z",   d.hitHalfZ, 0.02f, 0.0f, 6.0f, "%.2f");
 
     ImGui::Separator();
-    changed |= ImGui::ColorEdit3("Colore", d.color.data());
+    changed |= editor::ui::colorRow("Colore", d.color.data());
 
     ImGui::Separator();
     ImGui::TextDisabled("Fase B (19_Vehicles): hitbox a zone multiple, attach\n"

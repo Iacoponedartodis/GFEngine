@@ -1,9 +1,11 @@
+#include "util/DataPath.hpp"
 #include "modules/EntityEditor.hpp"
 #include "util/RigReader.hpp"
 #include "util/FileDialog.hpp"
 #include "util/UiWidgets.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+#include "mini/game/ClassResolve.hpp"   // ADR-022: la regola "la classe vince", non una copia
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -23,17 +25,9 @@ namespace fs = std::filesystem;
 namespace editor
 {
 
-static std::string getDataDir()
-{
-    char* base = SDL_GetBasePath();
-    fs::path exeDir = base ? base : ".";
-    SDL_free(base);
-    std::error_code ec;
-    fs::path sourceData = fs::canonical(exeDir / "../../../data", ec);
-    if (!ec && fs::exists(sourceData, ec))
-        return sourceData.string() + "/";
-    return (exeDir / "data").string() + "/";
-}
+// R8 chiuso: unica risoluzione in util/DataPath (era una delle copie col
+// controllo debole: accettava qualunque cartella di nome data).
+static std::string getDataDir() { return editor::datapath::dir(); }
 
 static std::string getExeDir()
 {
@@ -123,10 +117,13 @@ void EntityEditor::loadAvailableIds()
         std::sort(ids.begin(), ids.end());
         return ids;
     };
-    m_availableWeapons  = scanIds("weapons");
-    m_availableAI       = scanIds("ai");
+    m_availableClasses  = scanIds("classes");
     m_availableHitboxes = scanIds("hitboxes");
-    m_availableAbilities= scanIds("abilities");
+
+    // Registry: serve solo a risolvere l'arma della classe via `classres`.
+    // Ricaricata insieme alle liste, così una classe appena creata/modificata in
+    // Moduli → Classi si riflette subito nell'anteprima dell'arma in mano.
+    m_registry.loadAll(getDataDir());
 }
 
 void EntityEditor::loadEntries()
@@ -162,18 +159,20 @@ void EntityEditor::loadEntries()
             e.meshRotY  = jf(j, "mesh_rot_y", 0.0f);
             e.meshScale = jf(j, "mesh_scale", 1.0f);
 
+            // Solo `hp`: move_speed e damage_scale non si leggono nemmeno più —
+            // il primo lo sovrascrive sempre il profilo AI, il secondo non ha
+            // consumatori. Tenerli in memoria significava solo poterli riscrivere
+            // per sbaglio da uno stato che l'utente non vede.
             if (j.contains("stats") && j["stats"].is_object())
-            {
-                e.hp          = jf(j["stats"], "hp",           80.0f);
-                e.moveSpeed   = jf(j["stats"], "move_speed",    4.0f);
-                e.damageScale = jf(j["stats"], "damage_scale",  1.0f);
-            }
-            e.aiProfileId     = j.value("ai_profile",     std::string(""));
+                e.hp = jf(j["stats"], "hp", 80.0f);
+
+            e.classId         = j.value("class",          std::string(""));
             e.hitboxProfileId = j.value("hitbox_profile", std::string(""));
+            // `weapons` serve ancora, ma in SOLA LETTURA: è il fallback quando
+            // l'unità non ha una classe (classres), e alimenta l'anteprima
+            // dell'arma in mano. Non lo si edita più qui (ADR-022).
             if (j.contains("weapons") && j["weapons"].is_array())
                 for (auto& wid : j["weapons"]) e.weaponIds.push_back(wid.get<std::string>());
-            if (j.contains("abilities") && j["abilities"].is_array())
-                for (auto& aid : j["abilities"]) e.abilityIds.push_back(aid.get<std::string>());
 
             if (j.contains("attach_points") && j["attach_points"].is_object())
             {
@@ -310,9 +309,12 @@ void EntityEditor::selectEntry(int idx)
     m_hitboxZones    = e.hitboxZones;
     m_selZone        = -1;
 
-    // Arma in mano = arma PRIMARIA del loadout (weapons[0]); il display id
-    // legacy è solo un fallback. Così l'anteprima combacia col runtime.
-    m_weaponId       = !e.weaponIds.empty() ? e.weaponIds[0] : e.dispWeaponId;
+    // Arma in mano: STESSA precedenza del runtime (WeaponAttach), risolta con la
+    // STESSA funzione — classe (ADR-022) → loadout dell'entità → display legacy.
+    // Riscriverla qui è come l'ha riscritta il runtime: diverge (bug 2026-07-17).
+    m_weaponId = mini::classres::primaryWeaponId(
+        m_registry, e.classId, e.weaponIds.empty() ? std::string() : e.weaponIds[0]);
+    if (m_weaponId.empty()) m_weaponId = e.dispWeaponId;
     m_weaponScale    = e.dispWeaponScale;
     m_weaponRot      = e.dispWeaponRot;
     m_weaponOffset   = e.dispWeaponOffset;
@@ -422,6 +424,23 @@ void EntityEditor::loadWeaponPreview()
         for (const char* k : {"right_hand", "grip", "left_hand"})
             if (ap.contains(k) && ap[k].is_array() && ap[k].size() >= 3)
             { m_weaponGrip = {ap[k][0], ap[k][1], ap[k][2]}; break; }
+    }
+
+    // Posa in mano dall'ARMA (KI #49). Se autorata (hand_scale>0) VINCE: la
+    // preview e i valori mostrati vengono dall'arma, identici al runtime, e la
+    // posa non si edita più qui ma nel Weapon Editor. Senza (legacy) restano i
+    // valori dell'entità già caricati in selectEntry (fallback di transizione).
+    const float hs = j.value("hand_scale", 0.0f);
+    m_weaponPoseFromWeapon = (hs > 0.0f);
+    if (m_weaponPoseFromWeapon)
+    {
+        m_weaponScale = hs;
+        if (j.contains("hand_rot") && j["hand_rot"].size() >= 3)
+            m_weaponRot = {j["hand_rot"][0], j["hand_rot"][1], j["hand_rot"][2]};
+        else m_weaponRot = {0,0,0};
+        if (j.contains("hand_offset") && j["hand_offset"].size() >= 3)
+            m_weaponOffset = {j["hand_offset"][0], j["hand_offset"][1], j["hand_offset"][2]};
+        else m_weaponOffset = {0,0,0};
     }
     updateWeaponTransform();
 }
@@ -545,31 +564,41 @@ void EntityEditor::saveSelected()
 
     j["name"]           = e.name;
     j["faction"]        = e.faction;
-    j["stats"]["hp"]            = e.hp;
-    j["stats"]["move_speed"]    = e.moveSpeed;
-    j["stats"]["damage_scale"]  = e.damageScale;
-    j["ai_profile"]     = e.aiProfileId;
+    j["stats"]["hp"]    = e.hp;
+    // ADR-022: la classe fornisce loadout+comportamento all'unità che la
+    // referenzia. Vuota = valgono i campi propri dell'unità (additivo).
+    if (e.classId.empty()) j.erase("class");
+    else                   j["class"] = e.classId;
     j["hitbox_profile"] = e.hitboxProfileId;
-    j["weapons"]        = e.weaponIds;
-    // Niente slot vuoti nel JSON (entry "+ Abilita'" mai riempite)
-    std::vector<std::string> abOut;
-    for (const auto& a : e.abilityIds) if (!a.empty()) abOut.push_back(a);
-    j["abilities"]      = abOut;
 
-    j["hitbox_profile"] = e.hitboxProfileId;
+    // NON si scrivono più: `ai_profile`, `weapons`, `abilities` (li decide la
+    // CLASSE) né `stats.move_speed` / `stats.damage_scale` (morti: il primo lo
+    // sovrascrive il profilo AI, il secondo non ha consumatori).
+    // Questo modulo non li edita più, quindi non deve nemmeno rivendicarli:
+    // RMW (ADR-010) preserva i valori già nel file, e un'unità senza classe
+    // continua a funzionare esattamente come prima. Riscriverli da uno stato
+    // che l'utente non può più vedere sarebbe il modo esatto per perderli.
     j.erase("hitbox_zones"); // legacy inline: deprecato da ADR-006
 
-    // Arma in mano (posa)
-    if (m_weaponId.empty())
-        j.erase("weapon_display");
-    else
+    // Arma in mano: si salva SOLO la POSA.
+    // `wd["id"]` NON si scrive più: `m_weaponId` ora è l'arma RISOLTA (la classe
+    // vince), e riscriverla qui inietterebbe l'arma della CLASSE dentro l'entità —
+    // cioè ricreerebbe nei dati proprio la confusione che ADR-022 elimina. L'`id`
+    // già nel file resta dov'è (RMW, ADR-010) e continua a fare da ultimo fallback.
     {
-        json wd;
-        wd["id"]     = m_weaponId;
-        wd["scale"]  = m_weaponScale;
-        wd["hand"]   = m_weaponHandPoint;
-        wd["rot"]    = {m_weaponRot.x, m_weaponRot.y, m_weaponRot.z};
-        wd["offset"] = {m_weaponOffset.x, m_weaponOffset.y, m_weaponOffset.z};
+        json wd = j.contains("weapon_display") && j["weapon_display"].is_object()
+                  ? j["weapon_display"] : json::object();
+        wd["hand"] = m_weaponHandPoint;   // la MANO è sempre del personaggio
+        // scala/rot/offset: si scrivono SOLO in modalità legacy (arma senza posa
+        // autorata). Se la posa viene dall'ARMA (KI #49), i valori mostrati sono
+        // dell'arma: riscriverli qui li "fotograferebbe" sull'entità, ricreando il
+        // dato duplicato che questa migrazione elimina. RMW li lascia com'erano.
+        if (!m_weaponPoseFromWeapon)
+        {
+            wd["scale"]  = m_weaponScale;
+            wd["rot"]    = {m_weaponRot.x, m_weaponRot.y, m_weaponRot.z};
+            wd["offset"] = {m_weaponOffset.x, m_weaponOffset.y, m_weaponOffset.z};
+        }
         j["weapon_display"] = wd;
     }
     return true;
@@ -605,7 +634,9 @@ void EntityEditor::saveSelected()
     e.meshScale   = m_scale;
     e.attachPoints = m_attachPoints;
     e.hitboxZones  = m_hitboxZones;
-    e.dispWeaponId     = m_weaponId;
+    // NON `e.dispWeaponId = m_weaponId`: m_weaponId è l'arma RISOLTA (può venire
+    // dalla classe), dispWeaponId è il fallback legacy dell'entità. Confonderli
+    // avrebbe copiato l'arma della classe dentro l'entità al primo salvataggio.
     e.dispWeaponScale  = m_weaponScale;
     e.dispWeaponRot    = m_weaponRot;
     e.dispWeaponOffset = m_weaponOffset;
@@ -785,7 +816,23 @@ void EntityEditor::draw()
         }
     }
 
-    if (ImGui::Button("Ricarica lista", {m_listW, 0})) loadEntries();
+    // Ricarica ANCHE le liste di riferimento (classi, hitbox) e la registry:
+    // altrimenti una classe appena creata/modificata in Moduli → Classi non
+    // comparirebbe nel dropdown e l'anteprima dell'arma userebbe la classe vecchia.
+    // Prima ricaricava solo le entità → le classi nuove restavano invisibili.
+    if (ImGui::Button("Ricarica lista", {m_listW, 0}))
+    {
+        // Conserva l'unità selezionata per id: loadEntries() azzera m_sel, ma
+        // dopo un refresh l'utente si aspetta di restare sulla stessa unità (con
+        // l'arma ri-risolta dai dati freschi della classe).
+        const std::string keepId = (m_sel >= 0 && m_sel < (int)m_entries.size())
+                                    ? m_entries[m_sel].id : std::string();
+        loadAvailableIds();
+        loadEntries();
+        if (!keepId.empty())
+            for (int i = 0; i < (int)m_entries.size(); ++i)
+                if (m_entries[i].id == keepId) { selectEntry(i); break; }
+    }
     ImGui::EndGroup();
 
     // Separator/drag handle between list and center
@@ -1035,27 +1082,24 @@ void EntityEditor::draw()
                 ImGui::EndCombo();
             }
 
-            // Arma PRIMARIA (weapons[0]): è l'arma che l'entità impugna E usa.
-            // Cambiarla qui aggiorna il loadout, quindi anche l'in-hand in gioco.
-            auto setPrimaryWeapon = [&](const std::string& wid)
-            {
-                if (wid.empty())
-                { if (!e.weaponIds.empty()) e.weaponIds.erase(e.weaponIds.begin()); }
-                else if (e.weaponIds.empty()) e.weaponIds.push_back(wid);
-                else e.weaponIds[0] = wid;
-                m_weaponId = wid;
-            };
-            ImGui::SetNextItemWidth(200);
-            const char* wprev = m_weaponId.empty() ? "(nessuna)" : m_weaponId.c_str();
-            if (ImGui::BeginCombo("Arma primaria##wid", wprev))
-            {
-                if (ImGui::Selectable("(nessuna)", m_weaponId.empty()))
-                { setPrimaryWeapon(""); loadWeaponPreview(); m_dirty = true; }
-                for (auto& wid : m_availableWeapons)
-                    if (ImGui::Selectable(wid.c_str(), m_weaponId == wid))
-                    { setPrimaryWeapon(wid); loadWeaponPreview(); m_dirty = true; }
-                ImGui::EndCombo();
-            }
+            // QUALE arma: sola lettura. Prima questo combo scriveva `weapons[0]`,
+            // cioè era l'editor del LOADOUT travestito da posa — e con una classe
+            // assegnata quel valore viene ignorato dal gioco (ADR-022).
+            // Qui si autora la POSA (mano/rotazione/offset/scala): quella sì che è
+            // dell'entità, perché dipende da come il modello impugna.
+            ImGui::TextDisabled("Arma mostrata");
+            ImGui::SameLine();
+            if (m_weaponId.empty())
+                ImGui::TextColored({1,0.6f,0.2f,1}, "(nessuna)");
+            else
+                ImGui::TextColored({0.6f,0.85f,1.0f,1}, "%s", m_weaponId.c_str());
+            if (!e.classId.empty())
+                ImGui::TextDisabled("Dalla CLASSE '%s' — si cambia in Moduli -> Classi.",
+                                    e.classId.c_str());
+            else if (!m_weaponId.empty())
+                ImGui::TextDisabled("Dai campi legacy dell'unita' (nessuna classe assegnata).");
+            else
+                ImGui::TextDisabled("Assegna una classe (tab Statistiche) per avere un'arma.");
 
             if (!m_weaponId.empty())
             {
@@ -1066,17 +1110,39 @@ void EntityEditor::draw()
                 if (m_weaponMeshPath.empty())
                     ImGui::TextColored({1,0.6f,0.2f,1}, "L'arma non ha un mesh assegnato.");
 
-                bool wc = false;
-                if (floatRow("Scala arma", m_weaponScale, 0.02f, 5.0f, 0.01f, "%.3f")) wc = true;
-                ImGui::TextDisabled("Rotazione arma (gradi)");
-                if (floatRow("RotX##w", m_weaponRot.x, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
-                if (floatRow("RotY##w", m_weaponRot.y, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
-                if (floatRow("RotZ##w", m_weaponRot.z, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
-                ImGui::TextDisabled("Offset fine (rispetto alla mano)");
-                if (floatRow("OffX##w", m_weaponOffset.x, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
-                if (floatRow("OffY##w", m_weaponOffset.y, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
-                if (floatRow("OffZ##w", m_weaponOffset.z, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
-                if (wc) { updateWeaponTransform(); m_dirty = true; }
+                if (m_weaponPoseFromWeapon)
+                {
+                    // Posa dall'ARMA (KI #49): sola lettura. Editarla qui
+                    // scriverebbe su un campo ignorato — la stessa trappola KI #25.
+                    ImGui::TextColored({0.55f,0.8f,0.95f,1.0f},
+                        "Posa in mano definita dall'ARMA '%s'.", m_weaponId.c_str());
+                    ImGui::TextDisabled("Scala %.3f  Rot (%.0f, %.0f, %.0f)  Off (%.3f, %.3f, %.3f)",
+                        m_weaponScale, m_weaponRot.x, m_weaponRot.y, m_weaponRot.z,
+                        m_weaponOffset.x, m_weaponOffset.y, m_weaponOffset.z);
+                    ImGui::TextDisabled("Si modifica in Moduli -> Weapon Editor (vale per ogni\n"
+                                        "unita' che impugna quest'arma). Qui resta solo la MANO.");
+                }
+                else
+                {
+                    // Arma legacy senza posa autorata: si edita ancora qui, ma è
+                    // la POSA GIUSTA solo per quest'arma. Il posto definitivo è
+                    // il Weapon Editor (hand_scale/hand_rot/hand_offset).
+                    ImGui::TextColored({1.0f,0.75f,0.35f,1.0f},
+                        "Arma '%s' senza posa in mano: valori LEGACY dell'unita'.\n"
+                        "Autora hand_scale nel Weapon Editor per renderla dell'arma.",
+                        m_weaponId.c_str());
+                    bool wc = false;
+                    if (floatRow("Scala arma", m_weaponScale, 0.02f, 5.0f, 0.01f, "%.3f")) wc = true;
+                    ImGui::TextDisabled("Rotazione arma (gradi)");
+                    if (floatRow("RotX##w", m_weaponRot.x, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
+                    if (floatRow("RotY##w", m_weaponRot.y, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
+                    if (floatRow("RotZ##w", m_weaponRot.z, -180.0f, 180.0f, 1.0f, "%.0f")) wc = true;
+                    ImGui::TextDisabled("Offset fine (rispetto alla mano)");
+                    if (floatRow("OffX##w", m_weaponOffset.x, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
+                    if (floatRow("OffY##w", m_weaponOffset.y, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
+                    if (floatRow("OffZ##w", m_weaponOffset.z, -1.0f, 1.0f, 0.005f, "%.3f")) wc = true;
+                    if (wc) { updateWeaponTransform(); m_dirty = true; }
+                }
             }
 
             ImGui::Spacing();
@@ -1239,7 +1305,7 @@ void EntityEditor::drawHitboxTab()
 
         // Name
         char nameBuf[64]; std::strncpy(nameBuf, z.name.c_str(), 63); nameBuf[63] = '\0';
-        if (ImGui::InputText("Nome##hzn", nameBuf, 64))
+        if (editor::ui::textRow("Nome##hzn", nameBuf, 64))
         { z.name = nameBuf; changed = true; }
 
         // Bone attachment
@@ -1327,39 +1393,57 @@ void EntityEditor::drawStatsPanel()
     ImGui::TextColored({0.9f,0.7f,0.2f,1.0f}, "%s", e.id.c_str());
     ImGui::Separator();
 
+    // ── La CLASSE per prima: decide se il resto del pannello conta ────
+    // ADR-022: l'entità è il CORPO (mesh, hitbox), la classe è la PROFESSIONE
+    // (loadout, comportamento, abilità). Con una classe assegnata, arma/profilo
+    // AI/abilità qui sotto vengono IGNORATI dal runtime — e un campo che si può
+    // editare senza effetto è la classe di problema di KI #25.
+    // Sta in cima e non in mezzo perché è la scelta che condiziona le altre.
+    ImGui::TextDisabled("CLASSE (professione: loadout + comportamento + abilita')");
+    ImGui::SetNextItemWidth(280.0f);
+    if (ImGui::BeginCombo("##cls", e.classId.empty() ? "-- nessuna --" : e.classId.c_str()))
+    {
+        if (ImGui::Selectable("-- nessuna --", e.classId.empty()))
+        { e.classId.clear(); m_dirty = true; }
+        for (const auto& id : m_availableClasses)
+            if (ImGui::Selectable(id.c_str(), e.classId == id))
+            { e.classId = id; m_dirty = true; }
+        ImGui::EndCombo();
+    }
+    if (!e.classId.empty())
+        ImGui::TextDisabled("Arma, profilo AI e abilita' si editano in Moduli -> Classi.");
+    else
+        ImGui::TextColored({1.0f, 0.55f, 0.35f, 1.0f},
+            "NESSUNA CLASSE: quest'unita' usa i campi legacy del suo JSON\n"
+            "(weapons / ai_profile / abilities), che NON sono piu' editabili qui.\n"
+            "Assegna una classe per poterli cambiare.");
+    ImGui::Separator();
+
     char buf[256];
     std::strncpy(buf, e.name.c_str(), 255);
-    if (ImGui::InputText("Nome", buf, 255)) { e.name = buf; m_dirty = true; }
+    if (editor::ui::textRow("Nome", buf, 255)) { e.name = buf; m_dirty = true; }
 
     const char* factions[] = {"neutral","republic","separatist"};
     int fi = 0;
     for (int i = 0; i < 3; ++i) if (e.faction == factions[i]) fi = i;
-    if (ImGui::Combo("Fazione", &fi, factions, 3)) { e.faction = factions[fi]; m_dirty = true; }
+    if (editor::ui::comboRow("Fazione", fi, factions, 3)) { e.faction = factions[fi]; m_dirty = true; }
 
     ImGui::Separator();
-    ImGui::TextDisabled("Combat");
+    ImGui::TextDisabled("Corpo");
 
     auto drag = [&](const char* label, float& v, float lo, float hi, const char* fmt = "%.2f") {
         if (ImGui::DragFloat(label, &v, (hi-lo)*0.005f, lo, hi, fmt)) m_dirty = true;
     };
-    drag("HP",           e.hp,          1.f, 2000.f, "%.0f");
-    // moveSpeed: usato solo se l'entità NON ha un profilo AI (il profilo
-    // vince col suo patrol_speed); damageScale: non ancora consumato (KI #25).
-    drag("Velocita' (vince il profilo AI)", e.moveSpeed, 0.5f, 20.f);
-    drag("Danno Scale (non attivo)", e.damageScale, 0.1f, 5.f);
-    ImGui::TextDisabled("(non attivo) = salvato ma non consumato dal runtime — KI #25");
+    // Solo HP: è l'unica stat dell'unità che il runtime consuma davvero
+    // (`out.hp = enemy->hp`). Qui c'erano anche:
+    //  - "Velocita'"    → morta: `resolveUnitArchetype` la sovrascrive sempre con
+    //                     `ai->patrolSpeed` del profilo. Si edita nel PROFILO AI.
+    //  - "Danno Scale"  → morta: ZERO consumatori nel runtime (classe KI #25).
+    // Un campo editabile che non fa nulla non è un dettaglio estetico: insegna a
+    // fidarsi di numeri che non contano.
+    drag("HP", e.hp, 1.f, 2000.f, "%.0f");
 
-    ImGui::Separator();
-    ImGui::TextDisabled("AI Profile");
-    if (ImGui::BeginCombo("##ai", e.aiProfileId.empty() ? "-- nessuno --" : e.aiProfileId.c_str()))
-    {
-        if (ImGui::Selectable("-- nessuno --", e.aiProfileId.empty())) { e.aiProfileId.clear(); m_dirty = true; }
-        for (auto& id : m_availableAI)
-            if (ImGui::Selectable(id.c_str(), e.aiProfileId == id)) { e.aiProfileId = id; m_dirty = true; }
-        ImGui::EndCombo();
-    }
-
-    ImGui::TextDisabled("Hitbox Profile");
+    ImGui::TextDisabled("Hitbox Profile   (il CORPO: resta sempre dell'entita')");
     if (ImGui::BeginCombo("##hbx", e.hitboxProfileId.empty() ? "-- nessuno --" : e.hitboxProfileId.c_str()))
     {
         if (ImGui::Selectable("-- nessuno --", e.hitboxProfileId.empty())) { e.hitboxProfileId.clear(); m_dirty = true; }
@@ -1379,43 +1463,12 @@ void EntityEditor::drawStatsPanel()
         ImGui::EndCombo();
     }
 
-    ImGui::Separator();
-    ImGui::TextDisabled("Armi");
-    for (int i = 0; i < (int)e.weaponIds.size(); ++i)
-    {
-        ImGui::PushID(i);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 30.f);
-        if (ImGui::BeginCombo(("##wid"+std::to_string(i)).c_str(),
-                              e.weaponIds[i].empty() ? "-- seleziona --" : e.weaponIds[i].c_str()))
-        {
-            for (auto& wid : m_availableWeapons)
-                if (ImGui::Selectable(wid.c_str(), e.weaponIds[i] == wid)) { e.weaponIds[i] = wid; m_dirty = true; }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) { e.weaponIds.erase(e.weaponIds.begin()+i); m_dirty = true; ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Arma")) e.weaponIds.push_back("");
-
-    ImGui::Separator();
-    ImGui::TextDisabled("Abilita'");
-    for (int i = 0; i < (int)e.abilityIds.size(); ++i)
-    {
-        ImGui::PushID(1000 + i);
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 30.f);
-        if (ImGui::BeginCombo(("##aid"+std::to_string(i)).c_str(),
-                              e.abilityIds[i].empty() ? "-- seleziona --" : e.abilityIds[i].c_str()))
-        {
-            for (auto& aid : m_availableAbilities)
-                if (ImGui::Selectable(aid.c_str(), e.abilityIds[i] == aid)) { e.abilityIds[i] = aid; m_dirty = true; }
-            ImGui::EndCombo();
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("X")) { e.abilityIds.erase(e.abilityIds.begin()+i); m_dirty = true; ImGui::PopID(); break; }
-        ImGui::PopID();
-    }
-    if (ImGui::SmallButton("+ Abilita'")) e.abilityIds.push_back("");
+    // Qui c'erano "Armi" e "Abilita'". Rimossi (ADR-022): li decide la CLASSE.
+    // "Armi" era anche una lista bugiarda — il runtime legge solo `weapons[0]`
+    // (`EnemyDef::primaryWeaponId()`), quindi il pulsante "+ Arma" prometteva un
+    // arsenale che il gioco ignorava.
+    // I valori esistenti NON vengono toccati: `saveSelected` non scrive più questi
+    // campi e RMW (ADR-010) li preserva. Un'unità senza classe continua a usarli.
 
     ImGui::Separator();
     if (m_dirty) ImGui::TextColored({1.f,0.7f,0.2f,1.f}, "* Modifiche non salvate");

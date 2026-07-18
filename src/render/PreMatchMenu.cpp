@@ -30,10 +30,8 @@ void PreMatchMenu::setSettings(const MatchSettings& s)
     if (!s.missionId.empty())
         for (int i = 0; i < (int)m_missionList.size(); ++i)
             if (m_missionList[i].id == s.missionId) { m_missionIdx = i + 1; break; }
-    m_classIdx = 0;
-    if (!s.classId.empty())
-        for (int i = 0; i < (int)m_classList.size(); ++i)
-            if (m_classList[i].id == s.classId) { m_classIdx = i + 1; break; }
+    // Nessun indice di classe: il giocatore NON sceglie una classe (GDD 11.3,
+    // ADR-022). `s.classId` passa di qui intatto — vedi buildRows().
     if (m_missionIdx > 0) syncRowsToMission();
     buildRows();
 }
@@ -57,9 +55,10 @@ const std::string& PreMatchMenu::getSelectedMapId() const
     return m_mapList[m_settings.mapIndex].id;
 }
 
-// ── Missioni (ADR-019) e Classi (doc 14) ─────────────────────────────────
+// ── Missioni (ADR-019) ───────────────────────────────────────────────────
 // Stesso pattern delle mappe. Indice 0 = "(nessuna)": senza selezione il gioco
 // si comporta esattamente come prima — additivo, non breaking.
+// Qui NON c'è l'equivalente per le classi, ed è voluto: vedi buildRows().
 void PreMatchMenu::setMissionList(const std::vector<MissionEntry>& missions)
 {
     m_missionList = missions;
@@ -72,30 +71,11 @@ void PreMatchMenu::setMissionList(const std::vector<MissionEntry>& missions)
     buildRows();
 }
 
-void PreMatchMenu::setClassList(const std::vector<ClassEntry>& classes)
-{
-    m_classList = classes;
-    m_classNames.clear();
-    m_classNamePtrs.clear();
-    m_classNames.push_back("(nessuna - loadout manuale)");
-    for (const auto& c : m_classList) m_classNames.push_back(c.name);
-    for (const auto& n : m_classNames) m_classNamePtrs.push_back(n.c_str());
-    if (m_classIdx > (int)m_classList.size()) m_classIdx = 0;
-    buildRows();
-}
-
 const std::string& PreMatchMenu::getSelectedMissionId() const
 {
     static const std::string none;
     if (m_missionIdx <= 0 || m_missionIdx > (int)m_missionList.size()) return none;
     return m_missionList[m_missionIdx - 1].id;   // -1: lo 0 è "(nessuna)"
-}
-
-const std::string& PreMatchMenu::getSelectedClassId() const
-{
-    static const std::string none;
-    if (m_classIdx <= 0 || m_classIdx > (int)m_classList.size()) return none;
-    return m_classList[m_classIdx - 1].id;
 }
 
 // La missione IMPONE mappa e modalità (MissionDef, doc 25). Il menu deve mostrare
@@ -139,11 +119,13 @@ const std::string& PreMatchMenu::getSelectedWeaponId() const
 
 void PreMatchMenu::syncLoadoutToSettings()
 {
-    // Missione (ADR-019) e classe (doc 14): passano da qui perché questo è il
-    // punto unico chiamato sia all'avvio partita sia al salvataggio del preset —
-    // così finiscono anche nei preset, che li serializzano già entrambi.
+    // La missione (ADR-019) passa da qui perché questo è il punto unico chiamato
+    // sia all'avvio partita sia al salvataggio del preset — così finisce anche
+    // nei preset, che la serializzano già.
+    // `classId` NON si tocca di proposito: il menu non lo possiede più (GDD 11.3),
+    // e assegnarlo da un indice inesistente lo azzererebbe, distruggendo il valore
+    // arrivato da `--class` o da un preset. È il guasto di KI #36, in miniatura.
     m_settings.missionId = getSelectedMissionId();
-    m_settings.classId   = getSelectedClassId();
     if (!m_settings.missionId.empty()) syncRowsToMission();   // mappa/modalità della missione
     m_settings.mapId = getSelectedMapId();
 
@@ -187,17 +169,15 @@ void PreMatchMenu::applyPreset(const MatchSettings& p)
     }
     if (m_settings.mapIndex >= (int)m_mapList.size()) m_settings.mapIndex = 0;
 
-    // Missione (ADR-019) e classe (doc 14): per ID come tutto il resto (KI #20).
+    // Missione (ADR-019): per ID come tutto il resto (KI #20).
     // Un id che non risolve più (definizione cancellata) torna a "(nessuna)":
     // è la degradazione onesta — meglio partita libera che una missione fantasma.
     m_missionIdx = 0;
     if (!p.missionId.empty())
         for (int i = 0; i < (int)m_missionList.size(); ++i)
             if (m_missionList[i].id == p.missionId) { m_missionIdx = i + 1; break; }
-    m_classIdx = 0;
-    if (!p.classId.empty())
-        for (int i = 0; i < (int)m_classList.size(); ++i)
-            if (m_classList[i].id == p.classId) { m_classIdx = i + 1; break; }
+    // `classId` di un preset legacy sopravvive in `m_settings` (assegnato sopra)
+    // ma non ha più una riga: il giocatore non sceglie una classe (GDD 11.3).
     if (m_missionIdx > 0) syncRowsToMission();   // la missione impone mappa/modalità
 
     // Arma primaria (indice diretto nella lista)
@@ -238,10 +218,13 @@ void PreMatchMenu::buildRows()
     if (!m_mapNamePtrs.empty())
         m_rows.push_back({"Mappa",                       true,  &m_settings.mapIndex,     nullptr,   1,   0,
                           (float)(m_mapNamePtrs.size() - 1), m_mapNamePtrs.data()});
-    // Classe (doc 14): un loadout confezionato. "(nessuna)" = scelta manuale.
-    if (m_classNamePtrs.size() > 1)
-        m_rows.push_back({"Classe",                      true,  &m_classIdx,              nullptr,   1,   0,
-                          (float)(m_classNamePtrs.size() - 1), m_classNamePtrs.data()});
+    // NESSUNA riga "Classe", e non è una dimenticanza (ADR-022, GDD 11.3):
+    // il giocatore non sceglie una classe — la classe si LIVELLA giocando, è il
+    // gameplay a decidere quale cresce. La riga faceva anche danno concreto:
+    // sovrascriveva in silenzio le righe "Arma primaria/secondaria" qui sotto,
+    // due posti che decidono lo stesso dato con uno che vince senza dirlo.
+    // Il loadout del giocatore sono quelle righe. `--class` resta come override
+    // di TEST (Application), non come scelta offerta al giocatore.
     m_rows.push_back({"Vite alleati  (team 1 tickets)", true,  &m_settings.team1Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"Vite nemici    (team 2 tickets)", true,  &m_settings.team2Tickets, nullptr,   1,   1,  99});
     m_rows.push_back({"AI alleate  (num unita team 1)",  true,  &m_settings.team1AiCount, nullptr,   1,   0,  config::MAX_AI_PER_TEAM});

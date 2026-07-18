@@ -1,4 +1,5 @@
 {
+    "attach_points": {},
     "bullet_color": [
         0.30000001192092896,
         0.6499999761581421,
@@ -14,12 +15,15 @@
     "fire_rate": 3.0,
     "heat_per_shot": 0.3499999940395355,
     "mesh": "",
+    "mesh_rot_x": -90.0,
+    "mesh_rot_y": 0.0,
+    "mesh_scale": 0.800000011920929,
     "min_range": 0.0,
     "name": "T-21 Heavy Blaster",
     "overheat_penalty": 2.5,
     "projectile_mesh": "",
-    "spread_ads": 0.004999999888241291,
-    "spread_base": 0.019999999552965164,
+    "spread_ads": 0.0024999999441206455,
+    "spread_base": 0.009999999776482582,
     "spread_jump": 0.20000000298023224,
     "spread_move": 0.05999999865889549,
     "spread_sprint": 0.14000000059604645

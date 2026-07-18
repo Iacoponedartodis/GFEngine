@@ -1,7 +1,9 @@
+#include "util/DataPath.hpp"
 #include "modules/BalanceEditor.hpp"
 #include "util/JsonSave.hpp"
 #include "util/FileDialog.hpp"
 #include "util/DefinitionRename.hpp"
+#include "util/UiWidgets.hpp"   // righe etichetta-a-sinistra: label mai tagliata
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -23,18 +25,9 @@ namespace editor
 // L'exe è in build/windows-debug/Debug/ → sali 3 livelli per il source.
 static std::string getSourceDataDir()
 {
-    char* base = SDL_GetBasePath();
-    fs::path exeDir = base ? base : ".";
-    SDL_free(base);
-
-    // Prova 3 livelli su: build/config/Debug → project root
-    std::error_code ec;
-    fs::path sourceData = fs::canonical(exeDir / "../../../data", ec);
-    if (!ec && fs::exists(sourceData / "weapons", ec))
-        return sourceData.string() + "/";
-
-    // Fallback: usa la copia locale nell'output dir
-    return (exeDir / "data").string() + "/";
+    // R8 chiuso: unica risoluzione in util/DataPath (prima ogni modulo aveva
+    // la sua, e le copie erano già divergenti).
+    return editor::datapath::dir();
 }
 
 
@@ -192,7 +185,7 @@ void BalanceEditor::drawAbilitiesTab()
     {
         char nameBuf[64];
         std::snprintf(nameBuf, sizeof(nameBuf), "%s", edit.name.c_str());
-        if (ImGui::InputText("Nome", nameBuf, sizeof(nameBuf)))
+        if (editor::ui::textRow("Nome", nameBuf, sizeof(nameBuf)))
             edit.name = nameBuf;
     }
 
@@ -202,7 +195,7 @@ void BalanceEditor::drawAbilitiesTab()
             {"shield", "roll", "melee", "jetpack", "missile", "command_aura"};
         int ti = 0;
         for (int i = 0; i < 6; ++i) if (edit.type == kTypes[i]) { ti = i; break; }
-        if (ImGui::Combo("Tipo", &ti, kTypes, 6)) edit.type = kTypes[ti];
+        if (editor::ui::comboRow("Tipo", ti, kTypes, 6)) edit.type = kTypes[ti];
     }
     ImGui::TextDisabled("Runtime attivo: solo 'shield' (16_AiBehavior). Gli altri tipi\n"
                         "sono autorabili ma non ancora consumati in partita.");
@@ -210,10 +203,10 @@ void BalanceEditor::drawAbilitiesTab()
 
     // Parametri con etichette contestuali per il tipo shield
     const bool isShield = (edit.type == "shield");
-    ImGui::DragFloat(isShield ? "HP scudo (param1)"    : "param1", &edit.param1, 1.0f,  0.0f, 1000.0f, "%.1f");
-    ImGui::DragFloat(isShield ? "Rigenerazione/s (param2)" : "param2", &edit.param2, 0.1f,  0.0f,  100.0f, "%.1f");
-    ImGui::DragFloat(isShield ? "Ritardo regen s (param3)" : "param3", &edit.param3, 0.1f,  0.0f,   30.0f, "%.1f");
-    ImGui::DragFloat("Cooldown (s)", &edit.cooldown, 0.1f, 0.0f, 60.0f, "%.1f");
+    editor::ui::dragRow(isShield ? "HP scudo (param1)"    : "param1", edit.param1, 1.0f,  0.0f, 1000.0f, "%.1f");
+    editor::ui::dragRow(isShield ? "Rigenerazione/s (param2)" : "param2", edit.param2, 0.1f,  0.0f,  100.0f, "%.1f");
+    editor::ui::dragRow(isShield ? "Ritardo regen s (param3)" : "param3", edit.param3, 0.1f,  0.0f,   30.0f, "%.1f");
+    editor::ui::dragRow("Cooldown (s)", edit.cooldown, 0.1f, 0.0f, 60.0f, "%.1f");
     ImGui::Checkbox("Passiva", &edit.passive);
 
     ImGui::Separator();
@@ -285,37 +278,37 @@ void BalanceEditor::drawWeaponsTab()
     {
         int fi = mini::factionToIndex(edit.faction);
         const char* const* fnames = mini::factionNames();
-        if (ImGui::Combo("Fazione##w", &fi, fnames, 3)) edit.faction = mini::factionFromIndex(fi);
+        if (editor::ui::comboRow("Fazione##w", fi, fnames, 3)) edit.faction = mini::factionFromIndex(fi);
     }
     ImGui::Separator();
 
-    ImGui::DragFloat("Danno",           &edit.damage,          0.5f, 1.0f, 200.0f, "%.1f");
-    ImGui::DragFloat("Cadenza (rnd/s)", &edit.fireRate,         0.1f, 0.1f,  30.0f, "%.2f");
-    ImGui::DragFloat("Vel. proiettile", &edit.bulletSpeed,      0.5f, 1.0f, 100.0f, "%.1f");
-    ImGui::DragFloat("Vita proiettile", &edit.bulletLifetime,   0.1f, 0.1f,  10.0f, "%.2f");
-    ImGui::DragFloat("Scala proiettile",&edit.bulletScale,      0.005f,0.01f, 1.0f, "%.3f");
-    ImGui::ColorEdit3("Colore proiettile", edit.bulletColor.data());
+    editor::ui::dragRow("Danno", edit.damage,          0.5f, 1.0f, 200.0f, "%.1f");
+    editor::ui::dragRow("Cadenza (rnd/s)", edit.fireRate,         0.1f, 0.1f,  30.0f, "%.2f");
+    editor::ui::dragRow("Vel. proiettile", edit.bulletSpeed,      0.5f, 1.0f, 100.0f, "%.1f");
+    editor::ui::dragRow("Vita proiettile", edit.bulletLifetime,   0.1f, 0.1f,  10.0f, "%.2f");
+    editor::ui::dragRow("Scala proiettile", edit.bulletScale,      0.005f,0.01f, 1.0f, "%.3f");
+    editor::ui::colorRow("Colore proiettile", edit.bulletColor.data());
     ImGui::Separator();
     ImGui::Text("Calore");
-    ImGui::DragFloat("Calore/colpo",    &edit.heatPerShot,     0.005f,0.01f, 1.0f, "%.3f");
-    ImGui::DragFloat("Raffreddamento",  &edit.cooldownRate,    0.005f,0.01f, 2.0f, "%.3f");
-    ImGui::DragFloat("Penalità overheat",&edit.overheatPenalty,0.1f, 0.0f,  10.0f, "%.2f");
+    editor::ui::dragRow("Calore/colpo", edit.heatPerShot,     0.005f,0.01f, 1.0f, "%.3f");
+    editor::ui::dragRow("Raffreddamento", edit.cooldownRate,    0.005f,0.01f, 2.0f, "%.3f");
+    editor::ui::dragRow("Penalità overheat", edit.overheatPenalty,0.1f, 0.0f,  10.0f, "%.2f");
 
     ImGui::Separator();
     ImGui::Text("Gittata");
-    ImGui::DragFloat("Range effettivo",  &edit.effectiveRange, 0.5f, 1.0f, 200.0f, "%.1f");
-    ImGui::DragFloat("Range minimo (non attivo)", &edit.minRange, 0.1f, 0.0f, 20.0f, "%.1f");
+    editor::ui::dragRow("Range effettivo", edit.effectiveRange, 0.5f, 1.0f, 200.0f, "%.1f");
+    editor::ui::dragRow("Range minimo (non attivo)", edit.minRange, 0.1f, 0.0f, 20.0f, "%.1f");
     ImGui::TextDisabled("(non attivo) = salvato ma non ancora consumato dal runtime — KI #25");
 
     ImGui::Separator();
     if (ImGui::CollapsingHeader("Precisione (spread in gradi)"))
     {
         ImGui::TextDisabled("0 = perfetto, valori tipici: 0.01-0.20");
-        ImGui::DragFloat("Base (fermo)",   &edit.baseSpread,   0.001f, 0.0f, 1.0f, "%.4f");
-        ImGui::DragFloat("In mira (ADS)",  &edit.adsSpread,    0.001f, 0.0f, 1.0f, "%.4f");
-        ImGui::DragFloat("In movimento",   &edit.moveSpread,   0.001f, 0.0f, 1.0f, "%.4f");
-        ImGui::DragFloat("In corsa",       &edit.sprintSpread, 0.001f, 0.0f, 1.0f, "%.4f");
-        ImGui::DragFloat("In aria",        &edit.jumpSpread,   0.001f, 0.0f, 1.0f, "%.4f");
+        editor::ui::dragRow("Base (fermo)", edit.baseSpread,   0.001f, 0.0f, 1.0f, "%.4f");
+        editor::ui::dragRow("In mira (ADS)", edit.adsSpread,    0.001f, 0.0f, 1.0f, "%.4f");
+        editor::ui::dragRow("In movimento", edit.moveSpread,   0.001f, 0.0f, 1.0f, "%.4f");
+        editor::ui::dragRow("In corsa", edit.sprintSpread, 0.001f, 0.0f, 1.0f, "%.4f");
+        editor::ui::dragRow("In aria", edit.jumpSpread,   0.001f, 0.0f, 1.0f, "%.4f");
 
         // Barra visuale di confronto spread
         ImGui::Spacing();
@@ -395,30 +388,30 @@ void BalanceEditor::drawAITab()
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Percezione", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat("Vista (range)",   &edit.sightRange,   0.5f,  1.0f, 100.0f, "%.1f");
-        ImGui::DragFloat("Campo visivo° (non attivo)", &edit.fovDeg, 1.0f, 10.0f, 360.0f, "%.0f");
-        ImGui::DragFloat("Udito (non attivo)", &edit.hearingRange, 0.5f, 0.0f, 50.0f, "%.1f");
-        ImGui::DragFloat("Reazione (sec)",  &edit.reactionTime, 0.01f, 0.0f,   3.0f, "%.2f");
+        editor::ui::dragRow("Vista (range)", edit.sightRange,   0.5f,  1.0f, 100.0f, "%.1f");
+        editor::ui::dragRow("Campo visivo° (non attivo)", edit.fovDeg, 1.0f, 10.0f, 360.0f, "%.0f");
+        editor::ui::dragRow("Udito (non attivo)", edit.hearingRange, 0.5f, 0.0f, 50.0f, "%.1f");
+        editor::ui::dragRow("Reazione (sec)", edit.reactionTime, 0.01f, 0.0f,   3.0f, "%.2f");
         ImGui::TextDisabled("(non attivo) = salvato ma non ancora consumato dal runtime — KI #25");
     }
     if (ImGui::CollapsingHeader("Comportamento", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Aggressività",  &edit.aggression,   0.0f, 1.0f);
-        ImGui::SliderFloat("Precisione",    &edit.accuracy,     0.0f, 1.0f);
-        ImGui::SliderFloat("Pref. copertura",&edit.coverPreference,0.0f, 1.0f);
-        ImGui::SliderFloat("HP ritiro",     &edit.retreatHpThresh,0.0f, 1.0f);
-        ImGui::SliderFloat("Fiancheggia",   &edit.flankChance,  0.0f, 1.0f);
-        ImGui::SliderFloat("Riposiziona (non attivo)", &edit.repositionChance, 0.0f, 1.0f);
+        editor::ui::sliderRowLR("Aggressività", edit.aggression,   0.0f, 1.0f);
+        editor::ui::sliderRowLR("Precisione", edit.accuracy,     0.0f, 1.0f);
+        editor::ui::sliderRowLR("Pref. copertura", edit.coverPreference,0.0f, 1.0f);
+        editor::ui::sliderRowLR("HP ritiro", edit.retreatHpThresh,0.0f, 1.0f);
+        editor::ui::sliderRowLR("Fiancheggia", edit.flankChance,  0.0f, 1.0f);
+        editor::ui::sliderRowLR("Riposiziona (non attivo)", edit.repositionChance, 0.0f, 1.0f);
     }
     if (ImGui::CollapsingHeader("Copertura e fuoco")) {
-        ImGui::DragFloat("Peek min (s)",    &edit.peekDurationMin, 0.05f,0.0f, 5.0f, "%.2f");
-        ImGui::DragFloat("Peek max (s)",    &edit.peekDurationMax, 0.05f,0.0f, 5.0f, "%.2f");
-        ImGui::DragFloat("Nascondi min (s)",&edit.hideDurationMin, 0.05f,0.0f,10.0f, "%.2f");
-        ImGui::DragFloat("Nascondi max (s)",&edit.hideDurationMax, 0.05f,0.0f,10.0f, "%.2f");
-        ImGui::DragFloat("Intervallo sparo",&edit.shootInterval,   0.05f,0.1f,10.0f, "%.2f");
+        editor::ui::dragRow("Peek min (s)", edit.peekDurationMin, 0.05f,0.0f, 5.0f, "%.2f");
+        editor::ui::dragRow("Peek max (s)", edit.peekDurationMax, 0.05f,0.0f, 5.0f, "%.2f");
+        editor::ui::dragRow("Nascondi min (s)", edit.hideDurationMin, 0.05f,0.0f,10.0f, "%.2f");
+        editor::ui::dragRow("Nascondi max (s)", edit.hideDurationMax, 0.05f,0.0f,10.0f, "%.2f");
+        editor::ui::dragRow("Intervallo sparo", edit.shootInterval,   0.05f,0.1f,10.0f, "%.2f");
     }
     if (ImGui::CollapsingHeader("Movimento")) {
-        ImGui::DragFloat("Vel. pattuglia",  &edit.patrolSpeed, 0.1f, 0.5f, 15.0f, "%.2f");
-        ImGui::DragFloat("Vel. inseguimento",&edit.seekSpeed,  0.1f, 0.5f, 20.0f, "%.2f");
+        editor::ui::dragRow("Vel. pattuglia", edit.patrolSpeed, 0.1f, 0.5f, 15.0f, "%.2f");
+        editor::ui::dragRow("Vel. inseguimento", edit.seekSpeed,  0.1f, 0.5f, 20.0f, "%.2f");
         ImGui::Checkbox("Può saltare",      &edit.jumpEnabled);
     }
 
@@ -443,7 +436,6 @@ void BalanceEditor::saveMap(const mini::MapDef& m)
     j["name"]         = m.name;
     j["mesh"]         = m.meshPath;
     j["metadata"]     = m.metadataPath;
-    j["navmesh"]      = m.navmeshPath;
     j["spawn_team1"]  = { m.spawnTeam1[0], m.spawnTeam1[1], m.spawnTeam1[2] };
     j["spawn_team2"]  = { m.spawnTeam2[0], m.spawnTeam2[1], m.spawnTeam2[2] };
     j["max_tickets"]  = m.maxTickets;
@@ -496,9 +488,9 @@ void BalanceEditor::drawMapsTab()
     // ── Ticket e conteggio ───────────────────────────────────────────
     if (ImGui::CollapsingHeader("Partita", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        ImGui::DragInt("Ticket massimi",    &edit.maxTickets, 1, 1, 200);
-        ImGui::DragInt("Nemici in campo",   &edit.enemyCount, 1, 1,  20);
-        ImGui::DragInt("Alleati in campo",  &edit.allyCount,  1, 0,  20);
+        editor::ui::intRow("Ticket massimi", edit.maxTickets, 1, 1, 200);
+        editor::ui::intRow("Nemici in campo", edit.enemyCount, 1, 1,  20);
+        editor::ui::intRow("Alleati in campo", edit.allyCount,  1, 0,  20);
     }
 
     // ── Spawn points ─────────────────────────────────────────────────
@@ -674,17 +666,17 @@ void BalanceEditor::drawPlayerDefTab()
 
     char buf[256];
     std::strncpy(buf, edit.name.c_str(), 255);
-    if (ImGui::InputText("Nome", buf, 255)) edit.name = buf;
+    if (editor::ui::textRow("Nome", buf, 255)) edit.name = buf;
 
     std::strncpy(buf, edit.description.c_str(), 255);
-    if (ImGui::InputText("Descrizione", buf, 255)) edit.description = buf;
+    if (editor::ui::textRow("Descrizione", buf, 255)) edit.description = buf;
 
     ImGui::Separator(); ImGui::Text("Stat base");
-    ImGui::DragFloat("HP base",        &edit.hp,          1.0f, 50.0f, 500.0f, "%.0f");
-    ImGui::DragFloat("Velocità",       &edit.moveSpeed,   0.1f,  1.0f,  20.0f, "%.1f");
-    ImGui::DragFloat("Salto (mult)",   &edit.jumpHeight,  0.05f, 0.5f,   3.0f, "x%.2f");
-    ImGui::DragFloat("Scatto (mult)",  &edit.sprintMult,  0.05f, 1.0f,   3.0f, "x%.2f");
-    ImGui::DragFloat("Armatura base",  &edit.armorRating, 0.05f, 0.0f,   3.0f, "%.2f");
+    editor::ui::dragRow("HP base", edit.hp,          1.0f, 50.0f, 500.0f, "%.0f");
+    editor::ui::dragRow("Velocità", edit.moveSpeed,   0.1f,  1.0f,  20.0f, "%.1f");
+    editor::ui::dragRow("Salto (mult)", edit.jumpHeight,  0.05f, 0.5f,   3.0f, "x%.2f");
+    editor::ui::dragRow("Scatto (mult)", edit.sprintMult,  0.05f, 1.0f,   3.0f, "x%.2f");
+    editor::ui::dragRow("Armatura base", edit.armorRating, 0.05f, 0.0f,   3.0f, "%.2f");
     ImGui::TextDisabled("  0=nessuna  1=standard  2=pesante");
 
     ImGui::Spacing(); ImGui::Separator();

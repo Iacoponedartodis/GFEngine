@@ -240,6 +240,298 @@
   (già funzionante via tasto), non un'abilità; lo shield va concepito come GADGET, non abilità.
   Lavoro futuro (abilità/gadget player-side).
 
+## 57. Respawn dentro la geometria di un command post → giocatore incastrato (MEDIUM) — RISOLTO 2026-07-18
+- **Segnalato dal playtest**: rientrando da un command post si spawnava DENTRO il cubo del crinale
+  del post e si restava bloccati.
+- **Causa**: il punto di spawn di un post è il centro della bandiera (`def.x/z`), che può coincidere
+  con la geometria autorata lì (box/copertura). Spawnare esatti sul centro = dentro un collider.
+- **Fix generale (non per-mappa)**: la posizione di respawn passa da `physics::nudgeOutOfColliders`
+  prima di schierare. Vale per QUALSIASI ostacolo (muri, veicoli, geometria dei post) su qualsiasi
+  mappa — niente fix ad hoc che domani sarebbero inutili.
+- **Migliorato 2026-07-18 (2° giro)**: con una lastra RIALZATA e più larga del raggio orizzontale (la
+  base di Alpha) la ricerca solo-orizzontale falliva → si nasceva ancora incastrati. Ora
+  `nudgeOutOfColliders` è una ricerca **3D a livelli di quota**: prima l'orizzontale a terra (muri: di
+  lato), poi — se tutto il livello è bloccato — sale e riprova, così ci si posiziona SOPRA la
+  piattaforma. Sempre generale (nessun caso speciale per Alpha/firebase), vale anche per gli spawn AI.
+- Lezione: uno spawn su una posizione autorata da dati (post, waypoint) non è mai garantito libero;
+  il de-clip va fatto al momento dello spawn, in un helper condiviso, non tarando le coordinate — e
+  deve poter risolvere anche **in verticale**, non solo sul piano.
+
+## 56. Respawn automatico allo scadere del timer: la scelta del punto non aveva priorità (MEDIUM) — RISOLTO 2026-07-18
+- **Segnalato dall'utente**: con `respawnDelay` basso (0.5–1 s, usato di proposito per far rientrare
+  in fretta AI e nemici) il giocatore veniva rigenerato allo spawn di default PRIMA di poter scegliere
+  il punto — la scelta introdotta il 07-18 diventava inutile.
+- **Causa**: il respawn del giocatore scattava da solo quando `respawnTimer <= 0`, allo spawn
+  correntemente selezionato (default = Base), senza attendere una conferma.
+- **Fix**: con **2+ punti disponibili** il timer è solo l'**attesa minima**; il rientro avviene in
+  `deployPlayerRespawn` quando il giocatore **conferma** (click sinistro / Invio / Spazio). Finché non
+  conferma resta a terra con l'overlay di scelta attivo (A/D o frecce per cambiare punto). Con **un
+  solo punto** (nessun post catturato) non c'è nulla da scegliere → si torna al respawn automatico
+  allo scadere del timer, per non aggiungere attrito a chi gioca con respawn brevi. Così `respawnDelay`
+  può restare basso per le AI senza mai penalizzare la scelta del giocatore quando conta.
+
+## 55. Gli HP impostati nelle regole partita valevano solo al primo spawn, non al respawn (MEDIUM) — RISOLTO 2026-07-18
+- **Segnalato dall'utente**: impostando HP ≠ 100 nelle regole, il valore valeva solo alla prima
+  comparsa; morendo e rinascendo la vita tornava a 100.
+- **Causa**: `initWorld` risovrascriveva `currentSettings.playerHp = pd->hp` (PlayerDef) DOPO che il
+  mode aveva già creato l'entità iniziale col valore dello slider → primo spawn = slider, ma HUD e
+  respawn = PlayerDef. Due fonti di verità per gli HP del giocatore.
+- **Fix**: `PlayerDef.hp` ora **semina** lo slider "HP giocatore" del PreMatch UNA volta all'avvio;
+  da lì lo slider (`currentSettings.playerHp`) è l'**autorità unica**, usata identica per spawn
+  iniziale e respawn. Rimosso il clobber in `initWorld` (le altre stat del personaggio — velocità,
+  salto, sprint, armatura — restano applicate). `PlayerDef.hp` resta significativo (è il default).
+
+## 54. Bersaglio strategico = "cubo volante" con hitbox sfasata (MEDIUM) — RISOLTO 2026-07-18
+- **Segnalato dal playtest**: il bersaglio appariva come un cubo che fluttuava nella metà nemica, e
+  non si riusciva a distruggerlo (né compariva un messaggio).
+- **Causa doppia**: (1) `meshOffsetY = 2.0` sul box di fallback → il cubo galleggiava 2 m sopra il
+  suolo; (2) l'hitbox sintetico `__strategic_target` era un box enorme con offset y=+2 → sommato al
+  meshOffsetY finiva a +4, **completamente scollegato dal cubo visibile** → i colpi non lo toccavano
+  (quindi niente distruzione → niente messaggio, che invece esisteva già).
+- **Fix**: hitbox sintetico = cubo unitario (offset 0, extents 0.5) che scala con l'entità e usa lo
+  STESSO `meshOffsetY` del rendering → **visibile == colpibile**. Grounding corretto: box 2.5 m con
+  la base appoggiata al suolo (`meshOffsetY = 0.5·scala`), mesh reale senza offset.
+- Lezione: quando una hitbox è sintetizzata separatamente dal mesh, DEVE condividere scala e
+  meshOffsetY con il rendering — sono la stessa formula (`testHit` vs `toModelMatrix`), non due.
+
+## 53. Bersagli strategici (DestroyTarget) non autorabili dal MapEditor (MEDIUM) — RISOLTO 2026-07-18
+- **FATTO**: il MapEditor ora autora i bersagli strategici — lista "Bersagli strategici" con
+  aggiungi/rimuovi, gizmo Sposta (range selezione -500), pannello proprietà (label, X/Z, HP), box
+  arancione nel viewport, load/save di `strategic_targets[]` via RMW. Mirroring dei command post.
+  DestroyTarget è ora completo anche lato authoring (regola 10_ProjectMemory).
+- DestroyTarget è runtime-completo (schema, spawn, obiettivo, conseguenza, gate) ma i bersagli
+  strategici (`MapDef.strategicTargets[]`) si aggiungono/spostano **solo a mano nel JSON della mappa**.
+- Viola la regola "un tipo nuovo non è finito finché non si autora dall'editor" (10_ProjectMemory):
+  finché il MapEditor non li piazza col gizmo (come command post / cover / danger zone), la feature
+  non è "finita" per l'utente.
+- **Da fare**: aggiungere i bersagli strategici al MapEditor — lista + gizmo Sposta + campi (label,
+  hp, mesh, colore) + save/load, mirroring dei command post. È l'immediato follow-up di DestroyTarget.
+
+## 52. Il binding mouse/rotella non mostrava il nome nelle opzioni (LOW) — RISOLTO 2026-07-17
+- **Segnalato dal playtest**: assegnando un input del mouse nel keybinding, la riga non mostrava
+  nessun nome (appariva "—").
+- **Causa**: `OptionsMenu::renderControls` leggeva `input.getScancode()` + `SDL_GetScancodeName()`.
+  Un binding non-tastiera (pulsante mouse / rotella) ha `getScancode() == UNKNOWN` → nome vuoto.
+- **Fix**: usa `input.getKeyName()`, che descrive OGNI tipo ("Mouse Centrale", "Rotella su",
+  "Mouse 4/5"). Aggiornati anche i prompt del rebind ("tasto / mouse / rotella").
+- Nota: i **tasti laterali** (X1/X2) erano già gestiti (SDL li dà come pulsanti 4/5); il nome ora
+  appare anche per loro.
+
+## 50. Le unità a terra si muovevano ancora sotto ordine (MEDIUM) — RISOLTO 2026-07-17
+- **Segnalato dal playtest**: con due compagni a terra, un ordine di movimento li faceva spostare
+  tutti — anche i caduti.
+- **Causa**: `SquadSystem` salta i caduti nell'assegnazione ordini (non ricevono il MoveTo), e
+  `AiSystem` li salta (niente decisione). Ma l'**agente crowd conserva l'ultimo target** e il
+  `CrowdSystem` lo muove comunque: skippare l'AI non basta, va **fermato attivamente**.
+- **Fix**: per un'unità a terra, `AiSystem` ora chiama `requestMoveVelocity(agent, {0,0,0})` ogni
+  tick prima di saltarla → l'agente si inchioda dov'è caduto finché non è rianimato o distrutto.
+
+## 51. I keybinding si perdevano alla chiusura del gioco (MEDIUM) — RISOLTO 2026-07-17
+- **Segnalato dal playtest**: rimappare un tasto nelle opzioni e poi chiudere/riaprire → modifica
+  persa.
+- **Causa**: `InputManager` impostava i default nel costruttore e `rebind()` cambiava solo la mappa
+  in memoria. **Nessuna persistenza**: ogni avvio ripartiva dai default.
+- **Fix**: `loadBindings()`/`saveBindings()` in `InputManager`. `load` al costruttore (i salvati
+  vincono sui default), `save` a ogni `rebind()` — come un preset. File in
+  `<exe>/user_presets/keybindings.json` (fuori da `data/`, sopravvive alle rebuild — stessa
+  convenzione dei preset partita, KI #19). Serializzato per **nome azione**: robusto al riordino
+  dell'enum `Action`. **Smoke dovuto**: cambia un tasto, riavvia, verifica che resti.
+
+## 49. La posa/scala dell'arma in mano è per-entità ma tarata su un'arma fissa (MEDIUM) — RISOLTO 2026-07-17
+**Aggiornamento: MIGRAZIONE FATTA.** La posa in mano ora vive sull'`WeaponDef` (`hand_scale`,
+`hand_rot`, `hand_offset`), non più sull'entità. Vale per chiunque impugni l'arma → una classe che
+cambia arma mostra sempre la scala giusta.
+- **Schema**: `WeaponDef` + loader (`hand_scale`/`hand_rot`/`hand_offset`); `handScale<=0` = non
+  autorata → fallback al `weapon_display` legacy dell'entità (transizione documentata).
+- **Risoluzione** (`WeaponAttach` + anteprima `EntityEditor`): l'arma VINCE se `handScale>0`; la
+  MANO (attach point) resta del personaggio. Una sola formula, come sempre.
+- **Authoring**: Weapon Editor → tab Mesh → "Posa in mano". L'EntityEditor mostra la posa in SOLA
+  LETTURA quando è dell'arma (evita la trappola KI #25 di editare un campo ignorato); resta
+  editabile solo la mano e, in modalità legacy, la posa vecchia.
+- **Migrazione dati (RMW-chirurgica, solo aggiunte)**: le 4 armi impugnate hanno preso la posa dai
+  rispettivi `weapon_display` — DC-15A 0.4, E-5 1.2, Z-6 **80**, E-5C **0.0015** (range nativo di
+  53000×: la prova che la scala è una proprietà dell'ARMA). Visivamente identico a prima; corretto
+  ora anche riassegnando le classi.
+- **Gate aggiornato**: avvisa se l'arma effettiva di un'unità non ha `hand_scale` autorato (userebbe
+  il fallback legacy). Sui dati attuali: 0 warning.
+- **APERTO (rifinitura, non bug)**: se in futuro la STESSA arma servirà a personaggi con mani molto
+  diverse (clone vs droide) e servirà una posa per-personaggio, si aggiungerà un override opzionale
+  sull'entità — additivo, non blocca nulla oggi.
+
+### Storia (diagnosi originale)
+- **È il "sistema scala che si è rotto" segnalato dall'utente.** L'arma in mano dell'Heavy Clone
+  Trooper appariva enorme *"nonostante la scala l'avessi già sistemata"*.
+- **Diagnosi (numeri reali).** La scala compensa la dimensione nativa del mesh dell'arma:
+  Z-6 richiede `weapon_display.scale = 80`, DC-15A ne richiede `0.4` — **200× di differenza**.
+  Da KI #43 il modello impugnato è l'arma **effettiva** (classe → loadout, via `WeaponAttach`),
+  ma la posa/scala resta in `weapon_display` sull'**entità**, tarata su `weapon_display.id`. Quando
+  l'Heavy aveva `class: trooper` (→ DC-15A) col display ancora sullo Z-6 (scala 80), il DC-15A veniva
+  reso a scala 80 → **200× troppo grande**. L'utente ha aggirato creando la classe `Heavy Trooper`
+  (Z-6), che riallinea display ed effettiva.
+- **La matematica NON è il problema**: la formula `effScale = weapon_display.scale / mesh_scale` è
+  **identica** tra anteprima editor (`EntityEditor::updateWeaponTransform`) e runtime
+  (`WeaponAttach::resolve`) — quindi "ciò che vedi nell'editor è ciò che vedi in gioco" **regge**.
+  Il buco è che il dato giusto è sull'oggetto sbagliato.
+- **Fatto ora (guard)**: il gate (ADR-018) avvisa quando `weapon_display.id ≠ arma effettiva`
+  (risolta con `classres`): il "scala per l'arma sbagliata" non è più silenzioso. Sui dati attuali
+  dell'utente: **0 mismatch** (tutto riallineato a mano).
+- **APERTO — decisione di design (non decisa scrivendo codice, GDD 21.4).** La scala/posa in mano è
+  una proprietà del **(mesh dell'arma)**, non dell'entità: la stessa arma sta in mano uguale a
+  chiunque la impugni. Andrebbe **spostata su `WeaponDef`** (scala/rot/offset/grip in mano), con
+  l'entità che fornisce solo l'attach point della mano. Così qualunque arma una classe assegni si
+  vede corretta, senza ri-tarare ogni entità. È una modifica di schema (WeaponDef + WeaponEditor per
+  autorarla + WeaponAttach + anteprima EntityEditor + migrazione dati): da proporre come scope prima
+  di implementarla. Finché non è fatta, tenere `weapon_display.id` allineato all'arma della classe.
+
+## 46. Mouse catturato (Tab) restava bloccato lasciando un modulo con viewport (HIGH) — RISOLTO 2026-07-17
+- **Segnalato dall'utente, mai registrato prima.** Tab nel viewport cattura il mouse
+  (`SDL_SetRelativeMouseMode(TRUE)`, cursore nascosto). Uscendo dal modulo **senza** premere Tab di
+  nuovo, il cursore restava invisibile e **non liberabile** se non riaprendo un modulo con viewport.
+- **Causa strutturale**: `SDL_SetRelativeMouseMode` è uno stato **globale** SDL, ma l'unico codice
+  che lo spegne è il **Tab dentro `FreeCameraViewport::tick()`** — e il tick di un modulo smette di
+  girare appena non è più attivo (i moduli persistono, non vengono distrutti: `EditorApp::tick`
+  chiama solo il tick del modulo attivo). Quindi la cattura restava accesa senza nessuno a spegnerla.
+  Lo stesso `if (!m_focused) return` all'inizio del tick rendeva il Tab inefficace anche perdendo
+  solo il focus.
+- **Fix, imposto dove si SA del cambio**: `FreeCameraViewport::releaseMouseCapture()` (idempotente,
+  chiamata anche dal distruttore per la chiusura app); ogni modulo con viewport la inoltra;
+  `EditorApp::tick` tiene `m_prevActive` e, **al cambio modulo**, rilascia la cattura su tutti i
+  viewport. L'invariante ("solo il modulo attivo può tenere il mouse") vive in EditorApp, che è
+  l'unico a sapere quando il modulo cambia — il tick per-modulo da solo non può mantenerlo.
+- **Bonus**: Esc→Home passa dal cambio modulo, quindi **Esc diventa un'uscita d'emergenza** dal mouse.
+- Build-verified + editor avviato senza crash (5 viewport inizializzati). **Smoke manuale dovuto**:
+  Tab per catturare → cambia modulo dal menu → il cursore deve riapparire.
+
+## 47. ClassEditor nascondeva le armi separatiste: impossibile armare le classi nemiche (MEDIUM) — RISOLTO 2026-07-17
+- **Segnalato dall'utente** creando le classi per B1 Battle Droid / B1 Heavy Droid: il dropdown armi
+  mostrava **solo** le repubblicane. Filtro `if (w.faction != Faction::Separatist)` in due punti
+  (dropdown + default della nuova classe).
+- **Residuo di un assunto superato**: la classe era nata "player/ally-facing" (doc 14 vecchio), ma
+  ADR-022 la rende valida **anche per gli NPC nemici** — una classe per un B1 **deve** poter usare
+  l'E-5. Il filtro impediva authoring legittimo.
+- **Fix**: rimosso il filtro; il dropdown mostra **tutte** le armi con la **fazione in etichetta**
+  (`DC-15A [republic]`, `E5 Blaster Rifle [separatist]`) — la fazione resta visibile senza togliere
+  scelte (principio dell'utente: "più cose posso modificare dall'editor, meglio è"). Il default di
+  una nuova classe è la prima arma disponibile, di qualunque fazione.
+
+## 48. Viewport: FBO invalidato a dimensione stabile non veniva mai ricostruito (MEDIUM) — RISOLTO 2026-07-17
+- **Probabile causa del "viewport dava problemi, poi si sistemava chiudendo e riaprendo".** Trovato
+  rivedendo il codice su segnalazione vaga dell'utente (non riproducibile a comando).
+- `resizeFBO` usciva subito se la dimensione richiesta == quella corrente — **anche con l'FBO rotto**
+  (`m_fboOk == false`). Un realloc fallito (intoppo del driver Intel — ADR-003, primi frame, o
+  minimize/restore che perde le risorse GL) lasciava `m_fboOk=false`; al frame dopo, pannello di
+  dimensione stabile → uscita immediata → **viewport rotto fino a un resize o al riavvio**.
+- **Fix**: la guardia di uscita ora richiede anche `m_fboOk` — se l'FBO è invalido si **ritenta la
+  ricostruzione** al frame successivo e si auto-ripara, senza restart. Nel caso normale (`m_fboOk`
+  true) la guardia esce come prima: nessun churn. Il log del realloc distingue crescita vera
+  (KI #17) da ricostruzione a parità di dimensione, per non spammare né simulare un leak.
+- **Non riprodotto** (è transitorio e driver-dipendente): il meccanismo è dimostrato per lettura del
+  codice, non da un crash catturato. Da confermare sul campo se il sintomo non si ripresenta.
+
+## 43. Con una classe assegnata, l'unità impugnava un'arma e ne sparava un'altra (HIGH) — RISOLTO 2026-07-17
+- **Il bug che avrebbe fatto dire "le classi non funzionano" appena assegnate.** ADR-022 applicava
+  la classe **solo dentro** `ConquestMode::resolveUnitArchetype` (`out.weaponId`), ma due
+  consumatori a valle continuavano a leggere il campo **grezzo** dell'`EnemyDef`:
+  - `ConquestMode.cpp` — **bullet stats** (danno, velocità, lifetime, colore) da
+    `enemy->primaryWeaponId()`;
+  - `WeaponAttach.hpp` — **modello in mano** da `def->primaryWeaponId()`.
+  Risultato su un'unità con classe: **spara** l'arma della classe, **impugna** quella dell'entità,
+  **coi danni** di quest'ultima. Tre risposte diverse alla stessa domanda.
+- **Stessa famiglia del bug 2026-07-11** (`weapon_display.id` che vinceva sul loadout), un livello
+  più in alto — e il commento che documentava quella correzione era proprio sulla riga incriminata.
+- **Fix strutturale, non locale**: nuova `mini::classres` (`include/mini/game/ClassResolve.hpp`) —
+  **unica** implementazione di "la classe vince se valorizzata". La usano runtime (ConquestMode),
+  render dell'arma in mano (WeaponAttach) **e l'editor** (anteprima). La cura non è ricordarsi di
+  applicare la regola ovunque: è che la domanda abbia una sola implementazione (ADR-018).
+- **VERIFICATO SUI DATI REALI dell'utente**, non per lettura del codice. `Heavy Clone Trooper` ha
+  `weapons[0]="Z-6 Rotary Blaster"` (danno 15) ma `class: trooper` → `DC-15A` (danno 20). Aggiunto
+  l'evento telemetrico `unit class resolved` (ADR-016) — `std::cout` è bufferizzato e un run
+  headless ucciso lo perde, quindi non era osservabile.
+  - col fix: `weapon: DC-15A, damage: 20.0` → **coerenti**;
+  - **col bug reintrodotto apposta**: `weapon: DC-15A, damage: 15.0` → **incoerenti**, la firma
+    esatta del guasto. Il test è stato **visto fallire** prima di essere creduto.
+- Nota: `out.weaponId` era già class-aware **prima** del fix, quindi il solo campo `weapon` non
+  provava nulla — è `damage` a rendere il bug visibile. Un evento che mostra un solo lato di
+  un'incoerenza non la può rivelare.
+
+## 44. Entity Editor: campi editabili che il gioco ignorava (MEDIUM) — RISOLTO 2026-07-17
+- Richiesta dell'utente ("togliere dall'Entity Editor tutto ciò che non decide l'entità"), ma
+  l'audit ha trovato più di quanto la richiesta implicasse. Rimossi dal tab Statistiche:
+  - **Armi** — le decide la CLASSE (ADR-022). Era anche una **lista bugiarda**: il runtime legge
+    solo `weapons[0]` (`EnemyDef::primaryWeaponId()`), quindi "+ Arma" prometteva un arsenale che
+    il gioco ignora.
+  - **Abilità**, **AI Profile** — le decide la CLASSE.
+  - **Velocità** — **morta**: `resolveUnitArchetype` la sovrascrive **sempre** con
+    `ai->patrolSpeed`. Si edita nel profilo AI. (Nei dati dell'utente `Heavy Clone Trooper` aveva
+    `move_speed: 4.0` e `Clone Trooper` `1.8`: due numeri che non hanno mai fatto nulla.)
+  - **Danno Scale** — **morta**: ZERO consumatori nel runtime (classe KI #25).
+- **`weapon_display` nel tab Visuale era il caso peggiore**: il combo "Arma primaria" scriveva
+  `weapons[0]`, cioè era **l'editor del loadout travestito da posa**. Ora è in **sola lettura** e
+  mostra l'arma risolta con `classres` — la stessa funzione del runtime. La **posa**
+  (mano/rotazione/offset/scala) resta dell'entità: quella sì che dipende dal corpo.
+- **Nessun dato toccato**: `saveSelected` ha smesso di **rivendicare** i campi che non edita più —
+  RMW (ADR-010) preserva quelli già nel file. Trappola evitata: `m_weaponId` ora è l'arma
+  **risolta**, quindi continuare a scriverla in `weapon_display.id`/`dispWeaponId` avrebbe copiato
+  l'arma della CLASSE dentro l'ENTITÀ al primo salvataggio — ricreando nei dati la confusione che
+  ADR-022 elimina.
+- **Gate**: nuovo warning "nessuna CLASSE assegnata" — un'unità classless ha un loadout che il gioco
+  usa e che l'editor non mostra più: va detto, o diventa invisibile.
+
+## 45. Risoluzione di `data/` duplicata in 8 punti e GIÀ divergente (MEDIUM) — RISOLTO 2026-07-17 (06_Todo R8)
+- Il debito era registrato come teorico. **Non lo era**: delle otto copie, **quattro** verificavano
+  `data/weapons` prima di accettare il percorso e **quattro** si accontentavano che una cartella di
+  nome `data` esistesse (EntityEditor, MapEditor, VehicleEditor, WeaponEditor). Basta che
+  `exeDir/../../../data` risolva a una directory qualunque perché metà dei moduli scriva in una
+  `data/` e l'altra metà in un'altra — un editor che salva dove il gioco non legge.
+- Il pannello di **Validazione** era il punto più grave: avrebbe validato una `data/` diversa da
+  quella caricata, cioè avrebbe **mentito** (il commento nel codice lo aveva previsto).
+- **Fix**: `editor/util/DataPath` — una sola risoluzione, che adotta il controllo **forte**.
+
+## 40. Il gate dei campi fantasma era cieco su hitboxes/maps/vehicles (MEDIUM) — RISOLTO 2026-07-16
+- **La regola c'era, il file non la vedeva mai.** `validateContent` avvisa da tempo sul campo
+  `profile_id`/`id` (ADR-001) e sui refusi — ma il rilevatore lavora su `reg.unknownKeys()`, che
+  viene popolato da `noteUnknownKeys()`, **chiamato da 9 loader su 12**: mancava in
+  `loadHitboxProfiles`, `loadMaps`, `loadVehicles`.
+- **Conseguenza reale**: `data/hitboxes/B1 Heavy Droid.json` conteneva `"profile_id"` — violazione
+  ADR-001 in piena vista — e il gate riportava **0 warning**. Il campo è stato rimosso (con `sed`,
+  non riscrivendo il JSON: riformattare i float è il danno che RMW previene).
+- **Lezione, la stessa di sempre**: *un detector mai visto scattare non è verificato*. La regola
+  esisteva dal giorno 1 e non aveva mai potuto fallire.
+- **Verificato con una sonda**: iniettati `profile_id`, un refuso top-level e un refuso dentro una
+  zona → il gate li segnala tutti e tre, quello di zona col nome della zona. File ripristinato
+  byte-identico via `git checkout`. La sonda ha anche smascherato un **mio** falso negativo: la
+  prima l'avevo messa nella `data/` di *output*, ma **entrambi i binari preferiscono la `data/`
+  sorgente** (`exeDir/../../../data`, `Application.cpp:91` e `EditorApp.cpp:301`) — non veniva
+  nemmeno letta.
+- **LIMITE APERTO**: su `maps` sono coperte solo le chiavi di **primo livello**. Le sotto-strutture
+  (`geometry`, `command_posts`, `cover_points`, `patrol_routes`, `danger_zones`, `vehicle_spawns`)
+  hanno ognuna il proprio set: un refuso **dentro** un box di geometry passa tuttora liscio. Le
+  liste di chiavi note vanno **lette dal loader, mai dedotte con grep**: derivandole a grep avevo
+  mancato `color` (veicoli) e `enemy_types`/`ally_types` (mappe) — e una chiave mancante dalla
+  lista fa dire al gate di cancellare un campo funzionante, cioè è peggio del silenzio.
+
+## 41. Profilo hitbox vuoto → colpito come una sfera, in silenzio (MEDIUM) — GATE FATTO, CONTENUTO APERTO
+- `zones: []` non è fatale: `testHit()` (`CombatSystem.cpp:57`) cade sul **fallback sferico**
+  (`k_hitRadius`, moltiplicatore 1.0). L'unità resta colpibile, ma **senza zone, senza headshot e
+  senza colpi di striscio** — si comporta diversamente da ciò che il profilo promette, e nessuno
+  lo dice. Era invisibile senza leggere il codice del combat.
+- **Fatto**: il gate ora avvisa sul profilo vuoto, e va in Error su `half_extents <= 0` (zona di
+  volume nullo, mai colpibile) e in Warn su `damage_multiplier <= 0` (zona che non fa danno).
+- **APERTO (contenuto dell'utente, non codice)**: `hitboxes/B1 Heavy Droid.json` (referenziato dal
+  nemico omonimo → oggi quel droide si colpisce a sfera) e `hitboxes/Heavy Clone Trooper.json`
+  (**orfano**: nessuno lo referenzia, l'unità omonima usa `hitbox_profile: "Clone Trooper"`).
+  Da disegnare in Entity Editor → tab Hitbox, o da eliminare.
+
+## 42. `MapDef.navmeshPath`: campo scritto e mai letto (LOW) — RISOLTO 2026-07-16
+- Anello morto completo: `BalanceEditor` **scriveva** `j["navmesh"]`, **nessun loader lo rileggeva**,
+  e `navmeshPath` non lo consumava nessun sistema — quindi valeva `""` per sempre e si ri-salvava `""`.
+- **Contrario ad ADR-004**: la navmesh la *genera Recast a runtime* dai box di `MapDef.geometry`;
+  non esiste una navmesh caricata da file. Era residuo di un'idea anteriore all'ADR.
+- **Rimosso in tutti e tre i punti**: campo in `Definitions.hpp`, scrittura in `BalanceEditor.cpp`,
+  e la chiave `"navmesh": ""` in `data/maps/firebase.json` — quest'ultima necessaria, perché RMW
+  (giustamente) preserva le chiavi che non gestisce: lasciandola, il gate avrebbe avvisato in eterno.
+- **Trovato dal gate di KI #40 appena riparato**, non a occhio: è la prova che serviva.
+
 ## 39. La morte del giocatore bruciava i rinforzi della squadra (HIGH) — RISOLTO 2026-07-16
 - **Disallineamento design↔codice**, emerso da un chiarimento dell'utente: i **ticket sono la
   riserva di rinforzi della squadra** (il campo ha un cap di AI; il resto entra man mano che le

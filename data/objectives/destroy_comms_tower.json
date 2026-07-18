@@ -1,0 +1,11 @@
+{
+  "name": "Distruggi la Torre delle Comunicazioni",
+  "type": "destroy_target",
+  "tier": "primary",
+  "target": { "structure": "Torre Comunicazioni" },
+  "activation": { "type": "immediate" },
+  "reward": 25,
+  "on_success": [
+    { "type": "enemy_accuracy", "value": 0.6 }
+  ]
+}

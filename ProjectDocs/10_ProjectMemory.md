@@ -171,6 +171,36 @@
 - **`MatchSettings` è assegnata per intero in più punti** (es. dal PreMatch all'ENTER): ogni campo
   che il PreMatch non possiede va preservato esplicitamente, altrimenti sparisce in silenzio
   (KI #36 — stessa classe di guasto della regola RMW di ADR-010, ma in memoria).
+- **ENTRAMBI i binari leggono la `data/` SORGENTE, non quella accanto all'exe.** Engine
+  (`Application.cpp:91`) ed editor (`EditorApp.cpp:301`) risalgono `exeDir/../../../data` e usano
+  quella se contiene `weapons/`; la copia in output è solo un fallback per un exe distribuito.
+  Conseguenze pratiche: (a) le modifiche dall'editor arrivano al sorgente, **nessun rischio** che
+  il `remove_directory` del post-build le distrugga; (b) **una sonda piazzata nella `data/` di
+  output non viene mai letta** — ci ho perso un giro credendo che un detector fosse rotto.
+- **Ogni nuovo loader del registry DEVE chiamare `noteUnknownKeys()`**, altrimenti il rilevatore
+  di campi fantasma è cieco su quel tipo di file e il gate riporta *0 warning* su violazioni in
+  piena vista (KI #40: mancava in hitboxes/maps/vehicles, e nascondeva un `profile_id` che viola
+  ADR-001). Le liste di chiavi note vanno **lette dal loader, mai dedotte con grep**: una chiave
+  dimenticata fa dire al gate di cancellare un campo funzionante — peggio del silenzio.
+- **Su questa postazione mancano `strings` e `python`.** Un comando che "non trova nulla" può
+  essere lo strumento assente, non il fatto assente: verificare con `grep` diretto / `sed`.
+- **`std::cout` NON è verificabile in un run headless**: è bufferizzato, e i run di
+  `--sim`/`--stress` si chiudono per forza (osservatore: la partita non finisce mai), quindi il
+  buffer va perso. Ciò che deve essere osservabile da un run va in **telemetria** (ADR-016), che
+  scrive su `_telemetry_data/session_latest.jsonl` evento per evento.
+- **`--sim` NON usa i default del menu sandbox**: `Application` fa
+  `sbMenu.allyCount = max(1, currentSettings.team1AiCount)`, cioè il valore del **preset salvato**
+  (nel repo dell'utente: 1 alleato). Per far spawnare più tipi di alleato serve **`--stress N`**,
+  che forza N AI per team. Con 1 solo alleato spawna solo `allyIds[0]`: una verifica sul secondo
+  tipo di unità sembrerebbe "non emettere nulla" senza che nulla sia rotto.
+- **`mini::classres` (`include/mini/game/ClassResolve.hpp`) è l'UNICA fonte di "la classe vince"**
+  (ADR-022). La usano ConquestMode, WeaponAttach e l'EntityEditor. Chi aggiunge un consumatore
+  dell'arma o del profilo AI di un'unità passa da lì: averla scritta in un solo game mode è ciò che
+  ha prodotto KI #43 (unità che impugnava un'arma e ne sparava un'altra).
+- **L'editor PUÒ linkare il codice di gioco** (`DefinitionRegistry`, `ContentValidation`,
+  `ClassResolve`): ADR-002 vieta il contrario (GFEngine non deve linkare codice dell'editor).
+  Precedente già in force: R4 (VehicleEditor) e il pannello di validazione (ADR-018). Quindi un
+  modulo dell'editor che ha bisogno di una regola del gioco la **importa**, non la riscrive.
 
 ## Vincoli confermati sul codice reale (sessione 2026-07-15)
 - **Una mailbox deve essere AUTOSUFFICIENTE.** Se il produttore distrugge il soggetto, la

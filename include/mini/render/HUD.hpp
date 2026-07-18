@@ -25,7 +25,34 @@ public:
     void tick(float dt);
 
     // Feedback di mira/colpo (impostati da Application ogni frame):
-    void setAimOnTarget(bool on) { m_aimOnTarget = on; }   // mirino su hitbox
+    void setAimOnTarget(bool on) { m_aimOnTarget = on; }   // mirino su hitbox nemica → rosso
+    void setAimOnAlly(bool on)   { m_aimOnAlly   = on; }   // mirino su compagno → verde (Revive/CoveringFire)
+    // Ruota di comando (doc 26): open = visibile; sel = settore evidenziato
+    // (-1 = nessuno). Etichette in `labels`, indicizzate come sel.
+    void setCommandWheel(bool open, int sel) { m_wheelOpen = open; m_wheelSel = sel; }
+
+    // Mappa top-down di selezione del punto di respawn (doc 30, Phase 1, stile
+    // Battlefront II 2005). Mentre si è a terra: vista dall'alto della mappa con
+    // i punti di respawn disponibili selezionabili col mouse. La proiezione
+    // mondo→pannello vive QUI (unica fonte, coerente fra render e picking).
+    struct RespawnMap
+    {
+        bool  active = false;
+        float minX = 0, minZ = 0, maxX = 1, maxZ = 1;   // bounds mondo (XZ)
+        struct Wall   { float x, z, sx, sz; };           // footprint geometria
+        struct Marker { std::string label; float x, z; };
+        std::vector<Wall>   walls;
+        std::vector<Marker> markers;    // = availableSpawns, indice allineato a sel
+        int   sel = 0;                  // marker selezionato (indice in markers)
+        float secondsLeft = 0.0f;       // <= 0 → pronto a schierarsi
+        bool  hasDeath = false;
+        float deathX = 0, deathZ = 0;   // luogo di morte (orientamento)
+        float mouseX = 0, mouseY = 0;   // cursore per l'hover
+    };
+    void setRespawnMap(const RespawnMap& m) { m_respawnMap = m; }
+    // Indice del marker sotto (mx,my), o -1. Stessa proiezione del render.
+    [[nodiscard]] int respawnMapPick(float mx, float my) const;
+
     void hitmarker(bool kill);                             // colpo a segno
     void toast(const std::string& msg, float seconds = 2.5f); // messaggio a schermo
 
@@ -72,6 +99,10 @@ private:
     Ui2D m_ui;
 
     bool        m_aimOnTarget = false;
+    bool        m_aimOnAlly   = false;
+    bool        m_wheelOpen   = false;
+    int         m_wheelSel    = -1;
+    RespawnMap  m_respawnMap;              // mappa top-down di respawn (doc 30)
     float       m_hitTimer    = 0.0f;
     bool        m_hitWasKill  = false;
     float       m_toastTimer  = 0.0f;

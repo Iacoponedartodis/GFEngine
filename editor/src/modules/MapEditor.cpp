@@ -3,6 +3,7 @@
 // Layout: [lista box | viewport 3D | pannello proprietà]
 // Salva/carica da data/maps/<id>.json, campo "geometry".
 
+#include "util/DataPath.hpp"
 #include "modules/MapEditor.hpp"
 #include "util/FileDialog.hpp"
 #include "util/UiWidgets.hpp"
@@ -27,20 +28,10 @@ namespace editor
 {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-static std::string getDataDir()
-{
-    char* base = SDL_GetBasePath();
-    std::string exeDir = base ? base : "./";
-    SDL_free(base);
-    // Vai 3 livelli su dall'exe (build/config/Debug → project root) per la cartella sorgente
-    std::error_code ec;
-    std::filesystem::path sourceData = std::filesystem::canonical(
-        std::filesystem::path(exeDir) / "../../../data", ec);
-    if (!ec && std::filesystem::exists(sourceData, ec))
-        return sourceData.string();
-    // Fallback: output dir
-    return exeDir + "data";
-}
+// R8 chiuso: unica risoluzione in util/DataPath. Questo modulo era una delle
+// quattro copie col controllo DEBOLE (solo "la cartella esiste"): ora usa quello
+// forte (`data/weapons`) come tutti gli altri.
+static std::string getDataDir() { return editor::datapath::root(); }
 
 // ── Ctor ─────────────────────────────────────────────────────────────────────
 MapEditor::MapEditor()
@@ -108,10 +99,16 @@ void MapEditor::tick(float dt)
                 r.points[m_selRoutePt][2] += delta.z;
             }
         }
-        else if (m_selBox <= -400 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+        else if (m_selBox <= -400 && m_selBox > -500
+                 && (-400 - m_selBox) < (int)m_vehSpawns.size())
         {
             auto& v = m_vehSpawns[-400 - m_selBox];
             v.x += delta.x; v.z += delta.z;
+        }
+        else if (m_selBox <= -500 && (-500 - m_selBox) < (int)m_targets.size())
+        {
+            auto& t = m_targets[-500 - m_selBox];
+            t.x += delta.x; t.z += delta.z;
         }
         m_dirty = true;
         updateViewport();
@@ -195,6 +192,7 @@ void MapEditor::loadMap(const std::string& id)
     m_dangers.clear();
     m_routes.clear();
     m_vehSpawns.clear();
+    m_targets.clear();
     m_selRoutePt = 0;
     m_selBox = -1;
 
@@ -243,6 +241,21 @@ void MapEditor::loadMap(const std::string& id)
             p.team        = cp.value("team", 0);
             p.captureTime = cp.value("capture_time", 8.f);
             m_posts.push_back(p);
+        }
+    }
+
+    // Bersagli strategici (doc 25, DestroyTarget)
+    if (j.contains("strategic_targets") && j["strategic_targets"].is_array())
+    {
+        for (auto& st : j["strategic_targets"])
+        {
+            TargetEntry t;
+            std::string lbl = st.value("label", std::string("Bersaglio"));
+            std::strncpy(t.label, lbl.c_str(), sizeof(t.label) - 1);
+            t.x  = st.value("x", 0.f);
+            t.z  = st.value("z", 0.f);
+            t.hp = st.value("hp", 300.f);
+            m_targets.push_back(t);
         }
     }
 
@@ -343,6 +356,18 @@ bool MapEditor::saveMap()
         postsArr.push_back(cp);
     }
     j["command_posts"] = postsArr;
+
+    // Bersagli strategici (doc 25, DestroyTarget)
+    json targetsArr = json::array();
+    for (const auto& t : m_targets)
+    {
+        json st;
+        st["label"] = t.label;
+        st["x"] = t.x;  st["z"] = t.z;
+        st["hp"] = t.hp;
+        targetsArr.push_back(st);
+    }
+    j["strategic_targets"] = targetsArr;
 
     // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
     json coverArr = json::array();
@@ -501,6 +526,18 @@ void MapEditor::updateViewport()
         draws.push_back(area);
     }
 
+    // Bersagli strategici (DestroyTarget): box arancione ~2.5 m, come in gioco.
+    for (int i = 0; i < (int)m_targets.size(); ++i)
+    {
+        const auto& t = m_targets[i];
+        FreeCameraViewport::MapBoxDraw s;
+        s.x = t.x; s.y = 1.25f; s.z = t.z; s.ry = 0;
+        s.sx = 2.5f; s.sy = 2.5f; s.sz = 2.5f;
+        s.r = 0.85f; s.g = 0.55f; s.b = 0.15f;
+        s.selected = (m_selBox == -500 - i);
+        draws.push_back(s);
+    }
+
     // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
     // Cover point: lastra verde-acqua alta `height` + "naso" nella direzione
     // del fronte di copertura (facing).
@@ -641,10 +678,17 @@ void MapEditor::updateViewport()
         else
             m_viewport.setGizmoTarget({0,0,0}, false);
     }
-    else if (m_selBox <= -400 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+    else if (m_selBox <= -400 && m_selBox > -500
+             && (-400 - m_selBox) < (int)m_vehSpawns.size())
     {
         const auto& v = m_vehSpawns[-400 - m_selBox];
         m_viewport.setGizmoTarget({v.x, 0.6f, v.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -500 && (-500 - m_selBox) < (int)m_targets.size())
+    {
+        const auto& t = m_targets[-500 - m_selBox];
+        m_viewport.setGizmoTarget({t.x, 1.25f, t.z}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
     }
     else
@@ -894,6 +938,40 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         }
     }
 
+    // ── Bersagli strategici (doc 25, DestroyTarget) ──────────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Bersagli strategici (%d)", (int)m_targets.size());
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.6f, 0.2f, 1.0f));
+    for (int i = 0; i < (int)m_targets.size(); ++i)
+    {
+        char lbl[96];
+        std::snprintf(lbl, sizeof(lbl), "[BG] %s##tg%d", m_targets[i].label, i);
+        bool sel = (m_selBox == -500 - i);
+        if (ImGui::Selectable(lbl, sel)) { m_selBox = -500 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Bersaglio"))
+    {
+        TargetEntry t;
+        std::snprintf(t.label, sizeof(t.label), "Bersaglio %d", (int)m_targets.size() + 1);
+        m_targets.push_back(t);
+        m_selBox = -500 - ((int)m_targets.size() - 1);
+        m_dirty = true;
+        updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("- Rimuovi##tg") && m_selBox <= -500)
+    {
+        int i = -500 - m_selBox;
+        if (i >= 0 && i < (int)m_targets.size())
+        {
+            m_targets.erase(m_targets.begin() + i);
+            m_selBox = -1;
+            m_dirty = true;
+            updateViewport();
+        }
+    }
+
     // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
     ImGui::Separator();
     ImGui::TextDisabled("Metadata AI");
@@ -1072,6 +1150,32 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
     }
 
     // ── Spawn veicolo selezionato (19_Vehicles Fase B) ───────────────────
+    // ── Bersaglio strategico (DestroyTarget) — PRIMA dei veicoli: -500 <= -400 ──
+    if (m_selBox <= -500)
+    {
+        int ti = -500 - m_selBox;
+        if (ti < 0 || ti >= (int)m_targets.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& t = m_targets[ti];
+        ImGui::TextColored({0.9f,0.6f,0.2f,1.0f}, "Bersaglio strategico");
+        ImGui::Separator();
+        bool changed = false;
+
+        ImGui::SetNextItemWidth(sliderW);
+        if (editor::ui::textRow("Label##tg", t.label, sizeof(t.label))) changed = true;
+        ImGui::TextDisabled("La label e' il nome referenziato dall'obiettivo destroy_target.");
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X##tg", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z##tg", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        ImGui::TextDisabled("Resistenza");
+        changed |= editor::ui::sliderRow("HP##tg", t.hp, 10.f, 2000.f, 10.f, "%.0f");
+        ImGui::TextDisabled("Struttura statica colpibile (box di fallback finche' non ha un mesh).");
+
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
     if (m_selBox <= -400)
     {
         int vi = -400 - m_selBox;
@@ -1119,7 +1223,7 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         bool changed = false;
 
         ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::InputText("Nome##prid", r.id, sizeof(r.id))) changed = true;
+        if (editor::ui::textRow("Nome##prid", r.id, sizeof(r.id))) changed = true;
 
         ImGui::TextDisabled("Punti (%d)", (int)r.points.size());
         for (int pi = 0; pi < (int)r.points.size(); ++pi)
@@ -1176,11 +1280,11 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         bool changed = false;
 
         ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::InputText("Nome##cpl", p.label, sizeof(p.label))) changed = true;
+        if (editor::ui::textRow("Nome##cpl", p.label, sizeof(p.label))) changed = true;
 
         const char* teams[] = {"Neutrale", "Alleati (T1)", "Nemici (T2)"};
         ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::Combo("Team iniziale##cpt", &p.team, teams, 3)) changed = true;
+        if (editor::ui::comboRow("Team iniziale##cpt", p.team, teams, 3)) changed = true;
 
         ImGui::TextDisabled("Posizione");
         changed |= editor::ui::sliderRow("X", p.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
@@ -1210,7 +1314,7 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 
     // Etichetta
     ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::InputText("Etichetta", b.label, sizeof(b.label)))
+    if (editor::ui::textRow("Etichetta", b.label, sizeof(b.label)))
         changed = true;
 
     // Tipo

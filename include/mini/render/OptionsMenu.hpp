@@ -26,6 +26,11 @@ public:
     Result handleKey(int sdlScancode, InputManager& input);
     void   render(const InputManager& input) const;
 
+    // Cattura di input NON da tastiera (rotella / pulsanti mouse): l'Application
+    // inoltra qui gli eventi mouse solo mentre si è in attesa di un nuovo binding.
+    [[nodiscard]] bool isAwaitingKey() const { return m_awaitingKey && m_page == Page::Controls; }
+    void assignAwaited(InputBinding b, InputManager& input);
+
 private:
     Ui2D m_ui;
 

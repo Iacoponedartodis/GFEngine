@@ -26,6 +26,9 @@ static const char* subdirOf(Category c)
     case Category::Map:           return "maps";
     case Category::Character:     return "characters";
     case Category::Vehicle:       return "vehicles";
+    case Category::Objective:     return "objectives";
+    case Category::Mission:       return "missions";
+    case Category::Class:         return "classes";
     }
     return "";
 }
@@ -182,6 +185,37 @@ std::string renameDefinition(const std::string& dataDir, Category cat,
                     ch |= patchString(vs, "vehicle_id", oldId, newId);
             return ch;
         });
+        break;
+
+    case Category::Objective:
+        // missions: primary_objectives[] / optional_objectives[]
+        sweepDir("missions", [&](json& j){
+            bool ch = false;
+            ch |= patchArray(j, "primary_objectives",  oldId, newId);
+            ch |= patchArray(j, "optional_objectives", oldId, newId);
+            return ch;
+        });
+        // objectives: activation.objective (dipendenza) e linked_objectives[].
+        // Un obiettivo può referenziarne un altro: senza questo sweep, rinominare
+        // un prerequisito lascerebbe l'obiettivo dipendente inattivabile PER SEMPRE
+        // (il gate ADR-018 lo direbbe, ma il rename deve non romperlo affatto).
+        sweepDir("objectives", [&](json& j){
+            bool ch = false;
+            if (j.contains("activation") && j["activation"].is_object())
+                ch |= patchString(j["activation"], "objective", oldId, newId);
+            ch |= patchArray(j, "linked_objectives", oldId, newId);
+            return ch;
+        });
+        break;
+
+    case Category::Class:
+        // Nessun cross-ref dentro data/: la classe e' referenziata solo dai preset
+        // utente e dal flag --class. Un preset con id stantio ricade su "(nessuna)".
+        break;
+
+    case Category::Mission:
+        // Nessun cross-ref dentro data/: la missione è referenziata solo dai
+        // preset utente (fuori da data/, KI #19) e dal flag --mission.
         break;
     }
 

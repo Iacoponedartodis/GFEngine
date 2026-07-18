@@ -725,7 +725,10 @@ scrittura: snapshot immutabile → file temporaneo → validazione → flush/clo
   (evita architettura speculativa, 00_Vision non-goals): aprire un ADR allora.
 - Dettaglio in **28_Persistence.md**.
 
-## ADR-022 — Le classi sono professioni, non preset di armi: riconciliare 14_ClassSystem col GDD (Proposed, 2026-07-16)
+## ADR-022 (PRIMA STESURA — SUPERATA, vedi ADR-022 RISCRITTO in fondo) — Le classi sono professioni, non preset di armi (2026-07-16)
+
+> ⚠️ **Questa stesura è superata**: coglieva solo la meta' NPC del modello e ignorava che il
+> giocatore NON sceglie una classe (GDD 11.3). Lasciata come storico.
 
 ### Context
 Il GDD originale è entrato nel repo il 2026-07-16 (`Galactic_Front_GDD.docx`, sorgente di
@@ -785,3 +788,103 @@ e i conflitti aprono un ADR. Questo è quel caso.
   in (1)+(2); il resto è Fase 3.
 - **14_ClassSystem va riscritto** su questa base: oggi il suo Problem Solved è falso su due punti
   (vedi le note già inserite lì) e il suo Scope è più piccolo del GDD.
+
+## ADR-022 (RISCRITTO) — Le classi sono DUE sistemi in una definizione; le specializzazioni sono un terzo (Accepted — modello, 2026-07-16)
+
+> **Sostituisce integralmente la prima stesura di ADR-022** (2026-07-16, sopra), che proponeva
+> "far crescere `ClassDef` verso la professione partendo da `aiProfileId`". Era **parziale**:
+> coglieva metà del modello e ignorava che **il giocatore non sceglie affatto una classe**.
+> La correzione arriva da una spiegazione diretta dell'utente + **GDD 11.3**, che non avevo letto
+> (avevo letto il cap. 12 sulle classi, non l'11 sulla progressione — errore di metodo: il
+> concetto era spiegato in DUE capitoli).
+
+### Context — il modello reale, in tre parti
+Chiarimento dell'utente (2026-07-16), che **rifinisce il GDD** e vale come intento autoritativo.
+
+**1. `ClassDef` per i CLONI ALLEATI (NPC) — istanziata.**
+Indica *"le abilità, il comportamento, il loadout e in caso l'aspetto (variazioni di armatura)"*.
+È il modello "professione" (GDD 12.1/12.3): una squadra Trooper+Heavy+Recon+Engineer+Leader **deve
+comportarsi diversamente** da una monoclasse. Qui la classe si **instanzia** su un'unità.
+
+**2. `ClassDef` per il GIOCATORE — livellata, MAI scelta.**
+> *"Per il personaggio è diverso, **non ne sceglie una**: le classi sono tipo un albero delle
+> abilità. Ogni classe esiste **contemporaneamente** per il giocatore e può essere **livellata** —
+> per esempio usando determinate armi, o completando determinati tipi di obiettivi che rispecchiano
+> la filosofia di quella classe. Salendo di livello si sbloccano **perk**: se salgo di livello su
+> Heavy avrò magari un bonus per le armi pesanti come lo Z-6, o una versione migliore di un'arma, o
+> equipaggiamenti particolari. Il **gameplay decide** quali classi vengano livellate, e quindi fa
+> crescere il personaggio in una direzione."*
+
+**GDD 11.3 lo conferma alla lettera**: *"la classe **non è una scelta rigida all'inizio**, ma
+un'identità che **emerge dal comportamento**. Un clone che usa spesso armi pesanti sviluppa capacità
+da Heavy; uno che completa missioni di ricognizione sviluppa tratti da Recon. Ogni classe ha una
+propria progressione, con esperienza ottenuta tramite **azioni coerenti**"* — con gli assi già
+elencati (Heavy: armi pesanti, distruzione mezzi, difesa posizioni; Medic: cure, rianimazioni;
+Recon: ricognizione, eliminazioni precise; Engineer: hacking, sabotaggio).
+
+**3. SPECIALIZZAZIONI (ARC Trooper, Clone Commando) — sbloccate, NON livellate.**
+> *"Le classi sono differenti dalle specializzazioni, che fanno riferimento agli ARC trooper o ai
+> Clone Commando — diciamo delle forze speciali, che si sbloccano portando a termine una serie di
+> **obiettivi specifici** e che forniscono perk, nuove armi, armature, abilità, ma che **non si
+> livellano**."*
+
+**Nota terminologica**: il GDD 12.2 le chiama *"classi d'élite"* e il 12.4 le descrive come
+evoluzione di una classe (*"Clone Trooper → Heavy avanzato → ARC Heavy"*). La spiegazione
+dell'utente le rende un **asse separato** (sblocco a obiettivi, nessun livello). Vale la
+spiegazione più recente: sono un **terzo concetto**, non un ramo delle classi.
+
+### Cosa è stato costruito che CONTRADDICE il modello
+`MatchSettings.classId` + la riga **"Classe" nel PreMatch** = *il giocatore sceglie una classe che
+gli assegna il loadout*. È esattamente ciò che GDD 11.3 nega (*"non è una scelta rigida
+all'inizio"*) e che l'utente nega (*"non ne sceglie una"*).
+Non è un dettaglio: fa sì che **"classe" significhi due cose contraddittorie nello stesso codice** —
+la deriva nome↔concetto che questo progetto paga da mesi (KI #7, #25, #35).
+Per il giocatore quel selettore è in realtà un **preset di loadout**: utile, ma va chiamato col suo
+nome. La classe del giocatore non si sceglie: si **livella**.
+
+### Decision
+1. **`ClassDef` resta UNA definizione, usata in due modi** — è il modello dell'utente (*"la stessa
+   classe esiste sia per i cloni alleati, sia per il personaggio"*), e tenerne una sola evita che
+   le due metà divergano.
+2. **Metà NPC — implementabile ORA**: `ClassDef` guadagna `aiProfileId` (e poi l'aspetto); le unità
+   alleate/nemiche possono **referenziare una classe** invece di ripetere loadout+profilo+abilità.
+   Sblocca GDD 12.3 e alimenta il sistema di squadra (ADR-020). Supera l'Out of Scope del doc 14
+   (*"non accoppiare gli archetipi AI a ClassDef senza un ADR separato"*): **questo è quell'ADR**.
+3. **Metà giocatore — Fase 3 (doc 27)**: `classXp[classId]` + livelli + perk, alimentata da **azioni
+   coerenti**. Le fondamenta esistono già: `World::missionStats` conta kill/obiettivi/tempo, e gli
+   obiettivi hanno `tier`/`type` → "completare obiettivi di un certo tipo" è **già osservabile**.
+   **Non anticiparla**: richiede il sistema perk, che non esiste (e KI #32 — nemmeno le abilità del
+   giocatore esistono).
+4. **Il selettore di classe del giocatore va rimosso o rinominato "Loadout"**: non può restare a
+   chiamarsi "Classe". Serve la decisione dell'utente su quale delle due.
+   → **DECISO E APPLICATO 2026-07-17: RIMOSSO** (scelta dell'utente). Il fatto che ha sciolto il
+   dubbio: le righe **"Arma primaria"/"Arma secondaria" esistevano già** nello stesso menu, e la
+   riga "Classe" le **sovrascriveva in silenzio** (`Application`: `primaryId = cls->primaryWeaponId`).
+   Non era quindi solo un nome sbagliato: era la stessa trappola "due posti decidono lo stesso dato,
+   uno vince senza dirlo" che ADR-018 combatte. Rinominarla "Loadout" avrebbe conservato la
+   trappola cambiandole etichetta. Rimossa la riga **e** `setClassList`/`getSelectedClassId`/
+   `ClassEntry`: senza i metodi la regola è **strutturale** (stesso ragionamento della rimozione di
+   `consumeTeam1Ticket()` in KI #39). `--class` resta come **override di test**, dichiarato tale.
+   Trappola evitata nel farlo: lasciare `m_settings.classId = getSelectedClassId()` con la riga
+   rimossa avrebbe azzerato `--class` a ogni passaggio dal menu — **KI #36 in miniatura**.
+5. **Specializzazioni**: terzo tipo di definizione (`SpecializationDef`), sbloccato da una lista di
+   obiettivi, senza livelli. **Non progettarlo ora** — dipende da perk e progressione (Fase 3).
+
+### Consequences
+- Positive: il concetto più importante del gioco smette di significare due cose opposte; la metà NPC
+  è sbloccata e alimenta subito il pilastro #4 (la squadra come risorsa); la metà giocatore troverà
+  le fondamenta già pronte.
+- Costi: `role` dovrà diventare un enum consumato quando la metà NPC userà i ruoli tattici; il
+  selettore PreMatch va toccato.
+- ~~**14_ClassSystem è da riscrivere su questa base**: oggi descrive solo un pacchetto di armi.~~
+  → **FATTO 2026-07-17**: doc 14 riscritto. Stato dichiarato **MISTO** (metà NPC = Current
+  Implementation; metà giocatore = Planned). Questo **sblocca doc 27**, il cui criterio di
+  accettazione #1 è *"14_ClassSystem implementato prima di iniziare"*: è la **metà NPC** a
+  soddisfarlo, e ora il doc lo dice invece di dichiararsi "not yet implemented" mentre è in
+  produzione.
+
+### Vincolo di metodo che ne esce
+**Un concetto può essere specificato in più capitoli del GDD.** Le classi vivono nel cap. 12
+(cosa sono) *e* nell'11.3 (come si ottengono) — leggere solo il capitolo omonimo ha prodotto un ADR
+sbagliato e una feature contraria al design. Prima di decidere su un sistema, cercare il concetto
+in **tutto** il GDD (`grep`), non solo nel suo capitolo.

@@ -48,6 +48,13 @@ public:
     // Ritorna true se il sistema GL è operativo
     bool isReady() const;
 
+    // Rilascia la cattura del mouse (Tab) se attiva, riportando il cursore
+    // visibile. Idempotente. DEVE essere chiamata quando questo viewport smette
+    // di essere il modulo attivo: SDL_SetRelativeMouseMode è uno stato GLOBALE e
+    // il tick() — che è l'unico a poterlo spegnere col Tab — non gira più quando
+    // il modulo non è attivo, lasciando il mouse invisibile e non liberabile.
+    void releaseMouseCapture();
+
     // ── Bones ────────────────────────────────────────────────────────────
     void setBoneData(const std::vector<JointData>& joints, float meshRotX, float meshScale);
     void clearBones();

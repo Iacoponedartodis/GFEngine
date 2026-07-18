@@ -46,8 +46,14 @@ glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
                                float stepHeight = 0.55f,
                                EntityId excludeId = 0);
 
-// Se pos compenetra un collider (es. spawn sopra un veicolo), prova punti
-// vicini in 8 direzioni a raggi crescenti e ritorna il primo libero.
+// Se pos compenetra un collider (es. spawn dentro un veicolo o sulla lastra di
+// un command post), cerca la posizione libera più vicina e la ritorna. La
+// ricerca è 3D a livelli di quota crescenti: a ogni livello prova il punto
+// esatto e poi anelli orizzontali crescenti. Il livello 0 (quota di partenza)
+// gestisce i muri (ci si sposta di lato verso il terreno libero); i livelli
+// superiori gestiscono la geometria RIALZATA più larga del raggio orizzontale
+// (lastre/piattaforme: si sale e ci si posiziona SOPRA). Prima l'orizzontale a
+// terra, poi la risalita → non si "scala un muro" quando basta un passo di lato.
 // Ritorna pos invariato se già libero o se nessun tentativo riesce.
 glm::vec3 nudgeOutOfColliders(const glm::vec3& pos, const glm::vec3& half,
                               World& world, float step = 1.4f, int rings = 3);

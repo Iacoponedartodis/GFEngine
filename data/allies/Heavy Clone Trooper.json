@@ -3,7 +3,7 @@
         "Shield",
         "Combat Roll"
     ],
-    "ai_profile": "B1 Battle Droid",
+    "ai_profile": "Clone Trooper",
     "attach_points": {
         "eye": [
             0.0,
@@ -31,6 +31,7 @@
             0.0
         ]
     },
+    "class": "Heavy Trooper",
     "faction": "republic",
     "hitbox_profile": "Clone Trooper",
     "mesh": "assets/models/allies/clone_trooper_sw_tcw_republic_heroes.glb",

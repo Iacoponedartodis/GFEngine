@@ -1,3 +1,4 @@
+#include "util/DataPath.hpp"
 #include "EditorApp.hpp"
 #include "ui/HomeScreen.hpp"
 #include "viewport/FreeCameraViewport.hpp"
@@ -6,6 +7,8 @@
 #include "modules/MapEditor.hpp"
 #include "modules/WeaponEditor.hpp"
 #include "modules/VehicleEditor.hpp"
+#include "modules/MissionEditor.hpp"
+#include "modules/ClassEditor.hpp"
 #include <mini/game/data/DefinitionRegistry.hpp>   // ADR-018: pannello validazione
 
 #include <imgui.h>
@@ -98,6 +101,8 @@ void EditorApp::init()
     m_mapEditor     = std::make_unique<MapEditor>();
     m_weaponEditor  = std::make_unique<WeaponEditor>();
     m_vehicleEditor = std::make_unique<VehicleEditor>();
+    m_missionEditor = std::make_unique<MissionEditor>();
+    m_classEditor   = std::make_unique<ClassEditor>();
 
     m_running = true;
     std::cout << "[GFEditor] Avviato." << std::endl;
@@ -191,8 +196,29 @@ void EditorApp::processEvents()
     }
 }
 
+void EditorApp::releaseAllMouseCapture()
+{
+    if (m_viewport)      m_viewport->releaseMouseCapture();
+    if (m_entityEditor)  m_entityEditor->releaseMouseCapture();
+    if (m_mapEditor)     m_mapEditor->releaseMouseCapture();
+    if (m_weaponEditor)  m_weaponEditor->releaseMouseCapture();
+    if (m_vehicleEditor) m_vehicleEditor->releaseMouseCapture();
+}
+
 void EditorApp::tick(float dt)
 {
+    // Cambio modulo → libera il mouse. Se si lascia un viewport mentre la
+    // cattura Tab è attiva, il suo tick smette di girare e non può più spegnere
+    // SDL_SetRelativeMouseMode (stato GLOBALE): il cursore resterebbe invisibile
+    // e non liberabile finché non si riapre un viewport. È il punto che SA quando
+    // il modulo cambia, quindi è qui che l'invariante va imposto. Vale anche per
+    // Esc→Home (processEvents), che diventa così un'uscita d'emergenza dal mouse.
+    if (m_active != m_prevActive)
+    {
+        releaseAllMouseCapture();
+        m_prevActive = m_active;
+    }
+
     if (m_active == ActiveModule::FreeCameraViewport)
         m_viewport->tick(dt);
     else if (m_active == ActiveModule::EntityEditor)
@@ -224,6 +250,8 @@ void EditorApp::renderMenuBar()
         if (ImGui::MenuItem("Map Editor"))      m_active = ActiveModule::MapEditor;
         if (ImGui::MenuItem("Weapon Editor"))   m_active = ActiveModule::WeaponEditor;
         if (ImGui::MenuItem("Vehicle Editor"))  m_active = ActiveModule::VehicleEditor;
+        if (ImGui::MenuItem("Missioni e obiettivi")) m_active = ActiveModule::MissionEditor;
+        if (ImGui::MenuItem("Classi")) m_active = ActiveModule::ClassEditor;
         ImGui::Separator();
         if (ImGui::MenuItem("Validazione contenuti")) m_active = ActiveModule::ContentValidation;
         if (ImGui::MenuItem("Asset Manager (presto)"))  {}
@@ -282,22 +310,12 @@ void EditorApp::renderDockSpace()
     ImGui::End();
 }
 
-// Radice dati sorgente, stessa logica di BalanceEditor/EntityEditor/MapEditor.
-// DEBITO NOTO: questa risoluzione è duplicata in ogni modulo dell'editor (vedi
-// 06_Todo R8). Qui pesa più che altrove: se divergesse, il pannello validerebbe
-// una data/ diversa da quella che il gioco carica — cioè mentirebbe.
-static std::string editorDataPath()
-{
-    char* base = SDL_GetBasePath();
-    std::filesystem::path exeDir = base ? base : ".";
-    SDL_free(base);
-    std::error_code ec;
-    std::filesystem::path sourceData =
-        std::filesystem::canonical(exeDir / "../../../data", ec);
-    if (!ec && std::filesystem::exists(sourceData / "weapons", ec))
-        return sourceData.string();
-    return (exeDir / "data").string();
-}
+// R8 CHIUSO (2026-07-17): la radice si risolve in `util/DataPath`, una volta sola.
+// Il debito non era teorico — le otto copie erano già divergenti (quattro
+// verificavano `data/weapons`, quattro la sola esistenza della cartella). Qui
+// pesava più che altrove: il pannello avrebbe validato una data/ diversa da
+// quella che il gioco carica, cioè avrebbe mentito.
+static std::string editorDataPath() { return editor::datapath::root(); }
 
 // ── Pannello Validazione contenuti (24_ContentValidation, ADR-018) ────────
 // Terzo consumatore dello STESSO `validateContent()` che usano il runtime e
@@ -393,6 +411,14 @@ void EditorApp::render()
     else if (m_active == ActiveModule::ContentValidation)
     {
         renderValidationPanel();
+    }
+    else if (m_active == ActiveModule::MissionEditor)
+    {
+        m_missionEditor->draw();
+    }
+    else if (m_active == ActiveModule::ClassEditor)
+    {
+        m_classEditor->draw();
     }
     else if (m_active == ActiveModule::FreeCameraViewport)
     {

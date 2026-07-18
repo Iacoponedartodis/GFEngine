@@ -15,33 +15,51 @@ struct ModuleCard
     float        r, g, b;
 };
 
+// Ordine per COSA SI FA, non storico. Le descrizioni dicono anche cosa il modulo
+// NON fa: la sovrapposizione fra moduli (arma e profilo AI editabili sia
+// sull'unità sia sulla classe) è la confusione segnalata dall'utente il
+// 2026-07-16 — e un editor che non dice chi decide cosa la alimenta.
 static const ModuleCard k_modules[] = {
+    // ── Contenuto di gioco ───────────────────────────────────────────
+    {"mission", "Missioni e\nObiettivi",
+     "Missioni, obiettivi e le loro\nCONSEGUENZE sulla battaglia.\nRegole di vittoria/sconfitta.",
+     ActiveModule::MissionEditor,      true,  0.95f, 0.80f, 0.35f},
+
+    {"class",   "Classi",
+     "La PROFESSIONE: loadout,\ncomportamento (profilo AI)\ne abilità dei cloni.",
+     ActiveModule::ClassEditor,        true,  0.55f, 0.75f, 0.95f},
+
     {"entity",  "Entity\nEditor",
-     "Modifica nemici e alleati:\nmesh, scale, attach points,\nhitbox e statistiche.",
+     "Il CORPO dell'unità: mesh,\nscale, attach point e hitbox.\nArma/AI: le decide la Classe.",
      ActiveModule::EntityEditor,       true,  0.55f, 0.80f, 0.35f},
 
     {"weapon",  "Weapon\nEditor",
      "Configura armi: mesh, scala,\npunti di attacco, bilanciamento\ne parametri di fuoco.",
      ActiveModule::WeaponEditor,       true,  1.0f,  0.45f, 0.15f},
 
-    {"balance", "Balance\nEditor",
-     "Regola armi, AI e mappe\ncon slider. Nemici e alleati\nsi editano in Entity Editor.",
-     ActiveModule::BalanceEditor,      true,  0.4f,  0.9f,  0.4f},
-
     {"map",     "Map\nEditor",
-     "Posiziona box di geometria,\nspawn e zone tattiche.\nSalva come JSON.",
+     "Geometria, command post,\nspawn e zone tattiche.\nSalva come JSON.",
      ActiveModule::MapEditor,          true,  1.0f,  0.35f, 0.35f},
 
     {"vehicle", "Vehicle\nEditor",
      "Crea e configura i veicoli:\nmodello, statistiche di guida,\nbox di collisione.",
      ActiveModule::VehicleEditor,      true,  0.85f, 0.55f, 0.2f},
 
+    // ── Strumenti ────────────────────────────────────────────────────
+    {"balance", "Balance\nEditor",
+     "Slider di bilanciamento:\nprofili AI, mappe, personaggio\ne abilità.",
+     ActiveModule::BalanceEditor,      true,  0.4f,  0.9f,  0.4f},
+
+    {"validate","Validazione\ncontenuti",
+     "Trova riferimenti rotti, asset\nmancanti e duplicati. Stesse\nregole del gioco.",
+     ActiveModule::ContentValidation,  true,  0.95f, 0.45f, 0.45f},
+
     {"cam",     "Free Camera\nViewport",
      "Naviga la scena in 3D con\ncamera libera. Anteprima\nmodelli e animazioni.",
      ActiveModule::FreeCameraViewport, true,  0.25f, 0.65f, 1.0f},
 
     {"ai",      "AI Editor /\nDebugger",
-     "Visualizza e modifica profili\nAI. Debug stati, cover, target\ne percorsi in real-time.",
+     "Debug stati, cover, target e\npercorsi in real-time. I profili\nAI si editano in Balance.",
      ActiveModule::AiEditor,           false, 0.85f, 0.3f,  0.9f},
 
     {"assets",  "Asset\nManager",

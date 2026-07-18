@@ -21,7 +21,16 @@ enum class Category
     Map,            // data/maps        ← nessun cross-ref dati (ma vedi nota ADR-008:
                     //                    i game mode caricano ancora "firebase" hardcoded)
     Character,      // data/characters  ← nessun cross-ref dati al momento
-    Vehicle         // data/vehicles    ← maps: vehicle_spawns[].vehicle_id
+    Vehicle,        // data/vehicles    ← maps: vehicle_spawns[].vehicle_id
+    Objective,      // data/objectives  ← missions: primary_objectives[]/optional_objectives[],
+                    //                    objectives: activation.objective, linked_objectives[]
+    Class,          // data/classes   ← nessun cross-ref in data/: la classe si sceglie
+                    //                  nel PreMatch e si persiste per id nei preset
+                    //                  utente (fuori da data/, KI #19)
+    Mission         // data/missions    ← nessun cross-ref dati (la missione si sceglie nel
+                    //                    PreMatch e si persiste per id nei preset utente,
+                    //                    fuori da data/: un preset con id stantio ricade su
+                    //                    "(nessuna)" — degradazione onesta, non silenziosa)
 };
 
 // Esegue la rinomina. dataDir termina con '/'. Ritorna "" se ok, altrimenti

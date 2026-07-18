@@ -1,7 +1,10 @@
 {
-  "name": "Marksman",
-  "role": "sniper",
-  "primary_weapon": "DC-15X",
-  "secondary_weapon": "DC-17 Blaster Pistol",
-  "abilities": ["Shield"]
+    "abilities": [
+        "Shield"
+    ],
+    "ai_profile": "Clone Sniper",
+    "name": "Clone Sniper",
+    "primary_weapon": "DC-15X",
+    "role": "sniper",
+    "secondary_weapon": "DC-17 Blaster Pistol"
 }

@@ -136,6 +136,15 @@ int CommandPosts::countOwnedBy(int team) const
     return n;
 }
 
+std::vector<CommandPosts::OwnedPost> CommandPosts::ownedByTeam(int team) const
+{
+    std::vector<OwnedPost> out;
+    for (const auto& p : m_posts)
+        if (p.owner == team)
+            out.push_back({p.def.label, p.def.x, p.def.z});
+    return out;
+}
+
 std::vector<CommandPosts::Status> CommandPosts::status() const
 {
     std::vector<Status> out;

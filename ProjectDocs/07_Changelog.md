@@ -2,6 +2,651 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-18 (8) — De-clip dello spawn ora risolve anche in verticale (lastre rialzate)
+
+Playtest della mappa di respawn: schierandosi ad Alpha si nasceva ancora incastrati nella lastra su
+cui poggia il post — troppo larga perché la ricerca **solo orizzontale** di `nudgeOutOfColliders`
+trovasse un punto libero entro il raggio. Miglioramento **generale del sistema** (come chiesto
+dall'utente), non un fix per Alpha/firebase:
+
+- `physics::nudgeOutOfColliders` diventa una ricerca **3D a livelli di quota crescenti**: livello 0 =
+  la ricerca orizzontale a terra di prima (muri → ci si sposta di lato verso il terreno libero); se
+  TUTTO il livello 0 è bloccato (geometria rialzata più larga del raggio) sale di un livello e
+  riprova, posizionandosi **SOPRA** la piattaforma. Prima l'orizzontale, poi la risalita → non si
+  "scala un muro" quando basta un passo di lato (nessuna regressione sul caso muro).
+- Vale per **tutti** i chiamati (respawn giocatore + spawn/rinforzi AI in ConquestMode/SandboxMode):
+  è il sistema condiviso a migliorare, non il singolo call-site.
+- **Verificato**: build 0/0, `--validate` 0 errori. Comportamento su lastra rialzata da **smoke
+  manuale** (schierarsi ad Alpha e verificare di nascere sopra la lastra, non dentro). Aggiorna KI #57.
+
+## 2026-07-18 (7) — Mappa top-down di selezione respawn (doc 30, Phase 1, stile BF2005)
+
+Prossimo step dopo il controllo integrità (build 0/0, validate 0 errori, nessun residuo d'engine).
+Evoluzione dell'overlay-lista del giro 5 nella forma voluta dall'utente: una **mappa dall'alto** con
+i punti di respawn **cliccabili sulla mappa** (come Battlefront II 2005), non un elenco (BF2017).
+
+- **Nuovo sistema** (doc 30 scritto prima del codice, CLAUDE.md §5). Tutto **2D nell'HUD** (`Ui2D`):
+  nessuna telecamera 3D, **nessuna modifica alla pipeline OpenGL 3.3 Compat** (ADR-003).
+- **Render** (`HUD::RespawnMap` + `setRespawnMap`): pannello mappa, pareti dai box `geometry` come
+  rettangoli tenui (orientamento), marker dei punti disponibili (`availableSpawns`) alle posizioni
+  proiettate, marker selezionato/hover evidenziato, marker "caduto" del luogo di morte, titolo +
+  countdown/prompt. Bounds derivati dalla geometria (allargati a marker/morte) — nessun nuovo campo
+  dati (come la navmesh, ADR-004).
+- **Picking** (`HUD::respawnMapPick`): la proiezione mondo→schermo vive in UN posto (`rmProj`), usata
+  sia dal render sia dal picking → non possono divergere. Mentre la mappa è aperta la cattura del
+  mouse è rilasciata (cursore visibile); hover evidenzia, click seleziona e schiera.
+- **Coerente col respawn del giro 6**: stesso `respawnSel`/`deployPlayerRespawn`/`nudgeOutOfColliders`;
+  `A/D`/frecce + Invio restano come fallback tastiera; con un solo punto (nessun post) resta il respawn
+  automatico (KI #56). L'overlay-lista provvisorio (`setRespawnSelect`) è stato **rimosso**.
+- **Verificato**: build 0/0, `--validate` 0 errori. **Rendering/click da smoke manuale** (serve morire
+  in partita con 2+ punti): la mappa mostra i post ai posti giusti, si clicca un punto e ci si schiera.
+- Out of Scope (fasi future, doc 30): mappa tattica generale con **pausa**, post nemici/neutrali,
+  ordini dalla mappa, texture terreno, zoom/pan.
+
+## 2026-07-18 (6) — Tre fix sul respawn del giocatore (playtest della scelta del punto)
+
+Emersi provando la scelta del punto di respawn del giro (5). Tre bug distinti, tutti sul rientro
+del giocatore (KI #55/#56/#57).
+
+- **HP del respawn (KI #55)**: gli HP impostati nelle regole partita valevano solo al primo spawn,
+  poi tornavano a 100. `initWorld` risovrascriveva `currentSettings.playerHp` col `PlayerDef.hp`
+  DOPO che il mode aveva già creato l'entità con lo slider → due fonti di verità. **Fix**:
+  `PlayerDef.hp` **semina** lo slider una volta all'avvio; da lì lo slider è l'autorità unica per
+  spawn iniziale E respawn (clobber in `initWorld` rimosso; le altre stat del personaggio restano).
+- **Scelta con priorità (KI #56)**: con `respawnDelay` basso (0.5–1 s, voluto per far rientrare
+  in fretta le AI) il giocatore veniva rigenerato **prima di poter scegliere**. **Fix**: con 2+ punti
+  il timer è solo l'attesa minima e il rientro avviene alla **conferma** del giocatore (click / Invio /
+  Spazio) via il nuovo `deployPlayerRespawn`; l'overlay mostra il countdown e poi "CLICK o INVIO per
+  schierarti". Con **un solo punto** (nessun post) niente da scegliere → respawn automatico come prima.
+  Le AI restano veloci, la scelta del giocatore non è più a tempo quando conta.
+- **De-clip dallo spawn (KI #57)**: rientrando da un command post si finiva **dentro** la geometria
+  del post, incastrati. **Fix generale**: la posizione di respawn passa da
+  `physics::nudgeOutOfColliders` (helper già esistente, 8 direzioni a raggi crescenti) — vale per
+  qualsiasi ostacolo/mappa, nessun fix ad hoc.
+- **Verificato**: build 0/0, `--validate` 0 errori. Comportamento a terra/rientro da **smoke
+  manuale** (serve morire in partita): (1) HP del respawn = quelli impostati; (2) con respawnDelay
+  basso si può ancora scegliere e si rientra solo confermando; (3) rientro da un post senza restare
+  incastrati nella geometria.
+
+## 2026-07-18 (5) — Economia dei post: da ticket-bleed a *respawn-slow* + base della scelta del respawn
+
+Direttiva dell'utente: invece di far **consumare ticket** ai post ("chi ha più post drena le riserve
+avversarie"), ogni command post posseduto deve **rallentare il respawn** della squadra nemica di una
+piccola percentuale. Cambia la natura del vantaggio: controllare la mappa non svuota le riserve
+nemiche, le fa **rientrare più lentamente** — più leggibile e meno punitivo. In più, primo mattone
+verso la **mappa tattica**: scegliere il punto di respawn prima di rientrare.
+
+- **Task A — respawn-slow (Conquista).** `ConquestMode::checkDeaths`: il timer di un'unità in coda di
+  respawn ora è `respawnDelay * (1 + POST_RESPAWN_SLOW * postiNemici)` — ogni post avversario aggiunge
+  il 15% (`config::POST_RESPAWN_SLOW`). Il **ticket-bleed a tempo è rimosso** da Conquista:
+  `updateObjectiveRules` è ora un gancio vuoto. **Assalto/Difesa (ObjectiveModes, ADR-014) NON sono
+  toccate**: sovrascrivono `updateObjectiveRules` e usano `m_bleedTimer/m_bleedInterval` come proprio
+  timer di vittoria — i due membri restano nella base con un commento che spiega perché.
+- **Task B — base della scelta del punto di respawn.** Nuovo contratto `IGameMode::availableSpawns()`
+  → `[{label,pos}]`; default = solo spawn base (indice 0 = `getSpawnPos()`). `ConquestMode` lo
+  sovrascrive: spawn base + ogni command post **posseduto dagli alleati** (nuovo
+  `CommandPosts::ownedByTeam(team)`). Mentre si è a terra, `Application` mostra un **overlay HUD**
+  ("SEI A TERRA" + countdown + lista punti) e `A/D`/frecce scorrono la selezione; il rientro
+  (`updateRespawn`) usa il punto scelto. Conquistare un post avanza così anche il **punto da cui si
+  rientra**, non solo dove arrivano i rinforzi AI (unlock_spawn, giro 4).
+- **Perché insieme**: sono lo stesso filo — il post come *vantaggio di ritmo/posizione* invece che
+  come *sink di ticket*. La scelta del respawn è deliberatamente minimale (lista + countdown): è la
+  **fondazione** su cui poggerà la mappa tattica top-down (visuale dall'alto, selezione sulla mappa),
+  non la sua forma finale.
+- **Verificato**: build 0/0, `--validate` 0 errori (2 warning pre-esistenti su hitbox senza zone,
+  contenuto utente). **NON verificabile headless** (serve missione attiva + cattura post + morte del
+  giocatore): da **smoke manuale** — (1) i respawn nemici rallentano man mano che si catturano post;
+  (2) da morti, con un post alleato catturato, l'overlay elenca Base + quel post e si può rientrare lì.
+
+## 2026-07-18 (4) — `unlock_spawn` ora funziona davvero (era una conseguenza a metà)
+
+Prossimo step dalla roadmap, scelto trovando un **sistema isolato** (GDD 21.2): la conseguenza
+`unlock_spawn` — "conquistare un posto di comando sblocca un nuovo punto di spawn" (visione
+dell'utente / GDD 5.4) — **impostava** `battleState.allySpawnPost` ma **nessuno lo leggeva**. Il
+valore era morto: catturare un post non cambiava nulla.
+
+- **Fix**: `ConquestMode::spawnUnit` ora, per i RINFORZI alleati (team 1), se `allySpawnPost` è
+  impostato spawna al command post nominato invece che allo spawn di mappa (spread 8-vie per non
+  impilarli). Vuoto = comportamento invariato (additivo). È il pezzo che rende la cattura di un post
+  una **conquista tattica**, non una casella: i rinforzi arrivano al fronte, non dalle retrovie.
+- Telemetria `reinforcement at unlocked spawn` (ADR-016) per osservabilità.
+- **Verificato**: build 0/0, validate 0 errori. `firebase_alpha` già usa `capture_alpha` →
+  `unlock_spawn: Alpha`, quindi è testabile in gioco. **NON verificabile headless** (serve missione
+  attiva + cattura + morte + respawn; `--stress` non attiva missioni): loop completo da **smoke
+  manuale** — cattura Alpha, fatti uccidere, verifica che i rinforzi arrivino ad Alpha.
+
+Metodo: ennesima applicazione di "nessun sistema isolato" — una conseguenza che scrive un valore che
+nessun sistema legge è codice morto travestito da feature. Ora `battleState` ha 4 conseguenze su 4
+con un consumatore reale (block_enemy_reinforcements, enemy_accuracy, ally_reinforcements, unlock_spawn).
+
+## 2026-07-18 (3) — Etichette tagliate nell'editor: fix su TUTTI i moduli
+
+Richiesta dell'utente: il fix del testo tagliato (fatto in alcuni moduli) va applicato ovunque.
+
+- **Causa**: i widget ImGui nativi (`DragFloat`/`SliderFloat`/`Combo`/`InputText`/`InputFloat`/
+  `InputInt`) disegnano l'etichetta a DESTRA del campo; a piena larghezza (o in un pannello stretto)
+  la label esce dal pannello e viene tagliata dal clip rect.
+- **Fix**: helper "etichetta a SINISTRA + campo che riempie il resto" in `util/UiWidgets` — già
+  esistevano `dragRow`/`sliderRow`; aggiunti `sliderRowLR`, `intRow`, `inputFloatRow`, `inputIntRow`,
+  `comboRow`, `textRow`, `colorRow` (tutti condividono lo stesso helper `rowLabel` che stronca l'id
+  `##`). L'etichetta è disegnata PER PRIMA → non può mai essere tagliata.
+- **Convertiti**: BalanceEditor (~40), MissionEditor (~25), VehicleEditor (5), MapEditor,
+  EntityEditor, WeaponEditor, ClassEditor. Restano native solo le **checkbox** (widget minuscolo,
+  etichetta adiacente: non si taglia) e il Briefing multiline (etichetta spostata SOPRA il box).
+- **Verificato**: build 0/0; editor si avvia e carica tutti i moduli senza crash. Il comportamento
+  dei widget è invariato (i valori si modificano in place come prima); cambia solo il layout
+  (etichetta a sinistra). **Smoke manuale**: scorrere i pannelli e confermare che nessuna etichetta
+  sia più tagliata.
+
+## 2026-07-18 (2) — Fix "cubo volante" dei bersagli + authoring MapEditor + ruota più lenta
+
+Dal playtest dell'utente + prosecuzione dell'authoring.
+
+- **Ruota di comando: rallentamento più forte** — `WHEEL_TIME_SCALE` 0.25 → **0.15** (~1/7).
+- **KI #54 (bug playtest) — bersaglio = "cubo volante" con hitbox sfasata.** Il box di fallback
+  aveva `meshOffsetY = 2.0` (fluttuava) e l'hitbox sintetico era un box gigante a +4 (non combaciava
+  col visibile) → l'utente non riusciva a colpirlo, quindi non si distruggeva e non appariva il
+  messaggio. Fix: hitbox sintetico = cubo unitario (offset 0, extents 0.5) che scala con l'entità e
+  usa lo STESSO `meshOffsetY` del render → **visibile == colpibile**; grounding corretto (box 2.5 m
+  con base al suolo). Il messaggio di distruzione ("BERSAGLIO DISTRUTTO" + telemetria) c'era già:
+  non compariva perché il bersaglio non veniva mai davvero colpito.
+- **KI #53 RISOLTO — authoring dei bersagli strategici nel MapEditor.** Lista "Bersagli strategici"
+  + aggiungi/rimuovi + gizmo Sposta (range selezione -500) + proprietà (label, X/Z, HP) + box
+  arancione nel viewport + load/save `strategic_targets[]` (RMW). Mirroring dei command post.
+  Ora DestroyTarget è **finito** per la regola "editabile dall'editor" (10_ProjectMemory).
+- **Verificato**: build 0/0; editor si avvia e carica firebase col bersaglio (no crash); validate
+  0 errori. **Smoke manuale dovuto**: nel MapEditor aggiungere/spostare un bersaglio e salvare;
+  in gioco (`firebase_sabotage`) sparare alla torre → ora dovrebbe cadere, comparire il messaggio,
+  e i droidi sparare peggio (`enemy_accuracy`).
+
+## 2026-07-18 (1) — Ruota di comando in slow-motion + obiettivo DestroyTarget (runtime)
+
+- **Slow-motion sulla ruota di comando** (richiesta utente, stile Bannerlord): mentre la ruota è
+  aperta il tempo di GIOCO rallenta (non pausa) a `WHEEL_TIME_SCALE = 0.25×`. Implementato scalando
+  il tempo reale che alimenta l'accumulatore a timestep fisso: fisica/AI restano deterministiche,
+  solo meno passi al secondo. Camera e selezione della ruota restano a velocità reale. (Le future
+  mappa tattica ecc. metteranno in PAUSA piena; la ruota solo rallenta, per non perdere tempo utile.)
+- **DestroyTarget (doc 25) — runtime completo.** Un **bersaglio strategico** è una struttura statica
+  distruttibile piazzata sulla mappa; distruggerla completa un obiettivo e ne scatena la conseguenza
+  (es. torre comunicazioni → nemici disorganizzati, `enemy_accuracy`). È il "bersaglio strategico da
+  distruggere" del GDD / della visione dell'utente.
+  - `StrategicTargetDef` + `MapDef.strategicTargets[]` + `ObjectiveDef.targetStructure` (label);
+    loader + gate (la label deve esistere ed essere unica nella mappa della missione).
+  - Spawn in `ConquestMode`: entità statica team 2 (colpibile da giocatore/alleati, niente AI),
+    Health + hitbox **sintetico** `__strategic_target` (box ~3×4×3 — il fallback sferico da 0.7 m
+    era troppo piccolo per una struttura).
+  - Mailbox `World::strategicTargets` (entità→label): l'`ObjectiveSystem` collega una distruzione
+    (`killedThisTick`) alla label senza conoscere il codice di gioco (doc 10). Telemetria: eventi
+    `strategic target spawned` / `destroyed`.
+  - Esempio autorato: bersaglio "Torre Comunicazioni" su firebase + obiettivo `destroy_comms_tower`
+    (conseguenza `enemy_accuracy 0.6`) + missione `firebase_sabotage`.
+  - **Verificato**: build 0/0; gate accetta il contenuto (0 errori); il bersaglio **spawna** (telemetria,
+    `--stress`). **NON verificabile headless**: la distruzione (richiede fuoco DELIBERATO — il
+    giocatore; gli alleati mirano ai nemici, non alla struttura) e quindi il completamento
+    dell'obiettivo. Loop distruzione→obiettivo→conseguenza da **smoke manuale** (gioca
+    `firebase_sabotage`, distruggi la torre, verifica che i droidi sparino peggio).
+  - **Follow-up (KI #53)**: authoring dei bersagli nel **MapEditor** — oggi si aggiungono/spostano
+    solo a mano nel JSON. Per la regola "non finito finché non si autora dall'editor" (10_ProjectMemory)
+    DestroyTarget è runtime-completo ma **authoring-in-editor pendente**.
+
+## 2026-07-17 (9) — CoveringFire come soppressione + review sistema ordini + fix nome binding mouse
+
+- **CoveringFire ora SOPPRIME** (era = HoldPosition). Un membro in fuoco di copertura NON entra in
+  fase evasiva (niente peek/hide): resta esposto e continua a sparare ("stand and deliver"), con
+  ~30% di cadenza in più. Distinto da un semplice "tieni la posizione". (`AiSystem`, flag `covering`.)
+- **KI #52 (bug playtest) — il binding mouse non mostrava il nome**: `renderControls` usava
+  `getScancode`+`SDL_GetScancodeName`, che su un binding mouse/rotella dà UNKNOWN → riga vuota ("—").
+  Ora usa `getKeyName` (descrive "Mouse Centrale", "Rotella su", "Mouse 4/5"...). Prompt del rebind
+  aggiornato ("tasto / mouse / rotella").
+- **Tasti laterali del mouse (X1/X2)**: già supportati — SDL2 li consegna come pulsanti 4/5, che il
+  sistema binding gestisce (cattura, query, nome). **Nessuna libreria serve**: SDL copre nativamente
+  tutti i pulsanti e la rotella.
+- **Review del sistema ordini — bug silenziosi trovati e chiusi**:
+  - messaggio "rianimazione non ancora implementata" era **stantio** (Revive ORA è implementato; solo
+    Regroup resta non cablato) → corretto;
+  - l'annuncio "Squadra (N): ordine" scattava anche per gli ordini **diretti** a un singolo compagno
+    (che l'Application già annuncia col toast) → soppresso per `directedMember != 0`.
+  - Verificati OK (non bug): applicazione ordini diretti, skip dei caduti, auto-soccorso che non
+    ruba membri sotto ordine del giocatore, esclusioni del pre-check di raggiungibilità, leash di
+    Revive (1.5 m < 2.5 m di rianimazione → il soccorritore arriva).
+- **Verificato**: build 0/0; `--stress 8` senza regressioni (5 a terra / 3 rianimati / 19 ordini, no
+  crash). CoveringFire è player-diretto → non esercitabile in `--sim`: **smoke manuale dovuto**.
+
+## 2026-07-17 (8) — Ruota di comando + mirino verde sugli alleati + binding mouse/rotella
+
+Tre richieste dell'utente dopo il playtest.
+
+- **Ruota di comando (doc 26, livello 2)** — `CommandWheel` (tasto **B** di default, rimappabile).
+  Tenuto premuto: la camera si CONGELA e il mouse sceglie il settore (**Regroup** basso-sx / **Hold**
+  basso-dx / **Advance** in alto); al rilascio l'ordine va a tutta la squadra. Regroup = raduna sul
+  leader (MoveTo player); Hold = ognuno tiene la PROPRIA posizione (HoldPosition per-membro);
+  Advance = avanza 15 m nella direzione di mira. HUD radiale con settore evidenziato.
+- **Mirino VERDE sugli alleati**: la raycast ora distingue nemico (rosso) e compagno (verde) →
+  feedback immediato per i comandi Revive/CoveringFire. `HUD::setAimOnAlly`.
+- **Sistema di binding esteso (input non-tastiera)** — l'utente voleva poter mettere azioni su
+  rotella/pulsanti mouse; ha chiesto il SISTEMA, non le rimappature. Fatto:
+  - `InputBinding{type, code}` con `Key / MouseButton / WheelUp / WheelDown`; `m_bindings` passa da
+    scancode a binding. Query (`isDown`/`isPressed`) gestiscono tutti i tipi; tracking di
+    rotella+pulsanti nel frame (reset in `update()`, riempito da `processEvent()`).
+  - Cattura nelle opzioni: mentre si attende un nuovo binding, rotella e pulsanti del mouse valgono
+    come input assegnabili (`OptionsMenu::assignAwaited`, `isAwaitingKey`).
+  - Persistenza `{type, code}` per nome azione, **retrocompatibile** col formato vecchio (intero
+    nudo = tasto). `getKeyName` descrive anche mouse/rotella ("Mouse Centrale", "Rotella su").
+  - **Verificato**: build 0/0; gioco avviato con un `keybindings.json` di prova (Cambia arma→rotella,
+    Ordine squadra→tasto centrale) caricato senza crash. La rimappatura vera dalla UI è **smoke
+    manuale dell'utente** (li imposta lui).
+
+**Smoke manuali dovuti** (tutto input/render-driven): ruota B→muovi mouse→rilascia; mirino verde su
+un compagno; opzioni → rimappa un'azione su rotella/tasto mouse → riavvia → resta.
+
+## 2026-07-17 (7) — Rifiniture Phase C dal playtest + due comandi diretti + keybinding persistenti
+
+Feedback dell'utente dopo aver provato Phase C.
+
+- **KI #50 (bug) — i caduti si muovevano** sotto ordine: l'agente crowd conservava il target e il
+  CrowdSystem lo muoveva anche se l'AI era saltata. Ora `AiSystem` **ferma attivamente** l'agente
+  (`requestMoveVelocity 0`) ogni tick per gli a-terra.
+- **KI #51 (bug) — keybinding non persistenti**: `InputManager` non salvava le rimappature. Aggiunti
+  `load`/`save` (per nome azione) in `<exe>/user_presets/keybindings.json`, come un preset.
+- **Indicatore visivo del caduto**: manca una posa prone → **tint ROSSO** sul clone a terra (dice
+  QUALE è a terra; l'HUD dice quanti/quanto). Riutilizzabile per un futuro HUD dei cloni.
+- **Due comandi diretti (tasto G, dal contesto del mirino)** — estendono FocusFire/TakeCover:
+  - mirando un **compagno a terra** → **Revive**: manda il membro vivo più vicino a soccorrerlo
+    (comando esplicito, oltre all'auto-soccorso);
+  - mirando un **compagno vivo** → **CoveringFire**: quel compagno tiene la posizione e fa fuoco di
+    supporto.
+  Serviti da `SquadOrderRequest.directedMember` (ordine a SINGOLO membro, non a tutta la squadra) e
+  da un rilevamento mirino separato per gli alleati (`aimAlly`: prima la raycast saltava il team 1 e
+  gli hp≤0, quindi i compagni — e i caduti — non erano mirabili).
+- **Verificato**: build 0/0; `--stress 8` senza regressioni (Phase C: 6 a terra / 4 rianimati, 40s,
+  no crash). I comandi e l'indicatore sono input/render-driven → **smoke manuale dovuto** (vedi
+  sotto).
+
+Nota: `SquadOrderRequest` ora distingue ordini di squadra (directedMember=0) e ordini a un singolo
+compagno — la base per futuri comandi mirati senza toccare l'infrastruttura.
+
+## 2026-07-17 (6) — Squad Phase C: stato "a terra" + rianimazione (le perdite pesano)
+
+Il prossimo step dai doc (N1/doc 26): *"stato a terra + rianimazione — è ciò che dà peso alle
+perdite... candidato numero uno per far passare l'is-it-fun"*. Implementato come increment additivo,
+osservabile in `--sim`.
+
+- **Un membro della squadra alleata non muore subito: va A TERRA** con bleed-out. Stato in
+  `SquadComponent` (niente componente nuovo). `CombatSystem` intercetta il colpo letale su un
+  alleato-squadra (giocatore escluso, nemici invariati) → a terra invece di distrutto. Un colpo su
+  un già-a-terra lo finisce.
+- **Rianimazione**: per prossimità (compagno/giocatore entro 2.5m per 3s → 50% HP) **e auto-soccorso**
+  (il membro libero più vicino viene dispacciato con un ordine `Revive`, ora implementato: prima
+  falliva "non ancora implementato"). La squadra si autoprotegge.
+- **Bleed-out**: nessun soccorso in 20s → morte, e SOLO ALLORA conta come perdita (`missionStats`) —
+  una perdita evitata non pesa sul giudizio (doc 25).
+- **AiSystem**: unità a terra inerme. **HUD**: `[A TERRA n — Xs]`. **Costanti** in GameConfig
+  (segnaposto).
+- **Verificato in `--sim`** (`--stress 8`, telemetria): 9 a terra / 7 rianimati / ordini `Revive`
+  auto-emessi (ciclo down→dispaccio→revive completo, es. bot 11 → #15). Bleed-out esercitato con
+  costante a 1.5s → 2 morti. Tutti e tre gli esiti **visti scattare**, non dedotti.
+
+Effetto: la squadra diventa una risorsa da proteggere, non comparse — il pilastro tattico del GDD.
+Metodo: intercettazione additiva (cambia solo la morte dell'alleato-squadra), stato in un componente
+esistente, verifica per esiti osservati in telemetria (non per lettura).
+
+## 2026-07-17 (5) — La posa dell'arma in mano appartiene all'ARMA (KI #49 migrato)
+
+Implementata la migrazione proposta nel giro 4: la posa/scala in mano si sposta dall'entità
+all'`WeaponDef`, così è corretta per chiunque impugni l'arma (una classe che cambia arma non
+produce più un modello a scala sbagliata).
+
+- **Schema `WeaponDef`**: `hand_scale`/`hand_rot`/`hand_offset` (loader + noteUnknownKeys).
+  `handScale<=0` = fallback al `weapon_display` legacy dell'entità (transizione additiva).
+- **Risoluzione unica**: `WeaponAttach` (runtime) e `EntityEditor::updateWeaponTransform`
+  (anteprima) usano la posa dell'arma se autorata, altrimenti il legacy. La MANO resta del
+  personaggio. Stessa formula in entrambi → "editor == gioco".
+- **Authoring**: Weapon Editor → "Posa in mano" (checkbox + scala/rot/offset). L'EntityEditor mostra
+  la posa in sola lettura quando è dell'arma (niente campo-fantasma editabile, KI #25) e non la
+  riscrive più sul weapon_display in quel caso.
+- **Migrazione dati** (RMW-chirurgica, sed, solo righe aggiunte): DC-15A 0.4 · E-5 1.2 · Z-6 80 ·
+  E-5C 0.0015. Il range nativo 53000× è la dimostrazione che la scala è dell'arma, non dell'entità.
+  Verificato: JSON validi, visivamente identico, `--stress 4` risolve 8 unità senza crash, gate 0
+  warning di posa.
+- **Gate**: da "display.id ≠ arma effettiva" a "arma effettiva senza `hand_scale`" — la condizione
+  ora azionabile.
+
+Nota metodo: ennesima applicazione di "una domanda, una implementazione". La scala in mano era la
+stessa cosa (dimensione nativa del mesh) espressa su ogni entità; ora è sull'oggetto che la
+possiede davvero — l'arma. Stesso spirito di `classres`, `DataPath`, il rilascio-mouse di EditorApp.
+
+## 2026-07-17 (4) — Refresh classi in EntityEditor + integrità scala arma in mano
+
+Due segnalazioni dell'utente.
+
+- **Refresh (bug netto).** "Ricarica lista" in EntityEditor chiamava solo `loadEntries()`, non
+  `loadAvailableIds()`: le classi appena create/modificate in Moduli → Classi **non comparivano** nel
+  dropdown, e l'anteprima dell'arma usava la registry vecchia. Ora ricarica liste + registry e
+  **conserva l'unità selezionata** per id (loadEntries azzera m_sel). Fix diretto.
+- **Scala arma in mano (KI #49).** Verifica richiesta dall'utente ("arma enorme nonostante la scala
+  sistemata"). La formula di scala è **identica** tra anteprima editor e runtime — l'integrità
+  "editor == gioco" regge. Il buco è che `weapon_display` (posa/scala) è sull'ENTITÀ e tarato su
+  un'arma fissa, ma il modello impugnato è l'arma EFFETTIVA della classe (KI #43): quando divergono
+  (es. display Z-6 scala 80, classe → DC-15A) l'arma esce 200× sbagliata. Aggiunto **warning nel
+  gate** su `weapon_display.id ≠ arma effettiva`; sui dati dell'utente 0 mismatch (già riallineati).
+  **Aperto (design)**: la posa in mano appartiene all'ARMA, non all'entità → proposta di migrazione
+  su `WeaponDef`, da concordare prima di implementare (GDD 21.4).
+
+Nota: grazie allo sblocco delle armi separatiste (giro 3, KI #47) l'utente ha creato le classi
+`B1 Battle Droid`/`B1 Heavy Battle Droid` (E-5/E-5C) e `Heavy Trooper` (Z-6). Il gate le valida pulite.
+
+## 2026-07-17 (3) — Tre problemi del viewport/editor segnalati dall'utente
+
+- **KI #46 (HIGH) — mouse catturato col Tab restava bloccato** uscendo da un modulo con viewport.
+  `SDL_SetRelativeMouseMode` è globale, ma solo il Tab nel `tick()` del viewport lo spegne — e il
+  tick smette di girare quando il modulo non è attivo. `EditorApp` ora rilascia la cattura **al
+  cambio modulo** (`m_prevActive`), dove si SA che il modulo cambia. Esc→Home diventa un'uscita
+  d'emergenza dal mouse.
+- **KI #47 — ClassEditor mostrava solo le armi repubblicane.** Non si potevano armare le classi dei
+  nemici (B1). Rimosso il filtro `faction != Separatist`; ora tutte le armi, con la fazione in
+  etichetta.
+- **KI #48 — viewport rotto fino al riavvio**: `resizeFBO` non ricostruiva un FBO invalidato se la
+  dimensione del pannello era stabile. Probabile causa del "problemi poi risolti chiudendo e
+  riaprendo". Ora si auto-ripara al frame dopo. Non riproducibile a comando: fix per lettura del
+  codice, da confermare sul campo.
+
+**Effetto architetturale (KI #46).** Un'altra istanza dello schema di questa settimana: uno stato
+globale (la cattura del mouse SDL) guidato da un toggle **per-modulo** che smette di girare. Come per
+`classres` e `DataPath`, l'invariante va imposto in **un punto che vede tutto** — qui EditorApp, che
+sa quando il modulo cambia — non sparso nei singoli tick che non sanno di essere stati abbandonati.
+
+## 2026-07-17 (2) — Pulizia editor: e sotto la pulizia c'era un bug vero
+
+Richiesta dell'utente: *"facciamo ordine e pulizia... togliere dall'Entity Editor tutto ciò che non
+decide l'entità... rendere tutto più pulito, stabile e ordinato"*. L'audit ha trovato un guasto di
+correttezza che la pulizia da sola non avrebbe toccato.
+
+- **KI #43 (HIGH) — con una classe assegnata, l'unità impugnava un'arma e ne sparava un'altra.**
+  La regola di ADR-022 viveva **solo** dentro `resolveUnitArchetype`; i bullet stats e il modello in
+  mano leggevano ancora `enemy->primaryWeaponId()`. Nuova **`mini::classres`**: unica
+  implementazione di "la classe vince", usata da runtime, render **e editor**.
+  **Verificato sui dati reali**: `Heavy Clone Trooper` (Z-6, danno 15 → classe `trooper` → DC-15A,
+  danno 20) ora emette `weapon: DC-15A, damage: 20.0`; **col bug rimesso apposta**:
+  `damage: 15.0` con `weapon: DC-15A` — incoerenti. Il test è stato visto fallire.
+- **KI #44 — Entity Editor: via i campi che il gioco ignorava.** Armi (lista bugiarda: conta solo
+  `weapons[0]`), Abilità, AI Profile (li decide la classe); Velocità (la sovrascrive sempre il
+  profilo AI) e Danno Scale (zero consumatori). Il combo "Arma primaria" del tab Visuale — che
+  scriveva `weapons[0]` travestito da posa — è ora in sola lettura, risolto con `classres`.
+  Nessun dato toccato: il modulo ha smesso di **rivendicare** campi che non edita, e RMW li preserva.
+- **KI #45 — R8 chiuso, e non era teorico**: le 8 copie della risoluzione di `data/` **divergevano
+  già** (4 col controllo forte su `data/weapons`, 4 con quello debole). Ora `editor/util/DataPath`,
+  una volta sola, col controllo forte.
+- **Telemetria**: nuovo evento `unit class resolved` (ADR-016). Serviva perché `std::cout` è
+  bufferizzato e un run headless interrotto lo perde: la risoluzione della classe non era
+  osservabile, e un valore che nessun log mostra è un valore che nessuno controlla.
+
+**Effetto architetturale.** Tre guasti diversi, una sola forma: *la stessa domanda con più
+implementazioni*. L'arma effettiva (runtime/render/editor), la radice di `data/` (8 moduli), il
+loadout (Statistiche + Visuale). ADR-018 lo dice per le regole di validazione; vale identico per
+ogni regola di risoluzione. Chi aggiunge un consumatore dell'arma di un'unità passa da `classres`.
+
+## 2026-07-17 (1) — Il giocatore non sceglie più una classe; doc 14 riscritto su ADR-022
+
+Chiusura del punto 4 di ADR-022, che era rimasto **in attesa di una decisione dell'utente**.
+Decisione: **rimuovere** la riga "Classe" dal PreMatch.
+
+- **Il fatto che ha sciolto il dubbio "rimuovere o rinominare Loadout?"**: le righe *Arma primaria*
+  e *Arma secondaria* **erano già** nello stesso menu, e la riga "Classe" le **sovrascriveva in
+  silenzio** (`Application.cpp`: `primaryId = cls->primaryWeaponId`). Non era solo un nome
+  sbagliato: era la trappola "due posti decidono lo stesso dato, uno vince senza dirlo" — la stessa
+  appena corretta nell'EntityEditor. Rinominarla "Loadout" l'avrebbe conservata cambiando etichetta;
+  rimuoverla non toglie **nessuna** funzione.
+- **Rimossi anche `setClassList`/`getSelectedClassId`/`ClassEntry` e i membri `m_class*`**: senza i
+  metodi la regola è **strutturale**, non una convenzione da ricordare (stesso ragionamento della
+  rimozione di `consumeTeam1Ticket()`, KI #39).
+- **Trappola evitata**: lasciare `m_settings.classId = getSelectedClassId()` con la riga rimossa
+  avrebbe fatto restituire "" a un indice ormai fisso a 0, **azzerando `--class`** a ogni passaggio
+  dal menu. È **KI #36 in miniatura**. `classId` ora si preserva come `characterId` in
+  `startFromPreMatch()`.
+- **`--class` resta come override di TEST**, dichiarato tale nel codice e annunciato in telemetria
+  (*"classe iniziale (override di test --class)"*). Non è una scelta offerta al giocatore.
+- **Doc 14 riscritto su base ADR-022**. Prima: si dichiarava *"not yet implemented"* mentre la metà
+  NPC era in produzione, e in **Out of Scope vietava** proprio ciò che ADR-022 ha poi deciso
+  (accoppiare la classe al profilo AI). Ora dichiara lo stato **MISTO** — metà NPC = Current
+  Implementation, metà giocatore = Planned — e documenta i debiti reali (`role` fantasma di secondo
+  tipo, `abilityIds` inerte per il giocatore, KI #32).
+- **Sblocca doc 27 (Progression)**, il cui criterio di accettazione #1 è *"14_ClassSystem
+  implementato prima di iniziare"*: è la **metà NPC** a soddisfarlo. Finché doc 14 si dichiarava
+  non implementato, la progressione era bloccata da una doc che mentiva sul proprio stato.
+
+**Verificato sul binario** (non sul codice): `"(nessuna - loadout manuale)"` — stringa che esisteva
+**solo** in `setClassList` — è **sparita** da `GFEngine.exe`; `"override di test --class"` è
+presente; e come **controprova** `"(nessuna - partita libera)"` (riga Missione) è ancora lì, quindi
+il controllo sa distinguere invece di passare a vuoto. Build 0 errori / 0 warning.
+
+## 2026-07-16 (13) — Controllo integrità: il gate di validazione era cieco su 3 loader
+
+Controllo di routine richiesto dall'utente (integrità, stabilità, coerenza fra sistemi, residui).
+Build e `--validate` erano **puliti**, ed erano puliti **per il motivo sbagliato**.
+
+- **KI #40 — `noteUnknownKeys()` mancava in `loadHitboxProfiles`/`loadMaps`/`loadVehicles`**
+  (9 loader su 12 lo chiamavano). Il rilevatore di campi fantasma legge `reg.unknownKeys()`: sui
+  file non coperti non aveva **nulla da leggere**. Risultato: `data/hitboxes/B1 Heavy Droid.json`
+  aveva `"profile_id"` — violazione ADR-001 conclamata — e il gate diceva *0 warning*. Chiuso su
+  tutti e tre; liste di chiavi **lette dal loader, non dedotte** (derivandole a grep avevo mancato
+  `color` sui veicoli e `enemy_types`/`ally_types` sulle mappe: una chiave mancante dalla lista
+  fa dire al gate di cancellare un campo che funziona). Limite dichiarato: sulle mappe solo il
+  primo livello, le sotto-strutture restano scoperte.
+- **KI #41 — profilo hitbox vuoto**: `zones: []` non crasha, cade sul fallback sferico di
+  `testHit()` → niente zone, niente headshot, **in silenzio**. Il gate ora lo dice, e copre anche
+  `half_extents <= 0` (Error: zona mai colpibile) e `damage_multiplier <= 0` (Warn).
+- **KI #42 — `MapDef.navmeshPath` scritto e mai letto**: BalanceEditor lo salvava, nessun loader
+  lo rileggeva, nessun sistema lo consumava. Contrario ad ADR-004 (navmesh generata a runtime da
+  Recast). Rimosso da `Definitions.hpp`, `BalanceEditor.cpp` e `data/maps/firebase.json`.
+  **L'ha trovato il gate appena riparato**, non un occhio umano.
+- **Residuo di build**: i backup `.bak` di `saveJsonRMW` finivano copiati nelle `data/` di output
+  (24 per binario). `cmake -E copy_directory` non sa escludere: aggiunto `cmake/strip_backups.cmake`
+  a build time. Innocuo oggi (i loader filtrano `.json`), ma il giorno del packaging sarebbero
+  stati backup di authoring spediti ai giocatori.
+
+**Effetto architetturale**: ADR-018 dice *un solo gate per runtime, `--validate` ed editor*. Era
+vero per le **regole** ma non per la **copertura**: tre loader non alimentavano il gate, e una
+regola che non può fallire non è una garanzia, è una decorazione. Ogni nuovo loader deve chiamare
+`noteUnknownKeys()` — senza, il gate mente per omissione.
+
+## 2026-07-16 (12) — Audit organizzazione editor + Home aggiornata
+
+## Organizzazione dell'editor e dei concetti (audit + proposta, 2026-07-16)
+
+Segnalazione dell'utente: *"tra i profili AI in Balance Editor, l'Entity Editor e ora le Classi
+rischiamo di fare un caos... l'Entity ci serve soprattutto per modelli e hitbox, anche se ora
+gestisce anche quale arma viene usata, che per gli NPC abbiamo detto che la decide la classe. In
+realtà avevo usato Entity Editor come una sorta di class editor temporaneo."*
+
+### Audit: chi edita cosa (verificato sul codice)
+| Dato | Modulo | Note |
+| --- | --- | --- |
+| Profili AI (`data/ai/`) | BalanceEditor → tab "AI" | i profili in sé |
+| `ai_profile` **di un'unità** | EntityEditor → Statistiche | **sovrapposto** |
+| `ai_profile` **di una classe** | ClassEditor | **sovrapposto** |
+| Armi **dell'unità** | EntityEditor → Statistiche | **sovrapposto** |
+| Armi **della classe** | ClassEditor | **sovrapposto** |
+| Mesh / attach / hitbox | EntityEditor → Visuale, Hitbox | corretto |
+| Abilità (definizioni) | BalanceEditor → tab "Abilita'" | |
+| Personaggio (`PlayerDef`) | BalanceEditor → tab "Personaggio" | |
+| Mappe (bilanciamento) | BalanceEditor → tab "Mappe" + MapEditor | **sovrapposto** |
+
+### I tre problemi
+1. **Arma e profilo AI si assegnano in due posti.** Da ADR-022 vince la **classe**: il campo
+   sull'unità viene ignorato. Editarlo senza saperlo è KI #25 daccapo.
+   → **Fatto ora**: l'EntityEditor mostra un **selettore di classe** e avvisa in giallo che, con una
+   classe assegnata, arma/profilo/abilità **li decide la classe**. Nessun campo rimosso: prima si
+   verifica il modello provando, poi si toglie ciò che avanza.
+2. **`Clone Trooper` e `Heavy Clone Trooper` sono UNA entità e DUE classi.** L'utente l'ha detto:
+   ha usato l'EntityEditor come class editor provvisorio. Nel modello ADR-022 l'entità è il
+   **corpo** (mesh, hitbox, fazione), la classe è la **professione** (loadout, comportamento).
+   Due unità che condividono il modello e differiscono per arma+profilo **sono** due classi.
+   → **Migrazione proposta (NON fatta: è contenuto dell'utente)**:
+   `allies/Clone Trooper` resta l'unica entità-corpo; nascono `classes/trooper` (già c'è) e
+   `classes/heavy`; `Heavy Clone Trooper` si cancella **dopo** aver verificato che nessuna mappa lo
+   referenzi in `ally_types[]`. Da fare col comando Rinomina/gate, non a mano.
+   *Nota*: se le due unità hanno **mesh o hitbox diversi** allora sono davvero due entità e la
+   migrazione non vale — va guardato prima.
+3. **BalanceEditor è un contenitore misto**: profili AI + mappe + personaggio + abilità, quattro
+   cose senza parentela. Non è urgente, ma la direzione naturale è che "Balance" resti **solo gli
+   slider di bilanciamento** e i profili AI vadano nel futuro **AI Editor** (già previsto come card
+   "presto" nella Home).
+
+### Regola per non ricascarci
+**Un dato si edita in UN posto solo.** Se due moduli lo mostrano, uno dei due deve dire chi vince —
+o non mostrarlo. È lo stesso principio del gate condiviso (ADR-018: una sola fonte per le regole) e
+della mailbox (un solo proprietario del dato).
+
+### Fatto in questo giro
+- **Home aggiornata**: ci sono ora le card **Missioni e Obiettivi**, **Classi** e **Validazione
+  contenuti**, riordinate per *cosa fai* (contenuto di gioco → strumenti) invece che per ordine
+  storico. Le descrizioni dicono anche cosa il modulo **non** decide ("Entity: arma/AI le decide la
+  Classe"; "AI Editor: i profili si editano in Balance").
+- **EntityEditor**: selettore di classe + avviso di precedenza.
+- **Fix**: `saveObjective` scriveva **sempre** `actor_team`, anche per `eliminate_target` che non lo
+  usa (conta qualsiasi kill del team bersaglio). Era già successo davvero: `thin_the_garrison` si è
+  portato dietro un `actor_team` inerte al primo salvataggio dall'editor. Ora ogni tipo scrive solo
+  i campi che usa. File ripristinato.
+
+
+## 2026-07-16 (11) — ADR-022 riscritto sul modello reale + metà NPC delle classi implementata
+
+### La spiegazione dell'utente ha ribaltato ADR-022 — e ha mostrato che avevo letto male il GDD
+Modello reale delle classi, in **tre parti**:
+1. **NPC**: la classe indica *"abilità, comportamento, loadout e in caso l'aspetto"* → si
+   **instanzia** su un'unità (GDD 12.3).
+2. **Giocatore**: *"**non ne sceglie una**: le classi sono tipo un albero delle abilità. Ogni classe
+   esiste **contemporaneamente** e può essere **livellata** usando certe armi o completando certi
+   tipi di obiettivi... il **gameplay decide** quali classi crescono"*.
+3. **Specializzazioni** (ARC Trooper, Clone Commando): *"si sbloccano completando obiettivi
+   specifici... **non si livellano**"* → terzo asse, non un ramo delle classi.
+
+**GDD 11.3 lo diceva già**: *"la classe **non è una scelta rigida all'inizio**, ma un'identità che
+emerge dal comportamento"*. **Non l'avevo letto**: avevo studiato il cap. 12 (classi) e non l'11
+(progressione). Errore di metodo → vincolo registrato in ADR-022: *un concetto può essere
+specificato in più capitoli; cercarlo in tutto il GDD, non solo nel capitolo omonimo.*
+
+**Conseguenza scomoda**: `MatchSettings.classId` + la riga **"Classe" nel PreMatch** — che ho
+costruito ieri — sono **contrari al design**: fanno scegliere al giocatore una classe che gli
+assegna il loadout. Per il giocatore quello è un **preset di loadout**, non una classe. Va rimosso
+o rinominato: lasciarlo significa che "classe" ha **due significati opposti** nello stesso codice,
+la deriva nome↔concetto che il progetto paga da mesi (KI #7/#25/#35). **Decisione all'utente.**
+
+### ADR-022 riscritto (la prima stesura è marcata SUPERATA, non cancellata)
+`ClassDef` resta **una** definizione usata in due modi (è il modello dell'utente: *"la stessa classe
+esiste sia per i cloni alleati, sia per il personaggio"*). Metà NPC implementabile ora; metà
+giocatore (XP/livelli/perk) → Fase 3, doc 27; specializzazioni → terzo tipo, non ora.
+
+### Metà NPC — implementata
+- **`ClassDef.aiProfileId`**: è ciò che rende la classe una **professione** e non un pacchetto di
+  armi. `EnemyDef.classId` (opzionale): l'unità referenzia una classe invece di ripetere
+  loadout+profilo+abilità. Supera l'Out of Scope del doc 14 (*"non accoppiare gli archetipi AI a
+  ClassDef senza un ADR separato"*) — ADR-022 **è** quell'ADR.
+- **Ogni campo della classe vince solo se valorizzato**: un'unità può referenziare una classe e
+  tenersi una particolarità. Nessuna classe → **tutto come prima** (additivo).
+- Gate ADR-018 esteso: `classes.ai_profile` e `enemies/allies.class` sono riferimenti incrociati
+  come gli altri. Dropdown "Profilo AI" nel ClassEditor.
+- Fix collaterale: il messaggio d'errore del profilo AI stampava quello **dell'unità** anche quando
+  il profilo risolto veniva dalla classe → indicava il dato sbagliato da correggere.
+
+### Verifiche (sonda deterministica, poi rimossa; dati ripristinati con git)
+- **La classe fornisce davvero comportamento e loadout**: `Clone Trooper` ha nei dati
+  `weapons:["DC-15A"]` e `ai_profile:"B1 Battle Droid"`, ma referenziando una classe Heavy risolve
+  **`arma=Z-6 Rotary Blaster profiloAI=B1 Heavy Droid`**.
+- **Additivo**: rimossa la classe → torna a `arma=DC-15A profiloAI=B1 Battle Droid`, identico.
+- **Gate**: classe inesistente su un'unità + profilo AI inesistente su una classe → 2 Error, exit 1.
+- Build **0 errori, 0 warning**; `--validate` 0/0; `--stress 6` pulito; nessuno scaffold né dato di
+  test rimasto (verificato con `git status`).
+
+## 2026-07-16 (10) — Fix dropdown obiettivi + modulo editor "Classi" (authoring completo)
+
+### Bug segnalato dall'utente: "non tutti gli obiettivi appaiono nel menu a tendina"
+Due difetti distinti, uno reale e uno di comunicazione:
+1. **`static int sel` condiviso fra i due dropdown** (primari/opzionali): uno `static` dentro una
+   lambda è condiviso da **tutte** le sue invocazioni, quindi selezionare in un dropdown faceva
+   saltare l'altro — ed era condiviso anche fra missioni diverse. **Fix**: una selezione per lista
+   (`m_addSelPrimary`/`m_addSelOptional`).
+2. **Il filtro non era spiegato**: gli obiettivi già nella missione non ricompaiono (aggiungerli
+   due volte, o metterne uno fra primari *e* opzionali, sarebbe un dato incoerente) — ma nulla lo
+   diceva, quindi sembrava che il dropdown perdesse voci da solo. **Fix**: conteggio esplicito
+   *"N obiettivi già in questa missione (non rielencati): toglili con X per riassegnarli"*.
+3. Bonus: il dropdown mostrava l'**id grezzo** mentre la lista sopra mostra il nome — due modi di
+   chiamare la stessa cosa nella stessa finestra. Ora mostra `Nome (id)`.
+
+### Modulo "Classi" (Moduli → Classi)
+Ultimo pezzo di contenuto che si autorava a mano. Nome, ruolo, arma primaria/secondaria e abilità,
+tutti da **dropdown del registry**. Stessa disciplina del modulo Missioni: `saveJsonRMW` (ADR-010),
+`id` mai scritto nel JSON (ADR-001), nuova categoria `rename::Category::Class`, creazione col
+minimo valido per il gate (l'arma primaria è obbligatoria), ordinamento **congiunto** delle liste
+parallele id/label (ordinarne una sola le disallineerebbe: l'arma mostrata non sarebbe quella scelta).
+**Onestà sui limiti**, in giallo nel pannello: il `role` è solo un'etichetta che **nessun sistema
+consuma** (ADR-022 Proposed), e le abilità sono trasportate ma **senza effetto** (KI #32).
+
+### Il salvataggio è stato verificato SUI DATI REALI — dall'utente, senza saperlo
+Il `git status` mostrava due file dati modificati che io non avevo toccato. Non era un incidente:
+erano **le modifiche dell'utente** che testava l'editor (`firebase_ridge.time_limit` 300→350,
+`reach_east_ridge.target.radius` 4→5). Confronto campo per campo con `git show HEAD:`:
+- **nessun campo perso** in nessuno dei due file;
+- `reach_east_ridge` ha conservato **`target.y`**, che `saveObjective` **non scrive** → è l'RMW di
+  ADR-010 che preserva ciò che il modulo non possiede. È il test vero di quella regola, passato su
+  dati reali e su un file che l'utente teneva.
+Nota: i file salvati dall'editor escono riformattati (`dump(4)`, chiavi ordinate) — rumore nel
+diff, non perdita di dati; è il comportamento di ogni modulo dell'editor da sempre.
+
+### Verifiche
+- Build Debug completa (GFEngine + GFEditor): **0 errori, 0 warning**. `--validate` 0/0.
+- **Round-trip classi**: i campi scritti coprono tutti quelli presenti in `trooper`/`marksman`.
+- **NON verificato**: il modulo Classi a schermo e una rinomina di classe reale.
+
+## 2026-07-16 (9) — Modulo editor "Missioni e obiettivi": l'authoring esce dai JSON a mano
+
+Chiude il debito aperto dalla direttiva utente del 2026-07-16 (*"più cose posso modificare
+dall'editor meglio è; quello rimane lo strumento principale che IO posso usare"*): in tre giorni
+avevo aggiunto obiettivi, missioni, classi e conseguenze **senza alcun modulo editor**. Il doc 25
+stesso prevedeva *"prima lo schema e il runtime, poi l'authoring"* — schema e runtime erano in
+force, quindi l'authoring era il passo dovuto.
+
+### Il modulo (Moduli → "Missioni e obiettivi")
+Due tab, perché sono due tipi di definizione distinti: **un obiettivo esiste di per sé** e può
+essere usato da più missioni.
+- **Obiettivi**: nome, tipo, tier, bersaglio, attivazione, limite di tempo, ricompensa, e le
+  **conseguenze** (`on_success`/`on_failure`) con "+ conseguenza" / "X".
+- **Missioni**: nome, briefing, mappa, modalità, composizione degli obiettivi (primari/opzionali)
+  e regole di successo/fallimento.
+
+### Vincoli rispettati (sono la ragione per cui il modulo è fatto così)
+- **Dropdown dal registry, mai id a testo libero** (CLAUDE.md): gli obiettivi si **compongono** da
+  una lista, la mappa viene dal registry, e **i command post vengono dalla mappa DELLA MISSIONE**
+  — `CaptureZone`/`unlock_spawn` referenziano una label, che a mano è un riferimento rotto in
+  attesa di accadere.
+- **`saveJsonRMW`** (ADR-010) per ogni scrittura: si toccano solo i campi propri.
+  **`id` non è mai scritto nel JSON** (ADR-001): è il filename, e un id in-file stantio ha già
+  rotto le cross-ref in silenzio (KI #21).
+- **Rinomina via comando**, con **sweep delle cross-reference reali** — nuove categorie
+  `rename::Category::Objective` (→ `missions.primary/optional_objectives[]`,
+  `objectives.activation.objective`, `linked_objectives[]`) e `::Mission`. Senza lo sweep,
+  rinominare un prerequisito lascerebbe l'obiettivo dipendente **inattivabile per sempre**.
+- **Ogni tipo mostra solo i campi che USA**: un `value` su `block_enemy_reinforcements` non lo
+  legge nessuno, e mostrarlo sarebbe una bugia. Idem per il target del bersaglio.
+- **Onestà sui limiti**: i tipi dichiarati ma non eseguiti dal runtime (DestroyTarget, EscortEntity,
+  SurviveWave, InteractHack) sono selezionabili **con un avviso arancione** — non nascosti, ma
+  nemmeno silenziosi.
+- **Creazione = minimo VALIDO per il gate** (missione con entrambe le regole, obiettivo con target
+  sensato): un contenuto che nasce già rifiutato sarebbe authoring ostile.
+
+### Verifiche
+- Build Debug completa (GFEngine + GFEditor): **0 errori, 0 warning**. `--validate` 0/0.
+- **Forma dei dati verificata contro i file reali**: i tre punti dello sweep di rename
+  (`primary_objectives[]` array, `activation.objective` stringa annidata, `linked_objectives[]`)
+  combaciano con `firebase_alpha`/`hold_alpha`, dove `capture_alpha` è referenziato da **due** file.
+- **Round-trip del save**: i campi scritti da `saveObjective` coprono tutti quelli presenti nei
+  file reali; `target` contiene esattamente `post`/`actor_team` per CaptureZone. Nessun campo
+  perso — e l'RMW preserva comunque gli ignoti.
+- **Dati reali intatti**: nessun test li ha toccati (verificato con `diff`).
+- **NON verificato — serve un giro in GFEditor**: l'interfaccia (layout, dropdown popolati) e un
+  salvataggio/rinomina reali. È il pezzo che va provato a mano: il salvataggio è la classe di
+  operazione che nel 2026-07-08 ha distrutto dati.
+
 ## 2026-07-16 (8) — `consequence`: gli obiettivi smettono di essere caselle da spuntare
 
 ### La direttiva che ha sbloccato il lavoro (e corretto un mio errore)

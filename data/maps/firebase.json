@@ -1,8 +1,4 @@
 {
-    "vehicle_spawns": [
-        { "vehicle_id": "BARC Speeder", "x": 2.0,  "z": 15.5, "ry": 180.0 },
-        { "vehicle_id": "BARC Speeder", "x": -5.0, "z": -14.0, "ry": 0.0 }
-    ],
     "ally_count": 3,
     "ally_types": [],
     "command_posts": [
@@ -404,7 +400,6 @@
     "mesh": "assets/maps/firebase.obj",
     "metadata": "assets/maps/firebase_meta.json",
     "name": "Firebase",
-    "navmesh": "",
     "patrol_routes": [
         {
             "id": "route_1",
@@ -446,5 +441,27 @@
         0.0,
         0.8600000143051147,
         -16.0
+    ],
+    "strategic_targets": [
+        {
+            "hp": 300.0,
+            "label": "Torre Comunicazioni",
+            "x": 8.0,
+            "z": -14.836868286132813
+        }
+    ],
+    "vehicle_spawns": [
+        {
+            "ry": 180.0,
+            "vehicle_id": "BARC Speeder",
+            "x": 2.0,
+            "z": 15.5
+        },
+        {
+            "ry": 0.0,
+            "vehicle_id": "BARC Speeder",
+            "x": -5.0,
+            "z": -14.0
+        }
     ]
 }

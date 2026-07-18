@@ -161,14 +161,31 @@ glm::vec3 nudgeOutOfColliders(const glm::vec3& pos, const glm::vec3& half,
         { 1, 0}, {-1, 0}, { 0, 1}, { 0,-1},
         { 0.707f, 0.707f}, {-0.707f, 0.707f},
         { 0.707f,-0.707f}, {-0.707f,-0.707f} };
-    for (int ring = 1; ring <= rings; ++ring)
-        for (const auto& d : dirs)
-        {
-            const glm::vec3 p = {pos.x + d[0] * step * (float)ring,
-                                 pos.y,
-                                 pos.z + d[1] * step * (float)ring};
-            if (!hasCollision(p, half, world)) return p;
-        }
+
+    // Ricerca 3D a livelli di quota crescenti. Il livello 0 è la ricerca
+    // orizzontale a terra di prima (muri: ci si sposta di lato). Se TUTTO il
+    // livello 0 è bloccato — è il caso della geometria rialzata più larga del
+    // raggio, es. la lastra larga di un command post — si sale di un livello e
+    // si riprova: così ci si posiziona SOPRA la piattaforma invece di restare
+    // incastrati. Passo verticale fine per atterrare vicino alla superficie;
+    // tetto finito così da non teletrasportare in alto all'infinito.
+    const float vStep  = 0.4f;
+    const int   vSteps = 15;   // ~6 m di risalita massima
+    for (int v = 0; v <= vSteps; ++v)
+    {
+        const float y = pos.y + vStep * (float)v;
+        // Punto esatto a questa quota (a v=0 è già noto bloccato, si salta).
+        if (v > 0 && !hasCollision({pos.x, y, pos.z}, half, world))
+            return {pos.x, y, pos.z};
+        for (int ring = 1; ring <= rings; ++ring)
+            for (const auto& d : dirs)
+            {
+                const glm::vec3 p = {pos.x + d[0] * step * (float)ring,
+                                     y,
+                                     pos.z + d[1] * step * (float)ring};
+                if (!hasCollision(p, half, world)) return p;
+            }
+    }
     return pos;
 }
 

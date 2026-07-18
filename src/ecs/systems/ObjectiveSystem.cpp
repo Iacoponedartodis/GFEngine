@@ -52,7 +52,8 @@ bool isImplemented(ObjectiveType t)
         || t == ObjectiveType::EliminateTarget
         || t == ObjectiveType::HoldAreaForDuration
         || t == ObjectiveType::CaptureZone
-        || t == ObjectiveType::DefendZone;
+        || t == ObjectiveType::DefendZone
+        || t == ObjectiveType::DestroyTarget;
 }
 
 // Proprietario del post con quella label. -1 = post inesistente (dato invalido:
@@ -379,6 +380,19 @@ bool ObjectiveSystem::evaluate(World& world, Runtime& r, float dt)
         for (const auto& k : world.killedThisTick)
             if (k.team == d.targetTeam) ++r.progress;
         return r.progress >= d.count;
+
+    case ObjectiveType::DestroyTarget:
+    {
+        // Completo quando il bersaglio NOMINATO è stato distrutto. L'entità del
+        // bersaglio muore in CombatSystem (killedThisTick); la mailbox
+        // strategicTargets (popolata dal game mode) collega quella entità alla
+        // sua label — così l'ObjectiveSystem resta agnostico al codice di gioco.
+        for (const auto& k : world.killedThisTick)
+            for (const auto& st : world.strategicTargets)
+                if (st.entity == k.entity && st.label == d.targetStructure)
+                    return true;
+        return false;
+    }
 
     default:
         return false;   // i tipi non implementati sono già stati intercettati

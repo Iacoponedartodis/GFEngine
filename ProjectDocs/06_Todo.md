@@ -13,8 +13,15 @@ Stato: `SquadComponent` + `SquadSystem` (fra Combat e Ai) in force; squadra alle
 comando contestuale a un tasto (G) risolto dal mirino → `FocusFire`/`TakeCover`/`MoveTo`, mailbox
 `World::squadOrder`, raggiungibilità verificata prima di impartire, HUD pannello SQUADRA + esiti nel
 feed. 4 criteri di accettazione del doc 26 su 5 soddisfatti (vedi 07_Changelog per i numeri).
-**Restano:** la **ruota di comando** (livello 2: Regroup/Hold/Advance) e **Phase C** ("a terra" +
-rianimazione, tocca `CombatSystem`). L'economia tattica (Punti Comando) resta bloccata su N2 —
+**~~Phase C~~ → FATTA 2026-07-17**: stato "a terra" + rianimazione (per prossimità + auto-soccorso
+con ordine `Revive`) + bleed-out; intercettazione additiva in `CombatSystem`, HUD, costanti in
+GameConfig. Verificata in `--sim`: down/revive/bleed-out tutti e tre visti scattare. Le perdite ora
+pesano (doc 26). **~~ruota di comando~~ → FATTA 2026-07-17** (tasto B tenuto → mouse sceglie
+Regroup/Hold/Advance; HUD radiale; mirino verde sugli alleati). Aggiunti anche i comandi diretti
+Revive/CoveringFire (giro 7) e il **sistema di binding esteso** (rotella/pulsanti mouse assegnabili
+dalle opzioni, giro 8). `CoveringFire` rifinito in **soppressione** (giro 9). **Restano rifiniture
+Phase C**: posa prone (in attesa di pose/animazioni — tooling dell'utente), bilanciamento tempi/raggio.
+L'economia tattica (Punti Comando) resta bloccata su N2 —
 come il 5° criterio di accettazione ("la missione è più difficile senza ordini"), che richiede una
 missione vera: **è l'argomento più forte per fare N2 adesso**.
 → **Playtest confermato dall'utente 2026-07-15** (tasto G, contesto dal mirino, pannello HUD:
@@ -37,8 +44,9 @@ farla passare.
 framework era completo ma per il giocatore **non esisteva** (KI #37). Ora: esito missione → esito
 partita (con precedenza al mode); **HUD OBIETTIVI**; la missione impone la sua mappa; rebind al
 riavvio (KI #38). Verificato in partita vera: fallimento → SCONFITTA, successo → VITTORIA.
-**Selezione dal PreMatch FATTA (07-16)**: righe Missione e Classe nel menu; la missione impone
-mappa/modalita' e il menu le mostra.
+**Selezione dal PreMatch FATTA (07-16)**: riga Missione nel menu; la missione impone
+mappa/modalita' e il menu le mostra. (La riga **Classe**, aggiunta lo stesso giorno, e' stata
+**rimossa il 07-17**: contraddiceva GDD 11.3 — vedi N4.)
 **CaptureZone/DefendZone FATTE (07-16)**: ADR-009 **avvolto** via mailbox `commandPostStates`
 (zero duplicazione della logica di cattura); riferimento per label validato dal gate nella mappa
 della missione. Missione esempio: `firebase_alpha`. Ora il framework sa esprimere la meccanica
@@ -62,22 +70,71 @@ progressione (doc 27) e restano design.
 (`block_enemy_reinforcements`, `enemy_accuracy`, `ally_reinforcements`, `unlock_spawn`) via
 `World::battleState`; valori segnaposto da bilanciare provando; gate ADR-018 esteso.
 Verificato con **effetto reale** (2× "RINFORZI INTERROTTI", 0 rimpiazzi).
+**`unlock_spawn` completato 2026-07-18**: era una conseguenza a metà (scriveva `allySpawnPost` che
+nessuno leggeva). Ora i rinforzi alleati spawnano al post conquistato (`ConquestMode::spawnUnit`).
+Tutte e 4 le conseguenze hanno un consumatore reale. Loop completo da smoke manuale (firebase_alpha).
 
-## ⚠️ DEBITO PRINCIPALE — l'editor non conosce i sistemi nuovi
-Direttiva utente 2026-07-16 (vedi 10_ProjectMemory): *"più cose posso modificare dall'editor meglio
-è; quello rimane lo strumento principale che IO posso usare, deve essere un tool molto forte e
-profondo"*. Oggi **obiettivi, missioni, classi e conseguenze si autorano a mano nei JSON**: nessun
-modulo editor. Il doc 25 stesso prevedeva "prima lo schema e il runtime, poi l'authoring" — schema
-e runtime **ci sono**, quindi l'authoring è il passo dovuto.
-Da fare (in ordine): **modulo "Missioni"** (missione + obiettivi + conseguenze, dropdown-only dal
-registry: post dalla mappa della missione, obiettivi dal registry, tipi da enum) e **modulo
-"Classi"** (doc 14). Vincoli non negoziabili: `saveJsonRMW` (ADR-010), comando Rinomina,
-dropdown mai testo libero, e il gate ADR-018 già pronto come pannello di verifica.
+**Economia dei post: da ticket-bleed a *respawn-slow* — FATTO 2026-07-18** (direttiva utente). Il
+vecchio "chi ha più post drena i ticket avversari" è **rimosso** da Conquista: ora ogni post posseduto
+**rallenta il respawn** della squadra nemica (`config::POST_RESPAWN_SLOW = 0.15` additivo per post, in
+`ConquestMode::checkDeaths`). Il post è un vantaggio di **ritmo/posizione**, non un sink di ticket.
+Assalto/Difesa (ObjectiveModes) NON toccate: mantengono `m_bleedTimer` come timer di vittoria.
+Questo **scioglie il nodo "sink dei Punti Comando"** solo in parte: il vantaggio-post ora c'è ma è
+strutturale (respawn + unlock_spawn), non una valuta spendibile — la valuta resta design aperto.
+
+**Mappa top-down di selezione respawn — FATTO 2026-07-18** (doc 30, Phase 1, stile Battlefront II 2005).
+`IGameMode::availableSpawns()` (default = spawn base; `ConquestMode` = base + post alleati via
+`CommandPosts::ownedByTeam`); **mappa dall'alto** in `Ui2D` (pareti dai box `geometry`, marker dei
+punti proiettati, marker "caduto") con selezione **col mouse SULLA mappa** (hover + click) + fallback
+`A/D`/Invio; conferma esplicita per schierarsi — **non** auto-respawn con 2+ punti (KI #56); spawn
+de-clippato con `nudgeOutOfColliders` (KI #57); HP dal setting partita (KI #55). Tutto 2D → ADR-003
+intatto. Build-verified; rendering/click da **smoke manuale**.
+→ **Fasi future (doc 30 Out of Scope)**: **mappa tattica generale** (tasto dedicato, mette in PAUSA —
+sistema *distinto* ma con base condivisa, chiarito dall'utente 07-18), post nemici/neutrali sulla
+mappa, **ordini dalla mappa** (muovi la squadra cliccando), texture terreno, zoom/pan. Da fare quando
+l'utente lo chiede.
+
+## Editor: modulo "Missioni e obiettivi" FATTO 2026-07-16
+Moduli → "Missioni e obiettivi": due tab (obiettivi / missioni), dropdown-only dal registry
+(obiettivi composti da lista, mappa dal registry, **command post dalla mappa della missione**),
+conseguenze editabili, `saveJsonRMW` (ADR-010), id mai scritto nel JSON (ADR-001), Rinomina con
+sweep delle cross-ref (nuove categorie `Objective`/`Mission`). Tipi non ancora eseguiti dal
+runtime: selezionabili ma **con avviso**.
+→ **Smoke dovuto**: aprire GFEditor → Moduli → "Missioni e obiettivi", provare un salvataggio e
+una rinomina. Il salvataggio è la classe di operazione che nel 2026-07-08 ha distrutto dati:
+build-verified non basta.
+**Modulo "Classi" FATTO 2026-07-16**: nome, ruolo, armi e abilita' da dropdown del registry;
+stessa disciplina (RMW, id = filename, Rinomina con categoria `Class`, minimo valido per il gate).
+Avvisi espliciti: `role` non consumato da nessuno (ADR-022) e abilita' senza effetto (KI #32).
+**L'authoring dei contenuti e' ora completo**: nessun tipo di definizione richiede piu' di
+scrivere JSON a mano.
+→ **Smoke dovuto**: Moduli → Classi (salvataggio e rinomina).
+
+## Debito editor — CHIUSO 2026-07-16 (storico)
+Era: *"obiettivi, missioni, classi e conseguenze si autorano a mano nei JSON, nessun modulo
+editor"*, aperto dalla direttiva utente del 07-16 (l'editor è lo strumento principale) e dal doc 25
+("prima lo schema e il runtime, **poi l'authoring**"). Chiuso dai due moduli sopra.
+**Regola che ne deriva, da rispettare d'ora in poi**: un tipo di definizione nuovo non è finito
+finché non si autora dall'editor. Il test è *"l'utente può modificarlo senza di me?"*
+(10_ProjectMemory).
 
 **Altro su questo filone:**
-1. **`DestroyTarget`** — serve per "bersagli distrutti" (parametro del giudizio) e per i "bersagli
-   strategici" che ogni mappa avrà.
+1. **~~`DestroyTarget`~~ → FATTO 2026-07-18 (runtime + editor).** Bersaglio strategico = struttura
+   statica distruttibile su mappa (`StrategicTargetDef`/`MapDef.strategicTargets[]`); distruggerla
+   completa l'obiettivo e scatena la conseguenza. Esempio: torre comunicazioni su firebase → missione
+   `firebase_sabotage` (conseguenza `enemy_accuracy`). Authoring nel MapEditor completo (KI #53).
+   Fix del "cubo volante"/hitbox sfasata (KI #54). Da rifinire quando ci saranno mesh reali per le
+   strutture (ora box di fallback); smoke manuale del loop distruzione→obiettivo→conseguenza.
 2. **Pesi/esperienza** del giudizio → doc 27 (Fase 3), dopo aver provato.
+
+**Intento di design confermato dall'utente (2026-07-18)**: in una missione **convivranno più
+obiettivi**, e distruggere un bersaglio spesso NON completerà la missione — le torri di
+comunicazione e simili saranno per lo più bersagli da **distruggere o difendere per ottenere
+vantaggi in partita** (conseguenze), non condizioni di vittoria. Già supportato: una missione ha
+primari + opzionali con regole di vittoria, e le conseguenze danno vantaggi. Quando si autora, un
+DestroyTarget "per vantaggio" va messo come **opzionale** (o con sola conseguenza, senza renderlo
+condizione di successo). L'esempio `firebase_sabotage` lo usa come primario solo perché è una demo
+a obiettivo singolo.
 
 **Storico — candidato ormai chiuso:**
 L'utente lo indica come necessario: *"dopo ogni missione si ottengono punti grazie a un sistema di
@@ -119,14 +176,31 @@ Limite documentato: cattura le chiavi IGNORATE dal loader, non i campi letti-ma-
 (la lista storica di KI #25) — quelli sono codice, non dati, e restano annotati a mano.
 → **Smoke dovuto**: aprire GFEditor → Moduli → Validazione contenuti.
 
-**N4. Class System — Phase A fatta, ma il doc 14 CONTRADDICE il GDD → ADR-022 (Proposed).**
-Il GDD cap. 12 apre con *"professioni militari, non semplici categorie di armi"* e in 12.3 lega le
-classi al **comportamento IA degli NPC** e alla composizione di squadra; il doc 14 modella una
-categoria di armi e **vieta** il legame con l'IA. Il `ClassDef` implementato copre **1 dei 6
-parametri** del GDD: seme valido, incorniciato male. **Decisione da approvare (ADR-022)**: far
-crescere `ClassDef` verso il GDD partendo da `aiProfileId` + `role` come enum consumato — è ciò che
-lo rende una professione e alimenta il sistema di squadra (ADR-020). Perk/XP/sblocchi → Fase 3.
-**Il doc 14 va riscritto** su quella base.
+**N4. Class System → ADR-022 RISCRITTO e meta' NPC FATTA (2026-07-16).**
+Modello reale (spiegazione utente + GDD 11.3, capitolo che non avevo letto): le classi sono **due
+sistemi in una definizione**. (1) **NPC**: la classe da' abilita', **comportamento**, loadout e
+aspetto → si instanzia. (2) **Giocatore**: **non ne sceglie una** — tutte esistono insieme e si
+**livellano** giocando ("il gameplay decide quali classi crescono"), sbloccando perk. (3)
+**Specializzazioni** (ARC, Commando): sbloccate da obiettivi, **non si livellano** → terzo asse.
+**FATTO**: `ClassDef.aiProfileId` + `EnemyDef.classId` → l'unita' referenzia una classe (additivo);
+gate + dropdown nell'editor. Verificato: la classe fornisce arma E profilo AI all'alleato.
+**~~RESTA — decisione utente~~ → DECISO E FATTO 2026-07-17: riga "Classe" RIMOSSA dal PreMatch**
+(scelta dell'utente). Il fatto decisivo: le righe *Arma primaria/secondaria* erano **gia'** nello
+stesso menu e la riga "Classe" le **sovrascriveva in silenzio** → non era solo un nome sbagliato,
+era la trappola "due posti, uno vince senza dirlo". Rimuoverla non toglie nessuna funzione.
+Rimossi anche `setClassList`/`getSelectedClassId`/`ClassEntry`: la regola e' **strutturale**.
+`--class` resta come **override di test**, dichiarato tale.
+**~~Il doc 14 va riscritto~~ → FATTO 2026-07-17**: stato **MISTO** (meta' NPC = Current
+Implementation, meta' giocatore = Planned). **Questo sblocca doc 27**, il cui criterio #1 e'
+*"14 implementato prima di iniziare"*.
+**RESTA — Fase 3 (doc 27), ORA SBLOCCATA**: XP/livelli/perk per classe; le fondamenta ci sono gia'
+(`missionStats` conta kill/obiettivi, gli obiettivi hanno tier/type). Serve prima il sistema perk.
+**RESTA**: `SpecializationDef` (terzo tipo) — non progettarlo ora (dipende dai perk).
+**RESTA — contenuto (utente)**: **nessuna unita' ha `class` impostato**, quindi la meta' NPC e'
+costruita ma **inerte sui dati reali**: i profili AI `Clone Trooper`/`Clone Sniper` autorati
+dall'utente non vengono mai raggiunti, e i cloni alleati girano col profilo **`B1 Battle Droid`**.
+Basta assegnare la classe dall'Entity Editor. Finche' non e' fatto, il criterio "una squadra
+multi-classe si comporta diversamente" (GDD 12.3) non e' verificabile.
 
 **Dettaglio di quanto già in force (Phase A):**
 `ClassDef` nel registry (id = filename stem) + `MatchSettings.classId` risolto in `startGame()`,
@@ -162,10 +236,11 @@ non viceversa. Gate ADR-018 esteso a personaggi e classi.
 
 **N5. Progressione (27) e Persistenza (28) — Fase 3, dopo N4.** Non prima.
 
-**R8 (nuovo, 2026-07-15).** La risoluzione della data dir sorgente e' duplicata in ogni modulo
-dell'editor (BalanceEditor, EntityEditor, MapEditor, ... e ora EditorApp per il pannello
-validazione). Se una copia divergesse, quel modulo lavorerebbe su una `data/` diversa da quella
-che il gioco carica — e il pannello di validazione mentirebbe. Estrarre in una helper unica.
+**~~R8 (nuovo, 2026-07-15)~~ → CHIUSO 2026-07-17** (`editor/util/DataPath`, KI #45).
+Il rischio era scritto al condizionale (*"se una copia divergesse"*): **erano gia' divergenti** —
+4 copie su 8 verificavano `data/weapons`, le altre 4 accettavano qualunque cartella di nome `data`
+(EntityEditor, MapEditor, VehicleEditor, WeaponEditor). Ora una sola risoluzione, col controllo
+forte. Lezione: un debito descritto come ipotetico va **misurato** prima di classificarlo tale.
 
 **Debiti che restano validi in parallelo:** KI #31 (AI attraversano i veicoli — regressione nav),
 KI #32 (abilità/gadget player-side), R2 (Application.cpp ~1250 righe → estrarre

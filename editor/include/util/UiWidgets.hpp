@@ -51,6 +51,106 @@ inline bool dragRow(const char* label, float& v, float speed,
     return ch;
 }
 
+// Come dragRow ma con uno SLIDER (per valori a range fisso, es. 0..1). Etichetta
+// a SINISTRA (mai tagliata), slider che riempie il resto del pannello.
+inline bool sliderRowLR(const char* label, float& v, float lo, float hi,
+                        const char* fmt = "%.2f")
+{
+    ImGui::PushID(label);
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGui::TextUnformatted(label, end);
+    ImGui::SameLine();
+    float w = ImGui::GetContentRegionAvail().x;
+    if (w < 60.0f) w = 60.0f;
+    ImGui::SetNextItemWidth(w);
+    const bool ch = ImGui::SliderFloat("##v", &v, lo, hi, fmt);
+    ImGui::PopID();
+    return ch;
+}
+
+// Etichetta a SINISTRA + DragInt che riempie il resto. Ritorna true se cambia.
+inline bool intRow(const char* label, int& v, float speed, int lo, int hi)
+{
+    ImGui::PushID(label);
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGui::TextUnformatted(label, end);
+    ImGui::SameLine();
+    float w = ImGui::GetContentRegionAvail().x;
+    if (w < 60.0f) w = 60.0f;
+    ImGui::SetNextItemWidth(w);
+    const bool ch = ImGui::DragInt("##v", &v, speed, lo, hi);
+    ImGui::PopID();
+    return ch;
+}
+
+// Etichetta a SINISTRA + widget che riempie il resto. Helper comune per non
+// ripetere lo stesso boilerplate (label, SameLine, larghezza, id nascosto).
+namespace detail {
+inline void rowLabel(const char* label)
+{
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    ImGui::TextUnformatted(label, end);
+    ImGui::SameLine();
+    float w = ImGui::GetContentRegionAvail().x;
+    if (w < 60.0f) w = 60.0f;
+    ImGui::SetNextItemWidth(w);
+}
+} // namespace detail
+
+// Combo con etichetta a sinistra (items = array di const char*).
+inline bool comboRow(const char* label, int& index, const char* const items[], int count)
+{
+    ImGui::PushID(label);
+    detail::rowLabel(label);
+    const bool ch = ImGui::Combo("##c", &index, items, count);
+    ImGui::PopID();
+    return ch;
+}
+
+// InputText con etichetta a sinistra.
+inline bool textRow(const char* label, char* buf, size_t bufSize)
+{
+    ImGui::PushID(label);
+    detail::rowLabel(label);
+    const bool ch = ImGui::InputText("##t", buf, bufSize);
+    ImGui::PopID();
+    return ch;
+}
+
+// InputFloat con etichetta a sinistra (mantiene il typing preciso, non un drag).
+inline bool inputFloatRow(const char* label, float& v, const char* fmt = "%.2f")
+{
+    ImGui::PushID(label);
+    detail::rowLabel(label);
+    const bool ch = ImGui::InputFloat("##if", &v, 0.0f, 0.0f, fmt);
+    ImGui::PopID();
+    return ch;
+}
+
+// InputInt con etichetta a sinistra.
+inline bool inputIntRow(const char* label, int& v)
+{
+    ImGui::PushID(label);
+    detail::rowLabel(label);
+    const bool ch = ImGui::InputInt("##ii", &v);
+    ImGui::PopID();
+    return ch;
+}
+
+// ColorEdit3 con etichetta a sinistra.
+inline bool colorRow(const char* label, float* rgb)
+{
+    ImGui::PushID(label);
+    detail::rowLabel(label);
+    const bool ch = ImGui::ColorEdit3("##col", rgb,
+                        ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoAlpha);
+    ImGui::PopID();
+    return ch;
+}
+
 // Tripla riga X/Y/Z per un vettore. Ritorna true se un componente è cambiato.
 inline bool sliderRow3(const char* baseLabel, float* v,
                        float vmin, float vmax, float dragSpeed,

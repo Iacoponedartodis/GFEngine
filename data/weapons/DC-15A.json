@@ -1,4 +1,15 @@
 {
+    "hand_scale": 0.4000000059604645,
+    "hand_rot": [
+        0.0,
+        90.0,
+        0.0
+    ],
+    "hand_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
     "attach_points": {
         "muzzle": [
             1.9399850368499756,
@@ -33,9 +44,9 @@
     "name": "DC-15A",
     "overheat_penalty": 2.0,
     "projectile_mesh": "",
-    "spread_ads": 0.004999999888241291,
-    "spread_base": 0.019999999552965164,
-    "spread_jump": 0.20000000298023224,
-    "spread_move": 0.05999999865889549,
-    "spread_sprint": 0.14000000059604645
+    "spread_ads": 0.0024999999441206455,
+    "spread_base": 0.009999999776482582,
+    "spread_jump": 0.699999988079071,
+    "spread_move": 0.02500000037252903,
+    "spread_sprint": 0.05000000074505806
 }

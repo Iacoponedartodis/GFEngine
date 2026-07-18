@@ -253,6 +253,23 @@ void AiSystem::update(World& world, float dt)
 
         const AiState oldState = ai->state;   // telemetria: log solo sul CAMBIO
         auto* sq = world.getSquad(e);         // ordine di squadra (ADR-020), può mancare
+        // A TERRA (Phase C): inerme. Non sente, non decide, non spara. Va anche
+        // FERMATO ATTIVAMENTE: l'agente crowd conserva l'ultimo target e il
+        // CrowdSystem lo muoverebbe comunque (bug playtest: i caduti seguivano un
+        // ordine di movimento). Azzerare la velocità desiderata ogni tick lo
+        // inchioda dov'è caduto finché non è rianimato o distrutto.
+        if (sq && sq->downed)
+        {
+            if (world.nav && world.nav->crowdReady() && ai->crowdAgentIdx >= 0)
+                world.nav->requestMoveVelocity(ai->crowdAgentIdx, {0.0f, 0.0f, 0.0f});
+            continue;
+        }
+
+        // FUOCO DI COPERTURA (doc 26): un membro in CoveringFire SOPPRIME — sta
+        // fermo (leash stretto) e NON entra in fase evasiva (niente peek/hide):
+        // "stand and deliver". È ciò che lo distingue da un semplice HoldPosition.
+        const bool covering = sq && sq->hasActiveOrder()
+                            && sq->order == OrderType::CoveringFire;
         const int myTeam = team->teamId;
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
@@ -429,7 +446,9 @@ void AiSystem::update(World& world, float dt)
                     ai->exposeTimer -= dt;
                     if (ai->exposeTimer <= 0.0f)
                     {
-                        if (!ai->evading && aiRand01() < ai->coverPreference)
+                        // Chi fa fuoco di copertura NON si copre: resta esposto e
+                        // continua a sparare (soppressione). Gli altri peek/hide.
+                        if (!covering && !ai->evading && aiRand01() < ai->coverPreference)
                         {
                             ai->evading = true;
                             ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax);
@@ -626,8 +645,9 @@ void AiSystem::update(World& world, float dt)
             float ox = sq->targetX - et->x, oz = sq->targetZ - et->z;
             const float od = norm2D(ox, oz);   // normalizza ox/oz, ritorna la distanza
             const float leash = (sq->order == OrderType::Follow)       ? 8.0f
-                              : (sq->order == OrderType::HoldPosition) ? 2.0f
-                                                                       : 1.5f;  // MoveTo/TakeCover
+                              : (sq->order == OrderType::HoldPosition ||
+                                 sq->order == OrderType::CoveringFire) ? 2.0f
+                                                                       : 1.5f;  // MoveTo/TakeCover/Revive
             if (od > leash)
             {
                 moveDX = ox; moveDZ = oz;      // direzione unitaria verso il target
@@ -785,9 +805,11 @@ void AiSystem::update(World& world, float dt)
         if (ai->bulletMesh)
             world.addMeshRenderer(b, {ai->bulletMesh, ai->bulletTexture, ai->bulletR, ai->bulletG, ai->bulletB});
 
-        // Cadenza dall'arma se disponibile, altrimenti legacy dal profilo AI
+        // Cadenza dall'arma se disponibile, altrimenti legacy dal profilo AI.
+        // Fuoco di copertura: ~30% di volume in più (soppressione = cadenza).
         ai->shootCooldown = (ai->fireInterval > 0.0f) ? ai->fireInterval
                                                       : ai->shootInterval;
+        if (covering) ai->shootCooldown *= 0.7f;
 
         // Surriscaldamento (se l'arma lo prevede)
         if (ai->heatPerShot > 0.0f)

@@ -63,6 +63,9 @@ public:
 
     [[nodiscard]] EntityId  getPlayerEntity()  const override { return m_playerEntity; }
     [[nodiscard]] glm::vec3 getSpawnPos()      const override { return m_spawnPos; }
+    // Spawn base + ogni command post posseduto dagli alleati (team 1): il
+    // giocatore può scegliere da dove rientrare tra questi (doc 25).
+    [[nodiscard]] std::vector<SpawnPoint> availableSpawns() const override;
     [[nodiscard]] int getTeam1Tickets()        const override { return m_team1Tickets; }
     [[nodiscard]] int getTeam2Tickets()        const override { return m_team2Tickets; }
     [[nodiscard]] bool hasVictoryCondition()   const override { return true; }
@@ -105,6 +108,10 @@ protected:
 
     // Respawn dei veicoli distrutti (19_Vehicles Fase B)
     vehiclespawn::RespawnTracker m_vehicleTracker;
+    int          m_spawnSpread   = 0;    // rotazione 8-vie per non impilare i rinforzi (unlock_spawn)
+    // Bleed a tempo: NON usato da Conquest (rimosso 07-18 → respawn-slow), ma è la
+    // meccanica di vittoria di Assalto/Difesa (ObjectiveModes, ADR-014), che
+    // sovrascrivono updateObjectiveRules.
     float        m_bleedTimer    = 0.0f;
     float        m_bleedInterval = 6.0f;
 

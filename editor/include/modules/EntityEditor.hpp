@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include "util/RigReader.hpp"
+#include "mini/game/data/DefinitionRegistry.hpp"
 #include <glm/glm.hpp>
 
 namespace editor
@@ -24,15 +25,17 @@ struct EntityEntry
     float meshScale = 1.0f;
     bool  isAlly    = false;
 
-    // Statistiche combat
+    // Il CORPO dell'unita' (ADR-022). Niente moveSpeed (lo sovrascrive sempre il
+    // profilo AI), niente damageScale (nessun consumatore), niente aiProfileId ne'
+    // abilityIds: li decide la CLASSE e questo modulo non li edita piu'.
     std::string faction    = "neutral";
     float hp               = 80.0f;
-    float moveSpeed        = 4.0f;
-    float damageScale      = 1.0f;
-    std::string aiProfileId;
+    // ADR-022: la classe (professione) fornisce loadout+comportamento+abilita'
+    // all'unita' che la referenzia. Vuota = valgono i campi legacy (additivo).
+    std::string classId;
     std::string hitboxProfileId;
+    // SOLA LETTURA: fallback quando non c'e' una classe + anteprima in mano.
     std::vector<std::string> weaponIds;
-    std::vector<std::string> abilityIds;
 
     // Attach points: "foot", "eye", "right_hand", ...
     std::unordered_map<std::string, AttachPointEntry> attachPoints;
@@ -68,6 +71,10 @@ public:
     EntityEditor();
     void draw();
     void tick(float dt);
+    // Rilascia la cattura del mouse quando questo modulo cessa di essere attivo
+    // (EditorApp lo chiama al cambio modulo): senza, il mouse resterebbe
+    // invisibile e non liberabile. Vedi FreeCameraViewport::releaseMouseCapture.
+    void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
 
 private:
     std::vector<EntityEntry> m_entries;
@@ -109,6 +116,10 @@ private:
     glm::vec3   m_weaponRot    = {0,0,0};    // euler gradi
     glm::vec3   m_weaponOffset = {0,0,0};    // offset fine rispetto alla mano
     std::string m_weaponHandPoint = "right_hand"; // attach point del personaggio
+    // KI #49: la posa (scala/rot/offset) viene dall'ARMA se autorata (hand_scale>0).
+    // In quel caso è READ-ONLY qui (si edita nel Weapon Editor) e non va riscritta
+    // sul weapon_display dell'entità. false = arma legacy senza posa → si edita qui.
+    bool        m_weaponPoseFromWeapon = false;
 
     void loadWeaponPreview();   // legge il JSON arma + carica mesh
     void updateWeaponTransform(); // ricalcola e applica la trasformazione
@@ -130,11 +141,16 @@ private:
     // Rinomina (ADR-010): reload deferito al frame successivo
     std::string m_pendingSelectId;
 
-    // ID disponibili per i dropdown delle statistiche
-    std::vector<std::string> m_availableWeapons;
-    std::vector<std::string> m_availableAI;
+    // ID disponibili per i dropdown. Niente liste per armi/AI/abilità dell'unità:
+    // le decide la CLASSE e non si editano più qui (ADR-022).
+    std::vector<std::string> m_availableClasses;   // ADR-022: professioni assegnabili
     std::vector<std::string> m_availableHitboxes;
-    std::vector<std::string> m_availableAbilities;
+
+    // Registry di sola lettura: serve a risolvere l'arma della CLASSE con
+    // `classres`, la stessa funzione del runtime, invece di riscrivere la regola
+    // nell'editor (è la duplicazione che ha fatto divergere runtime e display —
+    // stesso principio di R4 sul VehicleEditor e di ADR-018).
+    mini::DefinitionRegistry m_registry;
 
     void loadEntries();
     void selectEntry(int idx);

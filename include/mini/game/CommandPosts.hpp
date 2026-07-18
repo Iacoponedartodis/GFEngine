@@ -28,6 +28,12 @@ public:
     [[nodiscard]] int count() const { return (int)m_posts.size(); }
     [[nodiscard]] int countOwnedBy(int team) const;
 
+    // Post posseduti da una squadra, con etichetta e posizione al suolo.
+    // Base della selezione del punto di respawn (doc 25): una squadra può
+    // rientrare dai post che controlla, non solo dallo spawn iniziale.
+    struct OwnedPost { std::string label; float x = 0.0f, z = 0.0f; };
+    [[nodiscard]] std::vector<OwnedPost> ownedByTeam(int team) const;
+
     // Stato leggibile per l'HUD (proprietario + progresso cattura 0..1).
     struct Status
     {

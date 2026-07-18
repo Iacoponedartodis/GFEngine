@@ -1,0 +1,9 @@
+{
+  "name": "Sabotaggio a Firebase",
+  "briefing": "Distruggi la torre delle comunicazioni separatista: senza, i droidi combatteranno disorganizzati (mira ridotta).",
+  "map": "firebase",
+  "mode": "conquest",
+  "primary_objectives": ["destroy_comms_tower"],
+  "success_rules": { "rule": "all_primary_complete" },
+  "failure_rules": { "rule": "any_primary_failed" }
+}

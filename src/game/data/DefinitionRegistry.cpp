@@ -139,13 +139,23 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
             readPt("right_hand", w.gripAttach);  // right_hand ha precedenza
             readPt("muzzle",     w.muzzleAttach);
         }
+        // Posa in mano (KI #49): la scala/rotazione/offset dell'arma quando è
+        // impugnata. Vive sull'ARMA, non sull'entità, così vale per chiunque.
+        w.handScale = getf(*j, "hand_scale", 0.0f);   // 0 = non autorata → fallback
+        if ((*j).contains("hand_rot") && (*j)["hand_rot"].size() >= 3)
+            w.handRot = {(*j)["hand_rot"][0].get<float>(), (*j)["hand_rot"][1].get<float>(),
+                         (*j)["hand_rot"][2].get<float>()};
+        if ((*j).contains("hand_offset") && (*j)["hand_offset"].size() >= 3)
+            w.handOffset = {(*j)["hand_offset"][0].get<float>(), (*j)["hand_offset"][1].get<float>(),
+                            (*j)["hand_offset"][2].get<float>()};
         noteUnknownKeys(*j, "weapons/" + w.id + ".json",
             {"name","faction","damage","fire_rate","bullet_speed","bullet_lifetime",
              "bullet_scale","bullet_color","heat_per_shot","cooldown_rate",
              "overheat_penalty","effective_range","min_range","spread_base",
              "spread_ads","spread_move","spread_sprint","spread_jump","mesh",
              "projectile_mesh","mesh_scale","mesh_rot_x","mesh_rot_y",
-             "attach_points","description"}, m_unknownKeys);
+             "attach_points","hand_scale","hand_rot","hand_offset",
+             "description"}, m_unknownKeys);
         std::cout << "[Registry] Weapon: " << w.id
                   << " [" << factionToString(w.faction) << "]\n";
         m_weapons[w.id] = std::move(w);
@@ -236,6 +246,7 @@ static EnemyDef parseUnitDef(const nlohmann::json& j, const fs::path& path, int 
         if (wd.contains("offset") && wd["offset"].size() >= 3)
             e.weaponDisplay.offset = {wd["offset"][0].get<float>(), wd["offset"][1].get<float>(), wd["offset"][2].get<float>()};
     }
+    e.classId         = gets(j, "class");   // ADR-022: la classe fornisce loadout+comportamento
     e.aiProfileId     = gets(j, "ai_profile");
     e.hitboxProfileId = gets(j, "hitbox_profile");
     e.weaponIds       = getStrArray(j, "weapons");
@@ -261,7 +272,7 @@ static const std::initializer_list<const char*> kUnitKeys = {
     "name","faction","team","color","texture","mesh","mesh_scale","mesh_rot_x",
     "mesh_rot_y","attach_points","offset","rot","stats","weapon","weapons",
     "weapon_display","abilities","ai_profile","hitbox_profile","bullet_color",
-    "description"
+    "class","description"
 };
 
 void DefinitionRegistry::loadEnemies(const std::string& dir)
@@ -337,6 +348,24 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 m.commandPosts.push_back(p);
             }
         }
+
+        // Bersagli strategici distruttibili (doc 25, DestroyTarget)
+        if ((*j).contains("strategic_targets") && (*j)["strategic_targets"].is_array())
+        {
+            for (auto& st : (*j)["strategic_targets"])
+            {
+                StrategicTargetDef t;
+                t.label     = gets(st, "label", "Bersaglio");
+                t.x         = getf(st, "x", 0.0f);
+                t.z         = getf(st, "z", 0.0f);
+                t.hp        = getf(st, "hp", 300.0f);
+                t.meshPath  = gets(st, "mesh");
+                t.meshScale = getf(st, "mesh_scale", 1.0f);
+                if (st.contains("color") && st["color"].size() >= 3)
+                    t.color = {st["color"][0], st["color"][1], st["color"][2]};
+                m.strategicTargets.push_back(t);
+            }
+        }
         // ── Map Metadata (15_MapMetadata): opzionali, additivi ─────────
         if ((*j).contains("cover_points") && (*j)["cover_points"].is_array())
         {
@@ -392,6 +421,16 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             }
         }
 
+        // LIMITE VOLUTO: solo le chiavi di primo livello. Le sotto-strutture
+        // (geometry, command_posts, cover_points, patrol_routes, danger_zones,
+        // vehicle_spawns) hanno ognuna il proprio set e non sono ancora coperte:
+        // un refuso DENTRO un box di geometry passa tuttora liscio. Vedi 08 KI #40.
+        noteUnknownKeys(*j, "maps/" + m.id + ".json",
+            {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
+             "spawn_team1","spawn_team2","enemy_types","ally_types","geometry",
+             "command_posts","strategic_targets","cover_points","patrol_routes",
+             "danger_zones","vehicle_spawns","description"}, m_unknownKeys);
+
         std::cout << "[Registry] Map: " << m.id
                   << " (geometry: " << m.geometry.size() << " box, "
                   << m.commandPosts.size() << " command post, "
@@ -433,6 +472,11 @@ void DefinitionRegistry::loadVehicles(const std::string& dir)
         v.hitHalfZ    = getf(*j, "hit_half_z", 0.0f);
         if ((*j).contains("color") && (*j)["color"].size() >= 3)
             v.color = {(*j)["color"][0], (*j)["color"][1], (*j)["color"][2]};
+        noteUnknownKeys(*j, "vehicles/" + v.id + ".json",
+            {"name","hp","max_speed","accel","turn_rate_deg","mesh","mesh_scale",
+             "mesh_rot_x","mesh_rot_y","mesh_offset_y","half_x","half_y","half_z",
+             "hit_offset_y","hit_half_x","hit_half_y","hit_half_z","color",
+             "description"}, m_unknownKeys);
         std::cout << "[Registry] Vehicle: " << v.id << "\n";
         m_vehicles[v.id] = std::move(v);
     }
@@ -462,11 +506,41 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
                 hz.boneName = z.value("bone", std::string(""));
                 if (z.contains("rotation") && z["rotation"].size() >= 3)
                     hz.eulerDeg = {z["rotation"][0], z["rotation"][1], z["rotation"][2]};
+                // Prima del move: dopo std::move(hz) il nome non e' piu' leggibile.
+                noteUnknownKeys(z, "hitboxes/" + p.profileId + ".json (zona '"
+                                   + hz.name + "')",
+                    {"name","damage_multiplier","debug_visible","offset",
+                     "half_extents","bone","rotation"}, m_unknownKeys);
                 p.zones.push_back(std::move(hz));
             }
+        noteUnknownKeys(*j, "hitboxes/" + p.profileId + ".json",
+            {"zones"}, m_unknownKeys);
         std::cout << "[Registry] Hitbox: " << p.profileId
                   << " (" << p.zones.size() << " zone)\n";
         m_hitboxProfiles[p.profileId] = std::move(p);
+    }
+
+    // Profilo SINTETICO per i bersagli strategici (DestroyTarget): una struttura
+    // è grande, il fallback sferico (0.7 m) la renderebbe quasi impossibile da
+    // colpire. Box ~3×4×3 m attorno alla base. Owned dal registry come gli altri.
+    // Nome con "__" per non collidere con un file autorato.
+    if (!m_hitboxProfiles.count("__strategic_target"))
+    {
+        HitboxProfile st;
+        st.profileId = "__strategic_target";
+        HitZone z;
+        z.name        = "struttura";
+        // Cubo unitario: il test hitbox scala offset/extents per lo scale
+        // dell'entità e aggiunge lo STESSO meshOffsetY del rendering. Con offset 0
+        // ed extents 0.5 la hitbox coincide ESATTAMENTE col cubo di fallback
+        // (visibile == colpibile). Prima era un box gigante a +4 → il "cubo
+        // volante con hitbox sfasata" del playtest.
+        z.offset      = {0.0f, 0.0f, 0.0f};
+        z.halfExtents = {0.5f, 0.5f, 0.5f};
+        z.damageMultiplier = 1.0f;
+        z.debugVisible = false;
+        st.zones.push_back(z);
+        m_hitboxProfiles["__strategic_target"] = std::move(st);
     }
 }
 
@@ -599,11 +673,12 @@ void DefinitionRegistry::loadClasses(const std::string& dir)
         c.name              = gets(*j, "name", c.id);
         c.primaryWeaponId   = gets(*j, "primary_weapon");
         c.secondaryWeaponId = gets(*j, "secondary_weapon");
+        c.aiProfileId       = gets(*j, "ai_profile");   // ADR-022: il comportamento
         c.role              = gets(*j, "role");
         c.abilityIds        = getStrArray(*j, "abilities");
         noteUnknownKeys(*j, "classes/" + c.id + ".json",
             {"name","primary_weapon","secondary_weapon","abilities","role",
-             "description"}, m_unknownKeys);
+             "ai_profile","description"}, m_unknownKeys);
         std::cout << "[Registry] Class: " << c.id << "\n";
         m_classes[c.id] = std::move(c);
     }
@@ -632,6 +707,7 @@ void DefinitionRegistry::loadObjectives(const std::string& dir)
             o.count       = geti(t, "count", 1);
             o.holdSeconds = getf(t, "hold_seconds", 10.0f);
             o.targetPost  = gets(t, "post");   // CaptureZone/DefendZone (ADR-009)
+            o.targetStructure = gets(t, "structure");   // DestroyTarget (doc 25)
         }
         if ((*j).contains("activation"))
         {

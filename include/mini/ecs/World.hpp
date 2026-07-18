@@ -172,6 +172,15 @@ public:
     };
     std::vector<CommandPostState> commandPostStates;
 
+    // ── Bersagli strategici distruttibili (doc 25, DestroyTarget) ────────
+    //    Il game mode spawna le strutture come entità e registra QUI la mappa
+    //    entità→label; l'ObjectiveSystem collega una distruzione (killedThisTick)
+    //    alla label senza conoscere il codice di gioco (mailbox, doc 10). Popolata
+    //    a inizio partita, immutata dopo (le entità muoiono, la voce resta: serve
+    //    a riconoscere QUALE bersaglio è caduto).
+    struct StrategicTargetEntity { EntityId entity = 0; std::string label; };
+    std::vector<StrategicTargetEntity> strategicTargets;
+
     // ── Stato della battaglia (doc 25: conseguenze degli obiettivi) ──────
     //    Gli obiettivi non sono caselle da spuntare: completarli **cambia la
     //    battaglia**. ObjectiveSystem scrive QUI; ogni sistema competente legge

@@ -24,7 +24,8 @@ enum class OrderType : unsigned char
     MoveTo,        // A: raggiungi un punto
     TakeCover,     // B: raggiungi un cover point reale del MapDef (doc 15/18)
     FocusFire,     // B: concentra il fuoco su un bersaglio designato
-    Revive,        // C (non ancora eseguito — richiede lo stato "a terra")
+    Revive,        // C: va a rianimare un compagno a terra
+    CoveringFire,  // C: un alleato DIRETTO tiene la posizione e fa fuoco di supporto
     Regroup        // B2: ruota di comando (non ancora eseguito)
 };
 
@@ -42,6 +43,7 @@ inline const char* orderName(OrderType t)
         case OrderType::TakeCover:    return "TakeCover";
         case OrderType::FocusFire:    return "FocusFire";
         case OrderType::Revive:       return "Revive";
+        case OrderType::CoveringFire: return "CoveringFire";
         case OrderType::Regroup:      return "Regroup";
         default:                      return "None";
     }
@@ -61,6 +63,15 @@ struct SquadComponent
     // Causa esplicita del fallimento (stringa statica, mai nullptr se state==Failed).
     const char* failureReason = nullptr;
 
+    // ── Stato "a terra" (Phase C, doc 26) ────────────────────────────────
+    // Incapacitazione non letale: invece di morire, un membro va a terra con una
+    // finestra di rianimazione. È ciò che dà peso alle perdite (la squadra è una
+    // RISORSA, non comparse). Vive qui e non in un componente nuovo perché solo i
+    // membri della squadra vanno a terra — e ce l'hanno già.
+    bool  downed            = false;
+    float bleedoutRemaining = 0.0f;   // secondi prima della morte definitiva
+    float reviveProgress    = 0.0f;   // 0..SQUAD_REVIVE_TIME mentre un vivo è vicino
+
     [[nodiscard]] bool hasActiveOrder() const
     { return order != OrderType::None &&
              (state == OrderState::Pending || state == OrderState::Active); }
@@ -75,8 +86,12 @@ struct SquadOrderRequest
 {
     bool       pending = false;   // true = c'è un'intenzione da consumare
     OrderType  order   = OrderType::None;
-    EntityId   targetEntity = 0;  // FocusFire
-    float      targetX = 0.0f, targetZ = 0.0f;   // MoveTo / TakeCover
+    EntityId   targetEntity = 0;  // FocusFire (nemico) / Revive (compagno a terra)
+    float      targetX = 0.0f, targetZ = 0.0f;   // MoveTo / TakeCover / CoveringFire
+    // Ordine DIRETTO a un singolo membro (0 = tutta la squadra). Serve ai comandi
+    // che puntano un COMPAGNO: CoveringFire (quel compagno copre) e Revive (quel
+    // compagno va a soccorrere). Senza, l'ordine si applicherebbe a tutti.
+    EntityId   directedMember = 0;
 };
 
 } // namespace mini

@@ -1,12 +1,15 @@
 #include "mini/ecs/systems/CombatSystem.hpp"
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
+#include "mini/ecs/components/SquadComponent.hpp"   // Phase C: stato "a terra"
+#include "mini/core/GameConfig.hpp"                 // costanti bleed-out/rianimazione
 #include "mini/physics/HitTest.hpp"
 #include "mini/physics/Collision.hpp"
 #include "mini/core/Telemetry.hpp"
 
 #include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>   // data dell'evento "member downed" (doc 21)
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -213,6 +216,32 @@ void CombatSystem::update(World& world, float dt)
             toDestroy.push_back(bid);
             if (eh->current <= 0.0f)
             {
+                // ── Phase C (doc 26): un membro della squadra alleata non muore
+                //    subito, va "A TERRA" con una finestra di rianimazione. Solo
+                //    la PRIMA volta: un colpo su un già-a-terra lo finisce (cade
+                //    nel ramo morte sotto, perché sq->downed è true). Il GIOCATORE
+                //    è escluso (ha il suo respawn, KI #39); i nemici muoiono come
+                //    prima. Intercettazione ADDITIVA: cambia solo questo caso.
+                auto* sq = world.getSquad(eid);
+                const auto* tmv = world.getTeam(eid);
+                const bool allySquad = sq && tmv && tmv->teamId == 1
+                                       && eid != world.playerEntity;
+                if (allySquad && !sq->downed)
+                {
+                    sq->downed            = true;
+                    sq->bleedoutRemaining = config::SQUAD_BLEEDOUT_TIME;
+                    sq->reviveProgress    = 0.0f;
+                    sq->order             = OrderType::None;   // smette di eseguire
+                    sq->state             = OrderState::None;
+                    eh->current           = 0.0f;              // inerme, ma NON distrutto
+                    telemetry::event(telemetry::Level::Info, "Squad", "member downed",
+                                     {{"entity", (int)eid},
+                                      {"bleedout", config::SQUAD_BLEEDOUT_TIME}});
+                    world.pushEvent("A TERRA #" + std::to_string(eid)
+                        + " — rianimabile per " + std::to_string((int)config::SQUAD_BLEEDOUT_TIME) + "s");
+                    break;   // niente morte/distruzione questo tick
+                }
+
                 telemetry::logInfo("kill: entita' " + std::to_string(eid)
                     + " eliminata dal team " + std::to_string(bullet->ownerTeam));
                 std::cout << "[Combat] Eliminato!\n";

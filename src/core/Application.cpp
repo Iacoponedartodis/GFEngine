@@ -321,6 +321,14 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     bool sbMenuOpen  = false;             // overlay aperto (solo sandbox)
     bool observerFly = false;             // volo libero osservatore (sim AI)
     EntityId drivenVehicle = 0;           // veicolo guidato (19_Vehicles)
+    // Ruota di comando (doc 26): stato che vive fra i frame mentre il tasto è
+    // tenuto. `wheelDirX/Y` accumula il movimento mouse per scegliere il settore.
+    bool  wheelOpen = false; float wheelDirX = 0.0f, wheelDirY = 0.0f; int wheelSel = -1;
+    // Selezione del punto di respawn mentre si è a terra (mappa top-down, doc
+    // 30). `respawnSel` = indice in mode->availableSpawns() (0 = spawn base);
+    // `deathPos` = dove si è caduti (marker di orientamento sulla mappa).
+    int       respawnSel = 0;
+    glm::vec3 deathPos{0.0f, 0.0f, 0.0f};
     float vehPrevR = 0, vehPrevG = 0, vehPrevB = 0; // colore pre-mount
     int   vehTraceCnt = 0;                // throttle telemetria guida
     sbMenu.setWeapons(testWeapons);
@@ -345,13 +353,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         std::sort(misList.begin(), misList.end(),
                   [](const auto& a, const auto& b) { return a.name < b.name; });
         preMatchMenu.setMissionList(misList);
-
-        std::vector<PreMatchMenu::ClassEntry> clsList;
-        for (const auto& [id, c] : registry.classes())
-            clsList.push_back({id, c.name.empty() ? id : c.name});
-        std::sort(clsList.begin(), clsList.end(),
-                  [](const auto& a, const auto& b) { return a.name < b.name; });
-        preMatchMenu.setClassList(clsList);
+        // Nessuna lista di classi: il menu non offre una scelta di classe
+        // (GDD 11.3, ADR-022). Il loadout sono le righe Arma primaria/secondaria.
     }
 
     // ── Game mode (ADR-008: Application parla solo con IGameMode) ─────
@@ -375,16 +378,31 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                   "Serve la selezione esplicita (14_ClassSystem Phase B).");
     }
 
-    // ── Classe e missione iniziali da CLI ────────────────────────────
-    // Dal 2026-07-16 entrambe si scelgono anche dal PreMatch: questi flag
-    // SEMINANO solo il valore di partenza (utili per test e avvio diretto).
+    // HP di default dal personaggio: `PlayerDef.hp` SEMINA lo slider "HP
+    // giocatore" del PreMatch come default (fatto UNA volta all'avvio). Da lì
+    // in poi lo slider è l'autorità unica sugli HP del giocatore — usata
+    // identica per spawn iniziale E respawn. Prima `initWorld` risovrascriveva
+    // `playerHp` col PlayerDef DOPO che il mode aveva già creato l'entità con
+    // il valore dello slider: gli HP del primo spawn erano quelli scelti, ma
+    // al respawn tornavano a quelli del PlayerDef (bug 2026-07-18).
+    if (!currentSettings.characterId.empty())
+        if (const PlayerDef* pd = registry.getPlayerDef(currentSettings.characterId))
+            currentSettings.playerHp = pd->hp;
+
+    // ── Missione iniziale + override classe da CLI ───────────────────
+    // La missione si sceglie anche dal PreMatch: il flag SEMINA il valore di
+    // partenza. `--class` invece è un **override di TEST**, non una scelta di
+    // gioco: dal 2026-07-17 il menu non offre più le classi (GDD 11.3, ADR-022:
+    // il giocatore non sceglie una classe, la livella giocando). Serve a provare
+    // rapidamente un loadout senza passare dalle righe Arma; sovrascrive quelle
+    // righe, e per questo lo dice a voce (telemetria + stderr).
     // Un id sconosciuto non degrada in silenzio.
     if (!classId.empty())
     {
         if (registry.getClass(classId))
         {
             currentSettings.classId = classId;
-            telemetry::logInfo("classe iniziale: " + classId);
+            telemetry::logInfo("classe iniziale (override di test --class): " + classId);
         }
         else
             std::cerr << "[Class] id sconosciuto: '" << classId
@@ -472,7 +490,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 player.jumpMult    = pd->jumpHeight;
                 player.sprintMult  = pd->sprintMult;
                 player.armorRating = pd->armorRating;
-                currentSettings.playerHp = pd->hp;   // il personaggio definisce gli HP base
+                // NB: gli HP NON si risovrascrivono qui. `PlayerDef.hp` ha già
+                // seminato lo slider "HP giocatore" all'avvio; da lì lo slider
+                // (currentSettings.playerHp) è l'autorità, identica per spawn
+                // iniziale e respawn. Sovrascrivere qui li faceva divergere.
                 telemetry::event(telemetry::Level::Info, "Content", "character equipped",
                                  {{"character", currentSettings.characterId},
                                   {"hp", pd->hp}, {"move_speed", pd->moveSpeed},
@@ -675,12 +696,15 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     auto startFromPreMatch = [&]()
     {
         MatchSettings s = preMatchMenu.getSettings();
-        // Dal 2026-07-16 il PreMatch POSSIEDE missione e classe: non vanno più
-        // ripristinate da currentSettings — se il giocatore sceglie "(nessuna)"
-        // dopo un `--class`, la sua scelta esplicita deve vincere. Preservare a
-        // forza il valore vecchio sarebbe la toppa che distrugge una decisione.
-        // `characterId` invece NON è nel menu (nessun selettore): quello sì.
+        // Il PreMatch possiede la MISSIONE: non va ripristinata da currentSettings —
+        // se il giocatore sceglie "(nessuna)" dopo un `--mission`, la sua scelta
+        // esplicita deve vincere. Preservare a forza il valore vecchio sarebbe la
+        // toppa che distrugge una decisione.
+        // `characterId` e `classId` NON sono nel menu (nessun selettore: il
+        // giocatore non sceglie una classe, GDD 11.3): quelli vanno preservati,
+        // altrimenti un `--class` verrebbe azzerato passando dal menu (KI #36).
         if (s.characterId.empty()) s.characterId = currentSettings.characterId;
+        if (s.classId.empty())     s.classId     = currentSettings.classId;
         currentSettings = s;
         startGame();
     };
@@ -754,6 +778,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         if (alliedAiAlive > 0 || reinforcements > 0)
         {
             player.respawnTimer = currentSettings.respawnDelay;
+            respawnSel = 0;   // ogni caduta riparte dallo spawn base (doc 25)
+            deathPos   = cam.getPosition();   // marker "caduto" sulla mappa (doc 30)
             std::cout << "[Game] Eliminato! Respawn in "
                       << currentSettings.respawnDelay << "s (alleati vivi: "
                       << alliedAiAlive << ", rinforzi: " << reinforcements << ")"
@@ -787,6 +813,65 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         state = GameState::Playing;
         stateChanged = true;
         window.setMouseCaptured(true);
+    };
+
+    // ── Schieramento dal punto scelto (doc 30) ────────────────────────
+    // Il respawn del giocatore NON è automatico allo scadere del timer (quando
+    // c'è una scelta): il timer è solo l'ATTESA MINIMA (che permette di tenere
+    // respawnDelay basso per far rientrare in fretta AI e nemici), poi il rientro
+    // avviene solo quando il giocatore CONFERMA (click sulla mappa/Invio), così
+    // la scelta del punto ha sempre la precedenza. La posizione scelta viene
+    // spinta fuori da eventuali collider (`nudgeOutOfColliders`): rientrare dentro
+    // la geometria di un command post non incastra più — generale, non per-mappa.
+    auto deployPlayerRespawn = [&]()
+    {
+        if (observerFly || !player.isDead || player.respawnTimer > 0.0f) return;
+        const auto spawns = mode->availableSpawns();
+        if (respawnSel < 0 || respawnSel >= (int)spawns.size()) respawnSel = 0;
+        glm::vec3 spawnPos = spawns.empty() ? mode->getSpawnPos()
+                                            : spawns[respawnSel].pos;
+        spawnPos = physics::nudgeOutOfColliders(spawnPos, config::playerHalf(), world);
+        player.updateRespawn(world, cam, currentSettings.respawnDelay,
+                             spawnPos, currentSettings.playerHp);
+        mode->overridePlayerEntity(player.entity);
+        world.playerEntity = player.entity;   // respawn = entità NUOVA (ADR-020)
+        hud.setRespawnMap({});                 // chiudi la mappa
+        window.setMouseCaptured(true);         // torna in gioco: cattura il mouse
+    };
+
+    // ── Costruzione della mappa top-down di respawn (doc 30) ──────────
+    // Proietta i dati mondo (bounds dai box geometria, pareti, punti disponibili,
+    // luogo di morte) in una `HUD::RespawnMap`. I bounds partono dalla geometria
+    // e si allargano a marker/morte così tutto è sempre in-frame.
+    auto buildRespawnMap = [&](const std::vector<IGameMode::SpawnPoint>& spawns)
+    {
+        HUD::RespawnMap m;
+        m.active      = true;
+        m.sel         = respawnSel;
+        m.secondsLeft = player.respawnTimer;
+
+        float minX = 1e9f, minZ = 1e9f, maxX = -1e9f, maxZ = -1e9f;
+        auto grow = [&](float x, float z) {
+            minX = std::min(minX, x); maxX = std::max(maxX, x);
+            minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+        };
+        if (const MapDef* md = world.activeMap)
+            for (const auto& b : md->geometry)
+            {
+                m.walls.push_back({b.x, b.z, b.sx, b.sz});
+                grow(b.x - b.sx * 0.5f, b.z - b.sz * 0.5f);
+                grow(b.x + b.sx * 0.5f, b.z + b.sz * 0.5f);
+            }
+        for (const auto& sp : spawns) { m.markers.push_back({sp.label, sp.pos.x, sp.pos.z}); grow(sp.pos.x, sp.pos.z); }
+        m.hasDeath = true; m.deathX = deathPos.x; m.deathZ = deathPos.z; grow(deathPos.x, deathPos.z);
+        if (minX > maxX) { minX = -10; maxX = 10; minZ = -10; maxZ = 10; }   // fallback
+        const float pad = 3.0f;
+        m.minX = minX - pad; m.maxX = maxX + pad;
+        m.minZ = minZ - pad; m.maxZ = maxZ + pad;
+
+        int mx = 0, my = 0; SDL_GetMouseState(&mx, &my);
+        m.mouseX = (float)mx; m.mouseY = (float)my;
+        return m;
     };
 
     // ── Bootstrap Sandbox: salta i menu, entra subito in gioco ────────
@@ -837,6 +922,20 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             if (ev.type == SDL_TEXTINPUT && state == GameState::PreMatch)
                 preMatchMenu.handleTextInput(ev.text.text);
 
+            // ── Keybinding: cattura di input NON da tastiera ──────────────
+            //    Mentre le opzioni aspettano un nuovo binding, rotella e pulsanti
+            //    del mouse valgono come input assegnabili (l'ESC per annullare e i
+            //    tasti passano dal ramo SDL_KEYDOWN sotto). È così che l'utente può
+            //    mettere "cambia arma sulla rotella" o "ordini sul tasto centrale".
+            if (state == GameState::Options && optMenu.isAwaitingKey())
+            {
+                if (ev.type == SDL_MOUSEWHEEL && ev.wheel.y != 0)
+                    optMenu.assignAwaited(ev.wheel.y > 0 ? InputBinding::wheelUp()
+                                                         : InputBinding::wheelDown(), input);
+                else if (ev.type == SDL_MOUSEBUTTONDOWN)
+                    optMenu.assignAwaited(InputBinding::mouseButton(ev.button.button), input);
+            }
+
             // ── Mouse nel menu principale: hover evidenzia, click attiva ──
             if (state == GameState::MainMenu &&
                 (ev.type == SDL_MOUSEMOTION || ev.type == SDL_MOUSEBUTTONDOWN))
@@ -858,6 +957,19 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
                 else if (res == MainMenuScreen::Result::Quit)
                     window.close();
+            }
+
+            // ── Click sinistro sulla mappa di respawn (doc 30) ────────────────
+            //    Da vivi il click spara (updateShooting); da morti seleziona il
+            //    punto sotto il cursore e schiera (deployPlayerRespawn no-op se
+            //    non ancora pronto). Click nel vuoto: nessun effetto.
+            if (ev.type == SDL_MOUSEBUTTONDOWN
+                && ev.button.button == SDL_BUTTON_LEFT
+                && state == GameState::Playing && !sbMenuOpen
+                && player.isDead)
+            {
+                const int idx = hud.respawnMapPick((float)ev.button.x, (float)ev.button.y);
+                if (idx >= 0) { respawnSel = idx; deployPlayerRespawn(); }
             }
 
             if (ev.type == SDL_KEYDOWN)
@@ -984,6 +1096,27 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 {
                     if (sc == SDL_SCANCODE_V)
                         player.toggleThirdPerson(cam);
+
+                    // ── Scelta e schieramento del punto di respawn mentre si è
+                    //    a terra (doc 25, base della futura mappa tattica): A/D o
+                    //    frecce scorrono i punti (Base + command post alleati);
+                    //    Invio/Spazio (o click, gestito sotto) SCHIERA al punto
+                    //    scelto quando l'attesa minima è finita. Da morto il
+                    //    movimento è inerte, quindi A/D non confligge.
+                    if (!observerFly && player.isDead)
+                    {
+                        const int n = (int)mode->availableSpawns().size();
+                        if (n > 1)
+                        {
+                            if (sc == SDL_SCANCODE_D || sc == SDL_SCANCODE_RIGHT)
+                                respawnSel = (respawnSel + 1) % n;
+                            if (sc == SDL_SCANCODE_A || sc == SDL_SCANCODE_LEFT)
+                                respawnSel = (respawnSel + n - 1) % n;
+                        }
+                        if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER
+                            || sc == SDL_SCANCODE_SPACE)
+                            deployPlayerRespawn();   // no-op finché non è pronto
+                    }
 
                     // ── Menu sandbox (17_SandboxTools): TAB apre l'overlay
                     if (sandbox && sc == SDL_SCANCODE_TAB)
@@ -1154,7 +1287,15 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
 
         if (state == GameState::Playing)
         {
-            accumulator += frameDt;
+            // Ruota di comando aperta → RALLENTA il tempo di gioco (non pausa):
+            // si alimenta l'accumulatore con meno tempo reale, quindi la
+            // simulazione avanza meno passi al secondo. Il timestep fisso
+            // (fixedDt) resta invariato → fisica/AI deterministiche, solo più
+            // lente. Camera e selezione della ruota girano fuori da qui, a
+            // velocità reale. `wheelOpen` è del frame precedente (la ruota si
+            // gestisce più sotto): scarto di 1 frame, impercettibile.
+            const float timeScale = wheelOpen ? config::WHEEL_TIME_SCALE : 1.0f;
+            accumulator += frameDt * timeScale;
             while (accumulator >= SIMULATION_STEP)
             {
                 mode->update(world, fixedDt);
@@ -1189,24 +1330,113 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             // In osservatore NIENTE respawn: updateRespawn teletrasporterebbe
             // la camera allo spawn e ricreerebbe il player a team 1 (bug:
             // "osservo dall'alto e i droidi iniziano a spararmi").
-            if (!observerFly && player.respawnTimer > 0.0f)
+            //
+            // Il respawn NON è automatico QUANDO c'è una scelta: qui si scala
+            // solo l'attesa minima e si alimenta l'overlay. Con 2+ punti il
+            // rientro avviene in `deployPlayerRespawn` alla CONFERMA del
+            // giocatore (click/Invio) — così la scelta ha la precedenza anche con
+            // respawnDelay basso (KI #56). Se invece c'è UN solo punto (nessun
+            // post catturato) non c'è nulla da scegliere: si torna al respawn
+            // automatico di prima, per non aggiungere attrito a chi gioca con
+            // respawn brevi.
+            if (!observerFly && player.isDead)
             {
-                player.respawnTimer -= elapsed;
-                if (player.respawnTimer <= 0.0f)
+                if (player.respawnTimer > 0.0f)
+                    player.respawnTimer -= elapsed;
+
+                // La lista può cambiare mentre si aspetta (un post cade): si
+                // riclampa l'indice per non uscire dai limiti.
+                const auto spawns = mode->availableSpawns();
+                if (respawnSel < 0 || respawnSel >= (int)spawns.size())
+                    respawnSel = 0;
+
+                if (spawns.size() <= 1)
                 {
-                    player.updateRespawn(world, cam, currentSettings.respawnDelay,
-                                          mode->getSpawnPos(), currentSettings.playerHp);
-                    mode->overridePlayerEntity(player.entity);
-                    world.playerEntity = player.entity;   // respawn = entità NUOVA (ADR-020)
+                    // Un solo punto: nessuna scelta → respawn automatico allo
+                    // scadere del timer, nessuna mappa (niente attrito, KI #56).
+                    hud.setRespawnMap({});
+                    if (player.respawnTimer <= 0.0f) deployPlayerRespawn();
+                }
+                else
+                {
+                    // 2+ punti: mappa top-down cliccabile (doc 30). Rilascia il
+                    // cursore per poter cliccare i marker; lo riprende il deploy.
+                    if (window.isMouseCaptured()) window.setMouseCaptured(false);
+                    hud.setRespawnMap(buildRespawnMap(spawns));
                 }
             }
+            else
+                hud.setRespawnMap({});
+        }
+
+        // ── Ruota di comando (doc 26, livello 2) ─────────────────────
+        //    Tenuto il tasto: la camera si CONGELA e il movimento del mouse
+        //    sceglie il settore (Regroup/Hold/Advance); al rilascio si impartisce
+        //    l'ordine di squadra. Un ordine che non ferma l'azione è il requisito
+        //    del doc — qui l'azione si mette in pausa solo mentre si sceglie.
+        {
+            const bool wheelWasOpen = wheelOpen;
+            const bool canWheel = state == GameState::Playing && !observerFly
+                                && !sbMenuOpen && drivenVehicle == 0
+                                && window.isMouseCaptured();
+            wheelOpen = canWheel && input.isDown(Action::CommandWheel);
+            if (wheelOpen)
+            {
+                if (!wheelWasOpen) { wheelDirX = wheelDirY = 0.0f; wheelSel = -1; }
+                wheelDirX += (float)input.mouseDX();
+                wheelDirY += (float)input.mouseDY();
+                const float mag = std::sqrt(wheelDirX*wheelDirX + wheelDirY*wheelDirY);
+                if (mag > 24.0f)   // dead zone: un micromovimento non seleziona
+                {
+                    const float ang = std::atan2(wheelDirY, wheelDirX);
+                    // Centri: Regroup basso-sx, Hold basso-dx, Advance in alto
+                    // (Y schermo verso il basso → Advance = -90°).
+                    const float c[3] = { 2.356f, 0.785f, -1.5708f };
+                    int best = 0; float bestD = 1e9f;
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const float dd = std::fabs(std::atan2(std::sin(ang-c[i]),
+                                                              std::cos(ang-c[i])));
+                        if (dd < bestD) { bestD = dd; best = i; }
+                    }
+                    wheelSel = best;
+                }
+                else wheelSel = -1;
+            }
+            else if (wheelWasOpen && wheelSel >= 0)
+            {
+                // Rilascio con un settore scelto → ordine di squadra.
+                SquadOrderRequest req; req.pending = true;
+                const auto* pt = world.getTransform(player.entity);
+                const glm::vec3 pp = pt ? glm::vec3{pt->x, pt->y, pt->z} : cam.getPosition();
+                if (wheelSel == 0)        // REGROUP: raduna sul leader (giocatore)
+                { req.order = OrderType::MoveTo; req.targetX = pp.x; req.targetZ = pp.z; }
+                else if (wheelSel == 1)   // HOLD: ognuno tiene la propria posizione
+                { req.order = OrderType::HoldPosition; }
+                else                      // ADVANCE: avanza nella direzione di mira
+                {
+                    glm::vec3 fwd = cam.getForward(); fwd.y = 0.0f;
+                    const float fl = glm::length(fwd);
+                    fwd = (fl > 0.001f) ? fwd / fl : glm::vec3{0,0,1};
+                    req.order = OrderType::MoveTo;
+                    req.targetX = pp.x + fwd.x * 15.0f;
+                    req.targetZ = pp.z + fwd.z * 15.0f;
+                }
+                world.squadOrder = req;
+                hud.toast(wheelSel==0 ? "Squadra: REGROUP"
+                        : wheelSel==1 ? "Squadra: HOLD"
+                                      : "Squadra: ADVANCE");
+                wheelSel = -1;
+            }
+            hud.setCommandWheel(wheelOpen, wheelSel);
         }
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
         // Alla guida la camera segue il veicolo (VehicleDrive): niente
-        // mouse-look, altrimenti lo sterzo sembra invertito.
+        // mouse-look, altrimenti lo sterzo sembra invertito. La ruota di comando
+        // CONGELA la camera mentre si sceglie il settore (mouse = selezione).
         if (state == GameState::Playing && window.isMouseCaptured()
-            && !sbMenuOpen && drivenVehicle == 0)
+            && !sbMenuOpen && drivenVehicle == 0 && !wheelOpen)
             player.processMouse(cam, (float)input.mouseDX(), (float)input.mouseDY());
 
         if (state == GameState::Playing)
@@ -1276,23 +1506,30 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             //    hitbox nemica reale. USA LO STESSO test OBB dei proiettili
             //    (physics/HitTest.hpp, KI #13): il raggio è un segmento di
             //    80m — mirino e colpi concordano per costruzione. ──────────
-            EntityId aimEntity = 0;   // nemico inquadrato (0 = nessuno)
+            EntityId aimEntity = 0;   // NEMICO inquadrato (0 = nessuno) → crosshair + FocusFire
+            EntityId aimAlly   = 0;   // COMPAGNO inquadrato (anche a terra) → Revive/CoveringFire
             {
                 bool aimOn = false;
                 // Entità inquadrata: la risolve GIÀ questo loop: riusarla per
                 // l'ordine contestuale (ADR-020 Phase B) garantisce che ciò che
                 // il mirino segna sia ciò che la squadra riceve come bersaglio.
+                // Ora distingue nemico e COMPAGNO: gli ordini che puntano un
+                // alleato (rianima / fuoco di copertura) hanno bisogno del secondo.
                 aimEntity = 0;
                 const glm::vec3 ro = cam.getPosition();
                 const glm::vec3 rd = cam.getForward();
                 const glm::vec3 re = ro + rd * 80.0f;
                 for (EntityId id : world.getEntities())
                 {
+                    if (id == player.entity) continue;   // non ci si mira da soli
                     const auto* tm2 = world.getTeam(id);
                     const auto* eh2 = world.getHealth(id);
                     const auto* tr2 = world.getTransform(id);
-                    if (!tm2 || tm2->teamId == 1 || !eh2 || eh2->current <= 0.0f
-                        || !tr2 || world.getBullet(id)) continue;
+                    if (!tm2 || !tr2 || world.getBullet(id)) continue;
+                    const bool ally = (tm2->teamId == 1);
+                    // Nemico: dev'essere vivo (i morti spariscono). Compagno: anche
+                    // A TERRA (hp 0) resta mirabile — è il caso del comando Revive.
+                    if (!ally && (!eh2 || eh2->current <= 0.0f)) continue;
 
                     const auto* hb2 = world.getHitbox(id);
                     const auto* mr2 = world.getMeshRenderer(id);
@@ -1325,9 +1562,15 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                             && glm::length(ep - (ro + rd * t)) < 0.7f)
                             aimOn = true;
                     }
-                    if (aimOn) { aimEntity = id; break; }
+                    if (aimOn)
+                    {
+                        if (ally) aimAlly = id;   // compagno (Revive/CoveringFire)
+                        else      aimEntity = id; // nemico (crosshair + FocusFire)
+                        break;
+                    }
                 }
-                hud.setAimOnTarget(aimOn);
+                hud.setAimOnTarget(aimEntity != 0);   // crosshair rosso solo sui nemici
+                hud.setAimOnAlly(aimAlly != 0);        // verde sui compagni (feedback comandi)
             }
 
             // ── Ordine contestuale alla squadra (ADR-020 Phase B, doc 26) ──
@@ -1343,9 +1586,53 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 SquadOrderRequest req;
                 if (aimEntity != 0)
                 {
-                    req.order        = OrderType::FocusFire;
+                    req.order        = OrderType::FocusFire;   // nemico inquadrato
                     req.targetEntity = aimEntity;
                     req.pending      = true;
+                }
+                else if (aimAlly != 0)
+                {
+                    const auto* asq = world.getSquad(aimAlly);
+                    if (asq && asq->downed)
+                    {
+                        // Compagno A TERRA → manda il membro vivo più vicino a
+                        // rianimarlo (comando esplicito, oltre all'auto-soccorso).
+                        const auto* dt = world.getTransform(aimAlly);
+                        EntityId reviver = 0; float best2 = 1e30f;
+                        if (dt)
+                            for (EntityId o : world.getEntities())
+                            {
+                                const auto* osq = world.getSquad(o);
+                                if (!osq || osq->squadId == 0 || osq->isLeader || osq->downed) continue;
+                                if (o == aimAlly) continue;
+                                const auto* ot = world.getTransform(o);
+                                if (!ot) continue;
+                                const float ddx = ot->x - dt->x, ddz = ot->z - dt->z;
+                                const float d2 = ddx*ddx + ddz*ddz;
+                                if (d2 < best2) { best2 = d2; reviver = o; }
+                            }
+                        if (reviver != 0)
+                        {
+                            req.order          = OrderType::Revive;
+                            req.targetEntity   = aimAlly;
+                            req.directedMember = reviver;
+                            req.pending        = true;
+                            hud.toast("Rianimazione: compagno in soccorso");
+                        }
+                        else
+                            hud.toast("Nessun compagno disponibile per la rianimazione");
+                    }
+                    else
+                    {
+                        // Compagno vivo → fuoco di copertura: tiene la posizione
+                        // (dove si trova ora) e spara di supporto.
+                        req.order          = OrderType::CoveringFire;
+                        req.directedMember = aimAlly;
+                        if (const auto* at = world.getTransform(aimAlly))
+                        { req.targetX = at->x; req.targetZ = at->z; }
+                        req.pending        = true;
+                        hud.toast("Fuoco di copertura");
+                    }
                 }
                 else
                 {
@@ -1388,7 +1675,14 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 // si confronta l'arrivo col punto chiesto. Senza questo si possono
                 // ordinare mete impossibili — es. la "Collina Centrale" di firebase,
                 // 1m > agentClimb, scollegata dal pavimento (KI #34).
-                if (req.pending && req.order != OrderType::FocusFire && nav.crowdReady())
+                // Il pre-check di raggiungibilità vale solo per gli ordini di
+                // MOVIMENTO verso un punto (MoveTo/TakeCover). FocusFire vincola un
+                // bersaglio; Revive insegue un compagno (meta dinamica); CoveringFire
+                // tiene la posizione dove il compagno è già → sempre raggiungibile.
+                if (req.pending && nav.crowdReady()
+                    && req.order != OrderType::FocusFire
+                    && req.order != OrderType::Revive
+                    && req.order != OrderType::CoveringFire)
                 {
                     const auto* ptr = world.getTransform(player.entity);
                     std::vector<glm::vec3> path;
@@ -1479,11 +1773,21 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 bool found = false;
                 OrderType ord = OrderType::None;
                 float dist = 0.0f;
+                int   downed = 0;
+                float mostUrgentBleed = -1.0f;   // -1 = nessuno a terra
                 for (EntityId id : world.getEntities())
                 {
                     const auto* sq = world.getSquad(id);
                     if (!sq || sq->squadId == 0 || sq->isLeader) continue;
                     ++members;
+                    // A terra (Phase C): conta e traccia il timer più urgente.
+                    if (sq->downed)
+                    {
+                        ++downed;
+                        if (mostUrgentBleed < 0.0f || sq->bleedoutRemaining < mostUrgentBleed)
+                            mostUrgentBleed = sq->bleedoutRemaining;
+                        continue;   // un a-terra non ha un ordine da mostrare
+                    }
                     if (found || !sq->hasActiveOrder()) continue;
                     ord = sq->order; found = true;
                     if (const auto* t = world.getTransform(id))
@@ -1493,15 +1797,23 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 if (members == 0) hud.setSquadOrder("");
                 else
                 {
-                    char sb[96];
+                    char sb[128];
+                    char downTag[48] = "";
+                    // Lo stato "a terra" è la cosa più urgente: va davanti, con il
+                    // conto alla rovescia della perdita più imminente.
+                    if (downed > 0)
+                        std::snprintf(downTag, sizeof(downTag), "  [A TERRA %d — %.0fs]",
+                                      downed, mostUrgentBleed);
                     // FocusFire non ha una destinazione: mostrarne una distanza
                     // sarebbe un numero inventato.
                     if (found && ord != OrderType::FocusFire)
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s  %.0fm",
-                                      members, orderName(ord), dist);
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s  %.0fm%s",
+                                      members, orderName(ord), dist, downTag);
+                    else if (found)
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s%s",
+                                      members, orderName(ord), downTag);
                     else
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s",
-                                      members, orderName(ord));
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)%s", members, downTag);
                     hud.setSquadOrder(sb);
                 }
             }
@@ -1605,8 +1917,14 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     if (mr->meshOffsetY != 0.0f)
                         model = glm::translate(glm::mat4(1.0f),
                                     glm::vec3(0.0f, mr->meshOffsetY, 0.0f)) * model;
-                    renderer.drawMeshFrom(viewCam, *mr->mesh, mr->texture, model,
-                                          {mr->r, mr->g, mr->b});
+                    // Indicatore "a terra" (Phase C): manca una posa prone, quindi
+                    // il segnale è un TINT ROSSO — dice a colpo d'occhio QUALE clone
+                    // è a terra (l'HUD dice quanti/quanto). Riutilizzabile poi per
+                    // un HUD dei cloni più ricco.
+                    glm::vec3 tint = {mr->r, mr->g, mr->b};
+                    if (const auto* sqd = world.getSquad(id); sqd && sqd->downed)
+                        tint = {0.85f, 0.12f, 0.12f};
+                    renderer.drawMeshFrom(viewCam, *mr->mesh, mr->texture, model, tint);
 
                     // Arma in mano (o altro modello agganciato)
                     if (mr->attachMesh)

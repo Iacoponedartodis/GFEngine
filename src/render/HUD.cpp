@@ -7,7 +7,53 @@
 namespace mini
 {
 
+// ── Proiezione mondo→schermo della mappa di respawn (doc 30) ────────────────
+// Definita UNA volta e usata sia dal render sia dal picking → render e click
+// non possono mai divergere. Il pannello è funzione della sola dimensione
+// schermo (costante nel frame), quindi ricalcolarlo in due punti è sicuro.
+namespace
+{
+    struct RMProj
+    {
+        float ox = 0, oy = 0, scale = 1, minX = 0, minZ = 0;
+        void to(float x, float z, float& sx, float& sy) const
+        { sx = ox + (x - minX) * scale; sy = oy + (z - minZ) * scale; }
+    };
+
+    void rmPanel(int W, int H, float& px, float& py, float& pw, float& ph)
+    {
+        pw = (float)W * 0.5f; ph = (float)H * 0.54f;
+        px = ((float)W - pw) * 0.5f; py = (float)H * 0.24f;
+    }
+
+    RMProj rmProj(const HUD::RespawnMap& r, int W, int H)
+    {
+        float px, py, pw, ph; rmPanel(W, H, px, py, pw, ph);
+        const float worldW = std::max(0.001f, r.maxX - r.minX);
+        const float worldD = std::max(0.001f, r.maxZ - r.minZ);
+        const float scale  = std::min(pw / worldW, ph / worldD);
+        const float ox = px + (pw - worldW * scale) * 0.5f;
+        const float oy = py + (ph - worldD * scale) * 0.5f;
+        return {ox, oy, scale, r.minX, r.minZ};
+    }
+}
+
 HUD::HUD(int screenW, int screenH) : m_ui(screenW, screenH) {}
+
+int HUD::respawnMapPick(float mx, float my) const
+{
+    const RespawnMap& r = m_respawnMap;
+    if (!r.active) return -1;
+    const RMProj p = rmProj(r, m_ui.width(), m_ui.height());
+    int best = -1; float bestD2 = 16.0f * 16.0f;   // raggio di hit ~16 px
+    for (int i = 0; i < (int)r.markers.size(); ++i)
+    {
+        float sx, sy; p.to(r.markers[i].x, r.markers[i].z, sx, sy);
+        const float dx = mx - sx, dy = my - sy, d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) { bestD2 = d2; best = i; }
+    }
+    return best;
+}
 
 void HUD::tick(float dt)
 {
@@ -199,15 +245,46 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                           overheated ? 0.2f : 0.85f);
             }
 
-            // Crosshair — ROSSA quando il mirino è su una hitbox nemica reale
+            // Crosshair — ROSSA su hitbox nemica, VERDE su un compagno (feedback
+            // per i comandi Revive/CoveringFire). Il surriscaldamento vince su
+            // tutto (è uno stato dell'arma che il giocatore deve notare subito).
             const float arm = 10, gap = 4, thick = 1.5f;
             float cr = 0.9f, cg = 0.9f, cb = 0.9f;
+            if (m_aimOnAlly)   { cr = 0.25f; cg = 0.9f; cb = 0.3f; }
             if (m_aimOnTarget) { cr = 1.0f; cg = 0.25f; cb = 0.2f; }
             if (overheated)    { cr = 1.0f; cg = 0.55f; cb = 0.1f; }
             m_ui.rect(cx-thick, cy-arm-gap, thick*2, arm, cr, cg, cb);
             m_ui.rect(cx-thick, cy+gap,     thick*2, arm, cr, cg, cb);
             m_ui.rect(cx-arm-gap, cy-thick, arm, thick*2, cr, cg, cb);
             m_ui.rect(cx+gap,     cy-thick, arm, thick*2, cr, cg, cb);
+
+            // ── Ruota di comando (doc 26, livello 2) ─────────────────────
+            // 3 settori attorno al mirino: Advance (alto), Regroup (basso-sx),
+            // Hold (basso-dx). Il settore puntato dal mouse è evidenziato; si
+            // impartisce al rilascio del tasto. Ordine = indice: 0/1/2.
+            if (m_wheelOpen)
+            {
+                m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.35f);   // vela di fondo
+                const char* wlabels[3] = { "REGROUP", "HOLD", "ADVANCE" };
+                const float R = 120.0f, bw = 108.0f, bh = 40.0f;
+                // Posizioni dei 3 settori (x,y del centro box)
+                const float px[3] = { cx - R,        cx + R,        cx        };
+                const float py[3] = { cy + R*0.55f,  cy + R*0.55f,  cy - R    };
+                for (int i = 0; i < 3; ++i)
+                {
+                    const bool on = (m_wheelSel == i);
+                    const float bx = px[i] - bw*0.5f, by = py[i] - bh*0.5f;
+                    if (on) m_ui.rect(bx, by, bw, bh, 0.18f, 0.42f, 0.20f, 0.95f);
+                    else    m_ui.rect(bx, by, bw, bh, 0.08f, 0.10f, 0.14f, 0.85f);
+                    m_ui.border(bx, by, bw, bh, on ? 0.4f : 0.5f,
+                                                on ? 0.95f : 0.5f, on ? 0.4f : 0.55f);
+                    m_ui.textCentered(px[i], py[i] - 6.0f, 1.7f, wlabels[i],
+                                      on ? 0.85f : 0.7f, on ? 1.0f : 0.7f, on ? 0.85f : 0.72f);
+                }
+                m_ui.textCentered(cx, cy + R + 34.0f, 1.4f,
+                                  "muovi il mouse e rilascia per impartire",
+                                  0.7f, 0.75f, 0.8f);
+            }
 
             // Hitmarker — 4 tacche diagonali per ~0.2s dopo un colpo a segno
             // (giallo = colpito, rosso = eliminato)
@@ -252,6 +329,80 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                 }
                 px += box + gapP;
             }
+        }
+
+        // ── Mappa top-down di selezione respawn (doc 30, Phase 1, BF2005) ──
+        //    Mentre si è a terra: vista dall'alto della mappa con i punti di
+        //    respawn cliccabili. Proiezione in `rmProj` (coerente col picking).
+        if (state == 0 && m_respawnMap.active)
+        {
+            const RespawnMap& r = m_respawnMap;
+            m_ui.rect(0, 0, W, H, 0.30f, 0.03f, 0.03f, 0.5f);   // vela "a terra"
+            m_ui.textCentered(cx, 40.0f, 3.0f, "SEI A TERRA", 1.0f, 0.42f, 0.36f);
+
+            const bool ready = (r.secondsLeft <= 0.05f);
+            if (ready)
+                m_ui.textCentered(cx, 84.0f, 1.6f,
+                    "Clicca un punto sulla mappa o premi INVIO per schierarti",
+                    0.55f, 1.0f, 0.6f);
+            else
+            {
+                char cd[72];
+                std::snprintf(cd, sizeof(cd),
+                    "Scegli il punto — rientro disponibile fra %.0fs",
+                    std::ceil(r.secondsLeft));
+                m_ui.textCentered(cx, 84.0f, 1.5f, cd, 0.9f, 0.86f, 0.8f);
+            }
+
+            float px, py, pw, ph; rmPanel(m_ui.width(), m_ui.height(), px, py, pw, ph);
+            m_ui.rect(px, py, pw, ph, 0.06f, 0.08f, 0.11f, 0.92f);   // sfondo mappa
+            m_ui.border(px, py, pw, ph, 0.40f, 0.55f, 0.75f, 1.5f);
+            const RMProj proj = rmProj(r, m_ui.width(), m_ui.height());
+
+            // Pareti/geometria come rettangoli tenui (contesto, non cliccabili)
+            for (const auto& w2 : r.walls)
+            {
+                float sx, sy;
+                proj.to(w2.x - w2.sx * 0.5f, w2.z - w2.sz * 0.5f, sx, sy);
+                m_ui.rect(sx, sy, w2.sx * proj.scale, w2.sz * proj.scale,
+                          0.16f, 0.18f, 0.22f, 0.9f);
+            }
+
+            // Luogo di morte (orientamento)
+            if (r.hasDeath)
+            {
+                float sx, sy; proj.to(r.deathX, r.deathZ, sx, sy);
+                m_ui.rect(sx - 3, sy - 3, 6, 6, 0.72f, 0.72f, 0.74f, 0.95f);
+                m_ui.textCentered(sx, sy + 7.0f, 1.0f, "caduto",
+                                  0.72f, 0.72f, 0.74f);
+            }
+
+            const int hover = respawnMapPick(r.mouseX, r.mouseY);
+
+            // Marker dei punti di respawn disponibili (verde alleato)
+            for (int i = 0; i < (int)r.markers.size(); ++i)
+            {
+                float sx, sy; proj.to(r.markers[i].x, r.markers[i].z, sx, sy);
+                const bool on = (i == r.sel);
+                const bool hv = (i == hover);
+                const float half = on ? 8.0f : 6.0f;
+                const float cr = on ? 0.45f : 0.30f;
+                const float cg = on ? 1.00f : 0.85f;
+                const float cb = on ? 0.55f : 0.45f;
+                m_ui.rect(sx - half, sy - half, half * 2, half * 2, cr, cg, cb);
+                if (on || hv)
+                    m_ui.border(sx - half - 2, sy - half - 2,
+                                half * 2 + 4, half * 2 + 4, 0.9f, 1.0f, 0.9f, 1.5f);
+                m_ui.textCentered(sx, sy - half - 15.0f, (on || hv) ? 1.3f : 1.0f,
+                                  r.markers[i].label.c_str(),
+                                  (on || hv) ? 0.9f : 0.70f,
+                                  (on || hv) ? 1.0f : 0.85f,
+                                  (on || hv) ? 0.9f : 0.72f);
+            }
+
+            m_ui.textCentered(cx, py + ph + 18.0f, 1.2f,
+                              "Click sulla mappa  oppure  A/D per scegliere",
+                              0.70f, 0.75f, 0.82f);
         }
 
         // Toast (messaggi tipo "game_state.json salvato") — alto centro

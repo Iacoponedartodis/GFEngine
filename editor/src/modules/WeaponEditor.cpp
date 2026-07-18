@@ -1,4 +1,5 @@
 // WeaponEditor.cpp
+#include "util/DataPath.hpp"
 #include "modules/WeaponEditor.hpp"
 #include "util/FileDialog.hpp"
 #include "util/RigReader.hpp"
@@ -36,13 +37,9 @@ static std::string getExeDir()
 }
 
 // data/ source folder — 3 livelli sopra l'exe (build/config/Debug -> project root)
-static std::string getDataDir()
-{
-    std::error_code ec;
-    fs::path src = fs::canonical(fs::path(getExeDir()) / "../../../data", ec);
-    if (!ec && fs::exists(src, ec)) return src.string() + "/";
-    return getExeDir() + "data/"; // fallback: output dir
-}
+// R8 chiuso: unica risoluzione in util/DataPath (era una delle copie col
+// controllo debole: accettava qualunque cartella di nome data).
+static std::string getDataDir() { return editor::datapath::dir(); }
 
 // assets/ at project root (3 levels above Debug/)
 static std::string getAssetsDir()
@@ -222,6 +219,13 @@ void WeaponEditor::loadWeapons()
         if (j.contains("bullet_color") && j["bullet_color"].size() >= 3)
             w.bulletColor = {j["bullet_color"][0], j["bullet_color"][1], j["bullet_color"][2]};
 
+        // Posa in mano (KI #49)
+        w.handScale = j.value("hand_scale", 0.0f);
+        if (j.contains("hand_rot") && j["hand_rot"].size() >= 3)
+            w.handRot = {j["hand_rot"][0], j["hand_rot"][1], j["hand_rot"][2]};
+        if (j.contains("hand_offset") && j["hand_offset"].size() >= 3)
+            w.handOffset = {j["hand_offset"][0], j["hand_offset"][1], j["hand_offset"][2]};
+
         m_weapons.push_back(std::move(w));
     }
     std::sort(m_weapons.begin(), m_weapons.end(),
@@ -321,6 +325,19 @@ void WeaponEditor::saveSelected()
     j["spread_move"]      = w.spreadMove;
     j["spread_sprint"]    = w.spreadSprint;
     j["spread_jump"]      = w.spreadJump;
+
+    // Posa in mano (KI #49): si scrive solo se autorata (handScale>0). A 0 si
+    // rimuove, così un'arma "senza posa" torna esplicitamente al fallback legacy.
+    if (w.handScale > 0.0f)
+    {
+        j["hand_scale"]  = w.handScale;
+        j["hand_rot"]    = {w.handRot[0], w.handRot[1], w.handRot[2]};
+        j["hand_offset"] = {w.handOffset[0], w.handOffset[1], w.handOffset[2]};
+    }
+    else
+    {
+        j.erase("hand_scale"); j.erase("hand_rot"); j.erase("hand_offset");
+    }
     return true;
     });
     m_dirty = false;
@@ -618,6 +635,37 @@ void WeaponEditor::drawMeshTab(float panelW)
             }
         }
         ImGui::EndChild();
+    }
+
+    // ── Posa in mano (KI #49) ─────────────────────────────────────────────
+    // Come l'arma sta impugnata: vale per QUALUNQUE unità la usi (prima era
+    // tarata per singola entità → cambiando arma via classe usciva sbagliata).
+    ImGui::SeparatorText("Posa in mano (vale per ogni unita')");
+    {
+        auto& w2 = m_weapons[m_sel];
+        bool authored = w2.handScale > 0.0f;
+        if (ImGui::Checkbox("Posa definita da quest'arma", &authored))
+        {
+            // Attivando: parte da 1.0 (poi si tara guardando in gioco/anteprima
+            // unità). Disattivando: torna al fallback legacy weapon_display.
+            w2.handScale = authored ? (w2.handScale > 0.0f ? w2.handScale : 1.0f) : 0.0f;
+            m_dirty = true;
+        }
+        if (w2.handScale > 0.0f)
+        {
+            if (editor::ui::dragRow("Scala in mano", w2.handScale, 0.01f, 0.02f, 200.0f, "%.3f"))
+                m_dirty = true;
+            if (ImGui::DragFloat3("Rotazione in mano", w2.handRot.data(), 1.0f, -180.0f, 180.0f, "%.0f"))
+                m_dirty = true;
+            if (ImGui::DragFloat3("Offset in mano", w2.handOffset.data(), 0.005f, -1.0f, 1.0f, "%.3f"))
+                m_dirty = true;
+            ImGui::TextDisabled("La scala compensa la dimensione NATIVA del mesh:\n"
+                                "es. Z-6 ~80, DC-15A ~0.4. L'anteprima e' nell'Entity\n"
+                                "Editor (arma in mano su un'unita').");
+        }
+        else
+            ImGui::TextDisabled("Non autorata: le unita' usano il loro weapon_display\n"
+                                "legacy (transizione KI #49). Attivala per centralizzarla.");
     }
 
     ImGui::Separator();

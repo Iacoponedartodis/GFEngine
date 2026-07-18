@@ -48,6 +48,13 @@ OptionsMenu::Result OptionsMenu::handleRoot(int sc)
 }
 
 // ── Controls: editor keybinding ──────────────────────────────────────────
+void OptionsMenu::assignAwaited(InputBinding b, InputManager& input)
+{
+    if (!m_awaitingKey || m_page != Page::Controls) return;
+    input.rebind(InputManager::rebindableAt(m_controlRow), b);
+    m_awaitingKey = false;
+}
+
 OptionsMenu::Result OptionsMenu::handleControls(int sc, InputManager& input)
 {
     const int count = InputManager::rebindableCount();
@@ -62,7 +69,7 @@ OptionsMenu::Result OptionsMenu::handleControls(int sc, InputManager& input)
         }
         // Assegna il nuovo tasto all'azione selezionata
         Action a = InputManager::rebindableAt(m_controlRow);
-        input.rebind(a, (SDL_Scancode)sc);
+        input.rebind(a, InputBinding::key((SDL_Scancode)sc));
         m_awaitingKey = false;
         return Result::None;
     }
@@ -165,14 +172,15 @@ void OptionsMenu::renderControls(const InputManager& input) const
         m_ui.text(labelX, y + 6, 1.9f, InputManager::actionName(a),
                   sel ? 1.0f : 0.8f, sel ? 0.95f : 0.8f, sel ? 0.5f : 0.8f);
 
-        // Tasto attualmente assegnato
-        SDL_Scancode sc = input.getScancode(a);
-        const char* keyName = SDL_GetScancodeName(sc);
+        // Input attualmente assegnato: getKeyName descrive OGNI tipo (tasto,
+        // pulsante mouse, rotella). Prima usava getScancode+SDL_GetScancodeName,
+        // che su un binding mouse/rotella dava UNKNOWN → nome vuoto ("—").
+        const char* keyName = input.getKeyName(a);
         char keyBuf[48];
 
         if (sel && m_awaitingKey)
         {
-            std::snprintf(keyBuf, sizeof(keyBuf), "[ premi un tasto... ]");
+            std::snprintf(keyBuf, sizeof(keyBuf), "[ tasto / mouse / rotella... ]");
             m_ui.rect(keyX - 8, y - 2, 230, 30, 0.4f, 0.2f, 0.05f, 0.7f);
             m_ui.text(keyX, y + 6, 1.7f, keyBuf, 1.0f, 0.7f, 0.2f);
         }
@@ -219,7 +227,7 @@ void OptionsMenu::renderControls(const InputManager& input) const
     if (m_awaitingKey)
     {
         m_ui.textCentered(cx, ly, 1.7f,
-                          "Premi il nuovo tasto da assegnare   (ESC = annulla)",
+                          "Premi tasto, pulsante mouse o rotella   (ESC = annulla)",
                           1.0f, 0.7f, 0.2f);
     }
     else

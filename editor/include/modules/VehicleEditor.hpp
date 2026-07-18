@@ -19,6 +19,8 @@ public:
 
     void tick(float dt);
     void draw();
+    // Rilascio cattura mouse al cambio modulo (FreeCameraViewport::releaseMouseCapture).
+    void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
 
 private:
     struct VehicleEntry

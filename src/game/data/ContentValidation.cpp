@@ -4,6 +4,7 @@
 // incidente hitbox 2026-07-09, ADR-007 id di fallback hardcoded).
 #include "mini/game/data/ContentValidation.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/ClassResolve.hpp"   // ADR-022: arma effettiva = quella della classe
 #include "mini/core/Telemetry.hpp"
 
 #include <nlohmann/json.hpp>
@@ -259,6 +260,33 @@ Diagnostics validateMission(const MissionDef& m, const DefinitionRegistry& reg)
                     "defend_zone con hold_seconds <= 0 → completato subito",
                     "Imposta target.hold_seconds > 0 (secondi di tenuta).");
         }
+
+        // DestroyTarget: la 'structure' è una LABEL da risolvere nella mappa
+        // della missione, stessa disciplina del post (deve esistere ed essere unica).
+        if (o->type == ObjectiveType::DestroyTarget)
+        {
+            if (o->targetStructure.empty())
+                add(d, L::Error, "Mission", "objectives/" + id + ".json",
+                    "destroy_target senza 'structure'",
+                    "Indica target.structure con la label di un bersaglio strategico della mappa.");
+            else if (const MapDef* md = reg.getMap(m.mapId))
+            {
+                int found = 0;
+                for (const auto& st : md->strategicTargets)
+                    if (st.label == o->targetStructure) ++found;
+                if (found == 0)
+                    add(d, L::Error, "Mission", "objectives/" + id + ".json",
+                        "bersaglio '" + o->targetStructure + "' non esiste nella mappa '"
+                        + m.mapId + "'",
+                        "Usa la label di un bersaglio strategico autorato in quella mappa, "
+                        "oppure cambia la mappa della missione.");
+                else if (found > 1)
+                    add(d, L::Error, "Map", "maps/" + m.mapId + ".json",
+                        "piu' bersagli strategici con la label '" + o->targetStructure
+                        + "' → il riferimento e' ambiguo",
+                        "Le label dei bersagli sono il loro unico nome: rendile univoche.");
+            }
+        }
     };
     for (const auto& id : m.primaryObjectives)  checkObj(id, true);
     for (const auto& id : m.optionalObjectives) checkObj(id, false);
@@ -298,16 +326,47 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
     auto checkUnit = [&](const std::string& id, const EnemyDef& u, const char* kind)
     {
         const std::string f = std::string(kind) + "/" + id + ".json";
+        checkRef(d, reg.classes(),       u.classId,         f, "classe");
         checkRef(d, reg.aiProfiles(),     u.aiProfileId,     f, "profilo AI");
         checkRef(d, reg.hitboxProfiles(), u.hitboxProfileId, f, "profilo hitbox");
         for (const auto& wid : u.weaponIds)
             checkRef(d, reg.weapons(), wid, f, "arma");
         for (const auto& aid : u.abilityIds)
             checkRef(d, reg.abilities(), aid, f, "abilita'");
-        if (u.weaponIds.empty())
-            add(d, L::Warn, "Content", f, "nessuna arma assegnata",
-                "L'unita' entrera' in partita disarmata: assegna almeno un'arma "
-                "dal dropdown, o conferma che e' voluto.");
+
+        // Posa dell'arma in mano (KI #49). Il modello impugnato è l'arma
+        // EFFETTIVA (classe → loadout, via WeaponAttach). La posa/scala DEVE
+        // venire da quell'arma (`hand_scale`), non dal `weapon_display` legacy
+        // dell'unità: quest'ultimo è tarato per un'arma fissa e, quando la classe
+        // cambia arma, produce un modello a scala sbagliata (gigante/minuscolo).
+        {
+            const std::string eff = mini::classres::primaryWeaponId(reg, u);
+            const WeaponDef* wpn = eff.empty() ? nullptr : reg.getWeapon(eff);
+            if (wpn && wpn->handScale <= 0.0f)
+                add(d, L::Warn, "Content", f,
+                    "l'arma effettiva '" + eff + "' non ha una posa in mano "
+                    "autorata (hand_scale) → si usa il weapon_display legacy "
+                    "dell'unita', che e' tarato per un'arma fissa e sbaglia scala "
+                    "se la classe cambia arma",
+                    "Apri Weapon Editor → '" + eff + "' → tab Mesh → 'Posa in "
+                    "mano' e attiva/tara la scala. Cosi' vale per ogni unita' che "
+                    "impugna quest'arma (KI #49).");
+        }
+        // Unita' senza classe: NON e' rotta (i campi propri restano il fallback,
+        // ADR-022 e' additivo) ma e' contenuto in stato legacy — e dal 2026-07-17
+        // l'Entity Editor non edita piu' arma/profilo/abilita', perche' li decide
+        // la classe. Quindi una classless ha un loadout che il gioco usa e che
+        // l'editor non mostra: va detto, o diventa invisibile.
+        if (u.classId.empty())
+            add(d, L::Warn, "Content", f,
+                "nessuna CLASSE assegnata → arma, profilo AI e abilita' vengono dai "
+                "campi legacy dell'unita', non piu' editabili dall'editor",
+                "Assegna una classe in Entity Editor → tab Statistiche (la classe e' "
+                "la professione: loadout + comportamento + abilita').");
+        if (u.weaponIds.empty() && u.classId.empty())
+            add(d, L::Warn, "Content", f, "nessuna arma e nessuna classe",
+                "L'unita' entrera' in partita disarmata: assegnale una classe "
+                "(Entity Editor → Statistiche), o conferma che e' voluto.");
         if (u.hp <= 0.0f)
             add(d, L::Error, "Content", f, "hp <= 0 → l'unita' muore allo spawn",
                 "Imposta 'hp' > 0.");
@@ -317,6 +376,40 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
     for (const auto& [id, u] : reg.allies())  checkUnit(id, u, "allies");
     checkNearDuplicates(d, reg.enemies(), "enemies");
     checkNearDuplicates(d, reg.allies(),  "allies");
+
+    // ── Profili hitbox: il vuoto degrada in SILENZIO ─────────────────────
+    // zones vuoto non e' fatale: testHit() cade sul fallback sferico
+    // (CombatSystem, k_hitRadius, moltiplicatore 1.0). Ma vuol dire niente
+    // zone, niente headshot e niente colpi di striscio — l'unita' si comporta
+    // diversamente da quello che il profilo promette, senza un solo messaggio.
+    // E' l'unico modo per accorgersene senza leggere il codice del combat.
+    for (const auto& [id, hp] : reg.hitboxProfiles())
+    {
+        const std::string f = "hitboxes/" + id + ".json";
+        if (hp.zones.empty())
+        {
+            add(d, L::Warn, "Content", f,
+                "profilo senza zone → l'unita' viene colpita come una SFERA, "
+                "niente headshot ne' moltiplicatori",
+                "Disegna le zone in Entity Editor → tab Hitbox, oppure elimina "
+                "il profilo se non serve piu'.");
+            continue;
+        }
+        for (const auto& z : hp.zones)
+        {
+            const std::string zf = f + " (zona '" + z.name + "')";
+            if (z.halfExtents.x <= 0.0f || z.halfExtents.y <= 0.0f ||
+                z.halfExtents.z <= 0.0f)
+                add(d, L::Error, "Content", zf,
+                    "half_extents <= 0 → zona di volume nullo, mai colpibile",
+                    "Imposta tutti e tre gli half_extents > 0.");
+            if (z.damageMultiplier <= 0.0f)
+                add(d, L::Warn, "Content", zf,
+                    "damage_multiplier <= 0 → colpire questa zona non fa danno",
+                    "Imposta 'damage_multiplier' > 0, o conferma che e' voluto "
+                    "(es. una zona corazzata).");
+        }
+    }
 
     // ── Mappe ─────────────────────────────────────────────────────────────
     for (const auto& [id, m] : reg.maps())
@@ -400,6 +493,9 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         else
             checkRef(d, reg.weapons(), c.primaryWeaponId, f, "arma primaria");
         checkRef(d, reg.weapons(),   c.secondaryWeaponId, f, "arma secondaria");
+        // Il profilo AI e' cio' che rende la classe una PROFESSIONE (ADR-022):
+        // un riferimento rotto qui la degrada a pacchetto di armi in silenzio.
+        checkRef(d, reg.aiProfiles(), c.aiProfileId, f, "profilo AI");
         for (const auto& aid : c.abilityIds)
             checkRef(d, reg.abilities(), aid, f, "abilita'");
         if (c.primaryWeaponId == c.secondaryWeaponId && !c.primaryWeaponId.empty())

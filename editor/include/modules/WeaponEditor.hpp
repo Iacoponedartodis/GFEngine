@@ -17,6 +17,8 @@ public:
 
     void tick(float dt);
     void draw();
+    // Rilascio cattura mouse al cambio modulo (FreeCameraViewport::releaseMouseCapture).
+    void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
 
 private:
     struct AttachPointEntry { float x=0, y=0, z=0; };
@@ -54,6 +56,12 @@ private:
         float spreadSprint   = 0.14f;
         float spreadJump     = 0.20f;
         std::string faction  = "neutral";
+
+        // Posa in mano (KI #49): come l'arma sta impugnata, indipendente da chi.
+        // handScale <= 0 = non autorata (le unità usano il weapon_display legacy).
+        float handScale = 0.0f;
+        std::array<float,3> handRot    = {0.0f, 0.0f, 0.0f};
+        std::array<float,3> handOffset = {0.0f, 0.0f, 0.0f};
     };
 
     std::vector<WeaponEntry> m_weapons;

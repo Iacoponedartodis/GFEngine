@@ -18,6 +18,8 @@ public:
 
     void tick(float dt);
     void draw();
+    // Rilascio cattura mouse al cambio modulo (FreeCameraViewport::releaseMouseCapture).
+    void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
 
 private:
     // ── Working data ─────────────────────────────────────────────────────
@@ -51,12 +53,16 @@ private:
     // Spawn veicoli (19_Vehicles Fase B: authoring in editor)
     struct VehicleSpawnEntry { std::string vehicleId; float x=0, z=0, ry=0; };
 
+    // Bersaglio strategico distruttibile (doc 25, DestroyTarget)
+    struct TargetEntry { char label[64] = "Bersaglio"; float x=0, z=0; float hp=300.0f; };
+
     std::vector<BoxEntry>     m_boxes;
     std::vector<PostEntry>    m_posts;
     std::vector<CoverEntry>   m_covers;
     std::vector<DangerEntry>  m_dangers;
     std::vector<RouteEntry>   m_routes;
     std::vector<VehicleSpawnEntry> m_vehSpawns;
+    std::vector<TargetEntry>  m_targets;
     std::vector<std::string>       m_vehicleIds;   // dal registry (combo)
     int                       m_selRoutePt = 0;   // punto attivo della route sel.
     std::array<float,3>       m_spawnTeam1 = {0.f, 0.86f,  8.f};
@@ -64,7 +70,8 @@ private:
 
     // Selezione: >=0 box; -2/-3 spawn T1/T2; -10..-99 command post (-10-i);
     // -100..-199 cover point (-100-i); -200..-299 danger zone (-200-i);
-    // <=-300 patrol route (-300-i, il gizmo muove il punto m_selRoutePt)
+    // -300..-399 patrol route (-300-i, il gizmo muove il punto m_selRoutePt);
+    // -400..-499 vehicle spawn (-400-i); -500..-599 bersaglio strategico (-500-i)
     int   m_selBox       = -1;   // box selezionato
     float m_gridSnap     = 0.5f; // snap griglia
     bool  m_showNavmesh  = false; // evidenzia floor

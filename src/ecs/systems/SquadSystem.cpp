@@ -3,10 +3,12 @@
 #include "mini/ecs/World.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/core/Telemetry.hpp"
+#include "mini/core/GameConfig.hpp"   // Phase C: bleed-out/rianimazione
 
 #include <nlohmann/json.hpp>   // data degli eventi (doc 21)
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace mini
 {
@@ -25,7 +27,34 @@ bool isImplemented(OrderType t)
 {
     return t == OrderType::Follow || t == OrderType::HoldPosition
         || t == OrderType::MoveTo || t == OrderType::TakeCover
-        || t == OrderType::FocusFire;
+        || t == OrderType::FocusFire || t == OrderType::Revive        // Phase C
+        || t == OrderType::CoveringFire;
+}
+
+// C'è un compagno VIVO (o il leader) abbastanza vicino da rianimare? La
+// rianimazione è per PROSSIMITÀ: la squadra unita si auto-soccorre (il Follow la
+// tiene insieme), un membro isolato che cade rischia il bleed-out — è la tensione
+// tattica voluta (doc 26: la squadra è una risorsa, le perdite pesano).
+bool reviverNearby(World& world, EntityId downed, EntityId leader, float dx, float dz)
+{
+    const float r2 = config::SQUAD_REVIVE_RADIUS * config::SQUAD_REVIVE_RADIUS;
+    auto within = [&](EntityId o) -> bool {
+        const auto* otr = world.getTransform(o);
+        if (!otr) return false;
+        const float ddx = otr->x - dx, ddz = otr->z - dz;
+        return ddx * ddx + ddz * ddz <= r2;
+    };
+    // Il leader (in partita vera è il GIOCATORE) non è arruolato come membro
+    // AI: contarlo qui è ciò che gli permette di rianimare stando vicino.
+    if (leader != 0 && leader != downed && within(leader)) return true;
+    for (EntityId o : world.getEntities())
+    {
+        if (o == downed) continue;
+        const auto* osq = world.getSquad(o);
+        if (!osq || osq->squadId != kAlliedSquadId || osq->downed) continue;
+        if (within(o)) return true;
+    }
+    return false;
 }
 
 // Ordini impartiti dal giocatore: vanno annunciati sull'HUD e, una volta finiti,
@@ -63,6 +92,8 @@ void SquadSystem::update(World& world, float dt)
     if (req.pending) m_outcomeAnnounced = false;   // ordine nuovo → esito da annunciare
     int assigned = 0;
 
+    std::vector<EntityId> bledOut;   // a terra senza soccorso in tempo → morte
+
     for (EntityId e : world.getEntities())
     {
         auto* sq = world.getSquad(e);
@@ -70,12 +101,48 @@ void SquadSystem::update(World& world, float dt)
         auto* tr = world.getTransform(e);
         if (!tr) continue;
 
-        if (req.pending && isImplemented(req.order))
+        // ── A TERRA (Phase C): non esegue ordini; o viene rianimato, o muore ──
+        if (sq->downed)
+        {
+            if (reviverNearby(world, e, m_leader, tr->x, tr->z))
+            {
+                sq->reviveProgress += dt;
+                if (sq->reviveProgress >= config::SQUAD_REVIVE_TIME)
+                {
+                    sq->downed = false;
+                    sq->reviveProgress = 0.0f;
+                    if (auto* h = world.getHealth(e))
+                        h->current = h->max * config::SQUAD_REVIVE_HP;
+                    sq->order = OrderType::None;   // riparte dal default (Follow)
+                    sq->state = OrderState::None;
+                    telemetry::event(telemetry::Level::Info, "Squad", "member revived",
+                                     {{"entity", (int)e}});
+                    world.pushEvent("RIANIMATO #" + std::to_string(e));
+                }
+            }
+            else
+            {
+                sq->reviveProgress = 0.0f;   // interrotto: riparte da capo
+                sq->bleedoutRemaining -= dt;
+                if (sq->bleedoutRemaining <= 0.0f)
+                    bledOut.push_back(e);
+            }
+            continue;   // un'unità a terra non riceve/esegue ordini
+        }
+
+        // Ordine DIRETTO: se req.directedMember è impostato, solo quel membro lo
+        // riceve (comandi che puntano un compagno). 0 = tutta la squadra (default).
+        const bool addressed = (req.directedMember == 0 || req.directedMember == e);
+        if (req.pending && isImplemented(req.order) && addressed)
         {
             sq->order         = req.order;
             sq->targetEntity  = req.targetEntity;
-            sq->targetX       = req.targetX;
-            sq->targetZ       = req.targetZ;
+            // HOLD (ruota comandi): ognuno tiene la PROPRIA posizione, non un
+            // punto condiviso — altrimenti convergerebbero tutti sullo stesso.
+            if (req.order == OrderType::HoldPosition)
+            { sq->targetX = tr->x; sq->targetZ = tr->z; }
+            else
+            { sq->targetX = req.targetX; sq->targetZ = req.targetZ; }
             sq->state         = OrderState::Active;
             sq->failureReason = nullptr;
             sq->issuedTick    = world.getTickCount();
@@ -84,12 +151,13 @@ void SquadSystem::update(World& world, float dt)
         }
 
         // ── Ordine non ancora eseguibile → fallisce CON CAUSA ────────────
+        // Oggi l'unico non implementato è Regroup (ruota di comando livello 2 —
+        // Regroup/Hold/Advance passano già come MoveTo/HoldPosition; Regroup come
+        // ordine a sé non è cablato). Revive/CoveringFire ORA sono implementati.
         if (sq->hasActiveOrder() && !isImplemented(sq->order))
         {
             sq->state         = OrderState::Failed;
-            sq->failureReason = (sq->order == OrderType::Revive)
-                              ? "rianimazione non ancora implementata (Phase C)"
-                              : "ordine non ancora implementato";
+            sq->failureReason = "ordine non ancora implementato";
             emitOrder("order failed", e, *sq, telemetry::Level::Warn);
             world.pushEvent(std::string("Ordine ") + orderName(sq->order)
                             + " fallito: " + sq->failureReason);
@@ -183,14 +251,114 @@ void SquadSystem::update(World& world, float dt)
             break;
         }
 
+        case OrderType::Revive:
+        {
+            // Phase C: manda il membro VERSO il compagno a terra; la
+            // rianimazione vera scatta per PROSSIMITÀ (gestita nel ramo `downed`
+            // del bersaglio). Qui si tiene aggiornato il punto e si chiude
+            // l'ordine quando il bersaglio non è più a terra (rianimato) o è perso.
+            const auto* dt2 = world.getTransform(sq->targetEntity);
+            const auto* dsq = world.getSquad(sq->targetEntity);
+            if (!dt2 || !world.isValidEntity(sq->targetEntity))
+            {
+                sq->state = OrderState::Failed;
+                sq->failureReason = "bersaglio della rianimazione perduto";
+                emitOrder("order failed", e, *sq, telemetry::Level::Warn);
+                if (!m_outcomeAnnounced)
+                { world.pushEvent("Ordine Revive fallito: compagno perduto");
+                  m_outcomeAnnounced = true; }
+                sq->order = OrderType::None;
+                break;
+            }
+            if (!dsq || !dsq->downed)   // rianimato (dalla prossimità) → fatto
+            {
+                sq->state = OrderState::Done;
+                emitOrder("order completed", e, *sq, telemetry::Level::Info);
+                if (!m_outcomeAnnounced)
+                { world.pushEvent("Ordine Revive completato: compagno rianimato");
+                  m_outcomeAnnounced = true; }
+                sq->order = OrderType::None;
+                break;
+            }
+            sq->targetX = dt2->x;   // insegue il compagno a terra
+            sq->targetZ = dt2->z;
+            break;
+        }
+
         case OrderType::HoldPosition:
+        case OrderType::CoveringFire:   // tieni la posizione e fai fuoco di supporto
         default:
             break;   // resta Active finché non viene sostituito
         }
     }
 
-    // Un solo messaggio per ordine, non uno per membro (sarebbe illeggibile).
-    if (assigned > 0)
+    // ── Auto-soccorso (Phase C): il membro libero più vicino va a rianimare ──
+    // È ciò che rende la squadra una RISORSA che si autoprotegge: un compagno a
+    // terra non viene abbandonato. Assegna un solo soccorritore per caduto (gli
+    // altri continuano a combattere), e mai sopra un ordine del GIOCATORE — la
+    // sua intenzione vince (contratto di autonomia, doc 26).
+    for (EntityId d : world.getEntities())
+    {
+        const auto* dsq = world.getSquad(d);
+        if (!dsq || dsq->squadId != kAlliedSquadId || !dsq->downed) continue;
+        const auto* dtr = world.getTransform(d);
+        if (!dtr) continue;
+
+        // Già servito? (qualcuno lo sta rianimando)
+        bool served = false;
+        for (EntityId o : world.getEntities())
+        {
+            const auto* osq = world.getSquad(o);
+            if (osq && osq->order == OrderType::Revive && osq->targetEntity == d)
+            { served = true; break; }
+        }
+        if (served) continue;
+
+        // Soccorritore = membro libero (Follow/idle, mai su ordine giocatore) più vicino.
+        EntityId best = 0; float bestD2 = 1e30f;
+        for (EntityId o : world.getEntities())
+        {
+            auto* osq = world.getSquad(o);
+            if (!osq || osq->squadId != kAlliedSquadId || osq->isLeader || osq->downed) continue;
+            if (osq->order != OrderType::Follow && osq->order != OrderType::None) continue;
+            const auto* otr = world.getTransform(o);
+            if (!otr) continue;
+            const float dx = otr->x - dtr->x, dz = otr->z - dtr->z;
+            const float d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) { bestD2 = d2; best = o; }
+        }
+        if (best != 0)
+        {
+            auto* bsq = world.getSquad(best);
+            bsq->order         = OrderType::Revive;
+            bsq->targetEntity  = d;
+            bsq->targetX       = dtr->x;
+            bsq->targetZ       = dtr->z;
+            bsq->state         = OrderState::Active;
+            bsq->failureReason = nullptr;
+            bsq->issuedTick    = world.getTickCount();
+            emitOrder("order issued", best, *bsq, telemetry::Level::Info);
+        }
+    }
+
+    // ── Morte per bleed-out: nessun soccorso in tempo ────────────────────
+    // SOLO ORA il membro conta come perdita (missionStats), non quando è caduto
+    // a terra: una perdita evitata con la rianimazione non deve pesare sul
+    // giudizio (doc 25). La distruzione avviene qui, fuori dall'iterazione.
+    for (EntityId e : bledOut)
+    {
+        telemetry::event(telemetry::Level::Info, "Squad", "member bled out",
+                         {{"entity", (int)e}});
+        world.pushEvent("PERSO #" + std::to_string(e) + " — a terra senza soccorso");
+        if (e != world.playerEntity) ++world.missionStats.alliesLost;
+        world.killedThisTick.push_back({e, 1});   // team 1: coerente con CombatSystem
+        world.destroyEntity(e);
+    }
+
+    // Un solo messaggio per ordine di SQUADRA (non uno per membro). Gli ordini
+    // DIRETTI a un compagno (Revive/CoveringFire) li annuncia già l'Application
+    // col suo toast: dire anche "Squadra (1)" sarebbe fuorviante e ridondante.
+    if (assigned > 0 && req.directedMember == 0)
         world.pushEvent(std::string("Squadra (") + std::to_string(assigned)
                         + "): " + orderName(req.order));
 }

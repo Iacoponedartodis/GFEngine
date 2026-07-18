@@ -247,11 +247,14 @@ add_executable(GFEditor
     editor/src/util/FileDialog.cpp
     editor/src/util/RigReader.cpp
     editor/src/util/DefinitionRename.cpp
+    editor/src/util/DataPath.cpp          # R8: unica risoluzione di data/
     editor/src/modules/BalanceEditor.cpp
     editor/src/modules/EntityEditor.cpp
     editor/src/modules/MapEditor.cpp
     editor/src/modules/WeaponEditor.cpp
     editor/src/modules/VehicleEditor.cpp
+    editor/src/modules/MissionEditor.cpp
+    editor/src/modules/ClassEditor.cpp
     src/core/Telemetry.cpp
     src/game/data/DefinitionRegistry.cpp
     src/game/data/ContentValidation.cpp   # ADR-018: STESSO gate del runtime, mai una copia
@@ -303,12 +306,16 @@ endif()
 add_custom_command(TARGET GFEngine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:GFEngine>/data"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data" "$<TARGET_FILE_DIR:GFEngine>/data"
-    COMMENT "Copia data/ -> GFEngine output dir (pulizia preventiva)"
+    COMMAND ${CMAKE_COMMAND} -DTARGET_DATA_DIR=$<TARGET_FILE_DIR:GFEngine>/data
+            -P "${CMAKE_SOURCE_DIR}/cmake/strip_backups.cmake"
+    COMMENT "Copia data/ -> GFEngine output dir (pulizia preventiva, senza .bak)"
 )
 add_custom_command(TARGET GFEditor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:GFEditor>/data"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/data" "$<TARGET_FILE_DIR:GFEditor>/data"
-    COMMENT "Copia data/ -> GFEditor output dir (pulizia preventiva)"
+    COMMAND ${CMAKE_COMMAND} -DTARGET_DATA_DIR=$<TARGET_FILE_DIR:GFEditor>/data
+            -P "${CMAKE_SOURCE_DIR}/cmake/strip_backups.cmake"
+    COMMENT "Copia data/ -> GFEditor output dir (pulizia preventiva, senza .bak)"
 )
 
 # ── Copia cartella assets nella directory di output ───────────────────────────

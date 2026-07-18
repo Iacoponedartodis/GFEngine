@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace mini
 {
@@ -43,6 +44,15 @@ public:
 
     [[nodiscard]] virtual EntityId  getPlayerEntity() const = 0;
     [[nodiscard]] virtual glm::vec3 getSpawnPos()     const = 0;
+
+    // Punti di respawn selezionabili dal giocatore prima di rientrare (doc 25,
+    // base della futura mappa tattica). Il default è il solo spawn base: una
+    // modalità che ha punti avanzati (ConquestMode: i command post posseduti)
+    // sovrascrive. getSpawnPos() resta il punto autoritativo di default —
+    // availableSpawns()[0] deve coincidere con esso.
+    struct SpawnPoint { std::string label; glm::vec3 pos; };
+    [[nodiscard]] virtual std::vector<SpawnPoint> availableSpawns() const
+    { return {{"Base", getSpawnPos()}}; }
     // I ticket sono la RISERVA DI RINFORZI della squadra: li consuma la morte di
     // un'UNITÀ (ConquestMode::checkDeaths → un rimpiazzo entra dalla riserva),
     // non quella del giocatore. Qui si leggono soltanto: quanti rinforzi restano

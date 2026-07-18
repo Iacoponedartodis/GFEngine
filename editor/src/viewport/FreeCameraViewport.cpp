@@ -140,9 +140,19 @@ FreeCameraViewport::FreeCameraViewport()
 
 FreeCameraViewport::~FreeCameraViewport()
 {
+    // Difensivo: se l'app si chiude (o il modulo viene distrutto) mentre la
+    // cattura è attiva, il cursore resterebbe nascosto a livello di sistema.
+    releaseMouseCapture();
     if (s_delFBO && m_fbo)      s_delFBO(1, &m_fbo);
     if (s_delRBO && m_depthRbo) s_delRBO(1, &m_depthRbo);
     if (m_colorTex) glDeleteTextures(1, &m_colorTex);
+}
+
+void FreeCameraViewport::releaseMouseCapture()
+{
+    if (!m_mouseCapture) return;
+    m_mouseCapture = false;
+    SDL_SetRelativeMouseMode(SDL_FALSE);
 }
 
 bool FreeCameraViewport::isReady() const
@@ -203,7 +213,15 @@ void FreeCameraViewport::drawArray(const std::vector<float>& data, int count,
 // ── FBO ──────────────────────────────────────────────────────────────────────
 void FreeCameraViewport::resizeFBO(int w, int h)
 {
-    if (w == m_fbWidth && h == m_fbHeight) return;
+    // Stessa dimensione E l'FBO è valido → niente da fare.
+    // Il `&& m_fboOk` è la RIPARAZIONE (2026-07-17): senza, un FBO invalidato
+    // mentre il pannello ha dimensione stabile non veniva mai più ricostruito.
+    // Un realloc fallito (intoppo del driver, primi frame, minimize/restore che
+    // perde le risorse GL) lasciava `m_fboOk=false`; al frame dopo, stessa
+    // dimensione → si usciva subito, e il viewport restava rotto fino a un
+    // resize o al riavvio dell'editor. Ora ritenta finché non torna valido —
+    // si auto-ripara al frame successivo invece di richiedere un restart.
+    if (w == m_fbWidth && h == m_fbHeight && m_fboOk) return;
 
     // KI #17 (leak memoria editor): l'area disponibile del pannello può
     // OSCILLARE di pochi pixel tra frame (scrollbar, separatori) — prima
@@ -223,8 +241,15 @@ void FreeCameraViewport::resizeFBO(int w, int h)
 
     const int aw = ((w + 63) / 64) * 64;
     const int ah = ((h + 63) / 64) * 64;
+    // Log solo su un VERO cambio di dimensione allocata. Un ritenta-a-parità
+    // (FBO rotto ma pannello stabile, vedi guardia sopra) non deve spammare il
+    // log a ogni frame né far credere a un churn di crescita (KI #17).
+    const bool sizeChanged = (aw != m_texWidth || ah != m_texHeight);
     m_texWidth = aw; m_texHeight = ah;
-    std::printf("[Viewport] Realloc FBO %dx%d (richiesti %dx%d)\n", aw, ah, w, h);
+    if (sizeChanged)
+        std::printf("[Viewport] Realloc FBO %dx%d (richiesti %dx%d)\n", aw, ah, w, h);
+    else
+        std::printf("[Viewport] Ricostruzione FBO invalidato %dx%d\n", aw, ah);
     m_fboOk = false;
 
     if (m_fbo)      { s_delFBO(1, &m_fbo);      m_fbo      = 0; }
