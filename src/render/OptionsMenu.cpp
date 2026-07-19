@@ -91,6 +91,40 @@ OptionsMenu::Result OptionsMenu::handleControls(int sc, InputManager& input)
     return Result::None;
 }
 
+// ── Mouse ─────────────────────────────────────────────────────────────────
+// Geometrie identiche a renderRoot/renderControls.
+OptionsMenu::Result OptionsMenu::handleMouse(float mx, float my, bool clicked)
+{
+    const float W = (float)m_ui.width(), H = (float)m_ui.height();
+    const float cx = W * 0.5f, cy = H * 0.5f;
+
+    if (m_page == Page::Root)   // renderRoot: startY=cy-30, box cx-240 w480 (y-4,h44)
+    {
+        const float y = cy - 30.0f, bx = cx - 240.0f;
+        if (mx >= bx && mx <= bx + 480 && my >= y - 4 && my <= y + 40)
+        {
+            m_rootRow = 0;
+            if (clicked) { m_page = Page::Controls; m_controlRow = 0; }
+        }
+    }
+    else                        // Controls: startY=78, rowH=42, riga 48..648 (y-5,h38)
+    {
+        if (m_awaitingKey) return Result::None;   // in attesa: il click lo cattura assignAwaited
+        const int count = InputManager::rebindableCount();
+        const float startY = 78.0f, rowH = 42.0f, labelX = 60.0f;
+        for (int i = 0; i < count; ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < labelX - 12 || mx > labelX - 12 + 600
+                || my < y - 5 || my > y - 5 + (rowH - 4)) continue;
+            m_controlRow = i;
+            if (clicked) m_awaitingKey = true;   // click = rimappa, poi premi il nuovo input
+            break;
+        }
+    }
+    return Result::None;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────────────────────

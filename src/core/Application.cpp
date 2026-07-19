@@ -319,6 +319,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     PreMatchMenu     preMatchMenu(W, H);
     SandboxMenu      sbMenu(W, H);        // menu banco di prova (17_SandboxTools)
     bool sbMenuOpen  = false;             // overlay aperto (solo sandbox)
+    bool sbMouseFreed = false;            // cursore liberato mentre il menu sandbox è aperto
     bool observerFly = false;             // volo libero osservatore (sim AI)
     EntityId drivenVehicle = 0;           // veicolo guidato (19_Vehicles)
     // Ruota di comando (doc 26): stato che vive fra i frame mentre il tasto è
@@ -902,6 +903,51 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         if (autoSim) startSimulation();
     }
 
+    // ── Gestione dei Result dei menu, condivisa fra tastiera e mouse ──
+    // Estratta in lambda così i due percorsi di input non divergono mai (una
+    // sola definizione dell'azione per ogni esito del menu).
+    auto applyPreMatchResult = [&](PreMatchMenu::Result res)
+    {
+        if      (res == PreMatchMenu::Result::StartGame) startFromPreMatch();
+        else if (res == PreMatchMenu::Result::Back)      goMainMenu();
+    };
+    auto applySandboxResult = [&](SandboxMenu::Result res)
+    {
+        if (res == SandboxMenu::Result::Close) sbMenuOpen = false;
+        else if (res == SandboxMenu::Result::EquipWeapon)
+        {
+            const auto* wd = registry.getWeapon(sbMenu.selectedWeaponId());
+            if (wd)
+            {
+                const int slot = sbMenu.weaponSlot();
+                player.weapons[slot] = weaponFromDef(*wd);
+                if (slot == 0 || player.activeWeapon == slot) player.activeWeapon = slot;
+                const char* slotName = slot == 0 ? "primaria" : "secondaria";
+                hud.toast(std::string("Arma ") + slotName + ": " + wd->name);
+                hud.pushFeed(std::string("ARMA ") + slotName + ": " + wd->name);
+                telemetry::logInfo("sandbox: arma cambiata -> " + wd->name);
+            }
+            sbMenuOpen = false;
+        }
+        else if (res == SandboxMenu::Result::ToggleSim)
+        {
+            if (!sbMenu.simRunning) startSimulation();
+            else                    stopSimulation();
+            sbMenuOpen = false;
+        }
+        else if (res == SandboxMenu::Result::RestartSandbox)
+        {
+            currentSettings.mapId = sbMenu.selectedMapId();
+            mode = createGameMode("sandbox");
+            observerFly = false; sbMenu.simRunning = false;
+            initWorld();
+            sbMenuOpen = false;
+            hud.toast("Sandbox su '" + currentSettings.mapId + "'");
+            hud.pushFeed("SANDBOX riavviata su " + currentSettings.mapId);
+            telemetry::logInfo("sandbox: riavvio su mappa '" + currentSettings.mapId + "'");
+        }
+    };
+
     // ═════════════════════════════════════════════════════════════════
     // MAIN LOOP
     // ═════════════════════════════════════════════════════════════════
@@ -957,6 +1003,57 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
                 else if (res == MainMenuScreen::Result::Quit)
                     window.close();
+            }
+
+            // ── Mouse negli altri menu (PreMatch, Opzioni, Sandbox) ───────────
+            //    Stesso schema del menu principale: hover evidenzia, click attiva.
+            //    Le azioni passano dalle stesse lambda del ramo tastiera.
+            if (ev.type == SDL_MOUSEMOTION || ev.type == SDL_MOUSEBUTTONDOWN)
+            {
+                const bool clicked = (ev.type == SDL_MOUSEBUTTONDOWN &&
+                                      ev.button.button == SDL_BUTTON_LEFT);
+                const float mx = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.x : ev.button.x);
+                const float my = (float)(ev.type == SDL_MOUSEMOTION ? ev.motion.y : ev.button.y);
+
+                if (state == GameState::Launcher)
+                {
+                    auto res = launcher.handleMouse(mx, my, clicked);
+                    if (res == LauncherScreen::Result::Launch) goMainMenu();
+                    else if (res == LauncherScreen::Result::Quit) window.close();
+                }
+                else if (state == GameState::PreMatch)
+                    applyPreMatchResult(preMatchMenu.handleMouse(mx, my, clicked));
+                else if (state == GameState::Options && !optMenu.isAwaitingKey())
+                {
+                    if (optMenu.handleMouse(mx, my, clicked) == OptionsMenu::Result::Back)
+                    {
+                        state = prevState; stateChanged = true;
+                        if (state == GameState::Playing) window.setMouseCaptured(true);
+                    }
+                }
+                else if (state == GameState::Playing && sbMenuOpen)
+                    applySandboxResult(sbMenu.handleMouse(mx, my, clicked));
+
+                // Click sui bottoni degli overlay Pausa / Fine partita
+                else if (clicked && (state == GameState::Paused
+                                  || state == GameState::Win || state == GameState::Lose))
+                {
+                    const int st = (state == GameState::Paused) ? -1
+                                 : (state == GameState::Win) ? 1 : 2;
+                    switch (hud.overlayPick(mx, my, st))
+                    {
+                    case HUD::OverlayAction::Resume:
+                        state = GameState::Playing; stateChanged = true;
+                        window.setMouseCaptured(true); break;
+                    case HUD::OverlayAction::Restart:  startGame(); break;
+                    case HUD::OverlayAction::Respawn:  doVoluntaryRespawn(); break;
+                    case HUD::OverlayAction::Options:
+                        prevState = GameState::Paused; state = GameState::Options;
+                        stateChanged = true; window.setMouseCaptured(false); break;
+                    case HUD::OverlayAction::MainMenu: goMainMenu(); break;
+                    case HUD::OverlayAction::None: break;
+                    }
+                }
             }
 
             // ── Click sinistro sulla mappa di respawn (doc 30) ────────────────
@@ -1021,21 +1118,12 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
                 else if (state == GameState::PreMatch)
                 {
-                    auto res = preMatchMenu.handleKey(sc);
-                    if (res == PreMatchMenu::Result::StartGame)
-                    {
-                        // Il PreMatch NON possiede personaggio e classe (non ha
-                        // ancora un selettore): assegnare la struct intera li
-                        // azzererebbe in silenzio. È la stessa modalità di guasto
-                        // dell'incidente che ha prodotto la regola READ-MODIFY-WRITE
-                        // (ADR-010) — costruire un oggetto nuovo e sovrascrivere
-                        // invece di modificare solo i propri campi — qui in memoria
-                        // invece che su file. Quando il PreMatch avrà i selettori,
-                        // questi campi passeranno a lui e questa toppa sparirà.
-                        startFromPreMatch();
-                    }
-                    else if (res == PreMatchMenu::Result::Back)
-                    { goMainMenu(); }
+                    // StartGame → startFromPreMatch (NON setSettings intera:
+                    // azzererebbe personaggio/classe che il PreMatch non possiede
+                    // ancora — stessa classe di guasto di ADR-010, qui in memoria;
+                    // sparirà quando il PreMatch avrà i selettori). Back → menu.
+                    // Stessa lambda del percorso mouse: i due input non divergono.
+                    applyPreMatchResult(preMatchMenu.handleKey(sc));
                 }
                 else if (state == GameState::Options)
                 {
@@ -1053,44 +1141,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
                 else if (state == GameState::Playing && sbMenuOpen)
                 {
-                    // ── Menu sandbox aperto: TUTTI i tasti vanno a lui ──
-                    const auto res = sbMenu.handleKey(sc);
-                    if (res == SandboxMenu::Result::Close)
-                        sbMenuOpen = false;
-                    else if (res == SandboxMenu::Result::EquipWeapon)
-                    {
-                        const auto* wd = registry.getWeapon(sbMenu.selectedWeaponId());
-                        if (wd)
-                        {
-                            const int slot = sbMenu.weaponSlot();
-                            player.weapons[slot] = weaponFromDef(*wd);
-                            if (slot == 0 || player.activeWeapon == slot)
-                                player.activeWeapon = slot;
-                            const char* slotName = slot == 0 ? "primaria" : "secondaria";
-                            hud.toast(std::string("Arma ") + slotName + ": " + wd->name);
-                            hud.pushFeed(std::string("ARMA ") + slotName + ": " + wd->name);
-                            telemetry::logInfo("sandbox: arma cambiata -> " + wd->name);
-                        }
-                        sbMenuOpen = false;
-                    }
-                    else if (res == SandboxMenu::Result::ToggleSim)
-                    {
-                        if (!sbMenu.simRunning) startSimulation();
-                        else                    stopSimulation();
-                        sbMenuOpen = false;
-                    }
-                    else if (res == SandboxMenu::Result::RestartSandbox)
-                    {
-                        currentSettings.mapId = sbMenu.selectedMapId();
-                        mode = createGameMode("sandbox");
-                        observerFly = false; sbMenu.simRunning = false;
-                        initWorld();
-                        sbMenuOpen = false;
-                        hud.toast("Sandbox su '" + currentSettings.mapId + "'");
-                        hud.pushFeed("SANDBOX riavviata su " + currentSettings.mapId);
-                        telemetry::logInfo("sandbox: riavvio su mappa '"
-                                           + currentSettings.mapId + "'");
-                    }
+                    // Menu sandbox aperto: TUTTI i tasti vanno a lui. Esiti
+                    // gestiti dalla stessa lambda del percorso mouse.
+                    applySandboxResult(sbMenu.handleKey(sc));
                 }
                 else if (state == GameState::Playing)
                 {
@@ -1245,6 +1298,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
             }
         }
+
+        // Cursore assoluto all'HUD per l'hover dei bottoni Pausa/Fine partita.
+        { int msx = 0, msy = 0; SDL_GetMouseState(&msx, &msy);
+          hud.setMousePos((float)msx, (float)msy); }
+
+        // Il menu sandbox libera il cursore per poterci cliccare; alla chiusura
+        // lo riprende. Sincronizzato qui per coprire TUTTE le vie di chiusura.
+        if (sbMenuOpen && !sbMouseFreed)
+        { window.setMouseCaptured(false); sbMouseFreed = true; }
+        else if (!sbMenuOpen && sbMouseFreed)
+        { if (state == GameState::Playing) window.setMouseCaptured(true); sbMouseFreed = false; }
 
         // ── 2. TRANSIZIONI STATO (gameplay) ──────────────────────────
         if (!isMenuState(state))

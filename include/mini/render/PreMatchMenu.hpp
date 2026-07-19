@@ -18,6 +18,10 @@ public:
     enum class Result { None, StartGame, Back };
 
     Result handleKey(int sdlScancode);
+    // Mouse: hover (clicked=false) evidenzia la riga sotto il cursore; click
+    // (clicked=true) attiva i bottoni e, sulle righe a valore, regola (metà
+    // sinistra = −, destra = +) come le frecce. Stessa `Result` di handleKey.
+    Result handleMouse(float mx, float my, bool clicked);
     void handleTextInput(const char* text);
     void render() const;
 

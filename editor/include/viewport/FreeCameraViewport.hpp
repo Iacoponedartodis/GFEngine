@@ -38,9 +38,19 @@ public:
         float sx, sy, sz;
         float r, g, b;
         bool selected = false;
+        // Identificatore OPACO per il picking dal viewport: il chiamante ci mette
+        // il proprio codice di selezione, il viewport lo restituisce quando il
+        // box è cliccato (vedi popClickedMapBox). kNoPick = non selezionabile.
+        static constexpr int kNoPick = 0x7fffffff;
+        int pickId = kNoPick;
     };
     void setMapBoxes(const std::vector<MapBoxDraw>& boxes);
     void clearMapBoxes();
+
+    // Selezione dal viewport (ray-picking, doc: "selezione oggetti dalle
+    // viewport"): se dall'ultima chiamata è stato cliccato un box con pickId
+    // valido, ritorna true e scrive il pickId del più vicino colpito dal ray.
+    bool popClickedMapBox(int& outPickId);
 
     // Marker visivo per un attach point
     void setFootMarker(float y, bool show);
@@ -189,6 +199,12 @@ private:
     // ── Selection state ──────────────────────────────────────────────
     std::string m_selMarker;
     std::string m_lastClickedItem;
+
+    // Ray-picking dei map box (selezione dal viewport): lista conservata per il
+    // test + esito dell'ultimo click.
+    std::vector<MapBoxDraw> m_mapBoxes;
+    int  m_clickedBoxId  = MapBoxDraw::kNoPick;
+    bool m_hasClickedBox = false;
 
     void drawGizmoOverlay();
     void drawMarkerLabels();   // etichette testo dei marker (attach point ecc.)

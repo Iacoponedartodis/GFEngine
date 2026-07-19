@@ -89,6 +89,86 @@ SandboxMenu::Result SandboxMenu::handleKey(int sc)
     return Result::None;
 }
 
+// ── Mouse ─────────────────────────────────────────────────────────────────
+// Geometrie identiche a render() (stesso PX/PY/PW/PH, y0, rowH).
+SandboxMenu::Result SandboxMenu::handleMouse(float mx, float my, bool clicked)
+{
+    const float W = (float)m_ui.width(), H = (float)m_ui.height();
+    const float PX = W * 0.5f - 260.0f, PY = 70.0f, PW = 520.0f, PH = H - 170.0f;
+
+    // Tab pagine (ARMI / SIMULAZIONE) — solo su click
+    for (int i = 0; i < 2; ++i)
+    {
+        const float tx = PX + 18.0f + (float)i * 160.0f;
+        if (clicked && mx >= tx && mx <= tx + 150 && my >= PY + 10 && my <= PY + 34)
+            m_page = i;
+    }
+
+    const float y0 = PY + 66.0f, rowH = 24.0f;
+
+    if (m_page == 0)   // ── Armi ──────────────────────────────────────────
+    {
+        // Slot primaria/secondaria
+        if (mx >= PX + 70 && mx <= PX + 260 && my >= y0 - 2 && my <= y0 + 18)
+        { if (clicked) m_weaponSlot = 1 - m_weaponSlot; }
+
+        const int n = (int)m_weapons.size();
+        if (n > 0)
+        {
+            const float listY = y0 + 26.0f;
+            const int first = std::max(0, std::min(m_weaponSel - k_visibleWeapons / 2,
+                                                    n - k_visibleWeapons));
+            const int last = std::min(n, first + k_visibleWeapons);
+            for (int i = first; i < last; ++i)
+            {
+                const float y = listY + (float)(i - first) * rowH;
+                if (mx < PX + 10 || mx > PX + 10 + (PW - 20)
+                    || my < y - 3 || my > y - 3 + (rowH - 2)) continue;
+                m_weaponSel = i;
+                if (clicked) return Result::EquipWeapon;   // click = equipaggia
+                break;
+            }
+        }
+    }
+    else               // ── Simulazione ───────────────────────────────────
+    {
+        const float rowsY = y0 + 46.0f;
+        // Il valore "< N >" è a destra (PX+PW-200): split sul suo centro così la
+        // freccia < diminuisce e > aumenta (come nei menu PreMatch).
+        const int dir = (mx < PX + PW - 165.0f) ? -1 : +1;
+        for (int i = 0; i < 7; ++i)
+        {
+            const float y = rowsY + (float)i * 30.0f;
+            if (mx < PX + 10 || mx > PX + 10 + (PW - 20)
+                || my < y - 4 || my > y - 4 + 24) continue;
+            m_simSel = i;
+            if (clicked)
+            {
+                const int nMaps = (int)m_maps.size();
+                switch (i)
+                {
+                case 0: if (nMaps > 0) m_mapSel = (m_mapSel + dir + nMaps) % nMaps; break;
+                case 1: simModeIndex = (simModeIndex + (dir > 0 ? 1 : 2)) % 3;      break;
+                case 2: allyCount    = std::clamp(allyCount  + dir, 1, config::MAX_AI_PER_TEAM); break;
+                case 3: enemyCount   = std::clamp(enemyCount + dir, 1, config::MAX_AI_PER_TEAM); break;
+                case 4: team1Tickets = std::clamp(team1Tickets + dir, 1, 50); break;
+                case 5: team2Tickets = std::clamp(team2Tickets + dir, 1, 50); break;
+                case 6: respawnDelay = std::clamp(respawnDelay + (float)dir, 0.0f, 30.0f); break;
+                }
+            }
+            return Result::None;
+        }
+        // Riga avvia/ferma sim (7) e riavvia sandbox (8)
+        const float y7 = rowsY + 7.0f * 30.0f + 10.0f;
+        if (mx >= PX + 10 && mx <= PX + 10 + (PW - 20) && my >= y7 - 4 && my <= y7 - 4 + 28)
+        { m_simSel = 7; if (clicked) return Result::ToggleSim; return Result::None; }
+        const float y8 = rowsY + 7.0f * 30.0f + 46.0f;
+        if (mx >= PX + 10 && mx <= PX + 10 + (PW - 20) && my >= y8 - 4 && my <= y8 - 4 + 28)
+        { m_simSel = 8; if (clicked) return Result::RestartSandbox; return Result::None; }
+    }
+    return Result::None;
+}
+
 void SandboxMenu::render() const
 {
     const float W = (float)m_ui.width();

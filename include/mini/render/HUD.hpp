@@ -53,6 +53,15 @@ public:
     // Indice del marker sotto (mx,my), o -1. Stessa proiezione del render.
     [[nodiscard]] int respawnMapPick(float mx, float my) const;
 
+    // Posizione del cursore (assoluta) per l'hover dei bottoni degli overlay
+    // Pausa/Fine partita. Impostata ogni frame da Application.
+    void setMousePos(float x, float y) { m_mouseX = x; m_mouseY = y; }
+
+    // Bottoni degli overlay Pausa (state -1) e Fine partita (Win 1 / Lose 2):
+    // gli stessi rettangoli del render, per il click del mouse.
+    enum class OverlayAction { None, Resume, Restart, Respawn, Options, MainMenu };
+    [[nodiscard]] OverlayAction overlayPick(float mx, float my, int state) const;
+
     void hitmarker(bool kill);                             // colpo a segno
     void toast(const std::string& msg, float seconds = 2.5f); // messaggio a schermo
 
@@ -103,6 +112,7 @@ private:
     bool        m_wheelOpen   = false;
     int         m_wheelSel    = -1;
     RespawnMap  m_respawnMap;              // mappa top-down di respawn (doc 30)
+    float       m_mouseX = 0.0f, m_mouseY = 0.0f;   // cursore per l'hover overlay
     float       m_hitTimer    = 0.0f;
     bool        m_hitWasKill  = false;
     float       m_toastTimer  = 0.0f;

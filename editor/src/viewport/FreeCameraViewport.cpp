@@ -561,6 +561,8 @@ void FreeCameraViewport::handleViewportClick()
 {
     if (!m_imgClicked) return;
     m_imgClicked = false;
+    // Click che ha afferrato il gizmo: è un trascinamento, non una selezione.
+    if (m_gizmoActiveAxis >= 0) return;
 
     glm::mat4 vp = m_camera->getViewProjection();
     float cx = m_imgClickPos.x;
@@ -606,6 +608,76 @@ void FreeCameraViewport::handleViewportClick()
             if (jd.name == bestName) { m_selBone = bestName; break; }
         m_lastClickedItem = bestName;
     }
+
+    // ── Map box: ray-picking (selezione dal viewport) ──────────────────
+    // Solo se nessun marker/bone è stato colto: quelli sono punti specifici e
+    // hanno la precedenza. I box sono volumi → si testa un raggio dal pixel
+    // cliccato contro ogni OBB e si prende il più vicino alla camera.
+    if (bestName.empty() && !m_mapBoxes.empty())
+    {
+        const float ndcX = ((cx - m_imgMin.x) / m_imgSize.x) * 2.0f - 1.0f;
+        const float ndcY = 1.0f - ((cy - m_imgMin.y) / m_imgSize.y) * 2.0f;
+        const glm::mat4 invVP = glm::inverse(vp);
+        glm::vec4 pNear = invVP * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        glm::vec4 pFar  = invVP * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+        if (std::abs(pNear.w) > 1e-8f && std::abs(pFar.w) > 1e-8f)
+        {
+            const glm::vec3 o = glm::vec3(pNear) / pNear.w;
+            const glm::vec3 f = glm::vec3(pFar)  / pFar.w;
+            const glm::vec3 dir = glm::normalize(f - o);
+
+            int   bestId = MapBoxDraw::kNoPick;
+            float bestT  = 1e30f;
+            for (const auto& b : m_mapBoxes)
+            {
+                if (b.pickId == MapBoxDraw::kNoPick) continue;
+                // Origine+direzione nello spazio locale del box (undo traslazione
+                // + rotazione Y). In setMapBoxes il corner è
+                //   wx = cosR*lx + sinR*lz + bx ; wz = -sinR*lx + cosR*lz + bz
+                // → inversa (R^T): lx = cosR*dx - sinR*dz ; lz = sinR*dx + cosR*dz
+                const float cosR = std::cos(glm::radians(b.ry));
+                const float sinR = std::sin(glm::radians(b.ry));
+                const glm::vec3 lo = {
+                    cosR*(o.x-b.x) - sinR*(o.z-b.z), o.y - b.y,
+                    sinR*(o.x-b.x) + cosR*(o.z-b.z) };
+                const glm::vec3 ld = {
+                    cosR*dir.x - sinR*dir.z, dir.y, sinR*dir.x + cosR*dir.z };
+                const glm::vec3 h = {b.sx*0.5f, b.sy*0.5f, b.sz*0.5f};
+
+                float tmin = -1e30f, tmax = 1e30f; bool hit = true;
+                for (int a = 0; a < 3; ++a)
+                {
+                    if (std::abs(ld[a]) < 1e-8f)
+                    { if (lo[a] < -h[a] || lo[a] > h[a]) { hit = false; break; } }
+                    else
+                    {
+                        const float inv = 1.0f / ld[a];
+                        float t1 = (-h[a]-lo[a])*inv, t2 = (h[a]-lo[a])*inv;
+                        if (t1 > t2) { const float tmp = t1; t1 = t2; t2 = tmp; }
+                        // NB: confronti manuali, non std::max/min — <windows.h>
+                        // (via editor) definisce le macro min/max e romperebbe.
+                        if (t1 > tmin) tmin = t1;
+                        if (t2 < tmax) tmax = t2;
+                        if (tmin > tmax) { hit = false; break; }
+                    }
+                }
+                if (!hit) continue;
+                const float t = (tmin > 0.0f) ? tmin : tmax;   // camera dentro il box → tmax
+                if (t > 0.0f && t < bestT) { bestT = t; bestId = b.pickId; }
+            }
+            if (bestId != MapBoxDraw::kNoPick)
+            { m_clickedBoxId = bestId; m_hasClickedBox = true; }
+        }
+    }
+}
+
+bool FreeCameraViewport::popClickedMapBox(int& outPickId)
+{
+    if (!m_hasClickedBox) return false;
+    outPickId = m_clickedBoxId;
+    m_hasClickedBox = false;
+    m_clickedBoxId  = MapBoxDraw::kNoPick;
+    return true;
 }
 
 // ── drawMarkerLabels ──────────────────────────────────────────────────────────
@@ -1015,9 +1087,12 @@ void FreeCameraViewport::draw(bool showLoadBar)
         m_imgClickPos = ImGui::GetMousePos();
     }
 
+    // Il gizmo PRIMA della selezione: se il click afferra un asse del gizmo,
+    // `handleViewportClick` lo vede (m_gizmoActiveAxis >= 0) e NON seleziona un
+    // oggetto dietro al gizmo (che rovinerebbe il trascinamento).
+    drawGizmoOverlay();
     handleViewportClick();
     drawMarkerLabels();
-    drawGizmoOverlay();
 }
 
 // ── tick() ────────────────────────────────────────────────────────────────────
@@ -1230,6 +1305,7 @@ void FreeCameraViewport::setHitboxes(const std::vector<mini::HitZone>& zones,
 // ── setMapBoxes() ─────────────────────────────────────────────────────────────
 void FreeCameraViewport::setMapBoxes(const std::vector<MapBoxDraw>& boxes)
 {
+    m_mapBoxes = boxes;   // conservata per il ray-picking (popClickedMapBox)
     m_mapBoxData.clear();
     m_mapBoxData.reserve(boxes.size() * 24 * 6);
 
@@ -1275,6 +1351,7 @@ void FreeCameraViewport::setMapBoxes(const std::vector<MapBoxDraw>& boxes)
 
 void FreeCameraViewport::clearMapBoxes()
 {
+    m_mapBoxes.clear();
     m_mapBoxData.clear();
     m_mapBoxVertCount = 0;
 }

@@ -36,9 +36,47 @@ namespace
         const float oy = py + (ph - worldD * scale) * 0.5f;
         return {ox, oy, scale, r.minX, r.minZ};
     }
+
+    // ── Bottoni degli overlay Pausa / Fine partita (doc: mouse ovunque) ──
+    // Una sola definizione dei rettangoli, usata da render e da overlayPick.
+    struct OvBtn { float x, y, w, h; const char* label; HUD::OverlayAction act; };
+    std::vector<OvBtn> overlayButtons(int W, int H, int state)
+    {
+        const float cx = (float)W * 0.5f, cy = (float)H * 0.5f;
+        const float bw = 320.0f, bh = 40.0f, gap = 10.0f;
+        std::vector<OvBtn> b;
+        if (state == -1)   // Pausa
+        {
+            const char* L[5] = { "Riprendi", "Riavvia partita",
+                                 "Respawn volontario", "Opzioni", "Menu principale" };
+            const HUD::OverlayAction A[5] = {
+                HUD::OverlayAction::Resume,  HUD::OverlayAction::Restart,
+                HUD::OverlayAction::Respawn, HUD::OverlayAction::Options,
+                HUD::OverlayAction::MainMenu };
+            float y = cy - 40.0f;
+            for (int i = 0; i < 5; ++i)
+            { b.push_back({cx - bw * 0.5f, y, bw, bh, L[i], A[i]}); y += bh + gap; }
+        }
+        else if (state == 1 || state == 2)   // Win / Lose
+        {
+            b.push_back({cx - bw*0.5f, cy + 110.0f,               bw, bh,
+                         "Ricomincia",      HUD::OverlayAction::Restart});
+            b.push_back({cx - bw*0.5f, cy + 110.0f + bh + gap,    bw, bh,
+                         "Menu principale", HUD::OverlayAction::MainMenu});
+        }
+        return b;
+    }
 }
 
 HUD::HUD(int screenW, int screenH) : m_ui(screenW, screenH) {}
+
+HUD::OverlayAction HUD::overlayPick(float mx, float my, int state) const
+{
+    for (const auto& b : overlayButtons(m_ui.width(), m_ui.height(), state))
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h)
+            return b.act;
+    return OverlayAction::None;
+}
 
 int HUD::respawnMapPick(float mx, float my) const
 {
@@ -106,12 +144,17 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
     if (state == -1) // Paused
     {
         m_ui.rect(0, 0, W, H, 0, 0, 0, 0.65f);
-        m_ui.text(cx - 75,  cy - 90, 4.5f, "PAUSA",                   0.95f, 0.95f, 0.95f);
-        m_ui.text(cx - 105, cy - 20, 2.3f, "ESC  =  Riprendi",        0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy + 12, 2.3f, "R    =  Riavvia partita", 0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy + 44, 2.3f, "K    =  Respawn volontario",     0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy + 76, 2.3f, "O    =  Opzioni",         0.75f, 0.85f, 0.95f);
-        m_ui.text(cx - 105, cy +108, 2.3f, "Q    =  Menu principale",  0.75f, 0.85f, 0.95f);
+        m_ui.textCentered(cx, cy - 110, 4.5f, "PAUSA", 0.95f, 0.95f, 0.95f);
+        for (const auto& b : overlayButtons(m_ui.width(), m_ui.height(), -1))
+        {
+            const bool hv = (m_mouseX >= b.x && m_mouseX <= b.x + b.w
+                          && m_mouseY >= b.y && m_mouseY <= b.y + b.h);
+            m_ui.rect(b.x, b.y, b.w, b.h, hv ? 0.14f : 0.08f,
+                      hv ? 0.30f : 0.10f, hv ? 0.52f : 0.14f, hv ? 0.92f : 0.6f);
+            m_ui.border(b.x, b.y, b.w, b.h, 0.3f, 0.4f, 0.6f);
+            m_ui.textCentered(cx, b.y + 11, 2.0f, b.label,
+                              hv ? 1.0f : 0.78f, hv ? 0.95f : 0.85f, hv ? 0.6f : 0.95f);
+        }
     }
     else // Playing / Win / Lose
     {
@@ -497,9 +540,16 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
             else
                 m_ui.text(cx - 125, cy - 70, 2.3f, "Sei stato eliminato.", 0.95f, 0.75f, 0.75f);
 
-            const float hy = cy + 130;
-            if (win) m_ui.text(cx - 155, hy, 2.3f, "R = ricomincia  |  Q = menu", 0.7f, 0.9f, 0.7f);
-            else     m_ui.text(cx - 155, hy, 2.3f, "R = ricomincia  |  Q = menu", 0.9f, 0.6f, 0.6f);
+            for (const auto& b : overlayButtons(m_ui.width(), m_ui.height(), state))
+            {
+                const bool hv = (m_mouseX >= b.x && m_mouseX <= b.x + b.w
+                              && m_mouseY >= b.y && m_mouseY <= b.y + b.h);
+                m_ui.rect(b.x, b.y, b.w, b.h, hv ? 0.16f : 0.09f,
+                          hv ? 0.30f : 0.11f, hv ? 0.42f : 0.13f, hv ? 0.92f : 0.62f);
+                m_ui.border(b.x, b.y, b.w, b.h, 0.4f, 0.5f, 0.55f);
+                m_ui.textCentered(cx, b.y + 11, 2.0f, b.label,
+                                  hv ? 1.0f : 0.82f, hv ? 1.0f : 0.88f, hv ? 0.85f : 0.82f);
+            }
         }
     }
 

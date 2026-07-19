@@ -12,6 +12,8 @@ public:
     enum class Result { None, Launch, Quit };
 
     Result handleKey(int sdlScancode);
+    // Click sul pulsante AVVIA → Launch. Geometria identica al render.
+    Result handleMouse(float mx, float my, bool clicked);
     void   render() const;
 
 private:

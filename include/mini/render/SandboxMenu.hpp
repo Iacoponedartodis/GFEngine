@@ -38,6 +38,9 @@ public:
     bool  simRunning   = false;
 
     Result handleKey(int sdlScancode);
+    // Mouse: hover evidenzia, click cambia pagina/valori (metà sx = −, dx = +)
+    // ed equipaggia armi / avvia-riavvia la sim. Stessa Result di handleKey.
+    Result handleMouse(float mx, float my, bool clicked);
     void   render() const;
 
 private:

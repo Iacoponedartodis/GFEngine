@@ -446,6 +446,125 @@ PreMatchMenu::Result PreMatchMenu::handleLoadPreset(int sc)
     return Result::None;
 }
 
+// ── Mouse ───────────────────────────────────────────────────────────────────
+// Le geometrie qui rispecchiano ESATTAMENTE quelle dei render* corrispondenti
+// (stessi startY/rowH/larghezze): se un layout cambia, cambiare entrambi.
+PreMatchMenu::Result PreMatchMenu::handleMouse(float mx, float my, bool clicked)
+{
+    const float W = (float)m_ui.width(), H = (float)m_ui.height();
+    const float cx = W * 0.5f, cy = H * 0.5f;
+
+    switch (m_page)
+    {
+    case Page::Root:   // renderRoot: startY=cy-30, rowH=58, box cx-220 w440 (y-4,h44)
+    {
+        const float startY = cy - 30.0f, rowH = 58.0f, bx = cx - 220.0f;
+        for (int i = 0; i < 3; ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < bx || mx > bx + 440 || my < y - 4 || my > y + 40) continue;
+            m_selectedRow = i;
+            if (clicked)
+            {
+                if (i == 0) { syncLoadoutToSettings(); return Result::StartGame; }
+                if (i == 1) { m_page = Page::Loadout; m_selectedRow = 0; }
+                if (i == 2) { m_page = Page::Rules;   m_rulesRow = 0; }
+            }
+            break;
+        }
+        break;
+    }
+    case Page::Loadout:   // renderLoadout: startY=90, rowH=52, box cx±300 (y-4,h44)
+    {
+        const float startY = 90.0f, rowH = 52.0f;
+        const int nW = (int)m_weaponList.size(), nA = (int)m_abilityList.size();
+        // Valore al centro-destra (cx+180), frecce a cx+70 (<) e cx+280 (>):
+        // split sul valore, non sul centro riga, così < diminuisce e > aumenta.
+        const int dir = (mx < cx + 180.0f) ? -1 : +1;
+        auto cycleWeapon = [&](int& idx, int n) { if (n > 0) idx = (idx + dir + n) % n; };
+        auto cycleOpt    = [&](int& idx, int n) { idx = (idx + dir + n + 1) % (n + 1); };
+        for (int i = 0; i < 5; ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < cx - 300 || mx > cx + 300 || my < y - 4 || my > y + 40) continue;
+            m_selectedRow = i;
+            if (clicked)
+            {
+                if (i == 0) cycleWeapon(m_weaponIdx,    nW);
+                if (i == 1) cycleOpt   (m_weapon2Idx,   nW);
+                if (i == 2) cycleOpt   (m_abilityIdx[0], nA);
+                if (i == 3) cycleOpt   (m_abilityIdx[1], nA);
+                if (i == 4) cycleOpt   (m_gadgetIdx,     nA);
+            }
+            break;
+        }
+        break;
+    }
+    case Page::Rules:   // renderRules: startY=95, rowH=40, box cx±312 (y-5,h rowH-4)
+    {
+        const float startY = 95.0f, rowH = 40.0f;
+        // Valore/frecce/barra stanno TUTTI a destra (come renderRules): valueX =
+        // cx+80, barra cx+150..cx+300. Lo split va fatto rispetto a QUESTI, non al
+        // centro della riga — altrimenti tutta l'area del valore cadeva a destra e
+        // si poteva solo aumentare. Sulla barra: le due metà; altrove (frecce/
+        // etichetta): sinistra del valore = −, destra = +.
+        const float valueX = cx + 80.0f, barX = cx + 150.0f, barW = 150.0f;
+        for (int i = 0; i < (int)m_rows.size(); ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < cx - 312 || mx > cx + 312 || my < y - 5 || my > y - 5 + (rowH - 4)) continue;
+            m_rulesRow = i;
+            if (clicked)
+            {
+                Row& r = m_rows[i];
+                float delta;
+                if (!r.names && mx >= barX && mx <= barX + barW)
+                    delta = (mx < barX + barW * 0.5f) ? -1.0f : +1.0f;   // metà barra
+                else
+                    delta = (mx < valueX) ? -1.0f : +1.0f;               // rispetto al valore/frecce
+                if (r.isInt)
+                { int v = *r.iVal + (int)delta; *r.iVal = std::clamp(v, (int)r.minV, (int)r.maxV); }
+                else
+                { float v = *r.fVal + delta * r.step; *r.fVal = std::clamp(v, r.minV, r.maxV); }
+                if (r.iVal == &m_missionIdx) syncRowsToMission();
+            }
+            break;
+        }
+        break;
+    }
+    case Page::LoadPreset:      // renderLoadPreset: startY=104, rowH=44, box cx±290
+    case Page::ManagePresets:   // renderManagePresets: startY=80, rowH=44, box cx±290
+    {
+        const bool manage = (m_page == Page::ManagePresets);
+        const float startY = manage ? 80.0f : 104.0f, rowH = 44.0f;
+        for (int i = 0; i < UserPresets::MAX; ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < cx - 290 || mx > cx + 290 || my < y - 4 || my > y - 4 + (rowH - 4)) continue;
+            m_presetSlot = i;
+            if (clicked)   // click = carica (come INVIO) se lo slot è pieno
+                if (const MatchSettings* p = m_presets.get(i)) { applyPreset(*p); m_page = Page::Rules; }
+            break;
+        }
+        break;
+    }
+    case Page::SavePreset:      // renderSavePreset: startY=146, rowH=38, box cx±240
+    {
+        const float startY = 146.0f, rowH = 38.0f;
+        for (int i = 0; i < UserPresets::MAX; ++i)
+        {
+            const float y = startY + i * rowH;
+            if (mx < cx - 240 || mx > cx + 240 || my < y - 4 || my > y - 4 + (rowH - 4)) continue;
+            if (clicked) m_presetSlot = i;   // seleziona lo slot; nome da tastiera
+            break;
+        }
+        break;
+    }
+    default: break;   // RenamePreset/LoadoutAbilities: solo tastiera (text input)
+    }
+    return Result::None;
+}
+
 // ── RENDER ────────────────────────────────────────────────────────────────
 
 void PreMatchMenu::render() const

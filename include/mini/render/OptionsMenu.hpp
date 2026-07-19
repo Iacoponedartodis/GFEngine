@@ -24,6 +24,9 @@ public:
 
     // input: serve per leggere/scrivere i keybinding correnti
     Result handleKey(int sdlScancode, InputManager& input);
+    // Mouse: hover evidenzia, click apre la categoria (Root) o mette la riga
+    // in attesa del nuovo input da assegnare (Controls, come INVIO).
+    Result handleMouse(float mx, float my, bool clicked);
     void   render(const InputManager& input) const;
 
     // Cattura di input NON da tastiera (rotella / pulsanti mouse): l'Application

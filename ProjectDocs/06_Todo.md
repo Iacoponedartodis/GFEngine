@@ -94,6 +94,17 @@ sistema *distinto* ma con base condivisa, chiarito dall'utente 07-18), post nemi
 mappa, **ordini dalla mappa** (muovi la squadra cliccando), texture terreno, zoom/pan. Da fare quando
 l'utente lo chiede.
 
+**Mouse in tutti i menu dell'engine — FATTO 2026-07-19** (prima solo nel menu principale). `handleMouse`
+su PreMatch/Opzioni/Sandbox + bottoni cliccabili negli overlay Pausa/Fine partita (`HUD::overlayPick`).
+Hover evidenzia; sulle righe a valore il click regola (metà sx = −, dx = +); esiti condivisi con la
+tastiera via lambda. Build-verified; click da smoke manuale.
+**Selezione oggetti dalle VIEWPORT dell'editor — FATTO 2026-07-19** (picking 3D via ray). In MapEditor
+si clicca un oggetto nel viewport per selezionarlo (ray-OBB sui map box, `MapBoxDraw::pickId` opaco +
+`FreeCameraViewport::popClickedMapBox`); lista ↔ viewport in sync, gizmo compreso; click sul gizmo non
+riseleziona. Marker/bone (altri editor) già cliccabili da prima. Build-verified; GUI da smoke manuale.
+→ Estensioni possibili: box-select multiplo, hover-highlight nel viewport, picking anche dove un editor
+mostra sia box sia marker (oggi in MapEditor ci sono solo box → nessun conflitto).
+
 ## Editor: modulo "Missioni e obiettivi" FATTO 2026-07-16
 Moduli → "Missioni e obiettivi": due tab (obiettivi / missioni), dropdown-only dal registry
 (obiettivi composti da lista, mappa dal registry, **command post dalla mappa della missione**),

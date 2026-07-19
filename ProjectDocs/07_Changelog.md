@@ -2,6 +2,64 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-19 (3) — Editor: selezione oggetti dalle viewport col mouse (ray-picking)
+
+Seconda parte dello step "mouse ovunque" (la prima erano i menu engine): nell'editor si potevano
+selezionare gli oggetti solo dalla lista. Ora si **clicca l'oggetto nel viewport 3D** — decisivo su
+mappe grandi, dove cercare per nome nella lista è una perdita di tempo (motivazione dell'utente).
+
+- **`FreeCameraViewport`**: aggiunto ray-picking dei map box. `MapBoxDraw` porta un `pickId` **opaco**
+  (il chiamante ci mette il proprio codice di selezione); su click si lancia un raggio dal pixel
+  (unproject con VP inversa) e si testa **ray-OBB** contro ogni box (spazio locale, gestisce la
+  rotazione Y), prendendo il più vicino. `popClickedMapBox(outId)` restituisce il pickId colpito.
+  Il picking marker/bone esistente (a distanza-schermo) resta e ha la precedenza (punti specifici).
+- **Priorità col gizmo**: `drawGizmoOverlay` ora gira PRIMA di `handleViewportClick`; se il click
+  afferra un asse del gizmo (`m_gizmoActiveAxis >= 0`) la selezione viene saltata → trascinare il
+  gizmo non riseleziona un oggetto dietro.
+- **`MapEditor`**: ogni `MapBoxDraw` riceve il `pickId` = codice `m_selBox` (geometria = i; spawn
+  −2/−3; post −10−i; cover −100−i; danger −200−i; route −300−i; veicoli −400−i; target −500−i).
+  Dopo `m_viewport.draw()` fa `popClickedMapBox` → imposta `m_selBox` e rinfresca (come un click nella
+  lista): lista e viewport restano in sync, incluso il gizmo.
+- **Verificato**: build 0/0 (engine + editor), `--validate` 0 errori. **Da smoke manuale** (GUI):
+  in MapEditor cliccare box/post/target/ecc. nel viewport per selezionarli; verificare che il click
+  su un asse del gizmo NON cambi la selezione. Gli altri editor con viewport (Entity/Weapon/Vehicle)
+  già selezionano marker/bone col click.
+
+## 2026-07-19 (2) — Fix del mouse nei menu: Launcher + slider che diminuiscono
+
+Due difetti segnalati dopo il giro (1):
+- **Menu iniziale (Launcher) dimenticato**: aggiunto `LauncherScreen::handleMouse` (click su AVVIA)
+  + wiring in Application.
+- **Slider/valori solo in aumento**: nelle Regole (e Loadout/Sandbox) il valore, le frecce `<`/`>` e
+  la barra stanno TUTTI a destra del centro riga, ma lo split −/+ era al centro riga → cliccando lì
+  (dove sono i controlli) si otteneva sempre `+`. **Fix**: split rispetto al VALORE, non alla riga —
+  `<`/sinistra-del-valore = −, `>`/destra = +; sulla barra delle Regole le due metà della barra
+  diminuiscono/aumentano. Ora `<` (e la metà sinistra della barra) diminuiscono davvero.
+- **Verificato**: build 0/0, `--validate` 0 errori. Da smoke manuale: nelle Regole cliccare `<` e la
+  metà sinistra della barra per DIMINUIRE, `>` e metà destra per aumentare.
+
+## 2026-07-19 (1) — Mouse in TUTTI i menu dell'engine (prima solo nel menu principale)
+
+Step intermedio richiesto: il mouse funzionava solo nel menu principale; ora seleziona ovunque
+nell'engine (nell'editor c'è già ImGui). Prima parte di due (l'altra: selezione oggetti dalle
+viewport dell'editor, step successivo).
+
+- **`handleMouse(mx,my,clicked)` aggiunto** a `PreMatchMenu` (Root/Loadout/Regole + pagine preset),
+  `OptionsMenu` (categorie + controlli), `SandboxMenu` (armi + simulazione). Overlay **Pausa** e
+  **Fine partita** (Win/Lose): i vecchi suggerimenti-tastiera diventano **bottoni cliccabili**
+  (`HUD::overlayPick` + `setMousePos` per l'hover).
+- **Modello di interazione** (scelto dall'utente): hover evidenzia la riga; sulle righe a valore il
+  click regola — **metà sinistra = −, metà destra = +** (come ←/→); sui bottoni/enum il click attiva
+  o cicla. Le geometrie degli hit-test **rispecchiano esattamente** i layout dei `render*` (stessi
+  startY/rowH/larghezze) per non divergere.
+- **Niente duplicazione di logica**: gli esiti dei menu (`applyPreMatchResult`/`applySandboxResult`)
+  sono estratti in lambda condivise fra tastiera e mouse — un solo punto per ogni azione.
+- **Menu sandbox**: la cattura del mouse viene rilasciata mentre è aperto (per cliccare) e ripresa
+  alla chiusura, sincronizzato per coprire tutte le vie di chiusura (`sbMouseFreed`).
+- **Verificato**: build 0/0, `--validate` 0 errori. **Comportamento dei click da smoke manuale**
+  (le GUI non sono testabili headless): navigare ogni menu solo col mouse, regolare i valori
+  (HP/ticket/conteggi) coi lati −/+, e i bottoni di Pausa/Fine partita.
+
 ## 2026-07-18 (8) — De-clip dello spawn ora risolve anche in verticale (lastre rialzate)
 
 Playtest della mappa di respawn: schierandosi ad Alpha si nasceva ancora incastrati nella lastra su

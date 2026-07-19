@@ -470,6 +470,7 @@ void MapEditor::updateViewport()
         d.x = b.x; d.y = b.y; d.z = b.z; d.ry = b.ry;
         d.sx = b.sx; d.sy = b.sy; d.sz = b.sz;
         d.selected = (i == m_selBox);
+        d.pickId = i;
 
         bool isFloor = (std::string(b.type) == "floor");
 
@@ -489,7 +490,8 @@ void MapEditor::updateViewport()
         s.x = m_spawnTeam1[0]; s.y = m_spawnTeam1[1]; s.z = m_spawnTeam1[2];
         s.ry = 0; s.sx = 0.6f; s.sy = 1.2f; s.sz = 0.6f;
         s.r = 0.20f; s.g = 0.50f; s.b = 1.00f;
-        s.selected = false;
+        s.selected = (m_selBox == -2);
+        s.pickId = -2;
         draws.push_back(s);
     }
     // Spawn team2 (rosso)
@@ -498,7 +500,8 @@ void MapEditor::updateViewport()
         s.x = m_spawnTeam2[0]; s.y = m_spawnTeam2[1]; s.z = m_spawnTeam2[2];
         s.ry = 0; s.sx = 0.6f; s.sy = 1.2f; s.sz = 0.6f;
         s.r = 1.00f; s.g = 0.20f; s.b = 0.20f;
-        s.selected = false;
+        s.selected = (m_selBox == -3);
+        s.pickId = -3;
         draws.push_back(s);
     }
 
@@ -516,6 +519,7 @@ void MapEditor::updateViewport()
         pole.sx = 0.3f; pole.sy = 3.0f; pole.sz = 0.3f;
         pole.r = r; pole.g = g; pole.b = b;
         pole.selected = sel;
+        pole.pickId = -10 - i;
         draws.push_back(pole);
 
         FreeCameraViewport::MapBoxDraw area;
@@ -523,6 +527,7 @@ void MapEditor::updateViewport()
         area.sx = p.radius * 2.0f; area.sy = 0.05f; area.sz = p.radius * 2.0f;
         area.r = r * 0.6f; area.g = g * 0.6f; area.b = b * 0.6f;
         area.selected = sel;
+        area.pickId = -10 - i;
         draws.push_back(area);
     }
 
@@ -535,6 +540,7 @@ void MapEditor::updateViewport()
         s.sx = 2.5f; s.sy = 2.5f; s.sz = 2.5f;
         s.r = 0.85f; s.g = 0.55f; s.b = 0.15f;
         s.selected = (m_selBox == -500 - i);
+        s.pickId = -500 - i;
         draws.push_back(s);
     }
 
@@ -551,6 +557,7 @@ void MapEditor::updateViewport()
         slab.sx = 0.9f; slab.sy = c.height; slab.sz = 0.25f;
         slab.r = 0.15f; slab.g = 0.85f; slab.b = 0.70f;
         slab.selected = sel;
+        slab.pickId = -100 - i;
         draws.push_back(slab);
 
         const float fr = glm::radians(c.facing);
@@ -562,6 +569,7 @@ void MapEditor::updateViewport()
         nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.4f;
         nose.r = 0.10f; nose.g = 0.60f; nose.b = 0.50f;
         nose.selected = sel;
+        nose.pickId = -100 - i;
         draws.push_back(nose);
     }
 
@@ -575,6 +583,7 @@ void MapEditor::updateViewport()
         area.sx = d.radius * 2.0f; area.sy = 0.04f; area.sz = d.radius * 2.0f;
         area.r = 0.9f; area.g = 0.55f - d.level * 0.45f; area.b = 0.10f;
         area.selected = sel;
+        area.pickId = -200 - i;
         draws.push_back(area);
     }
 
@@ -589,6 +598,7 @@ void MapEditor::updateViewport()
         body.sx = 1.0f; body.sy = 1.0f; body.sz = 2.6f;
         body.r = 0.95f; body.g = 0.60f; body.b = 0.15f;
         body.selected = sel;
+        body.pickId = -400 - i;
         draws.push_back(body);
 
         const float vr = glm::radians(v.ry);
@@ -600,6 +610,7 @@ void MapEditor::updateViewport()
         nose.sx = 0.3f; nose.sy = 0.3f; nose.sz = 0.6f;
         nose.r = 0.8f; nose.g = 0.45f; nose.b = 0.1f;
         nose.selected = sel;
+        nose.pickId = -400 - i;
         draws.push_back(nose);
     }
 
@@ -619,6 +630,7 @@ void MapEditor::updateViewport()
             wp.sx = 0.3f; wp.sy = activePt ? 1.8f : 1.0f; wp.sz = 0.3f;
             wp.r = 0.65f; wp.g = 0.35f; wp.b = 0.95f;
             wp.selected = activePt;
+            wp.pickId = -300 - ri;
             draws.push_back(wp);
         }
     }
@@ -1378,6 +1390,17 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 void MapEditor::drawViewport(float vpW, float vpH)
 {
     m_viewport.draw(false);
+
+    // Selezione dal viewport (ray-picking): un click su un oggetto lo seleziona
+    // esattamente come cliccarlo nella lista. Il pickId assegnato in
+    // updateViewport È già il codice di m_selBox, quindi basta assegnarlo.
+    int picked = 0;
+    if (m_viewport.popClickedMapBox(picked))
+    {
+        m_selBox = picked;
+        if (m_selBox <= -300 && m_selBox > -400) m_selRoutePt = 0;   // route: primo punto attivo
+        updateViewport();   // rinfresca evidenziazione + bersaglio del gizmo
+    }
     (void)vpW; (void)vpH;
 }
 

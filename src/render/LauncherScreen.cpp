@@ -19,6 +19,17 @@ LauncherScreen::Result LauncherScreen::handleKey(int sc)
     return Result::None;
 }
 
+LauncherScreen::Result LauncherScreen::handleMouse(float mx, float my, bool clicked)
+{
+    // Pulsante AVVIA: stessa geometria del render (bw=280, bh=50, cx, H*0.54).
+    const float W = (float)m_ui.width(), H = (float)m_ui.height();
+    const float cx = W * 0.5f, bw = 280, bh = 50;
+    const float bx = cx - bw * 0.5f, by = H * 0.54f;
+    if (clicked && mx >= bx && mx <= bx + bw && my >= by && my <= by + bh)
+        return Result::Launch;
+    return Result::None;
+}
+
 void LauncherScreen::render() const
 {
     const float W  = (float)m_ui.width();
