@@ -207,11 +207,13 @@ Implementation, meta' giocatore = Planned). **Questo sblocca doc 27**, il cui cr
 **RESTA — Fase 3 (doc 27), ORA SBLOCCATA**: XP/livelli/perk per classe; le fondamenta ci sono gia'
 (`missionStats` conta kill/obiettivi, gli obiettivi hanno tier/type). Serve prima il sistema perk.
 **RESTA**: `SpecializationDef` (terzo tipo) — non progettarlo ora (dipende dai perk).
-**RESTA — contenuto (utente)**: **nessuna unita' ha `class` impostato**, quindi la meta' NPC e'
-costruita ma **inerte sui dati reali**: i profili AI `Clone Trooper`/`Clone Sniper` autorati
-dall'utente non vengono mai raggiunti, e i cloni alleati girano col profilo **`B1 Battle Droid`**.
-Basta assegnare la classe dall'Entity Editor. Finche' non e' fatto, il criterio "una squadra
-multi-classe si comporta diversamente" (GDD 12.3) non e' verificabile.
+**~~RESTA — contenuto (utente)~~ → FATTO/VERIFICATO 2026-07-19.** L'utente ha assegnato le classi:
+`data/allies/Clone Trooper.json` ha ora `class: trooper` (+ `ai_profile: Clone Trooper`). Verificato
+**sul vivo** (`--sim` + telemetria `unit class resolved`): l'alleato risolve `ai=Clone Trooper`,
+`class=trooper`, `weapon=DC-15A` — **non** più `B1 Battle Droid`. I nemici risolvono `B1 Battle
+Droid`/`B1 Heavy Droid`. Quindi il criterio "una squadra multi-classe si comporta diversamente"
+(GDD 12.3) È soddisfatto: alleati e nemici usano profili AI distinti. La metà NPC del class system è
+ora **viva sui dati reali**, non solo costruita.
 
 **Dettaglio di quanto già in force (Phase A):**
 `ClassDef` nel registry (id = filename stem) + `MatchSettings.classId` risolto in `startGame()`,
@@ -239,8 +241,9 @@ non viceversa. Gate ADR-018 esteso a personaggi e classi.
 1. ~~Selettore PreMatch per classe~~ **FATTO 07-16** (riga "Classe" nel menu, insieme a
    "Missione"). Resta il **selettore personaggio**: serve solo quando esisterà un secondo
    personaggio autorato — con uno solo la scelta è automatica e il pannello dell'editor è già vivo.
-2. **Modulo editor "Classi"** (doc 14): oggi le classi si autorano a mano nei JSON. Il gate
-   ADR-018 protegge già i riferimenti, quindi l'urgenza è bassa ma il doc lo chiede (dropdown-only).
+2. **~~Modulo editor "Classi"~~ → GIÀ ESISTE** (`editor/.../ClassEditor`): questa voce era datata.
+   Il modulo c'è (vedi anche KI #47, sistemato il 07-17). Eventuali rifiniture dropdown-only del
+   ClassEditor restano possibili ma non urgenti.
 3. **KI #32 — abilità/gadget lato giocatore**: `ClassDef.abilityIds` è trasportato correttamente
    ma **nessuno lo consuma**. Volutamente NON affrontato ora: l'utente ha chiesto di non
    complicare abilità/gadget ("ci lavoreremo meglio in futuro"), ed è un sistema, non una patch.
@@ -253,9 +256,11 @@ Il rischio era scritto al condizionale (*"se una copia divergesse"*): **erano gi
 (EntityEditor, MapEditor, VehicleEditor, WeaponEditor). Ora una sola risoluzione, col controllo
 forte. Lezione: un debito descritto come ipotetico va **misurato** prima di classificarlo tale.
 
-**Debiti che restano validi in parallelo:** KI #31 (AI attraversano i veicoli — regressione nav),
-KI #32 (abilità/gadget player-side), R2 (Application.cpp ~1250 righe → estrarre
-VehicleDriver/SandboxSession), R7 (igiene `.bak`).
+**Debiti che restano validi in parallelo:** ~~KI #31 (AI attraversano i veicoli)~~ **RISOLTO 07-19**
+(push-out OBB nel CrowdSystem); ~~KI #29 (veicoli bloccati alle casse)~~ **RISOLTO 07-19** (collisione
+OBB-vs-OBB col param `queryYawRad`); KI #32 (abilità/gadget player-side); **R2** — Application.cpp era
+2132 righe: **down-payment 07-19** (estratto `core/StateDump`), restano SandboxSession/VehicleDriver;
+R7 (igiene `.bak`).
 ~~KI #7 (bonifica manuale near-duplicate)~~ → non è più un lavoro manuale: dal 2026-07-15 il gate
 ADR-018 li rileva da solo, e sui dati attuali non ce ne sono.
 

@@ -53,24 +53,21 @@ inline bool update(World& world, EntityId vehicle, Camera& cam,
     const glm::vec3 prev = {vt->x, vt->y, vt->z};
     const glm::vec3 next = prev + fwd * (vc->speed * dt);
 
-    // Box di collisione che tiene conto dello YAW: la fisica tratta il box in
-    // movimento come allineato agli assi del mondo, ma lo speeder è lungo
-    // (halfZ >> halfX). Senza questo, i 5m di lunghezza restano puntati lungo
-    // l'asse Z del mondo anche quando il mezzo gira → "muro invisibile" ai
-    // lati. Usa l'AABB avvolgente della sagoma ruotata (esatto a 0/90°).
-    const float ca = std::abs(std::cos(yr)), sa = std::abs(std::sin(yr));
-    const glm::vec3 H = { vc->halfX * ca + vc->halfZ * sa,
-                          vc->halfY,
-                          vc->halfX * sa + vc->halfZ * ca };
+    // Collisione col box REALE dello speeder (OBB), non più con l'AABB avvolgente
+    // della sagoma ruotata: quello sovrastimava agli angoli ≠ 0/90° (i 5 m di
+    // lunghezza gonfiavano il box ai lati) e il mezzo si bloccava con spazio
+    // apparente (KI #29). Ora si passa la rotazione `yr` a slideMove/hasCollision
+    // → test OBB-vs-OBB esatto (a 0/90° il risultato è identico a prima).
+    const glm::vec3 vhalf = {vc->halfX, vc->halfY, vc->halfZ};
     const glm::vec3 r    = physics::slideMoveWithStepUp(
-        prev, {next.x, prev.y, next.z}, H, world,
-        config::STEP_HEIGHT, vehicle);
+        prev, {next.x, prev.y, next.z}, vhalf, world,
+        config::STEP_HEIGHT, vehicle, yr);
     vt->x = r.x; vt->y = r.y; vt->z = r.z;
 
     // Gravità (stesso modello della fanteria)
     vc->velY += config::GRAVITY * dt;
     const float ny = vt->y + vc->velY * dt;
-    if (!physics::hasCollision({vt->x, ny, vt->z}, H, world, vehicle))
+    if (!physics::hasCollision({vt->x, ny, vt->z}, vhalf, world, vehicle, yr))
         vt->y = ny;
     else if (vc->velY < 0.0f)
         vc->velY = 0.0f;

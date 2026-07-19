@@ -40,7 +40,9 @@ BF2005 risolveva questo con la mappa cliccabile; BF2017 tornò all'elenco ed era
 - **Mappa tattica generale** (tasto dedicato, mette in **pausa** il gioco): panoramica strategica
   fuori dal flusso di respawn. L'utente ha chiarito (07-18) che è un sistema *distinto* ma con base e
   concetto condivisi con questa mappa di respawn.
-- Post nemici/neutrali e stato di cattura sulla mappa, icone unità/squadra, obiettivi, nebbia.
+- ~~Post nemici/neutrali sulla mappa~~ → **FATTO 2026-07-19** (`CommandPosts::allPosts`, cerchietti
+  colorati per proprietario). Restano: stato di cattura in corso sulla mappa, icone unità/squadra,
+  obiettivi, nebbia.
 - Impartire **ordini** dalla mappa (muovi la squadra cliccando la mappa).
 - Texture del terreno / minimappa sempre-visibile durante il gioco.
 - Zoom/pan della mappa.

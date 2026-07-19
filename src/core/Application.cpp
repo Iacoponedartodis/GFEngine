@@ -4,6 +4,7 @@
 #include "mini/core/Clock.hpp"
 #include "mini/core/GameConfig.hpp"
 #include "mini/core/GameState.hpp"
+#include "mini/core/StateDump.hpp"
 #include "mini/core/InputManager.hpp"
 #include "mini/core/Renderer.hpp"
 #include "mini/core/Window.hpp"
@@ -571,50 +572,13 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     // Snapshot JSON di OGNI entità attiva (pos/team/HP/goal-stato-AI), oltre a
     // camera/player/ticket. Riusato da F12, fine partita e crash net. Scritto
     // in game_state.json con "dump_reason" per distinguere il trigger.
+    // Dump completo dello stato (ADR-013): la logica vive in core/StateDump
+    // (R2 — estratta da run() per accorciare il main loop); qui una lambda
+    // sottile fissa i parametri correnti così i call-site restano `buildStateDump("...")`.
     auto buildStateDump = [&](const char* reason) -> nlohmann::json
     {
-        const glm::vec3 cp = cam.getPosition();
-        const glm::vec3 cf = cam.getForward();
-        nlohmann::json js;
-        js["app"]         = "GFEngine";
-        js["dump_reason"] = reason;
-        js["game_state"]  = (int)state;
-        js["world_ready"] = worldReady;
-        js["camera"]["pos"]     = {cp.x, cp.y, cp.z};
-        js["camera"]["forward"] = {cf.x, cf.y, cf.z};
-        js["player"]["hp"]     = player.prevHp;
-        js["player"]["dead"]   = player.isDead;
-        js["player"]["weapon"] = player.weapon().name;
-        js["player"]["heat"]   = player.weapon().heat;
-        js["tickets"]["team1"] = mode ? mode->getTeam1Tickets() : 0;
-        js["tickets"]["team2"] = mode ? mode->getTeam2Tickets() : 0;
-        auto& ents = js["entities"] = nlohmann::json::array();
-        if (worldReady)
-            for (EntityId id : world.getEntities())
-            {
-                const auto* tr = world.getTransform(id);
-                if (!tr) continue;
-                nlohmann::json ent;
-                ent["id"]  = id;
-                ent["pos"] = {tr->x, tr->y, tr->z};
-                if (const auto* tm = world.getTeam(id))   ent["team"] = tm->teamId;
-                if (const auto* hp = world.getHealth(id)) { ent["hp"] = hp->current; ent["hp_max"] = hp->max; }
-                if (const auto* ai = world.getAi(id))
-                {
-                    switch (ai->state) {
-                        case AiState::Patrol: ent["ai_state"] = "Patrol"; break;
-                        case AiState::Alert:  ent["ai_state"] = "Alert";  break;
-                        case AiState::Hunt:   ent["ai_state"] = "Hunt";   break;
-                        case AiState::Search: ent["ai_state"] = "Search"; break;
-                    }
-                    if (ai->hasLastKnown) ent["goal"] = {ai->lastKnownX, ai->lastKnownZ};
-                }
-                if (world.getBullet(id))  ent["kind"] = "bullet";
-                if (world.getVehicle(id)) ent["kind"] = "vehicle";
-                ents.push_back(std::move(ent));
-            }
-        js["entity_count"] = (int)ents.size();
-        return js;
+        return statedump::build(reason, (int)state, worldReady, cam, player,
+                                mode.get(), world);
     };
     // Crash net (Phase 4): su crash, dump best-effort dello stato completo.
     telemetry::setStateDumpCallback([&]() { telemetry::dumpGameState(buildStateDump("crash")); });
@@ -864,6 +828,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 grow(b.x + b.sx * 0.5f, b.z + b.sz * 0.5f);
             }
         for (const auto& sp : spawns) { m.markers.push_back({sp.label, sp.pos.x, sp.pos.z}); grow(sp.pos.x, sp.pos.z); }
+        // Tutti i command post colorati per proprietario (contesto = il fronte).
+        if (const CommandPosts* cps = mode->commandPosts())
+            for (const auto& po : cps->allPosts())
+            { m.posts.push_back({po.x, po.z, po.owner}); grow(po.x, po.z); }
         m.hasDeath = true; m.deathX = deathPos.x; m.deathZ = deathPos.z; grow(deathPos.x, deathPos.z);
         if (minX > maxX) { minX = -10; maxX = 10; minZ = -10; maxZ = 10; }   // fallback
         const float pad = 3.0f;
@@ -1349,16 +1317,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         const float elapsed = (float)frameDt;        // i sistemi non-simulazione vogliono float
         hud.tick(elapsed);
 
+        // Slow-mo della ruota di comando (non pausa): scala il TEMPO DI GIOCO.
+        // `timeScale` alimenta sia la simulazione a passo fisso (AI/proiettili)
+        // sia — via `simElapsed` — il GIOCATORE (movimento, cadenza dell'arma,
+        // guida veicolo), così rallenta TUTTO insieme. UI, camera e selezione
+        // della ruota restano a velocità reale (usano `elapsed`). `wheelOpen` è
+        // del frame precedente: scarto di 1 frame, impercettibile.
+        const float timeScale  = wheelOpen ? config::WHEEL_TIME_SCALE : 1.0f;
+        const float simElapsed = elapsed * timeScale;
+
         if (state == GameState::Playing)
         {
-            // Ruota di comando aperta → RALLENTA il tempo di gioco (non pausa):
-            // si alimenta l'accumulatore con meno tempo reale, quindi la
-            // simulazione avanza meno passi al secondo. Il timestep fisso
-            // (fixedDt) resta invariato → fisica/AI deterministiche, solo più
-            // lente. Camera e selezione della ruota girano fuori da qui, a
-            // velocità reale. `wheelOpen` è del frame precedente (la ruota si
-            // gestisce più sotto): scarto di 1 frame, impercettibile.
-            const float timeScale = wheelOpen ? config::WHEEL_TIME_SCALE : 1.0f;
             accumulator += frameDt * timeScale;
             while (accumulator >= SIMULATION_STEP)
             {
@@ -1387,7 +1356,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             for (auto& msg : world.eventFeed) hud.pushFeed(msg);
             world.eventFeed.clear();
 
-            player.weapon().update(elapsed);
+            player.weapon().update(simElapsed);   // cadenza/calore rallentano con lo slow-mo
             if (player.weapon().overheated && !wasOverheated) audio.playOverheat();
             wasOverheated = player.weapon().overheated;
 
@@ -1520,7 +1489,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             {
                 // ── Guida veicolo (19_Vehicles): fisica+camera estratte in
                 //    game/VehicleDrive.hpp (R2) ────────────────────────────
-                if (!vehicledrive::update(world, drivenVehicle, cam, elapsed,
+                if (!vehicledrive::update(world, drivenVehicle, cam, simElapsed,
                                           player.thirdPerson, vehTraceCnt))
                 {
                     drivenVehicle = 0;
@@ -1529,7 +1498,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
             }
             else if (!sbMenuOpen)
-                player.updateMovement(cam, input, world, elapsed);
+                player.updateMovement(cam, input, world, simElapsed);   // slow-mo ruota
         }
 
         // ── 5. GAME LOGIC ────────────────────────────────────────────

@@ -210,11 +210,18 @@
 - **Fix:** `mapquery::groundedSpawn` (suolo reale via `groundHeightAt` + `findFreeSpot`) in
   Sandbox/Conquest `start`. Probe runtime: camY stabile 0.95 dal frame 0. Vedi 07_Changelog.
 
-## 29. Veicoli si bloccano in corrispondenza delle 4 casse laterali (LOW) — APERTO, differito
-- Segnalato 2026-07-13: lo speeder resta bloccato passando vicino alle casse ai lati della
-  mappa anche con spazio apparente. Concordato di differirlo al futuro sistema di hitbox/
-  collisioni più accurato (la collisione tratta il box che si muove come AABB allineata al
-  mondo — vedi VehicleDrive AABB yaw-aware, mitigazione parziale). Non bloccante per il gioco.
+## 29. Veicoli si bloccano in corrispondenza delle 4 casse laterali (LOW) — RISOLTO 2026-07-19
+- Segnalato 2026-07-13: lo speeder restava bloccato passando vicino alle casse ai lati della
+  mappa anche con spazio apparente. Causa: la collisione trattava il box in movimento come **AABB
+  allineata al mondo** (VehicleDrive usava l'AABB avvolgente della sagoma ruotata) → agli angoli
+  ≠ 0/90° il box si gonfiava e urtava "aria".
+- **Fix**: `hasCollision`/`slideMove`/`slideMoveWithStepUp` hanno ora un parametro **`queryYawRad`**
+  opzionale (default 0 = AABB, comportamento **identico** per fanteria/proiettili → rischio zero per
+  i chiamanti esistenti). Con yaw ≠ 0 il test è **OBB-vs-OBB esatto** (SAT 2D a 4 assi,
+  `obbIntersectsRotatedCollider`). VehicleDrive passa il box REALE dello speeder + `yr` invece
+  dell'AABB avvolgente. A 0/90° il risultato è identico a prima. Build + `--validate` + `--sim`
+  senza crash; il "non si blocca più con spazio apparente" resta da smoke manuale (guidare fra le
+  casse in diagonale).
 
 ## 30. Sim AI: "impossibile muovere la visuale in osservatore" — NON RIPRODOTTO 2026-07-13
 - Segnalato insieme al bug #28. Probe runtime in simulazione: tutti i gate corretti
@@ -223,14 +230,17 @@
   risolto) o col glitch mouse primo-frame (già mitigato dal flush in `Window::setMouseCaptured`).
   **Da ri-testare a mano** dopo questi fix; se persiste, catturare un caso concreto.
 
-## 31. AI attraversano i veicoli (regressione nav Phase B, LOW) — APERTO 2026-07-14
+## 31. AI attraversano i veicoli (regressione nav Phase B, LOW) — RISOLTO 2026-07-19
 - Con DetourCrowd (ADR-017) il movimento AI non usa più `hasCollision`; il navmesh è costruito
   solo dalla geometria statica di `MapDef` e il crowd non conosce i veicoli (entità dinamiche
-  con collider). Quindi le AI ora CAMMINANO ATTRAVERSO gli speeder parcheggiati (prima `aiMove`
-  li bloccava). Il giocatore invece li collide ancora (usa `slideMoveWithStepUp`, non il crowd).
-- Fix futuro: veicoli come ostacoli dinamici del crowd (dtObstacleAvoidance / carve del navmesh
-  via tile-cache) oppure ri-aggiungere un check collisione veicolo nel movimento AI. Non
-  bloccante (i veicoli sono pochi e fermi); già notato in ADR-017 tra gli aperti.
+  con collider). Quindi le AI CAMMINAVANO ATTRAVERSO gli speeder parcheggiati.
+- **Fix (opzione "check collisione nel movimento AI")**: nel write-back del `CrowdSystem` (dopo che
+  il crowd ha aggiornato le posizioni), ogni AI viene spinta fuori dall'OBB di ciascun veicolo lungo
+  l'asse di **minima penetrazione** (deterministico, niente jitter; convenzione assi identica a
+  `physics::hasCollision`). Risolve SOLO la penetrazione nei veicoli — la geometria statica resta
+  gestita dal navmesh. Così l'AI scivola lungo lo speeder invece di attraversarlo. Veicoli raccolti
+  una volta per tick (sono pochi e fermi → costo trascurabile). Build + `--sim` senza crash;
+  comportamento da smoke manuale (veicolo in partita).
 
 ## 32. Nessun sistema abilità/gadget lato GIOCATORE (MEDIUM) — APERTO 2026-07-14
 - Il PreMatch fa scegliere `abilityIds`/`gadgetId` al giocatore ma NON vengono applicati
@@ -517,10 +527,12 @@ cambia arma mostra sempre la scala giusta.
   lo dice. Era invisibile senza leggere il codice del combat.
 - **Fatto**: il gate ora avvisa sul profilo vuoto, e va in Error su `half_extents <= 0` (zona di
   volume nullo, mai colpibile) e in Warn su `damage_multiplier <= 0` (zona che non fa danno).
-- **APERTO (contenuto dell'utente, non codice)**: `hitboxes/B1 Heavy Droid.json` (referenziato dal
-  nemico omonimo → oggi quel droide si colpisce a sfera) e `hitboxes/Heavy Clone Trooper.json`
-  (**orfano**: nessuno lo referenzia, l'unità omonima usa `hitbox_profile: "Clone Trooper"`).
-  Da disegnare in Entity Editor → tab Hitbox, o da eliminare.
+- **~~APERTO~~ → CHIUSO 2026-07-19**: `hitboxes/B1 Heavy Droid.json` e `hitboxes/Heavy Clone Trooper.json`
+  erano entrambi profili VUOTI e **orfani** — l'utente ha assegnato agli Heavy i profili con zone
+  (`B1 Heavy Battle Droid` → `hitbox_profile: "B1 Battle Droid"`; `Heavy Clone Trooper` →
+  `"Clone Trooper"`), quindi in gioco si colpiscono correttamente. Verificato che nulla li referenziava
+  ed **eliminati** → `--validate` ora **0/0** (era 0/2). Il gate resta a segnalare eventuali FUTURI
+  profili vuoti (comportamento voluto).
 
 ## 42. `MapDef.navmeshPath`: campo scritto e mai letto (LOW) — RISOLTO 2026-07-16
 - Anello morto completo: `BalanceEditor` **scriveva** `j["navmesh"]`, **nessun loader lo rileggeva**,

@@ -41,7 +41,9 @@ public:
         float minX = 0, minZ = 0, maxX = 1, maxZ = 1;   // bounds mondo (XZ)
         struct Wall   { float x, z, sx, sz; };           // footprint geometria
         struct Marker { std::string label; float x, z; };
+        struct Post   { float x, z; int owner; };        // command post (contesto)
         std::vector<Wall>   walls;
+        std::vector<Post>   posts;      // TUTTI i post, colorati per proprietario
         std::vector<Marker> markers;    // = availableSpawns, indice allineato a sel
         int   sel = 0;                  // marker selezionato (indice in markers)
         float secondsLeft = 0.0f;       // <= 0 → pronto a schierarsi

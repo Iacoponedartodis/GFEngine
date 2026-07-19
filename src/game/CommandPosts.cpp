@@ -145,6 +145,15 @@ std::vector<CommandPosts::OwnedPost> CommandPosts::ownedByTeam(int team) const
     return out;
 }
 
+std::vector<CommandPosts::PostInfo> CommandPosts::allPosts() const
+{
+    std::vector<PostInfo> out;
+    out.reserve(m_posts.size());
+    for (const auto& p : m_posts)
+        out.push_back({p.def.label, p.def.x, p.def.z, p.owner});
+    return out;
+}
+
 std::vector<CommandPosts::Status> CommandPosts::status() const
 {
     std::vector<Status> out;

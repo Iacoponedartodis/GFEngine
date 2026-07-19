@@ -276,13 +276,9 @@ void EditorApp::renderMenuBar()
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 20);
     ImGui::TextDisabled("| %s", modName);
 
-    // Pulsante chiudi a destra
-    float rightEdge = ImGui::GetWindowWidth();
-    ImGui::SetCursorPosX(rightEdge - 90.0f);
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.50f, 0.08f, 0.08f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.15f, 0.15f, 1.00f));
-    if (ImGui::Button("  X  Esci  ")) m_running = false;
-    ImGui::PopStyleColor(2);
+    // (Rimosso il pulsante rosso "X Esci": era un workaround di inizio progetto
+    // quando la finestra era tagliata e non si raggiungeva la X nativa. Ora si
+    // chiude con la X della finestra o dal menu "File → Chiudi GFEditor".)
 
     ImGui::EndMainMenuBar();
 }

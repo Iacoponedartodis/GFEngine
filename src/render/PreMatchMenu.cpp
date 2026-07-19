@@ -10,6 +10,28 @@
 namespace mini
 {
 
+// ── Geometrie dei bottoni-mouse (una definizione, usata da render e hit-test) ─
+namespace
+{
+    struct PMRect { float x, y, w, h; };
+    bool pmHit(const PMRect& r, float mx, float my)
+    { return mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h; }
+
+    // "Indietro" (controparte mouse di ESC): in alto a sinistra, su ogni pagina.
+    PMRect backBtn(int /*W*/, int /*H*/) { return {20.0f, 18.0f, 140.0f, 34.0f}; }
+
+    // 3 bottoni preset nel footer delle Regole (Salva / Carica / Gestisci):
+    // posizione FISSA in basso così render e hit-test non divergono.
+    void presetBtns(int W, int H, PMRect out[3])
+    {
+        const float cx = (float)W * 0.5f;
+        const float bw = 170.0f, bh = 30.0f, gap = 14.0f;
+        float x = cx - (bw * 3 + gap * 2) * 0.5f;
+        const float y = (float)H - 58.0f;
+        for (int i = 0; i < 3; ++i) { out[i] = {x, y, bw, bh}; x += bw + gap; }
+    }
+}
+
 // ── Inizializzazione ─────────────────────────────────────────────────────
 
 PreMatchMenu::PreMatchMenu(int screenW, int screenH)
@@ -381,9 +403,12 @@ PreMatchMenu::Result PreMatchMenu::handleRules(int sc)
 
 PreMatchMenu::Result PreMatchMenu::handleSavePreset(int sc)
 {
-    if (sc == SDL_SCANCODE_UP   || sc == SDL_SCANCODE_W)
+    // Text-entry: SOLO le frecce navigano gli slot, NON W/S (né altre lettere) —
+    // altrimenti digitando il nome del preset una lettera-navigazione sposta anche
+    // la selezione dello slot (bug segnalato). Le lettere devono solo scrivere.
+    if (sc == SDL_SCANCODE_UP)
     { m_presetSlot = (m_presetSlot - 1 + UserPresets::MAX) % UserPresets::MAX; return Result::None; }
-    if (sc == SDL_SCANCODE_DOWN || sc == SDL_SCANCODE_S)
+    if (sc == SDL_SCANCODE_DOWN)
     { m_presetSlot = (m_presetSlot + 1) % UserPresets::MAX; return Result::None; }
 
     if (sc == SDL_SCANCODE_BACKSPACE && !m_textInput.empty())
@@ -454,6 +479,15 @@ PreMatchMenu::Result PreMatchMenu::handleMouse(float mx, float my, bool clicked)
     const float W = (float)m_ui.width(), H = (float)m_ui.height();
     const float cx = W * 0.5f, cy = H * 0.5f;
 
+    // Pulsante "Indietro" (controparte di ESC), su ogni pagina: fa ESATTAMENTE
+    // ciò che fa ESC per la pagina corrente (riusa handleKey → niente logica
+    // duplicata). L'hover sul back non deve toccare le righe sotto.
+    if (pmHit(backBtn(m_ui.width(), m_ui.height()), mx, my))
+    {
+        if (clicked) return handleKey(SDL_SCANCODE_ESCAPE);
+        return Result::None;
+    }
+
     switch (m_page)
     {
     case Page::Root:   // renderRoot: startY=cy-30, rowH=58, box cx-220 w440 (y-4,h44)
@@ -502,6 +536,13 @@ PreMatchMenu::Result PreMatchMenu::handleMouse(float mx, float my, bool clicked)
     }
     case Page::Rules:   // renderRules: startY=95, rowH=40, box cx±312 (y-5,h rowH-4)
     {
+        // Bottoni preset (Salva/Carica/Gestisci): stessa azione di F5/F6/F7.
+        {
+            PMRect pb[3]; presetBtns(m_ui.width(), m_ui.height(), pb);
+            if (clicked && pmHit(pb[0], mx, my)) return handleKey(SDL_SCANCODE_F5);
+            if (clicked && pmHit(pb[1], mx, my)) return handleKey(SDL_SCANCODE_F6);
+            if (clicked && pmHit(pb[2], mx, my)) return handleKey(SDL_SCANCODE_F7);
+        }
         const float startY = 95.0f, rowH = 40.0f;
         // Valore/frecce/barra stanno TUTTI a destra (come renderRules): valueX =
         // cx+80, barra cx+150..cx+300. Lo split va fatto rispetto a QUESTI, non al
@@ -581,6 +622,13 @@ void PreMatchMenu::render() const
     case Page::RenamePreset:     renderRenamePreset(); break;
     case Page::LoadPreset:       renderLoadPreset(); break;
     }
+
+    // Pulsante "Indietro" (controparte mouse di ESC) su ogni pagina.
+    const PMRect bb = backBtn(m_ui.width(), m_ui.height());
+    m_ui.rect(bb.x, bb.y, bb.w, bb.h, 0.10f, 0.12f, 0.18f, 0.90f);
+    m_ui.border(bb.x, bb.y, bb.w, bb.h, 0.40f, 0.50f, 0.70f);
+    m_ui.text(bb.x + 14, bb.y + 9, 1.7f, "< Indietro", 0.80f, 0.85f, 0.95f);
+
     m_ui.end();
 }
 
@@ -760,10 +808,20 @@ void PreMatchMenu::renderRules() const
     }
 
     const float ly = startY + m_rows.size() * rowH + 22;
-    m_ui.rect(0, ly-8, W, 72, 0,0,0, 0.55f);
-    m_ui.text(cx-290, ly,    1.6f, "SU/GIU = naviga   SX/DX = modifica valore", 0.6f,0.6f,0.6f);
-    m_ui.text(cx-290, ly+18, 1.6f, "ESC = torna al menu partita", 0.6f,0.6f,0.6f);
-    m_ui.text(cx-290, ly+36, 1.6f, "F5 = salva preset   F6 = carica preset   F7 = gestisci preset", 0.5f,0.85f,1.0f);
+    m_ui.rect(0, ly-8, W, 44, 0,0,0, 0.55f);
+    m_ui.text(cx-290, ly,    1.6f, "SU/GIU = naviga   SX/DX = modifica valore (o click sui lati -/+)", 0.6f,0.6f,0.6f);
+    m_ui.text(cx-290, ly+18, 1.6f, "ESC / Indietro = torna al menu partita", 0.6f,0.6f,0.6f);
+
+    // Bottoni preset cliccabili (prima solo F5/F6/F7 da tastiera).
+    PMRect pb[3]; presetBtns(m_ui.width(), m_ui.height(), pb);
+    const char* plabel[3] = {"Salva preset", "Carica preset", "Gestisci preset"};
+    for (int i = 0; i < 3; ++i)
+    {
+        m_ui.rect(pb[i].x, pb[i].y, pb[i].w, pb[i].h, 0.08f, 0.14f, 0.22f, 0.90f);
+        m_ui.border(pb[i].x, pb[i].y, pb[i].w, pb[i].h, 0.30f, 0.55f, 0.80f);
+        m_ui.textCentered(pb[i].x + pb[i].w * 0.5f, pb[i].y + 8, 1.5f, plabel[i],
+                          0.55f, 0.85f, 1.0f);
+    }
 }
 
 void PreMatchMenu::renderSavePreset() const

@@ -55,9 +55,10 @@ constexpr float SQUAD_REVIVE_HP     =  0.5f;  // frazione di HP max al risveglio
 constexpr float POST_RESPAWN_SLOW = 0.15f;
 
 // Ruota di comando: quanto rallenta il tempo di GIOCO mentre è aperta (stile
-// Bannerlord). NON pausa: la simulazione avanza a questa frazione della velocità
-// reale, così si sceglie un ordine senza perdere tempo prezioso ma mantenendo un
-// minimo di immersione. Camera e selezione restano a velocità reale.
+// Bannerlord). NON pausa: TUTTO il gioco avanza a questa frazione della velocità
+// reale — simulazione (AI, proiettili) E giocatore (movimento, cadenza dell'arma,
+// guida). Solo UI, camera e selezione della ruota restano a velocità reale, così
+// si sceglie l'ordine senza perdere tempo prezioso ma con un minimo di immersione.
 constexpr float WHEEL_TIME_SCALE    = 0.15f;  // ~1/7 → tempo molto rallentato (non pausa)
 
 // ── Camera ────────────────────────────────────────────────────────────────

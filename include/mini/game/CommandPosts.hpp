@@ -34,6 +34,11 @@ public:
     struct OwnedPost { std::string label; float x = 0.0f, z = 0.0f; };
     [[nodiscard]] std::vector<OwnedPost> ownedByTeam(int team) const;
 
+    // TUTTI i post con proprietario (0 neutrale, 1, 2): contesto della mappa
+    // tattica/di respawn (doc 30) — mostrare il fronte, non solo i propri spawn.
+    struct PostInfo { std::string label; float x = 0.0f, z = 0.0f; int owner = 0; };
+    [[nodiscard]] std::vector<PostInfo> allPosts() const;
+
     // Stato leggibile per l'HUD (proprietario + progresso cattura 0..1).
     struct Status
     {

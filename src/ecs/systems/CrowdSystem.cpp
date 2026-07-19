@@ -5,6 +5,8 @@
 #include "mini/core/GameConfig.hpp"
 
 #include <glm/glm.hpp>
+#include <cmath>
+#include <vector>
 
 namespace mini
 {
@@ -50,6 +52,22 @@ void CrowdSystem::update(World& world, float dt)
     // ── 3. Tick del crowd (una volta per step fisso) ─────────────────────
     nav->updateCrowd(dt);
 
+    // Veicoli come OBB per il push-out (KI #31): il crowd (ADR-017) non conosce
+    // le entità dinamiche → il navmesh evita solo la geometria statica e le AI
+    // attraversavano gli speeder. Raccolti UNA volta; sono pochi e fermi.
+    struct VehBox { float x, y, z, hx, hy, hz, co, si; };
+    std::vector<VehBox> vehicles;
+    for (EntityId e : world.getEntities())
+    {
+        const auto* v = world.getVehicle(e);
+        const auto* c = world.getCollider(e);
+        const auto* t = world.getTransform(e);
+        if (!v || !c || !t) continue;
+        const float ry = t->ry * 3.14159265f / 180.0f;
+        vehicles.push_back({t->x, t->y, t->z, c->hx, c->hy, c->hz,
+                            std::cos(ry), std::sin(ry)});
+    }
+
     // ── 4. Write-back npos → transform ───────────────────────────────────
     // npos è sulla SUPERFICIE del navmesh (≈ piedi); il transform.y dell'entità
     // è il CENTRO fisico (spawn = suolo + AI_HALF_Y). Ripristino l'offset,
@@ -62,6 +80,28 @@ void CrowdSystem::update(World& world, float dt)
         glm::vec3 p;
         if (nav->agentPos(ai->crowdAgentIdx, p))
         { tr->x = p.x; tr->y = p.y + config::AI_HALF_Y; tr->z = p.z; }
+
+        // Push-out dai veicoli: risolve SOLO la penetrazione nell'OBB del
+        // veicolo (la geometria statica la gestisce già il navmesh), spingendo
+        // l'AI fuori lungo l'asse di MINIMA penetrazione → deterministico, senza
+        // jitter. Convenzione assi identica a physics::hasCollision (localX =
+        // (co,-si), localZ = (si,co)). Così l'AI scivola lungo lo speeder invece
+        // di attraversarlo (KI #31, LOW).
+        for (const auto& vb : vehicles)
+        {
+            if (std::abs(tr->y - vb.y) >= config::AI_HALF_Y + vb.hy) continue;
+            const float d0 = tr->x - vb.x, d1 = tr->z - vb.z;
+            float lx = d0 * vb.co - d1 * vb.si;   // coord. locale X del veicolo
+            float lz = d0 * vb.si + d1 * vb.co;   // coord. locale Z
+            const float ex = vb.hx + config::AI_HALF_X;
+            const float ez = vb.hz + config::AI_HALF_Z;
+            const float penX = ex - std::abs(lx), penZ = ez - std::abs(lz);
+            if (penX <= 0.0f || penZ <= 0.0f) continue;   // non penetra
+            if (penX < penZ) lx += (lx >= 0.0f ? penX : -penX);
+            else             lz += (lz >= 0.0f ? penZ : -penZ);
+            tr->x = vb.x + (lx * vb.co + lz * vb.si);      // local → world
+            tr->z = vb.z + (-lx * vb.si + lz * vb.co);
+        }
     }
 }
 

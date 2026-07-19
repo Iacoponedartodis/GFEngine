@@ -2,6 +2,87 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-19 (8) — Quattro piccoli fix (hitbox orfane, back button, preset)
+
+Serie di rifiniture segnalate dall'utente:
+- **Warning hitbox falsi**: `data/hitboxes/B1 Heavy Droid.json` e `Heavy Clone Trooper.json` erano
+  profili **vuoti e orfani** (`{"zones":[]}`, nessuna unità li referenzia — gli Heavy riusano i
+  profili `B1 Battle Droid`/`Clone Trooper` che HANNO le zone). Verificato che nulla li referenzia,
+  **eliminati** → `--validate` ora **0 errori, 0 warning** (era 0/2).
+- **Pulsante "Indietro" (mouse)**: aggiunto su ogni pagina di PreMatch e Opzioni — controparte di ESC
+  (riusa `handleKey(ESCAPE)` in PreMatch / replica Controls→Root, Root→Back in Opzioni: nessuna logica
+  duplicata).
+- **Preset F5/F6/F7 ora cliccabili**: nel footer delle Regole tre bottoni "Salva/Carica/Gestisci
+  preset" che chiamano `handleKey(F5/F6/F7)` (prima solo da tastiera, i tasti più scomodi).
+- **Bug nome preset**: nella pagina "Salva preset" i tasti **W/S** navigavano gli slot, quindi
+  digitandoli nel nome si spostava anche la selezione. Ora in text-entry navigano **solo le frecce**
+  → le lettere scrivono e basta. (I tasti-lettera colpevoli erano W/S, non A/D.)
+- **Editor**: rimosso il pulsante rosso "X Esci" della toolbar — era un workaround di inizio progetto
+  (finestra tagliata, X nativa irraggiungibile), non più necessario. Restano X nativa + "Chiudi GFEditor".
+- **Verificato**: build 0/0 (engine + editor), `--validate` 0/0. Il comportamento dei click/back da
+  smoke manuale (GUI).
+
+## 2026-07-19 (7) — Bug dei veicoli: AI non li attraversano più (KI #31) + non si bloccano (KI #29)
+
+Due bug veicoli chiusi, entrambi contenuti (rischio zero per fanteria/proiettili).
+
+- **KI #31 — AI attraversavano gli speeder**: il crowd (ADR-017) non conosce le entità dinamiche.
+  **Fix**: nel write-back del `CrowdSystem`, ogni AI viene spinta fuori dall'OBB dei veicoli lungo
+  l'asse di minima penetrazione (solo-veicolo; la geometria statica la gestisce il navmesh).
+  Deterministico, niente jitter. Ora l'AI scivola lungo lo speeder invece di attraversarlo.
+- **KI #29 — veicoli bloccati alle casse laterali**: la collisione trattava lo speeder in movimento
+  come **AABB** (inviluppo della sagoma ruotata) → agli angoli si gonfiava e urtava "aria". **Fix**:
+  `hasCollision`/`slideMove`/`slideMoveWithStepUp` hanno un parametro `queryYawRad` opzionale
+  (**default 0 = AABB, path invariato** per fanteria/proiettili → rischio zero); con yaw ≠ 0 il test
+  è **OBB-vs-OBB esatto** (`obbIntersectsRotatedCollider`, SAT 2D a 4 assi). VehicleDrive passa ora
+  il box REALE + `yr`. A 0/90° il risultato è identico a prima.
+- **Verificato**: build 0/0 (engine + editor), `--validate` 0 errori, `--sim` 5s senza crash. I due
+  comportamenti (AI che scivola, veicolo che non si blocca) restano da **smoke manuale** (serve un
+  veicolo guidato/AI vicino in partita). KI #31 e #29 → RISOLTI.
+
+## 2026-07-19 (6) — R2 (down-payment): estratto lo state-dump da Application.cpp
+
+Primo passo, a basso rischio, sul debito R2 (Application.cpp era 2132 righe). Estratta la lambda
+`buildStateDump` di `run()` — dump JSON completo dello stato (ADR-013, usato su F12/fine-partita/crash)
+— in `core/StateDump` (`statedump::build`, funzione pura read-only). In Application resta una lambda
+sottile che fissa i parametri correnti, così i call-site restano `buildStateDump("...")`.
+
+- **Estrazione fedele**: codice identico spostato → **comportamento invariato per costruzione** (nessun
+  cambio di logica). Il dump è ora riusabile/testabile in isolamento.
+- **Verificato**: build 0/0 (engine + editor), `--validate` 0 errori. Aggiunto `src/core/StateDump.cpp`
+  a CMakeLists.
+- **Resta R2**: le estrazioni più grosse (SandboxSession, VehicleDriver mount/dismount) restano, da
+  fare a piccoli passi per tenere basso il rischio — il main loop è tutto lambda `[&]` intrecciate.
+
+## 2026-07-19 (5) — Rifinitura: la mappa di respawn mostra il fronte (tutti i post)
+
+Scelta "rifinitura e robustezza" dell'utente. Passo piccolo, isolato al rendering, a basso rischio:
+la mappa di respawn mostrava solo i PROPRI punti di spawn (base + post alleati). Ora mostra **tutti i
+command post colorati per proprietario** (alleato blu, nemico rosso, neutrale grigio) come contesto —
+scegliendo dove rinascere si vede il fronte, non solo dove si può.
+
+- `CommandPosts::allPosts()` (label/x/z/owner). `HUD::RespawnMap` porta la lista `posts`; il render li
+  disegna come cerchietti colorati sotto i marker verdi selezionabili (non cliccabili: solo contesto).
+- Nessun impatto altrove: additivo alla mappa di respawn già esistente (doc 30 Phase 1).
+- **Verificato**: build 0/0, `--validate` 0 errori. Resa da smoke manuale (serve morire con 2+ punti).
+- **Bonus (verifica sul vivo)**: confermato via `--sim`+telemetria che gli alleati usano il profilo AI
+  `Clone Trooper` (class `trooper`), non più `B1 Battle Droid` → class system NPC vivo sui dati reali
+  (GDD 12.3 soddisfatto). Roadmap N4 corretto (era datato: ClassEditor già esiste, classi assegnate).
+
+## 2026-07-19 (4) — Slow-mo della ruota: ora rallenta anche il giocatore
+
+Lo slow-mo della ruota di comando scalava solo la **simulazione a passo fisso** (AI, proiettili): il
+giocatore era aggiornato FUORI da quel ciclo con il dt reale (`elapsed`), quindi si muoveva a velocità
+piena mentre tutto il resto rallentava. L'utente vuole che rallenti **tutto, giocatore incluso**.
+
+- **Fix**: introdotto `simElapsed = elapsed * timeScale` (calcolato una volta accanto a `elapsed`) e
+  usato per gli update del GIOCATORE — `updateMovement`, `weapon().update` (cadenza/calore),
+  `vehicledrive::update`. La simulazione già usava `timeScale` (invariata). UI/camera/selezione della
+  ruota restano a `elapsed` (velocità reale). I proiettili del giocatore, una volta creati, sono entità
+  della sim → già rallentati da `world.tick`.
+- **Verificato**: build 0/0, `--validate` 0 errori. **Da smoke manuale**: aprire la ruota e muoversi —
+  il giocatore ora rallenta insieme al mondo.
+
 ## 2026-07-19 (3) — Editor: selezione oggetti dalle viewport col mouse (ray-picking)
 
 Seconda parte dello step "mouse ovunque" (la prima erano i menu engine): nell'editor si potevano

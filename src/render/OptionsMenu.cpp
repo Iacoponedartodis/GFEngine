@@ -98,6 +98,17 @@ OptionsMenu::Result OptionsMenu::handleMouse(float mx, float my, bool clicked)
     const float W = (float)m_ui.width(), H = (float)m_ui.height();
     const float cx = W * 0.5f, cy = H * 0.5f;
 
+    // Pulsante "Indietro" (controparte di ESC): Controls → Root, Root → Back.
+    if (mx >= 20 && mx <= 160 && my >= 18 && my <= 52)
+    {
+        if (clicked)
+        {
+            if (m_page == Page::Controls) { m_page = Page::Root; return Result::None; }
+            return Result::Back;
+        }
+        return Result::None;
+    }
+
     if (m_page == Page::Root)   // renderRoot: startY=cy-30, box cx-240 w480 (y-4,h44)
     {
         const float y = cy - 30.0f, bx = cx - 240.0f;
@@ -137,6 +148,12 @@ void OptionsMenu::render(const InputManager& input) const
     case Page::Root:     renderRoot();           break;
     case Page::Controls: renderControls(input);  break;
     }
+
+    // Pulsante "Indietro" (controparte mouse di ESC), in alto a sinistra.
+    m_ui.rect(20, 18, 140, 34, 0.10f, 0.12f, 0.18f, 0.90f);
+    m_ui.border(20, 18, 140, 34, 0.40f, 0.50f, 0.70f);
+    m_ui.text(34, 27, 1.7f, "< Indietro", 0.80f, 0.85f, 0.95f);
+
     m_ui.end();
 }
 

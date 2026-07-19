@@ -411,6 +411,19 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                           0.16f, 0.18f, 0.22f, 0.9f);
             }
 
+            // Command post: cerchietto colorato per proprietario (contesto = il
+            // FRONTE). Alleati (blu) sotto ai marker verdi selezionabili; nemici
+            // rossi, neutrali grigi. Non cliccabili: danno il quadro tattico.
+            for (const auto& po : r.posts)
+            {
+                float sx, sy; proj.to(po.x, po.z, sx, sy);
+                float pr = 0.60f, pg = 0.60f, pb = 0.62f;          // neutrale
+                if (po.owner == 1) { pr = 0.25f; pg = 0.55f; pb = 1.00f; }  // alleato
+                if (po.owner == 2) { pr = 1.00f; pg = 0.30f; pb = 0.28f; }  // nemico
+                m_ui.rect(sx - 7, sy - 7, 14, 14, pr * 0.4f, pg * 0.4f, pb * 0.4f, 0.85f);
+                m_ui.border(sx - 7, sy - 7, 14, 14, pr, pg, pb, 1.5f);
+            }
+
             // Luogo di morte (orientamento)
             if (r.hasDeath)
             {

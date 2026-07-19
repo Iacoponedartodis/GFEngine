@@ -29,22 +29,28 @@ AABB computeWorldAABB(const TransformComponent& t, const ColliderComponent& c);
 // a qualche entità con ColliderComponent nel world.
 // excludeId: entità da ignorare (es. un veicolo che testa il PROPRIO
 // movimento non deve collidere col proprio collider). 0 = nessuna.
+// queryYawRad: rotazione Y del box QUERY (radianti). 0 = box allineato al mondo
+// (default: fanteria/proiettili — comportamento invariato). Diverso da 0 = il
+// query è un OBB e il test è OBB-vs-OBB esatto (veicoli lunghi che girano, KI
+// #29: senza questo l'AABB avvolgente sovrastimava e "muro invisibile" ai lati).
 bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
-                  EntityId excludeId = 0);
+                  EntityId excludeId = 0, float queryYawRad = 0.0f);
 
 // Sliding per-asse: testa X, Y, Z separatamente e accetta solo i movimenti
 // che non causano collisione. Zero jitter, sliding fluido lungo i muri.
+// queryYawRad: vedi hasCollision (0 = AABB, default).
 glm::vec3 slideMove(const glm::vec3& prev, const glm::vec3& next,
                     const glm::vec3& half, World& world,
-                    EntityId excludeId = 0);
+                    EntityId excludeId = 0, float queryYawRad = 0.0f);
 
 // Sliding con step-up: come slideMove ma se bloccato orizzontalmente e lo
 // spazio sopra l'ostacolo (≤ stepHeight) è libero, il soggetto viene
 // spinto automaticamente in alto. Permette di salire scale e scalini.
+// queryYawRad: vedi hasCollision (0 = AABB, default).
 glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
                                const glm::vec3& half, World& world,
                                float stepHeight = 0.55f,
-                               EntityId excludeId = 0);
+                               EntityId excludeId = 0, float queryYawRad = 0.0f);
 
 // Se pos compenetra un collider (es. spawn dentro un veicolo o sulla lastra di
 // un command post), cerca la posizione libera più vicina e la ritorna. La

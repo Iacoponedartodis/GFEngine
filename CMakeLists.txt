@@ -170,6 +170,7 @@ target_link_libraries(imgui PUBLIC
 add_executable(GFEngine
     src/main.cpp
     src/core/Application.cpp
+    src/core/StateDump.cpp
     src/core/Audio.cpp
     src/core/Clock.cpp
     src/core/Window.cpp

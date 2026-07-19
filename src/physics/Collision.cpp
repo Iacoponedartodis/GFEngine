@@ -61,11 +61,55 @@ static bool boxIntersectsRotatedCollider(const glm::vec3& pos, const glm::vec3& 
     return true;
 }
 
-bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
-                  EntityId excludeId)
+// Test ESATTO OBB query (ruotato di queryYaw attorno a Y) vs collider OBB.
+// Generalizza boxIntersectsRotatedCollider: SAT 2D con gli assi locali di
+// ENTRAMBI i box (4 assi) + intervallo Y. Serve ai box lunghi che ruotano
+// (veicoli, KI #29): l'AABB avvolgente li faceva urtare l'aria ai lati.
+static bool obbIntersectsRotatedCollider(const glm::vec3& pos, const glm::vec3& half,
+                                         float queryYaw,
+                                         const TransformComponent& t,
+                                         const ColliderComponent& c)
 {
-    const glm::vec3 pn = pos - half;
-    const glm::vec3 px = pos + half;
+    if (pos.y - half.y >= t.y + c.hy || pos.y + half.y <= t.y - c.hy)
+        return false;
+
+    const float qc = std::cos(queryYaw), qs = std::sin(queryYaw);
+    const float cr = t.ry * PI / 180.0f;
+    const float cc = std::cos(cr), cs = std::sin(cr);
+    // Assi locali (convenzione glm rotate-Y: localX=(co,-si), localZ=(si,co))
+    const float qx[2] = {qc, -qs}, qz[2] = {qs, qc};   // query
+    const float cx[2] = {cc, -cs}, cz[2] = {cs, cc};   // collider
+    const float dx = t.x - pos.x, dz = t.z - pos.z;
+
+    const float axesX[4] = {qx[0], qz[0], cx[0], cz[0]};
+    const float axesZ[4] = {qx[1], qz[1], cx[1], cz[1]};
+    for (int i = 0; i < 4; ++i)
+    {
+        const float aX = axesX[i], aZ = axesZ[i];
+        const float rq = half.x * std::abs(aX * qx[0] + aZ * qx[1])
+                       + half.z * std::abs(aX * qz[0] + aZ * qz[1]);
+        const float rc = c.hx * std::abs(aX * cx[0] + aZ * cx[1])
+                       + c.hz * std::abs(aX * cz[0] + aZ * cz[1]);
+        const float dist = std::abs(aX * dx + aZ * dz);
+        if (dist >= rq + rc) return false;
+    }
+    return true;
+}
+
+bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
+                  EntityId excludeId, float queryYawRad)
+{
+    // Broad test sull'AABB avvolgente del box query. A yaw=0 è `half`; a yaw≠0
+    // è l'inviluppo della sagoma ruotata (conservativo → nessun falso negativo).
+    glm::vec3 qhalf = half;
+    if (queryYawRad != 0.0f)
+    {
+        const float ca = std::abs(std::cos(queryYawRad));
+        const float sa = std::abs(std::sin(queryYawRad));
+        qhalf = {half.x * ca + half.z * sa, half.y, half.x * sa + half.z * ca};
+    }
+    const glm::vec3 pn = pos - qhalf;
+    const glm::vec3 px = pos + qhalf;
 
     for (EntityId id : world.getEntities())
     {
@@ -80,6 +124,14 @@ bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
             pn.y >= b.max.y || px.y <= b.min.y ||
             pn.z >= b.max.z || px.z <= b.min.z)
             continue;
+
+        // Query ruotato (veicolo): test OBB-vs-OBB esatto, salta il fast path.
+        if (queryYawRad != 0.0f)
+        {
+            if (obbIntersectsRotatedCollider(pos, half, queryYawRad, *t, *col))
+                return true;
+            continue;
+        }
 
         // Collider non ruotato: il broad test è già esatto
         const float ryMod = std::fmod(std::abs(t->ry), 180.0f);
@@ -97,12 +149,12 @@ bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
 
 glm::vec3 slideMove(const glm::vec3& prev, const glm::vec3& next,
                     const glm::vec3& half, World& world,
-                    EntityId excludeId)
+                    EntityId excludeId, float queryYawRad)
 {
     glm::vec3 r = prev;
-    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId)) r.x = next.x;
-    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId)) r.y = next.y;
-    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId)) r.z = next.z;
+    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId, queryYawRad)) r.x = next.x;
+    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId, queryYawRad)) r.y = next.y;
+    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId, queryYawRad)) r.z = next.z;
     return r;
 }
 
@@ -110,20 +162,20 @@ glm::vec3 slideMove(const glm::vec3& prev, const glm::vec3& next,
 
 glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
                                const glm::vec3& half, World& world,
-                               float stepHeight, EntityId excludeId)
+                               float stepHeight, EntityId excludeId, float queryYawRad)
 {
     glm::vec3 r = prev;
 
     // Asse X
-    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId))
+    if (!hasCollision({next.x, r.y, r.z}, half, world, excludeId, queryYawRad))
     {
         r.x = next.x;
     }
     else
     {
         const glm::vec3 stepped = {next.x, r.y + stepHeight, r.z};
-        if (!hasCollision(stepped, half, world, excludeId) &&
-            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId))
+        if (!hasCollision(stepped, half, world, excludeId, queryYawRad) &&
+            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId, queryYawRad))
         {
             r.x = next.x;
             r.y += stepHeight;
@@ -131,19 +183,19 @@ glm::vec3 slideMoveWithStepUp(const glm::vec3& prev, const glm::vec3& next,
     }
 
     // Asse Y (gravità — no step-up)
-    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId))
+    if (!hasCollision({r.x, next.y, r.z}, half, world, excludeId, queryYawRad))
         r.y = next.y;
 
     // Asse Z
-    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId))
+    if (!hasCollision({r.x, r.y, next.z}, half, world, excludeId, queryYawRad))
     {
         r.z = next.z;
     }
     else
     {
         const glm::vec3 stepped = {r.x, r.y + stepHeight, next.z};
-        if (!hasCollision(stepped, half, world, excludeId) &&
-            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId))
+        if (!hasCollision(stepped, half, world, excludeId, queryYawRad) &&
+            !hasCollision({r.x, r.y + stepHeight, r.z}, half, world, excludeId, queryYawRad))
         {
             r.z = next.z;
             r.y += stepHeight;
