@@ -201,6 +201,7 @@ add_executable(GFEngine
     src/game/game_modes/ObjectiveModes.cpp
     src/game/CommandPosts.cpp
     src/game/nav/NavManager.cpp
+    src/game/ai/WorldIntel.cpp
     src/core/Telemetry.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp

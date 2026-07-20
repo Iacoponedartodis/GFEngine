@@ -2,6 +2,189 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-20 (19) — Tactical Points + pulsanti gizmo cliccabili (ADR-027, doc 33)
+
+Fase 2 del piano metadata + fix ergonomia editor.
+- **Tactical Points** (ADR-027): `TacticalPointDef {x,y,z,facing,type,importance,radius}` su
+  `MapDef.tacticalPoints` (type: vantage/defensive/chokepoint/observation). Loader `tactical_points`;
+  `worldintel::nearestTacticalPoint` (seam per i consumatori futuri). **Editor completo**: lista +/-,
+  pannello con dropdown tipo + slider (importanza/raggio/fronte/posizione), marker colorati per tipo
+  nel viewport (pilastro + naso del fronte + disco del raggio), gizmo sposta+ruota. Authoring manuale
+  (no auto-gen). **Consumo AI = Fase 4/5** (dato autorato-ahead, come height/canShoot).
+- **Pulsanti gizmo cliccabili** (Sposta/Ruota/Scala) nel viewport dell'editor: la selezione del tool
+  non dipende più dalla scorciatoia da tastiera (che richiedeva viewport in hover + mouse libero,
+  poco affidabile). Ruota/Scala si disabilitano (grigi) sui target che non li supportano → anche
+  diagnostico. Risolve il "non riesco a selezionare ruota/scala" sui metadata (i cap erano corretti;
+  il problema era l'accesso al tool). KI #60.
+- **Verificato**: build 0/0, `--validate` 0/0 (firebase "0 tactical", additivo), `--sim` senza crash
+  (AI viva). Smoke editor manuale: creare/tipizzare un tactical point, usare i pulsanti tool, salvare.
+
+## 2026-07-20 (18) — Cover Intelligence: copertura come dato tattico + auto-gen (ADR-026, doc 33)
+
+Fase 1 del piano metadata. La copertura smette di essere solo posizione/fronte/altezza.
+- **`CoverPointDef` += `protection` (0..1) + `canShoot`** (additivi, default = comportamento vecchio;
+  protezione clampata al load). Loader `protection`/`can_shoot`.
+- **Scelta più intelligente**: `worldintel::nearestCoverToward` → **`bestCoverToward`** (scoring
+  protezione − distanza). L'AI ora preferisce coperture *migliori*, non solo vicine. Con protezione
+  uniforme degenera nella più vicina → retrocompatibile.
+- **Editor**: slider "Protezione" + checkbox "Si può sparare da qui" nel pannello copertura.
+- **Auto-gen coperture da geometria: aggiunta e poi RIMOSSA lo stesso giorno** (feedback utente).
+  L'euristica "un cover per faccia di box" produceva coperture insensate; le mappe sono fortemente
+  handcrafted → basso valore, e una versione buona richiede analisi tattica (LOS/minaccia/spaziatura),
+  non euristiche sui box. Funzione + bottone eliminati. Generazione automatica di metadata dalla
+  geometria **de-scoped** (doc 33 §6).
+- **Rimandato**: idoneità per ruolo + link (Fase 2), consumo pieno `canShoot` e riduzione danno
+  dietro copertura (più avanti); pose alle coperture bloccate (animazioni).
+- **Verificato**: build 0/0, `--validate` 0/0, `--sim` senza crash (AI viva). Smoke editor manuale:
+  generare coperture, regolare protezione, salvare.
+
+## 2026-07-20 (17) — World Intelligence Layer: seam di query + Fase 0 metadata (ADR-025, doc 33)
+
+Prima fase del piano metadata tattici (doc 33), filosofia "AI semplici in un mondo intelligente".
+Fondamenta a basso rischio, **senza cambiare il comportamento AI**.
+- **Query layer unico** `mini::worldintel` (`game/ai/WorldIntel.hpp/.cpp`): `nearestCoverToward` +
+  `dangerAt`. È il seam dove AI/squadre interrogano la conoscenza della mappa (solo dati+query pure,
+  decoupling doc 15). `AiSystem` ora lo chiama per la scelta copertura (rimossa la static `pickCover`,
+  stessa logica) → base testabile/ottimizzabile per tutte le fasi successive.
+- **Doppia verità danger risolta**: `applyDangerRepulsion` gated a **fallback** (solo `!navActive`);
+  col crowd il costo DANGER del navmesh (doc 22) aggira già le zone. Una sola verità.
+- **Editor: ruota/scala sui marker metadata** (KI #60 + richiesta utente): cover→ruota(`facing`),
+  veicolo→ruota(`ry`), danger/post→scala(`radius`). Prima solo-sposta.
+- **Doc-accuracy**: 15/18 aggiornati (l'AI consuma i metadata; il navmesh marca DANGER/COVER).
+- **Verificato**: build 0/0, `--validate` 0/0, `--sim` senza crash (AI viva, navmesh ok). Smoke
+  manuale editor: ruotare un cover, scalare una danger/post col gizmo.
+
+## 2026-07-20 (16) — Droide Tattico: singolo obiettivo vivente nelle retrovie (ADR-024 v1, doc 32)
+
+Su chiarimento dell'utente, il comandante diventa ciò che è davvero: **uno per mappa**, autorità
+strategica che **sta nelle retrovie e si difende soltanto**, non una truppa. Risolve i due problemi
+del playtest ("ce ne sono molti" + "avanza in prima linea").
+- **Singleton per mappa**: nuovo campo `MapDef.commander { unit, x, z }` (`CommanderSpawnDef`) +
+  loader (DefinitionRegistry) + gate (ContentValidation: risolve, porta l'ability `command`, e
+  **avvisa** se un comandante finisce in `enemy_types`). ConquestMode ne spawna **uno solo** alla
+  posizione autorata. Tolto `Tactical Droid` da `firebase.enemy_types`, aggiunto `firebase.commander`
+  (retrovie, `z=-18`). **Non rispawna**: nuovo flag `RespawnEntry.respawns=false` → non entra in
+  `m_trackedUnits` (come i bersagli strategici), così resta davvero uno per partita.
+- **Retrovie / autodifesa**: spawna **stationary** → AiSystem non lo muove mai (ogni ramo di
+  movimento è sotto `!ai->stationary`), ma fronteggia e spara a chi vede. Usa il profilo AI autorato
+  dall'utente (`Tactical Droid`: aggression 0, cover 1.0). Leva-dati: `sight_range` per limitarlo
+  alle minacce vicine.
+- **Data-loss check**: il MapEditor salva via `saveJsonRMW` (ADR-010) → il nuovo campo `commander`
+  **sopravvive** anche se l'editor non ha ancora UI per piazzarlo (authoring JSON a mano per ora).
+- **Verificato**: build 0/0, `--validate` 0/0, `--sim` → **esattamente 1** `class=Tactical Droid`
+  (prima erano molti), 0 crash. Smoke manuale: comandante fermo nelle retrovie + convergenza droidi
+  + messaggio alla morte.
+- Base dichiarata del futuro **sistema di gradi/ufficiali** (il Droide Tattico resta l'autorità
+  strategica; gli ufficiali gestiranno le truppe) — [[command-rank-system]].
+
+## 2026-07-20 (15) — Droide Tattico: COMANDANTE nemico, non aura (ADR-024 riscritto, doc 32)
+
+Su chiarimento dell'utente, il Droide Tattico è ridefinito: **non un buff**, ma lo **stratega** dei
+droidi — la **controparte** del comando del giocatore. Sostituisce la bozza-aura del giro (14), mai
+committata. Base **v0** (semplice, espandibile); gradi/strati/entità-a-sé sono futuro (doc 32).
+- **Concetto**: il comandante osserva la situazione (stato partita, metadata) e **dirige i droidi**;
+  come io do ordini ai cloni, lui ne dà ai droidi. Nascosto/protetto (obiettivo di design), ucciderlo
+  **rompe il coordinamento** — conseguenza come la torre comunicazioni.
+- **Meccanica**: ability `type "command"` → `CommanderComponent` (marker). Nuova mailbox
+  `World::enemyCommand` (controparte di `squadOrder`): se ≥1 comandante di team 2 è **vivo**, AiSystem
+  calcola il **focus** = command post non-separatista più vicino al comandante e lo pubblica. I droidi
+  in **pattuglia** convergono sul focus (movimento; il combattimento resta autonomo). Comandante morto
+  → direttiva spenta, feed "i droidi perdono coordinamento", ritorno alla pattuglia.
+- **Non** piega il `SquadSystem` (solo-giocatore) né inventa un sistema parallelo: riusa mailbox +
+  pipeline abilità→componente. Il calcolo è nel precompute di AiSystem; da estrarre in uno
+  `StrategicAiSystem` quando cresce (§5.3, doc 32 Out of Scope).
+- **Refactor**: `AuraComponent`→`CommanderComponent` (rename pulito di storage/accessor/IMPL);
+  `command_aura`→`command` (Definitions, BalanceEditor, ConquestMode); ability `Tactical Aura`
+  eliminata, creata `Tactical Command`. La classe `Tactical Droid` resta (corpo B1, tinta dorata,
+  hp_mult 1.5), ora con ability `Tactical Command`.
+- **Limiti v0 (ADR-024/doc 32)**: combatte ancora col profilo B1 invece di stare nelle retrovie
+  (KI #58, dati); un solo tipo di direttiva; entità a sé e gradi = futuro.
+- **Verificato**: build 0/0, `--validate` 0/0, `--sim` senza crash (`class=Tactical Droid` →
+  `unit=B1 Battle Droid`). Smoke manuale: convergenza droidi sul focus + messaggio alla morte.
+
+## 2026-07-19 (13) — Asse B (feel): flash di danno + cornice a vita bassa
+
+Completa il bundle di feedback di combattimento (dopo l'indicatore direzionale, giro 11):
+- **Flash rosso ai bordi** quando il giocatore è colpito (triggato da `addDamageIndicator`, sfuma
+  in ~0.3s) → riscontro immediato di "sei stato colpito".
+- **Cornice rossa costante a vita bassa** (< 28% HP, intensità crescente al calare degli HP) → stato
+  di pericolo leggibile senza guardare la barra. Serve la **vulnerabilità** (GDD 3.1).
+- 4 bande piene ai bordi in `Ui2D` (niente gradiente → ADR-003 intatto); intensità = max fra flash e
+  vita-bassa. Solo in Playing.
+- **Verificato**: build 0/0, `--validate` 0/0. Resa da smoke manuale (farsi colpire / scendere di HP).
+
+## 2026-07-19 (12) — Fix post-ADR-023: sniper spawnabile, tinte per classe, orientamento sandbox
+
+Tre cose emerse provando (feedback utente):
+- **Clone Sniper (marksman) non compariva** in sandbox: la classe non aveva `base_entity` → non
+  istanziabile. Aggiunto `base_entity: "Clone Trooper"` → ora spawna (arma DC-15X).
+- **Classi indistinguibili (stesso colore)**: `ClassDef` guadagna `colorMult` (tinta che MOLTIPLICA il
+  colore del corpo, default {1,1,1}); applicata in `classres::effectiveUnit` → vale sia in gioco sia
+  in sandbox. Tinte iniziali: Heavy ambré, Sniper verdino, B1 Heavy rossastro. Editabile nel
+  ClassEditor (ColorEdit3). `effectiveUnit` ora copia SEMPRE l'entità effettiva (così l'overlay
+  abilità+tinta vale anche per un'entità-con-classe, non solo per una classe-come-unità).
+- **Manichini sandbox orientati male** (clone e droidi guardavano la stessa direzione): erano statici a
+  ry=0. Ora ogni team guarda verso il nemico (facing dai `dirZ`, convenzione `ry=atan2(dx,dz)` gradi
+  come AiSystem). In gioco non serviva (l'AI li gira).
+- **Verificato**: build 0/0, `--validate` 0/0. Visuali (sniper, tinte, orientamento) da smoke manuale.
+
+## 2026-07-19 (11) — Consolidamento asse B (feel): indicatore di danno direzionale
+
+Primo slice dell'asse **B (feel e feedback del combattimento)** del piano di consolidamento (doc 31),
+scelto perché serve il criterio "feel" della milestone e la sensazione di **vulnerabilità** (GDD 3.1):
+il gioco dava feedback sui colpi INFLITTI (hitmarker) ma non su quelli **subiti** — non sapevi da dove
+ti sparavano.
+
+- **CombatSystem**: quando un proiettile ferisce il GIOCATORE (`eid == world.playerEntity`), registra
+  la direzione MONDO della **sorgente** (opposta al moto del proiettile) nella mailbox
+  `combatFeedback` (`playerDamaged` + `hitDirX/Z`).
+- **HUD**: `addDamageIndicator(worldDir)` accumula indicatori sfumanti (~1.2s, cap 8); il render
+  proietta ogni direzione rispetto alla **direzione di vista** (`setViewDir`, ogni frame) → un blocco
+  rosso attorno al mirino nella direzione della sorgente (davanti = alto, dietro = basso), che ruota
+  con la camera. Tutto 2D in `Ui2D` (ADR-003 intatto).
+- **Verificato**: build 0/0 (engine+editor), `--validate` 0/0, `--sim` nessun crash. Il **rendering**
+  (farsi sparare e vedere l'indicatore) resta da smoke manuale — e verifica il lato sinistra/destra:
+  se risultasse specchiato, è un cambio di segno di `side` (cross product) in Hud.cpp.
+
+## 2026-07-19 (10) — Entità = corpo, Classe = professione istanziabile (ADR-023, con migrazione)
+
+Raffinazione architetturale del class system chiesta dall'utente: un'**entità** è un **corpo** reale
+(usata quando il modello è davvero diverso: B1/B2/Droideka); una **classe** è una **professione** sullo
+stesso corpo (armi/abilità/gadget + moltiplicatori di stat). Heavy/Sniper/Medic = un corpo + classi,
+non entità. Prima era l'entità a referenziare una classe → variante = seconda entità (duplicazione).
+
+- **`ClassDef`** guadagna `baseEntityId` (il corpo) + `hpMult`/`speedMult`/`damageMult` (default 1.0).
+- **Risoluzione**: `ConquestMode::effectiveUnit` mappa un id-roster (entità O classe con base_entity)
+  sull'**entità effettiva** (corpo + `classId` sovrapposto) → classres/WeaponAttach/stat funzionano
+  invariati; `resolveUnitArchetype` applica i moltiplicatori. I **roster** (`ally_types`/`enemy_types`)
+  possono ora referenziare **classi** come tipo-unità.
+- **Migrazione** (dati): `Heavy Clone Trooper`→classe `Heavy Trooper` (corpo `Clone Trooper`, arma Z-6,
+  abilità Shield/Combat Roll, mult 1.0); `B1 Heavy Battle Droid`(entità)→classe omonima (corpo `B1
+  Battle Droid`, ai `B1 Heavy Droid`, hp_mult 1.125 = ex hp 90/80); entità ridondanti **eliminate**;
+  firebase/outpost roster resi espliciti (base + heavy come classi).
+- **Gate (ADR-018)** esteso: un id-roster deve risolvere come entità o classe-con-corpo; `base_entity`
+  deve esistere; moltiplicatori > 0. **ClassEditor**: dropdown corpo + slider moltiplicatori (RMW).
+- **Verificato**: build 0/0 (engine+editor), `--validate` 0/0, `--sim`+telemetria → il Heavy B1
+  risolve `unit=B1 Battle Droid` (corpo) + `class=B1 Heavy Battle Droid` → `ai=B1 Heavy Droid`,
+  `weapon=E-5C`. Il rendering/gameplay resta da smoke manuale. La metà giocatore (doc 27) non toccata.
+- **Sandbox — FATTO stesso giorno**: i manichini spawnano ora sia le ENTITÀ (corpi) sia le CLASSI
+  istanziabili (con base_entity), instradate al team giusto dal corpo; `spawnDummy` risolve via
+  `classres::effectiveUnit` (spostata in ClassResolve, condivisa con ConquestMode → una sola regola,
+  e via lo spam di `getClass` su cerr). Verificato: `--sandbox` carica i modelli Z-6/E-5C → gli heavy
+  (classi) compaiono. `effectiveUnit` sovrappone anche le abilità della classe sul corpo.
+
+## 2026-07-19 (9) — Milestone formalizzata (doc 31) + zoom in mira per-arma
+
+- **Piano di consolidamento formalizzato**: nuovo **31_ConsolidationMilestone.md** (punto da
+  raggiungere = *Vertical Slice v1* con 6 criteri di accettazione; assi di consolidamento A–F; unico
+  codice nuovo = Droide Tattico; progressione/meta rimandati). Puntatore "DIREZIONE ATTIVA" in cima a
+  06_Todo. Deriva da studio completo di Vision/GDD/Bridge/CurrentState.
+- **Zoom in mira per-arma** (`WeaponDef.adsFov`): prima l'ADS usava un FOV fisso (35°) per tutte le
+  armi; ora è per-arma e autorabile. Catena: `WeaponDef.adsFov` (default 35 → invariato) → loader
+  `ads_fov` + gate campi-fantasma → `Weapon.adsFov` via `weaponFromDef` → `PlayerController` usa
+  `weapon().adsFov` in mira → WeaponEditor slider "Zoom in mira / FOV" (RMW, ADR-010). Basso = più
+  zoom (es. sniper ~15). Build 0/0, `--validate` 0/0. Reso in mira da smoke manuale.
+
 ## 2026-07-19 (8) — Quattro piccoli fix (hitbox orfane, back button, preset)
 
 Serie di rifiniture segnalate dall'utente:

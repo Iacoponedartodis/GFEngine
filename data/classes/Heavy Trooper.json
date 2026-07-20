@@ -3,5 +3,18 @@
     "name": "Heavy Clone Trooper",
     "primary_weapon": "Z-6 Rotary Blaster",
     "role": "support",
-    "secondary_weapon": "T-21 Heavy Blaster"
+    "secondary_weapon": "T-21 Heavy Blaster",
+    "base_entity": "Clone Trooper",
+    "abilities": [
+        "Shield",
+        "Combat Roll"
+    ],
+    "hp_mult": 1.0,
+    "speed_mult": 1.0,
+    "damage_mult": 1.0,
+    "color_mult": [
+        1.0,
+        0.82,
+        0.62
+    ]
 }

@@ -1,8 +1,11 @@
 # 18 — AI Map Consumption: l'AI usa i Map Metadata (Implementato)
 
-Status: **Implementato (scope 1-4)** — 2026-07-10. Le voci in Out of Scope restano
-pianificate (pose alle coperture → Todo #24; route multi-segmento; pathfinding).
-Template come 14/15/16/17.
+Status: **Implementato (scope 1-4)** — 2026-07-10. Template come 14/15/16/17.
+**Aggiornamenti successivi:** il **pathfinding** (Out of Scope originale) è stato implementato
+(Recast/Detour, ADR-017/doc 22): il navmesh aggira gli ostacoli e marca DANGER/COVER come aree
+semantiche. Dal 2026-07-20 (ADR-025) la scelta della copertura vive nel **World Intelligence Layer**
+(`mini::worldintel`, doc 33) invece che in una static di AiSystem; la repulsione danger manuale è
+solo fallback senza navmesh. Le pose alle coperture restano bloccate (animazioni).
 Chiude il cerchio tra 15_MapMetadata (dati, implementato) e 16_AiBehavior
 (comportamento tattico, implementato): questo documento definisce il PRIMO
 consumo runtime dei metadata, in forma minima e verificabile.

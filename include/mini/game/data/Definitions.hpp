@@ -38,7 +38,7 @@ struct AbilityDef
 {
     std::string id;
     std::string name;
-    std::string type;    // "shield" | "roll" | "melee" | "jetpack" | "missile" | "command_aura"
+    std::string type;    // "shield" | "roll" | "melee" | "jetpack" | "missile" | "command"
     float param1   = 0.0f;   // es. shield_hp, roll_speed, melee_range
     float param2   = 0.0f;   // es. regen_rate, roll_duration
     float param3   = 0.0f;   // es. regen_delay, cooldown
@@ -64,6 +64,11 @@ struct WeaponDef
     float overheatPenalty     = 2.0f;
     float effectiveRange      = 20.0f;
     float minRange            = 0.0f;
+
+    // Zoom in mira (ADS): FOV della camera quando si mira (gradi). Più BASSO =
+    // più zoom. Default 35 = la vecchia costante fissa `ADS_FOV` → armi esistenti
+    // invariate; autorabile per-arma nel Weapon Editor (es. sniper ~15).
+    float adsFov              = 35.0f;
 
     // Precisione: 0=sempre al centro, 1=massima dispersione
     // Rappresenta il raggio di dispersione base (in gradi o unità angolari)
@@ -272,11 +277,29 @@ struct VehicleSpawnDef
 
 // Posizione + direzione da cui un'AI può coprirsi e sparare.
 // height distingue copertura bassa (peek-over) da alta (peek-around).
+// Cover Intelligence (ADR-026): protection/canShoot rendono la copertura un dato
+// tattico — l'AI sceglie in base a QUANTO ripara e se può sparare, non solo alla
+// vicinanza. Additivi: default = comportamento pre-ADR-026.
 struct CoverPointDef
 {
     float x = 0, y = 0, z = 0;
-    float facingDeg = 0.0f;   // direzione del fronte di copertura (gradi, yaw)
-    float height    = 1.0f;   // altezza della copertura (m)
+    float facingDeg  = 0.0f;   // direzione del fronte di copertura (gradi, yaw)
+    float height     = 1.0f;   // altezza della copertura (m)
+    float protection = 0.5f;   // quanto ripara (0..1) — pesa la scelta dell'AI
+    bool  canShoot   = true;   // si può sparare/peekare da qui (vs solo nascondersi)
+};
+
+// Tactical Point (doc 33 Fase 2, ADR-027): posizione tatticamente rilevante che
+// NON è una copertura — punto sopraelevato/dominante, difensivo, strettoia,
+// osservazione. Dato autorato a mano (mappe handcrafted); consumo da Squad/settori
+// (Fase 4/5). Additivo: array vuoto = zero impatto.
+struct TacticalPointDef
+{
+    float x = 0, y = 0, z = 0;
+    float facingDeg  = 0.0f;   // direzione d'interesse (vantaggio/osservazione)
+    std::string type = "vantage"; // vantage | defensive | chokepoint | observation
+    float importance = 0.5f;   // 0..1, priorità tattica
+    float radius     = 4.0f;   // area d'influenza (difensiva/chokepoint)
 };
 
 // Percorso di pattuglia con nome (riusabile da più squadre in futuro).
@@ -292,6 +315,17 @@ struct DangerZoneDef
     float x = 0, y = 0, z = 0;
     float radius      = 4.0f;
     float dangerLevel = 0.5f;   // 0..1, semantica del consumatore AI
+};
+
+// ── Comandante di mappa (Droide Tattico serie T — ADR-024, doc 32) ──────────
+// UNO per mappa: l'autorità strategica separatista. NON è un tipo del roster
+// (`enemy_types` ne spawnerebbe molti come truppa): è un'unità SINGOLA, piazzata
+// in una posizione protetta nelle retrovie, che dirige i droidi (World::enemyCommand)
+// e si difende soltanto (spawna stationary). `unit` vuoto = nessun comandante.
+struct CommanderSpawnDef
+{
+    std::string unit;            // id classe/entità (di norma una classe con ability "command")
+    float x = 0.0f, z = 0.0f;    // posizione strategica nelle retrovie (XZ)
 };
 
 // ── MapDef ────────────────────────────────────────────────────────────────
@@ -320,9 +354,13 @@ struct MapDef
     std::vector<CoverPointDef>  coverPoints;
     std::vector<PatrolRouteDef> patrolRoutes;
     std::vector<DangerZoneDef>  dangerZones;
+    std::vector<TacticalPointDef> tacticalPoints;   // doc 33 Fase 2, ADR-027
 
     // Veicoli in mappa (19_Vehicles, Fase A) — opzionale
     std::vector<VehicleSpawnDef> vehicleSpawns;
+
+    // Comandante strategico (ADR-024, doc 32) — opzionale, uno per mappa
+    CommanderSpawnDef commander;
 };
 
 // ── Obiettivi e missioni (25_ObjectivesAndMissions, ADR-019) ─────────────
@@ -477,6 +515,22 @@ struct ClassDef
     // nessun sistema: diventerà un enum quando il SquadSystem assegnerà i task
     // per ruolo (ADR-022).
     std::string role;
+
+    // ── Corpo + moltiplicatori (ADR-023) ─────────────────────────────────────
+    // `baseEntityId` = l'ENTITÀ-corpo da cui la classe prende modello, hitbox,
+    // stat base, attach/metadata. Con questo, una classe è istanziabile da sola
+    // (è un tipo-unità nei roster): Heavy/Sniper/Medic = un corpo clone + classe,
+    // non entità separate. Vuoto = classe usata solo "sopra" un'entità esistente
+    // (modello legacy, additivo).
+    std::string baseEntityId;
+    // Moltiplicatori applicati alle stat BASE del corpo (default 1.0 = invariato).
+    float hpMult     = 1.0f;
+    float speedMult  = 1.0f;
+    float damageMult = 1.0f;
+    // Tinta di colore della classe: MOLTIPLICA il colore del corpo (default
+    // {1,1,1} = invariato). Serve a distinguere a colpo d'occhio le professioni
+    // che condividono lo stesso corpo (es. Sniper verdino, Heavy ambrato).
+    std::array<float,3> colorMult = {1.0f, 1.0f, 1.0f};
 };
 
 // ── PlayerDef ─────────────────────────────────────────────────────────────

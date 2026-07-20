@@ -25,6 +25,9 @@ struct RespawnEntry
     float pax = 0, paz = 0, pbx = 0, pbz = 0;
     float patSpd = 2.5f, interval = 2.2f, range = 18.0f;
     bool  stationary = false;
+    // false = unità NON tracciata per il respawn (obiettivo vivente, es. il
+    // comandante: uno per mappa, ADR-024/doc 32). Come i bersagli strategici.
+    bool  respawns   = true;
     std::string hitboxProfileId;
 
     // Stats proiettile dall'arma primaria (WeaponDef)

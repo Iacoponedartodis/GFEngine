@@ -411,6 +411,48 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         }
     }
 
+    // Un archetipo di roster (ADR-023) è valido se risolve come ENTITÀ o come
+    // CLASSE con `base_entity` esistente (classe istanziabile come tipo-unità).
+    auto checkRosterUnit = [&](const std::string& tid, bool ally,
+                               const std::string& f, const char* what)
+    {
+        if (tid.empty()) return;
+        const auto& table = ally ? reg.allies() : reg.enemies();
+        if (table.count(tid)) return;                       // entità
+        auto ci = reg.classes().find(tid);
+        if (ci != reg.classes().end())
+        {
+            const ClassDef& c = ci->second;
+            if (c.baseEntityId.empty())
+                add(d, L::Error, "Content", f,
+                    std::string(what) + " '" + tid + "' e' una classe SENZA base_entity "
+                    "→ non istanziabile come unita'",
+                    "Aggiungi base_entity alla classe (ADR-023) o referenzia un'entita'.");
+            else if (!table.count(c.baseEntityId))
+                add(d, L::Error, "Content", f,
+                    std::string(what) + " '" + tid + "': la classe punta al corpo '"
+                    + c.baseEntityId + "' inesistente fra gli " + (ally ? "alleati" : "nemici"),
+                    "Imposta base_entity a un'entita' esistente.");
+            return;                                          // classe + corpo → ok
+        }
+        checkRef(d, table, tid, f, what);                   // né entità né classe
+    };
+
+    // Una classe è "comandante" se porta un'ability di tipo "command" (ADR-024).
+    // Serve a due controlli: il comandante di mappa deve esserlo, e NON deve finire
+    // nel roster (spawnerebbe in molti — il bug che il campo `commander` evita).
+    auto classIsCommander = [&](const std::string& id) -> bool
+    {
+        auto ci = reg.classes().find(id);
+        if (ci == reg.classes().end()) return false;
+        for (const auto& abId : ci->second.abilityIds)
+        {
+            const AbilityDef* ab = reg.getAbility(abId);
+            if (ab && ab->type == "command") return true;
+        }
+        return false;
+    };
+
     // ── Mappe ─────────────────────────────────────────────────────────────
     for (const auto& [id, m] : reg.maps())
     {
@@ -420,9 +462,27 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
                 "Aggiungi almeno un box 'floor'. Senza geometria non esiste navmesh "
                 "(ADR-017) e le unita' cadono nel vuoto.");
         for (const auto& t : m.enemyTypes)
-            checkRef(d, reg.enemies(), t, f, "archetipo nemico");
+        {
+            checkRosterUnit(t, false, f, "archetipo nemico");
+            if (classIsCommander(t))
+                add(d, L::Warn, "Content", f,
+                    "'" + t + "' e' un comandante (ability 'command') nel roster enemy_types "
+                    "→ spawnerebbe in molti come truppa",
+                    "Spostalo nel campo 'commander' della mappa (uno per mappa, ADR-024/doc 32).");
+        }
         for (const auto& t : m.allyTypes)
-            checkRef(d, reg.allies(), t, f, "archetipo alleato");
+            checkRosterUnit(t, true, f, "archetipo alleato");
+        // Comandante strategico (ADR-024, doc 32): opzionale, ma se c'è deve
+        // risolvere ed essere davvero un comandante (altrimenti non dirige nulla).
+        if (!m.commander.unit.empty())
+        {
+            checkRosterUnit(m.commander.unit, false, f, "comandante");
+            if (!classIsCommander(m.commander.unit))
+                add(d, L::Warn, "Content", f,
+                    "il comandante '" + m.commander.unit + "' non ha un'ability di tipo "
+                    "'command' → non dirigera' i droidi",
+                    "Assegna alla classe un'ability 'command' (es. Tactical Command).");
+        }
         for (const auto& cp : m.commandPosts)
             if (cp.radius <= 0.0f)
                 add(d, L::Error, "Map", f,
@@ -498,6 +558,19 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         checkRef(d, reg.aiProfiles(), c.aiProfileId, f, "profilo AI");
         for (const auto& aid : c.abilityIds)
             checkRef(d, reg.abilities(), aid, f, "abilita'");
+        // ADR-023: se la classe porta un corpo (istanziabile come unità), il
+        // corpo deve esistere; i moltiplicatori > 0 (0/negativo = unità
+        // invisibile o inerte).
+        if (!c.baseEntityId.empty()
+            && !reg.allies().count(c.baseEntityId)
+            && !reg.enemies().count(c.baseEntityId))
+            add(d, L::Error, "Content", f,
+                "base_entity '" + c.baseEntityId + "' non esiste (ne' alleato ne' nemico)",
+                "Scegli un'entita'-corpo esistente dal dropdown, o lascia base_entity vuoto.");
+        if (c.hpMult <= 0.0f || c.speedMult <= 0.0f || c.damageMult <= 0.0f)
+            add(d, L::Error, "Content", f,
+                "moltiplicatore <= 0 (hp/speed/damage) → unita' invisibile o inerte",
+                "Usa valori > 0 (1.0 = corpo invariato).");
         if (c.primaryWeaponId == c.secondaryWeaponId && !c.primaryWeaponId.empty())
             add(d, L::Warn, "Content", f,
                 "arma primaria e secondaria sono la stessa",

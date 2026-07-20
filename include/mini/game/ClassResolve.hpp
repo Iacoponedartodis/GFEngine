@@ -68,4 +68,53 @@ inline std::string primaryWeaponId(const DefinitionRegistry& reg, const EnemyDef
 inline std::string aiProfileId(const DefinitionRegistry& reg, const EnemyDef& def)
 { return aiProfileId(reg, def.classId, def.aiProfileId); }
 
+// ── Entità EFFETTIVA da un id-roster (ADR-023) ────────────────────────────
+// Mappa un id (ENTITÀ-corpo O CLASSE con base_entity) sull'EnemyDef effettiva:
+// per una classe = il CORPO (baseEntityId) con `classId` e loadout della classe
+// SOVRAPPOSTI, così ogni consumatore (resolveUnitArchetype, WeaponAttach, i
+// manichini della sandbox) la tratta come una normale classe su un'entità — la
+// regola in UN posto solo, come per l'arma. `storage` regge la copia nel caso
+// classe; il ritorno vi punta. `classes().find` invece di getClass per non
+// stampare "non trovato" su ogni entità che non è una classe.
+inline const EnemyDef* effectiveUnit(const DefinitionRegistry& reg,
+                                     const std::string& unitId, bool ally,
+                                     EnemyDef& storage)
+{
+    const EnemyDef* base = nullptr;
+    std::string     effClassId;
+    // 1) unitId è una CLASSE con corpo? → il corpo + QUESTA classe (tipo-unità).
+    auto ci = reg.classes().find(unitId);
+    if (ci != reg.classes().end() && !ci->second.baseEntityId.empty())
+    {
+        base = ally ? reg.getAlly(ci->second.baseEntityId)
+                    : reg.getEnemy(ci->second.baseEntityId);
+        if (base) effClassId = ci->first;
+    }
+    // 2) altrimenti è un'ENTITÀ; la sua eventuale classe conta comunque.
+    if (!base)
+    {
+        base = ally ? reg.getAlly(unitId) : reg.getEnemy(unitId);
+        if (base) effClassId = base->classId;
+    }
+    if (!base) return nullptr;
+
+    // Copia sempre: così l'overlay della classe (abilità + TINTA di colore) vale
+    // sia per una classe-come-unità sia per un'entità-con-classe, e ogni
+    // consumatore (gioco e sandbox) vede la stessa variante.
+    storage = *base;
+    storage.classId = effClassId;
+    auto cit = reg.classes().find(effClassId);
+    if (cit != reg.classes().end())
+    {
+        const ClassDef& c = cit->second;
+        if (!c.abilityIds.empty()) storage.abilityIds = c.abilityIds;
+        for (int i = 0; i < 3; ++i)
+        {
+            const float v = storage.color[i] * c.colorMult[i];
+            storage.color[i] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        }
+    }
+    return &storage;
+}
+
 } // namespace mini::classres

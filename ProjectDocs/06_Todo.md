@@ -1,5 +1,41 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ⇒ DIREZIONE ATTIVA (2026-07-19): Milestone "Vertical Slice v1" → poi consolidamento
+Deciso dopo studio completo di Vision/GDD/Bridge/CurrentState: **31_ConsolidationMilestone.md**.
+Siamo sul confine Fase 1 → Fase 2: i sistemi tattici (25+26) sono costruiti ma l'esperienza non è
+ancora *dimostrata*. Il punto da raggiungere è **una missione completa che prova il core loop**
+(squadra che conta + bestiario ≥3 ruoli tattici + obiettivi > kill + fronte mobile + briefing/debrief);
+poi si **consolida orizzontalmente** (authoring editor, feel combat, espressione AI, HUD/debrief,
+salute codice, validazione). Unico codice nuovo per arrivarci: il **Droide Tattico** (comandante)
+→ **✅ FATTO v1 2026-07-20 (ADR-024 riscritto, doc 32)**: ability `command` → `CommanderComponent`;
+`AiSystem` pubblica un focus strategico (`World::enemyCommand`) e i droidi vi convergono; ucciderlo
+rompe il coordinamento. **Uno per mappa** (campo `MapDef.commander`, non nel roster), spawnato
+**stationary** nelle retrovie (sta fermo, si difende soltanto). Resta come **dati/futuro** (non codice):
+ordini più ricchi, UI di piazzamento MapEditor, gerarchia gradi/ufficiali ([[command-rank-system]]),
+entità-a-sé (doc 32 Out of Scope).
+Rimandati esplicitamente: progressione (27), persistenza (28), meta (Fase 4/5). Vedi doc 31 per i
+criteri di accettazione e gli assi di consolidamento.
+
+**DIREZIONE (2026-07-20): prima la BASE del sistema tattico, poi rendere intelligente il Droide
+Tattico.** Direttiva utente: per far decidere bene AI/squadre/comandante servono metadata ricchi.
+Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici in un mondo intelligente"
+([[world-tactical-intelligence]]). Ogni fase = un ADR; NON tutto in una volta.
+- **✅ Fase 0 FATTA (ADR-025)**: query layer `mini::worldintel` (seam), doppia-verità danger risolta,
+  ruota/scala sui metadata (KI #60). Build/validate/sim OK.
+- **✅ Fase 1 FATTA (ADR-026)**: Cover Intelligence — `CoverPointDef` += protezione/canShoot,
+  `bestCoverToward` (scelta per protezione), editor slider/checkbox. Retrocompatibile.
+  (Auto-gen coperture RIMOSSA su feedback: mappe handcrafted → auto-gen de-scoped, doc 33 §6.)
+  Build/validate/sim OK.
+- **✅ Fase 2 FATTA (ADR-027)**: Tactical Points — `TacticalPointDef` (vantage/defensive/chokepoint/
+  observation + importanza/raggio/fronte), loader, `nearestTacticalPoint` (seam), editor completo
+  (lista/dropdown/slider/marker/gizmo). Authoring manuale. **Consumo = Fase 4/5**. + pulsanti gizmo
+  cliccabili (KI #60). Build/validate/sim OK.
+- **▶ Prossima: Fase 3 — Rete di navigazione tattica**: cablare i filtri per-ruolo del navmesh (già
+  pronti, doc 22); grafo tattico fra Tactical Points con semantica d'arco (esposizione/copertura/
+  avanzamento/ritirata/aggiramento); route con `purpose`; superare il limite 2-waypoint di AiComponent.
+- Poi: settori (4 — rende intelligente il comandante), Squad layer entrambi i team (5),
+  predisposizione simulazione (6).
+
 ## PROSSIMO SALTO — derivato da GDD + master plan (2026-07-15)
 
 Contesto: la **Fase 1 è essenzialmente completa** (05_CurrentState) e sopra ci sono già sistemi
@@ -411,8 +447,8 @@ R7. **Igiene data/**: `.bak` accumulati (uno per arma) — sono il paracadute AD
    all'avvio, log in telemetria.
 
 3. ~~AI: abilità + ruoli tattici~~ → FATTO 2026-07-10 (core, doc 16_AiBehavior);
-   prima abilità ATTIVA (Combat Roll) 2026-07-10 (23) — restano jetpack/missile/
-   command_aura sullo stesso binario:
+   prima abilità ATTIVA (Combat Roll) 2026-07-10 (23); ~~command~~ (comandante) → FATTO v0
+   2026-07-20 (ADR-024 riscritto, Droide Tattico). Restano jetpack/missile sullo stesso binario:
    aggression→distanza d'ingaggio, retreat_hp_threshold→disimpegno, peek/hide da
    cover_preference, flank_chance in Hunt; ability "shield" runtime (ShieldComponent,
    assorbimento + regen in CombatSystem). Resta (16_AiBehavior Out of Scope): abilità

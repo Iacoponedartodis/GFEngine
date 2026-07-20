@@ -710,6 +710,29 @@ void FreeCameraViewport::drawGizmoOverlay()
 {
     if (!m_gizmoEnabled) return;
 
+    // ── Barra strumenti CLICCABILE (Sposta/Ruota/Scala) ──────────────────
+    // Selezione del tool affidabile e scopribile, senza dipendere dalla
+    // scorciatoia da tastiera (che richiede viewport in hover + mouse libero).
+    // Ruota/Scala sono DISABILITATI se il target corrente non li supporta:
+    // un pulsante grigio dice a colpo d'occhio "questo elemento non lo permette".
+    {
+        ImGui::SetCursorScreenPos(ImVec2(m_imgMin.x + 8.0f, m_imgMin.y + 8.0f));
+        auto toolBtn = [&](const char* label, GizmoMode gm, bool enabled)
+        {
+            const bool active = (m_gizmoMode == gm);
+            if (!enabled) ImGui::BeginDisabled();
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.55f, 0.9f, 1.0f));
+            if (ImGui::Button(label)) m_gizmoMode = gm;
+            if (active) ImGui::PopStyleColor();
+            if (!enabled) ImGui::EndDisabled();
+        };
+        toolBtn("Sposta", GizmoMode::Translate, true);
+        ImGui::SameLine();
+        toolBtn("Ruota", GizmoMode::Rotate, m_gizmoCanRotate);
+        ImGui::SameLine();
+        toolBtn("Scala", GizmoMode::Scale, m_gizmoCanScale);
+    }
+
     // ── Scorciatoie modalità (solo viewport hover, mouse libero) ─────────
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !m_mouseCapture)
     {

@@ -92,6 +92,12 @@ public:
     ShieldComponent*       getShield(EntityId e);
     const ShieldComponent* getShield(EntityId e) const;
 
+    // Comandante nemico (ability "command", Droide Tattico — ADR-024, doc 32)
+    void addCommander(EntityId e, const CommanderComponent& c);
+    [[nodiscard]] bool hasCommander(EntityId e) const;
+    CommanderComponent*       getCommander(EntityId e);
+    const CommanderComponent* getCommander(EntityId e) const;
+
     // Vehicle (19_Vehicles, Fase A)
     void addVehicle(EntityId e, const VehicleComponent& c);
     [[nodiscard]] bool hasVehicle(EntityId e) const;
@@ -122,7 +128,12 @@ public:
     {
         bool team1Hit  = false;   // un proiettile del team 1 ha colpito
         bool team1Kill = false;   // ...e ha eliminato il bersaglio
-        void reset() { team1Hit = false; team1Kill = false; }
+        // Danno SUBITO dal giocatore in questo tick: direzione MONDO (XZ) della
+        // SORGENTE (da dove è arrivato il colpo), per l'indicatore di danno
+        // direzionale (feel/vulnerabilità, GDD 3.1). Normalizzata.
+        bool  playerDamaged = false;
+        float hitDirX = 0.0f, hitDirZ = 1.0f;
+        void reset() { team1Hit = false; team1Kill = false; playerDamaged = false; }
     };
     CombatFeedback combatFeedback;
 
@@ -236,6 +247,23 @@ public:
     //    è ciò che tiene `ecs/` indipendente dal codice di gioco.
     SquadOrderRequest squadOrder;
 
+    // ── Comando nemico (ADR-024, doc 32): la CONTROPARTE del comando giocatore.
+    //    Un Droide Tattico (CommanderComponent) vivo di team 2 fa sì che AiSystem
+    //    calcoli un "focus" strategico (il command post non-separatista più vicino
+    //    al comandante) e lo pubblichi QUI; i droidi in pattuglia convergono sul
+    //    focus (movimento, non combattimento). Ricalcolata ogni tick da AiSystem:
+    //    nessun comandante vivo → `active=false` e i droidi tornano alla pattuglia.
+    //    `commanderAlive` serve solo a distinguere "nessun bersaglio" da "comandante
+    //    ucciso" per il messaggio-conseguenza. Vedi [[droide-tattico-concept]].
+    struct EnemyCommand
+    {
+        bool  active         = false;  // c'è un focus valido da seguire
+        bool  commanderAlive = false;  // ≥1 comandante di team 2 vivo (edge → feed)
+        float x = 0.0f, z = 0.0f;      // posizione del focus (XZ)
+        std::string label;             // etichetta del post-focus (diagnostica)
+    };
+    EnemyCommand enemyCommand;
+
 private:
     std::uint64_t m_tickCount    = 0;
     EntityId      m_nextEntityId = 1;
@@ -254,6 +282,7 @@ private:
     std::unordered_map<EntityId, ColliderComponent>     m_colliders;
     std::unordered_map<EntityId, HitboxComponent>      m_hitboxes;
     std::unordered_map<EntityId, ShieldComponent>       m_shields;
+    std::unordered_map<EntityId, CommanderComponent>    m_commanders;
     std::unordered_map<EntityId, VehicleComponent>      m_vehicles;
     std::unordered_map<EntityId, SquadComponent>        m_squads;
     std::unordered_map<EntityId, AbilityComponent>      m_abilities;

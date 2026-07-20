@@ -13,8 +13,9 @@ Loads all definitions from a data root. Loaders: `loadAbilities`, `loadWeapons`,
   (see 14_ClassSystem) — mirrors the existing loader pattern exactly, additive only.
 
 ## Schemas (`include/mini/game/data/Definitions.hpp`)
-- `WeaponDef`: damage, fireRate, bullet*, spread*, heat*, effectiveRange, meshPath,
-  projectileMeshPath, faction.
+- `WeaponDef`: damage, fireRate, bullet*, spread*, heat*, effectiveRange, `adsFov` (FOV in mira,
+  per-arma; basso = più zoom; default 35 = comportamento storico), meshPath, projectileMeshPath,
+  faction. `adsFov` consumato da `PlayerController` (ADS), autorabile nel WeaponEditor.
 - `EnemyDef` (enemies AND allies): faction, team, meshPath, texturePath, color, `meshRotX/Y`,
   `meshScale`, `footAttach[3]` (+`footY()`), aiProfileId, hitboxProfileId, weaponIds[],
   abilityIds[], hp/moveSpeed/damageScale, bulletColor.
@@ -31,9 +32,11 @@ Loads all definitions from a data root. Loaders: `loadAbilities`, `loadWeapons`,
   DANGER/COVER, ADR-017/doc 22). NB: `MapGeometryBox` runtime NON ha `type`/`label` (editor-only).
 - `MapGeometryBox`: x/y/z (center), ry, sx/sy/sz (full size), r/g/b, collider.
 - `AbilityDef`, `PlayerDef`.
-- **Planned addition (not yet implemented, see 14_ClassSystem):** `ClassDef`
-  (id, name, primaryWeaponId, secondaryWeaponId, abilityIds[], role) + optional
-  `PlayerDef.classId` reference.
+- `ClassDef` (14_ClassSystem, ADR-022/023): id, name, primaryWeaponId, secondaryWeaponId,
+  abilityIds[], aiProfileId, role, **`baseEntityId`** (il corpo: modello/hitbox/stat-base; con esso la
+  classe è un tipo-unità istanziabile) + moltiplicatori **`hpMult`/`speedMult`/`damageMult`** (ADR-023).
+  Entità = corpo; classe = professione sul corpo. Risoluzione in `ConquestMode::effectiveUnit` +
+  `resolveUnitArchetype`; authoring in ClassEditor.
 
 ## Game modes (`src/game/game_modes/`, dietro `IGameMode` + factory ADR-008)
 Interfaccia `IGameMode`: `start()`, `update(World,dt)`, `outcome(World)` (Win/Lose/Ongoing —
@@ -95,6 +98,22 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
 - **Shield runtime** (`ShieldComponent`, storage in World): assorbe danno prima degli
   HP in CombatSystem, regen dopo `regenDelay`; assegnato allo spawn da `abilities[]`
   con AbilityDef `type=="shield"` (param1/2/3 = hp/regen/delay). Doc 16.
+- **World Intelligence Layer** (`mini::worldintel`, `game/ai/WorldIntel`; ADR-025, doc 33): il seam
+  UNICO di query tattiche sulla mappa (solo dati+query pure). Oggi `bestCoverToward` (scelta cover per
+  protezione, ADR-026; usato da AiSystem) + `dangerAt` + `nearestTacticalPoint` (Tactical Points,
+  ADR-027; seam non ancora consumato). `MapDef.tacticalPoints` (vantage/defensive/chokepoint/
+  observation) autorati nel MapEditor. Crescerà con rete
+  tattica e settori (doc 33, a fasi). Scansione lineare per ora; indice spaziale aggiungibile senza
+  toccare i chiamanti.
+- **Comando nemico** (`CommanderComponent` marker + mailbox `World::enemyCommand`; ADR-024, doc 32):
+  controparte del comando giocatore. **Uno per mappa**: campo `MapDef.commander{unit,x,z}`
+  (`CommanderSpawnDef`, loader in DefinitionRegistry, gate in ContentValidation); ConquestMode ne
+  spawna **uno solo**, **stationary**, nelle retrovie (non nel roster). Ability `type=="command"` →
+  `CommanderComponent`. Ogni tick `AiSystem`: se il comandante di **team 2** è **vivo**, calcola il
+  **focus** (command post owner≠2 più vicino) e lo pubblica; i droidi in **Patrol** convergono sul
+  focus (movimento, non combattimento). Comandante morto → `active=false`, feed-conseguenza, ritorno
+  alla pattuglia. `stationary` = "sta nelle retrovie" (AiSystem non muove chi lo è). v1: calcolo nel
+  precompute di AiSystem, da estrarre in `StrategicAiSystem` quando cresce.
 - **Comportamento tattico AI dal profilo**: aggression→distanza d'ingaggio,
   retreat_hp_threshold→disimpegno, peek/hide (cover_preference), flank in Hunt,
   Search con timeout→Patrol, ricerca attorno alla lastKnown. Doc 16 + fix in 07 (4).

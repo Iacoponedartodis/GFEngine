@@ -51,8 +51,9 @@ Con lo shield passivo validato in gioco, prima abilità con decisione d'uso:
   evading È il momento "sotto pressione" che il comportamento già calcola.
 
 ## Out of Scope (per ora)
-- Altre abilità attive (jetpack, missile, command_aura): arriveranno sullo stesso
-  binario (AbilityComponent + trigger dedicati), una per volta.
+- Altre abilità attive (jetpack, missile): arriveranno sullo stesso binario
+  (AbilityComponent + trigger dedicati), una per volta. (`command` → FATTO v0:
+  comandante nemico, ADR-024/doc 32, non un'ability "attiva" ma un marker.)
 - Vera copertura geometrica (cover point / nav data): dipende da 15_MapMetadata.
 - Ruoli come macro-preset (`role` del profilo resta descrittivo: il comportamento emerge
   dai parametri, non da branch per ruolo — evita hardcoding di archetipi).

@@ -37,6 +37,7 @@ struct Weapon
     float sprintSpread = 0.14f;   // in corsa
     float jumpSpread   = 0.20f;   // in aria
     float effectiveRange = 20.0f; // oltre ~2x il colpo si esaurisce
+    float adsFov       = 35.0f;   // FOV in mira (basso = più zoom); da WeaponDef
 
     // ── Sistema calore ───────────────────────────────────────────────
     float heatPerShot     = 0.12f;   // calore aggiunto per colpo (0-1)

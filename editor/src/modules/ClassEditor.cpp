@@ -77,6 +77,14 @@ void ClassEditor::save(const Entry& e)
         else j["secondary_weapon"] = e.def.secondaryWeaponId;
         if (e.def.abilityIds.empty()) j.erase("abilities");
         else j["abilities"] = e.def.abilityIds;
+        // ADR-023: corpo + moltiplicatori. base_entity vuoto = classe non
+        // istanziabile da sola (si toglie dal file per non lasciare rumore).
+        if (e.def.baseEntityId.empty()) j.erase("base_entity");
+        else j["base_entity"] = e.def.baseEntityId;
+        j["hp_mult"]     = e.def.hpMult;
+        j["speed_mult"]  = e.def.speedMult;
+        j["damage_mult"] = e.def.damageMult;
+        j["color_mult"]  = { e.def.colorMult[0], e.def.colorMult[1], e.def.colorMult[2] };
         return true;
     });
     m_status = ok ? ("Salvato: " + e.id) : ("ERRORE salvataggio: " + e.id);
@@ -182,6 +190,26 @@ void ClassEditor::drawProps()
     ImGui::TextDisabled("Vale per i CLONI ALLEATI che referenziano questa classe: e' cio' che\n"
                         "rende una squadra Trooper+Heavy+Recon diversa da una monoclasse\n"
                         "(GDD 12.3). Vuoto = l'unita' tiene il proprio profilo.");
+
+    // ── Corpo + moltiplicatori (ADR-023) ─────────────────────────────
+    ImGui::SeparatorText("Corpo e stat (ADR-023)");
+    std::vector<std::string> beIds, beLabels;
+    for (const auto& [bid, a] : m_registry.allies())
+    { beIds.push_back(bid); beLabels.push_back(bid + "  [alleato]"); (void)a; }
+    for (const auto& [bid, a] : m_registry.enemies())
+    { beIds.push_back(bid); beLabels.push_back(bid + "  [nemico]"); (void)a; }
+    idCombo("Corpo (base_entity)", beIds, beLabels, d.baseEntityId, /*allowNone=*/true);
+    ImGui::TextDisabled("Modello, hitbox e stat base vengono da qui. Impostato = la classe\n"
+                        "e' un TIPO-UNITA' (i roster la referenziano). Vuoto = solo 'sopra'\n"
+                        "un'entita' esistente (modello legacy).");
+    editor::ui::sliderRow("HP x",        d.hpMult,     0.1f, 3.0f, 0.01f, "%.2f", 100.0f);
+    editor::ui::sliderRow("Velocita' x", d.speedMult,  0.1f, 3.0f, 0.01f, "%.2f", 100.0f);
+    editor::ui::sliderRow("Danno x",     d.damageMult, 0.1f, 3.0f, 0.01f, "%.2f", 100.0f);
+    ImGui::TextDisabled("Moltiplicatori sulle stat BASE del corpo (1.0 = invariato).");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::ColorEdit3("Tinta colore (x sul corpo)", d.colorMult.data());
+    ImGui::TextDisabled("Distingue a colpo d'occhio le professioni che condividono il\n"
+                        "corpo: MOLTIPLICA il colore base (bianco = invariato).");
 
     // ── Armi: dropdown dal registry (mai testo libero) ────────────────
     ImGui::SeparatorText("Loadout");

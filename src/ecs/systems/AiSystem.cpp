@@ -3,6 +3,7 @@
 #include "mini/ecs/World.hpp"
 #include "mini/core/Telemetry.hpp"
 #include "mini/game/data/Definitions.hpp"   // MapDef (18_AiMapConsumption)
+#include "mini/game/ai/WorldIntel.hpp"       // World Intelligence query layer (ADR-025)
 #include "mini/game/nav/NavManager.hpp"      // crowd/pathfinding (ADR-017 Phase B)
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
@@ -93,33 +94,8 @@ static void enterHunt(AiComponent& ai, const TransformComponent& et)
 
 // ── Consumo Map Metadata (18_AiMapConsumption) ───────────────────────────
 
-// Cerca il cover point più vicino (≤ maxDist) il cui fronte guarda verso il
-// nemico (dot(facing, versoNemico) > 0). Ritorna false se non ce n'è.
-static bool pickCover(const MapDef* map, float x, float z,
-                      float enemyX, float enemyZ,
-                      float& outX, float& outZ)
-{
-    if (!map || map->coverPoints.empty()) return false;
-    const float maxDist2 = 12.0f * 12.0f;
-    float best2 = maxDist2;
-    bool found = false;
-    for (const auto& c : map->coverPoints)
-    {
-        const float dx = c.x - x, dz = c.z - z;
-        const float d2 = dx*dx + dz*dz;
-        if (d2 >= best2) continue;
-        // Il fronte della copertura deve guardare verso il nemico
-        float ex = enemyX - c.x, ez = enemyZ - c.z;
-        const float el = std::sqrt(ex*ex + ez*ez);
-        if (el < 0.5f) continue;
-        ex /= el; ez /= el;
-        const float fr = c.facingDeg * (PI / 180.0f);
-        const float fx = std::sin(fr), fz = std::cos(fr);
-        if (fx*ex + fz*ez <= 0.15f) continue;  // copre nella direzione sbagliata
-        best2 = d2; outX = c.x; outZ = c.z; found = true;
-    }
-    return found;
-}
+// La scelta della copertura vive nel World Intelligence Layer
+// (`worldintel::bestCoverToward`, ADR-025/026) — seam unico, scelta per protezione.
 
 // Repulsione dalle danger zone: piega il vettore di movimento lontano dal
 // centro delle aree pericolose (pesata su dangerLevel e vicinanza). Solo
@@ -158,6 +134,56 @@ void AiSystem::update(World& world, float dt)
     ZoneScoped;   // ADR-015: AI update loop
     const std::vector<EntityId> snap = world.getEntities();
     const std::uint64_t tick = world.getTickCount();   // time-slicing (Fase 4)
+
+    // ── Comando nemico (Droide Tattico, ADR-024 / doc 32) ────────────────────
+    // Controparte del comando del giocatore: un comandante di team 2 VIVO fa
+    // convergere i droidi sul command post non-separatista più vicino a lui.
+    // Precalcolo una volta per tick. Nessun comandante vivo → direttiva spenta e
+    // i droidi tornano alla pattuglia; la transizione vivo→morto emette la
+    // conseguenza leggibile (feed), come la torre comunicazioni.
+    {
+        float cmdrX = 0.0f, cmdrZ = 0.0f;
+        bool  aliveCmdr = false;
+        for (EntityId e : snap)
+        {
+            if (!world.hasCommander(e)) continue;
+            const auto* tm = world.getTeam(e);
+            const auto* t  = world.getTransform(e);
+            if (!tm || tm->teamId != 2 || !t) continue;
+            const auto* h = world.getHealth(e);
+            if (h && h->current <= 0.0f) continue;
+            cmdrX = t->x; cmdrZ = t->z; aliveCmdr = true;
+            break;   // v0: dirige il primo comandante vivo (uno stratega per lato)
+        }
+
+        // Focus = command post NON separatista (owner != 2) più vicino al comandante.
+        bool haveFocus = false; float fx = 0.0f, fz = 0.0f; std::string flabel;
+        if (aliveCmdr && world.activeMap)
+        {
+            float best2 = 1e18f;
+            for (const auto& st : world.commandPostStates)
+            {
+                if (st.owner == 2) continue;                 // già dei droidi
+                for (const auto& cp : world.activeMap->commandPosts)
+                {
+                    if (cp.label != st.label) continue;      // posizione autorata per label
+                    const float dx = cp.x - cmdrX, dz = cp.z - cmdrZ;
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 < best2)
+                    { best2 = d2; fx = cp.x; fz = cp.z; flabel = cp.label; haveFocus = true; }
+                    break;
+                }
+            }
+        }
+
+        if (world.enemyCommand.commanderAlive && !aliveCmdr)   // ultimo comandante caduto
+            world.pushEvent("Comandante tattico nemico eliminato: i droidi perdono coordinamento");
+
+        world.enemyCommand.commanderAlive = aliveCmdr;
+        world.enemyCommand.active         = haveFocus;
+        world.enemyCommand.x = fx; world.enemyCommand.z = fz;
+        world.enemyCommand.label = flabel;
+    }
 
     // Heartbeat diagnostico (ogni ~10s a 60Hz): quante AI e in che stato.
     // Rende osservabile da telemetria il sintomo "AI ferme".
@@ -454,9 +480,13 @@ void AiSystem::update(World& world, float dt)
                             ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax);
                             // Copertura vera se la mappa la offre (doc 18):
                             // altrimenti resta lo strafe evasivo di fallback.
-                            ai->hasCover = pickCover(world.activeMap,
-                                                     et->x, et->z, tt->x, tt->z,
-                                                     ai->coverX, ai->coverZ);
+                            // Query al World Intelligence Layer (ADR-025).
+                            const CoverPointDef* cov = world.activeMap
+                                ? worldintel::bestCoverToward(*world.activeMap,
+                                      et->x, et->z, tt->x, tt->z, 12.0f)
+                                : nullptr;
+                            ai->hasCover = (cov != nullptr);
+                            if (cov) { ai->coverX = cov->x; ai->coverZ = cov->z; }
 
                             // Abilità ROLL (16 est.): entrando in evasione,
                             // se pronta, scatto laterale col cooldown del def.
@@ -590,13 +620,22 @@ void AiSystem::update(World& world, float dt)
                     et->ry = std::atan2(moveDX, moveDZ) * (180.0f / PI);
                 }
             }
-            else if (ai->state == AiState::Patrol && patrolOk)
+            else if (ai->state == AiState::Patrol
+                     && (patrolOk || (world.enemyCommand.active && team->teamId == 2)))
             {
-                // Pattuglia (prima del contatto). Ai waypoint SOSTA per
-                // patrolDwell secondi: è ciò che permette di catturare i
-                // command post (serve presenza continuativa nell'area).
-                float wx = ai->goingToB ? ai->patrolBx : ai->patrolAx;
-                float wz = ai->goingToB ? ai->patrolBz : ai->patrolAz;
+                // Pattuglia (prima del contatto). Se un comandante nemico è vivo
+                // (ADR-024/doc 32), i droidi puntano il FOCUS strategico invece del
+                // waypoint di rotta: è così che convergono sull'obiettivo scelto.
+                // Ai waypoint (o al focus) SOSTA per patrolDwell secondi: è ciò che
+                // permette di catturare i command post (presenza continuativa).
+                const bool commanded = world.enemyCommand.active && team->teamId == 2;
+                float wx, wz;
+                if (commanded) { wx = world.enemyCommand.x; wz = world.enemyCommand.z; }
+                else
+                {
+                    wx = ai->goingToB ? ai->patrolBx : ai->patrolAx;
+                    wz = ai->goingToB ? ai->patrolBz : ai->patrolAz;
+                }
                 moveDX = wx - et->x; moveDZ = wz - et->z;
 
                 if (ai->waitTimer > 0.0f)
@@ -662,9 +701,13 @@ void AiSystem::update(World& world, float dt)
             // dentro il guinzaglio: nessun override — decide l'AI.
         }
 
-        // Danger zone (doc 18): fuori dall'ingaggio il movimento evita le
-        // aree marcate pericolose dall'autore della mappa.
-        if (ai->state != AiState::Alert && moveSpeed > 0.0f)
+        // Danger zone: SOLO come fallback senza navmesh (ADR-025). Col crowd il
+        // navmesh marca le danger come area a costo alto (doc 22 Phase C) e il
+        // pathfinding le aggira già → la repulsione manuale sarebbe una doppia
+        // verità. Fuori dall'ingaggio (in Alert si combatte, non si evita).
+        const bool navActive = world.nav && world.nav->crowdReady()
+                             && ai->crowdAgentIdx >= 0;
+        if (!navActive && ai->state != AiState::Alert && moveSpeed > 0.0f)
             applyDangerRepulsion(world.activeMap, et->x, et->z, moveDX, moveDZ);
 
         // Cooldown abilità attive + scatto roll in corso (16 est.)
@@ -678,8 +721,7 @@ void AiSystem::update(World& world, float dt)
         // i rami traversal impostano moveDX/DZ = destinazione − posizione).
         // Alert/roll → requestMoveVelocity (velocità tattica + avoidance del
         // crowd). Il write-back npos→transform lo fa CrowdSystem dopo il tick.
-        const bool useCrowd = world.nav && world.nav->crowdReady()
-                            && ai->crowdAgentIdx >= 0;
+        const bool useCrowd = navActive;   // (calcolato sopra per il gating danger)
         if (useCrowd)
         {
             NavManager& nv = *world.nav;

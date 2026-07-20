@@ -192,12 +192,13 @@ void BalanceEditor::drawAbilitiesTab()
     // Tipo dall'elenco supportato (niente testo libero)
     {
         static const char* kTypes[] =
-            {"shield", "roll", "melee", "jetpack", "missile", "command_aura"};
+            {"shield", "roll", "melee", "jetpack", "missile", "command"};
         int ti = 0;
         for (int i = 0; i < 6; ++i) if (edit.type == kTypes[i]) { ti = i; break; }
         if (editor::ui::comboRow("Tipo", ti, kTypes, 6)) edit.type = kTypes[ti];
     }
-    ImGui::TextDisabled("Runtime attivo: solo 'shield' (16_AiBehavior). Gli altri tipi\n"
+    ImGui::TextDisabled("Runtime attivo: 'shield' (16), 'roll' (Combat Roll), 'command'\n"
+                        "(Droide Tattico, ADR-024/doc 32). 'melee'/'jetpack'/'missile'\n"
                         "sono autorabili ma non ancora consumati in partita.");
     ImGui::Separator();
 

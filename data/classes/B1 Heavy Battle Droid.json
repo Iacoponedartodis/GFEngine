@@ -1,5 +1,15 @@
 {
     "name": "B1 Heavy Battle Droid",
     "primary_weapon": "E-5C Heavy Blaster",
-    "role": "assault"
+    "role": "assault",
+    "base_entity": "B1 Battle Droid",
+    "ai_profile": "B1 Heavy Droid",
+    "hp_mult": 1.125,
+    "speed_mult": 1.0,
+    "damage_mult": 1.0,
+    "color_mult": [
+        1.0,
+        0.72,
+        0.6
+    ]
 }

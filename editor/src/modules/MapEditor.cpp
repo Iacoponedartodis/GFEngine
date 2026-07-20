@@ -105,31 +105,57 @@ void MapEditor::tick(float dt)
             auto& v = m_vehSpawns[-400 - m_selBox];
             v.x += delta.x; v.z += delta.z;
         }
-        else if (m_selBox <= -500 && (-500 - m_selBox) < (int)m_targets.size())
+        else if (m_selBox <= -500 && m_selBox > -1000
+                 && (-500 - m_selBox) < (int)m_targets.size())
         {
             auto& t = m_targets[-500 - m_selBox];
             t.x += delta.x; t.z += delta.z;
+        }
+        else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+        {
+            auto& t = m_tacticals[-1000 - m_selBox];
+            t.x += delta.x; t.y += delta.y; t.z += delta.z;
         }
         m_dirty = true;
         updateViewport();
     }
 
-    // Gizmo Ruota: i box mappa ruotano solo attorno a Y.
+    // Gizmo Ruota (solo asse Y): box mappa (ry), cover point (facing), veicolo (ry).
+    // ADR-025: i marker metadata con un campo di orientamento sono ruotabili.
     glm::vec3 rotDelta;
     if (m_viewport.popGizmoRotDelta(rotDelta))
     {
+        auto wrap = [](float a) { while (a > 180.0f) a -= 360.0f; while (a < -180.0f) a += 360.0f; return a; };
         if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
         {
             auto& b = m_boxes[m_selBox];
-            b.ry += rotDelta.y;
-            while (b.ry >  180.0f) b.ry -= 360.0f;
-            while (b.ry < -180.0f) b.ry += 360.0f;
-            m_dirty = true;
-            updateViewport();
+            b.ry = wrap(b.ry + rotDelta.y);
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -100 && m_selBox > -200
+                 && (-100 - m_selBox) < (int)m_covers.size())
+        {
+            auto& c = m_covers[-100 - m_selBox];
+            c.facing = wrap(c.facing + rotDelta.y);
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -400 && m_selBox > -500
+                 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+        {
+            auto& v = m_vehSpawns[-400 - m_selBox];
+            v.ry = wrap(v.ry + rotDelta.y);
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+        {
+            auto& t = m_tacticals[-1000 - m_selBox];
+            t.facing = wrap(t.facing + rotDelta.y);
+            m_dirty = true; updateViewport();
         }
     }
 
-    // Gizmo Scala: dimensioni del box (full size), con minimo.
+    // Gizmo Scala: box (dimensioni per asse), post/danger (raggio uniforme).
+    // ADR-025: i marker metadata con un raggio sono scalabili (delta.x → radius).
     glm::vec3 scaleDelta;
     if (m_viewport.popGizmoScaleDelta(scaleDelta))
     {
@@ -139,8 +165,21 @@ void MapEditor::tick(float dt)
             b.sx += scaleDelta.x; if (b.sx < 0.1f) b.sx = 0.1f;
             b.sy += scaleDelta.y; if (b.sy < 0.1f) b.sy = 0.1f;
             b.sz += scaleDelta.z; if (b.sz < 0.1f) b.sz = 0.1f;
-            m_dirty = true;
-            updateViewport();
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -10 && m_selBox > -100
+                 && (-10 - m_selBox) < (int)m_posts.size())
+        {
+            auto& p = m_posts[-10 - m_selBox];
+            p.radius += scaleDelta.x; if (p.radius < 0.5f) p.radius = 0.5f;
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -200 && m_selBox > -300
+                 && (-200 - m_selBox) < (int)m_dangers.size())
+        {
+            auto& d = m_dangers[-200 - m_selBox];
+            d.radius += scaleDelta.x; if (d.radius < 0.5f) d.radius = 0.5f;
+            m_dirty = true; updateViewport();
         }
     }
 }
@@ -189,6 +228,7 @@ void MapEditor::loadMap(const std::string& id)
     m_boxes.clear();
     m_posts.clear();
     m_covers.clear();
+    m_tacticals.clear();
     m_dangers.clear();
     m_routes.clear();
     m_vehSpawns.clear();
@@ -270,7 +310,24 @@ void MapEditor::loadMap(const std::string& id)
             c.z      = cp.value("z", 0.f);
             c.facing = cp.value("facing_deg", 0.f);
             c.height = cp.value("height", 1.f);
+            c.protection = cp.value("protection", 0.5f);   // ADR-026
+            c.canShoot   = cp.value("can_shoot", true);
             m_covers.push_back(c);
+        }
+    }
+    if (j.contains("tactical_points") && j["tactical_points"].is_array())   // ADR-027
+    {
+        for (auto& tp : j["tactical_points"])
+        {
+            TacticalEntry t;
+            t.x          = tp.value("x", 0.f);
+            t.y          = tp.value("y", 1.f);
+            t.z          = tp.value("z", 0.f);
+            t.facing     = tp.value("facing_deg", 0.f);
+            t.type       = tp.value("type", std::string("vantage"));
+            t.importance = tp.value("importance", 0.5f);
+            t.radius     = tp.value("radius", 4.f);
+            m_tacticals.push_back(t);
         }
     }
     if (j.contains("danger_zones") && j["danger_zones"].is_array())
@@ -377,9 +434,24 @@ bool MapEditor::saveMap()
         cp["x"] = c.x;  cp["y"] = c.y;  cp["z"] = c.z;
         cp["facing_deg"] = c.facing;
         cp["height"]     = c.height;
+        cp["protection"] = c.protection;   // ADR-026
+        cp["can_shoot"]  = c.canShoot;
         coverArr.push_back(cp);
     }
     j["cover_points"] = coverArr;
+
+    json tacticalArr = json::array();   // ADR-027
+    for (const auto& t : m_tacticals)
+    {
+        json tp;
+        tp["x"] = t.x;  tp["y"] = t.y;  tp["z"] = t.z;
+        tp["facing_deg"] = t.facing;
+        tp["type"]       = t.type;
+        tp["importance"] = t.importance;
+        tp["radius"]     = t.radius;
+        tacticalArr.push_back(tp);
+    }
+    j["tactical_points"] = tacticalArr;
 
     json dangerArr = json::array();
     for (const auto& d : m_dangers)
@@ -573,6 +645,40 @@ void MapEditor::updateViewport()
         draws.push_back(nose);
     }
 
+    // Tactical point (ADR-027): pilastro colorato per tipo + naso del fronte +
+    // disco tenue del raggio d'influenza. pickId = -1000 - i.
+    for (int i = 0; i < (int)m_tacticals.size(); ++i)
+    {
+        const auto& t = m_tacticals[i];
+        const bool sel = (m_selBox == -1000 - i);
+        float r = 0.2f, g = 0.8f, b = 0.9f;                 // vantage (ciano)
+        if (t.type == "defensive")  { r = 0.9f; g = 0.4f; b = 0.2f; }
+        else if (t.type == "chokepoint")  { r = 0.7f; g = 0.3f; b = 0.9f; }
+        else if (t.type == "observation") { r = 0.9f; g = 0.85f; b = 0.2f; }
+
+        FreeCameraViewport::MapBoxDraw pillar;
+        pillar.x = t.x; pillar.y = t.y + 0.6f; pillar.z = t.z; pillar.ry = t.facing;
+        pillar.sx = 0.4f; pillar.sy = 1.2f; pillar.sz = 0.4f;
+        pillar.r = r; pillar.g = g; pillar.b = b;
+        pillar.selected = sel; pillar.pickId = -1000 - i;
+        draws.push_back(pillar);
+
+        const float fr = glm::radians(t.facing);
+        FreeCameraViewport::MapBoxDraw nose;
+        nose.x = t.x + std::sin(fr) * 0.5f; nose.y = t.y + 0.6f; nose.z = t.z + std::cos(fr) * 0.5f;
+        nose.ry = t.facing; nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.5f;
+        nose.r = r * 0.6f; nose.g = g * 0.6f; nose.b = b * 0.6f;
+        nose.selected = sel; nose.pickId = -1000 - i;
+        draws.push_back(nose);
+
+        FreeCameraViewport::MapBoxDraw disc;
+        disc.x = t.x; disc.y = t.y - 0.4f; disc.z = t.z; disc.ry = 0;
+        disc.sx = t.radius * 2.0f; disc.sy = 0.03f; disc.sz = t.radius * 2.0f;
+        disc.r = r; disc.g = g; disc.b = b;
+        disc.selected = sel; disc.pickId = -1000 - i;
+        draws.push_back(disc);
+    }
+
     // Danger zone: disco arancione (più rosso quanto più pericoloso)
     for (int i = 0; i < (int)m_dangers.size(); ++i)
     {
@@ -661,21 +767,22 @@ void MapEditor::updateViewport()
     {
         const auto& p = m_posts[-10 - m_selBox];
         m_viewport.setGizmoTarget({p.x, p.y, p.z}, true);
-        m_viewport.setGizmoCanRotateScale(false, false);
+        m_viewport.setGizmoCanRotateScale(false, true);   // scala → raggio (ADR-025)
     }
     else if (m_selBox <= -100 && m_selBox > -200
              && (-100 - m_selBox) < (int)m_covers.size())
     {
         const auto& c = m_covers[-100 - m_selBox];
         m_viewport.setGizmoTarget({c.x, c.y, c.z}, true);
-        m_viewport.setGizmoCanRotateScale(false, false);
+        m_viewport.setGizmoRotAxes(false, true, false);   // fronte copertura (facing)
+        m_viewport.setGizmoCanRotateScale(true, false);   // ruota → facing (ADR-025)
     }
     else if (m_selBox <= -200 && m_selBox > -300
              && (-200 - m_selBox) < (int)m_dangers.size())
     {
         const auto& d = m_dangers[-200 - m_selBox];
         m_viewport.setGizmoTarget({d.x, d.y, d.z}, true);
-        m_viewport.setGizmoCanRotateScale(false, false);
+        m_viewport.setGizmoCanRotateScale(false, true);   // scala → raggio (ADR-025)
     }
     else if (m_selBox <= -300 && m_selBox > -400
              && (-300 - m_selBox) < (int)m_routes.size())
@@ -695,13 +802,22 @@ void MapEditor::updateViewport()
     {
         const auto& v = m_vehSpawns[-400 - m_selBox];
         m_viewport.setGizmoTarget({v.x, 0.6f, v.z}, true);
-        m_viewport.setGizmoCanRotateScale(false, false);
+        m_viewport.setGizmoRotAxes(false, true, false);   // orientamento veicolo (ry)
+        m_viewport.setGizmoCanRotateScale(true, false);   // ruota → ry (ADR-025)
     }
-    else if (m_selBox <= -500 && (-500 - m_selBox) < (int)m_targets.size())
+    else if (m_selBox <= -500 && m_selBox > -1000
+             && (-500 - m_selBox) < (int)m_targets.size())
     {
         const auto& t = m_targets[-500 - m_selBox];
         m_viewport.setGizmoTarget({t.x, 1.25f, t.z}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+    {
+        const auto& t = m_tacticals[-1000 - m_selBox];
+        m_viewport.setGizmoTarget({t.x, t.y, t.z}, true);
+        m_viewport.setGizmoRotAxes(false, true, false);   // fronte del punto (facing)
+        m_viewport.setGizmoCanRotateScale(true, false);
     }
     else
         m_viewport.setGizmoTarget({0,0,0}, false);
@@ -1012,6 +1128,30 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         { m_covers.erase(m_covers.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
     }
 
+    // Tactical point (ADR-027)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 0.95f, 1.0f));
+    for (int i = 0; i < (int)m_tacticals.size(); ++i)
+    {
+        char lbl[64];
+        std::snprintf(lbl, sizeof(lbl), "[TP] %s %d##tp%d", m_tacticals[i].type.c_str(), i + 1, i);
+        if (ImGui::Selectable(lbl, m_selBox == -1000 - i))
+        { m_selBox = -1000 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Tactical"))
+    {
+        m_tacticals.push_back({});
+        m_selBox = -1000 - ((int)m_tacticals.size() - 1);
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##tp") && m_selBox <= -1000)
+    {
+        int i = -1000 - m_selBox;
+        if (i >= 0 && i < (int)m_tacticals.size())
+        { m_tacticals.erase(m_tacticals.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+    }
+
     // Danger zone
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.55f, 0.2f, 1.0f));
     for (int i = 0; i < (int)m_dangers.size(); ++i)
@@ -1135,6 +1275,46 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         changed |= editor::ui::sliderRow("Altezza", c.height, 0.4f, 3.0f, 0.05f, "%.2f");
         ImGui::TextDisabled(c.height < 1.2f ? "Bassa: l'AI fara' peek-over"
                                             : "Alta: l'AI fara' peek-around");
+        // Cover Intelligence (ADR-026): dato tattico che pesa la scelta dell'AI.
+        changed |= editor::ui::sliderRow("Protezione", c.protection, 0.f, 1.f, 0.05f, "%.2f");
+        ImGui::TextDisabled(c.protection >= 0.75f ? "Ottima: l'AI la preferisce"
+                          : c.protection <= 0.35f ? "Scarsa: ripiego"
+                                                  : "Media");
+        changed |= ImGui::Checkbox("Si puo' sparare da qui", &c.canShoot);
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
+    // ── Tactical point selezionato (ADR-027) ─────────────────────────────
+    if (m_selBox <= -1000)
+    {
+        int ti = -1000 - m_selBox;
+        if (ti < 0 || ti >= (int)m_tacticals.size())
+        { ImGui::TextDisabled("Seleziona un elemento."); return; }
+
+        auto& t = m_tacticals[ti];
+        ImGui::TextColored({0.5f,0.8f,0.95f,1.0f}, "Tactical Point %d", ti + 1);
+        ImGui::Separator();
+        bool changed = false;
+
+        static const char* kTypes[] = {"vantage", "defensive", "chokepoint", "observation"};
+        int typeIdx = 0;
+        for (int k = 0; k < 4; ++k) if (t.type == kTypes[k]) { typeIdx = k; break; }
+        if (ImGui::Combo("Tipo", &typeIdx, kTypes, 4)) { t.type = kTypes[typeIdx]; changed = true; }
+        ImGui::TextDisabled(typeIdx == 0 ? "Sopraelevato / dominante"
+                          : typeIdx == 1 ? "Posizione da tenere"
+                          : typeIdx == 2 ? "Strettoia / ingresso da presidiare"
+                                         : "Punto d'osservazione");
+
+        ImGui::TextDisabled("Posizione");
+        changed |= editor::ui::sliderRow("X", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", t.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        ImGui::TextDisabled("Tattica");
+        changed |= editor::ui::sliderRow("Fronte'", t.facing, -180.f, 180.f, 1.f, "%.0f");
+        changed |= editor::ui::sliderRow("Importanza", t.importance, 0.f, 1.f, 0.05f, "%.2f");
+        changed |= editor::ui::sliderRow("Raggio", t.radius, 0.5f, 20.f, 0.1f, "%.2f");
+        ImGui::TextDisabled("(Consumo AI: Fase 4/5 - doc 33)");
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }

@@ -141,8 +141,11 @@ void PlayerController::updateMovement(Camera& cam, const InputManager& input,
         isCrouching = !isCrouching;
 
     // ── Aim / ADS ─────────────────────────────────────────────────────────────
+    // Lo zoom in mira è ora PER-ARMA (WeaponDef.adsFov, autorabile nel Weapon
+    // Editor): FOV più basso = più zoom. La costante ADS_FOV resta solo come
+    // fallback storico (default 35 = comportamento invariato).
     isAiming = input.isAimHeld();
-    cam.setFov(isAiming ? ADS_FOV : NORMAL_FOV);
+    cam.setFov(isAiming ? weapon().adsFov : NORMAL_FOV);
 
     // ── Roll (schivata) ───────────────────────────────────────────────────────
     const bool canRoll = onGround && !isRolling && !isCrouching;

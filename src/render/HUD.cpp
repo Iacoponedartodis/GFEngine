@@ -98,6 +98,14 @@ void HUD::tick(float dt)
     if (m_hitTimer   > 0.0f) m_hitTimer   -= dt;
     if (m_toastTimer > 0.0f) m_toastTimer -= dt;
     for (auto& l : m_feed) l.age += dt;
+
+    // Indicatori di danno direzionale: invecchiano e scompaiono (~1.2s).
+    for (auto& di : m_damageInds) di.age += dt;
+    m_damageInds.erase(
+        std::remove_if(m_damageInds.begin(), m_damageInds.end(),
+                       [](const DamageInd& d) { return d.age > 1.2f; }),
+        m_damageInds.end());
+    if (m_damageFlash > 0.0f) m_damageFlash -= dt;
 }
 
 void HUD::pushFeed(const std::string& msg)
@@ -123,6 +131,14 @@ void HUD::hitmarker(bool kill)
 {
     m_hitTimer   = kill ? 0.45f : 0.18f;
     m_hitWasKill = kill;
+}
+
+void HUD::addDamageIndicator(float worldDirX, float worldDirZ)
+{
+    m_damageInds.push_back({worldDirX, worldDirZ, 0.0f});
+    if (m_damageInds.size() > 8)   // cap: colpi ravvicinati non accumulano all'infinito
+        m_damageInds.erase(m_damageInds.begin());
+    m_damageFlash = 0.30f;         // flash rosso ai bordi (feedback "sei colpito")
 }
 
 void HUD::toast(const std::string& msg, float seconds)
@@ -159,6 +175,26 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
     else // Playing / Win / Lose
     {
         const float PAD = 14;
+
+        // ── Feedback di danno/salute ai bordi (feel/vulnerabilità, GDD 3.1) ──
+        //    Flash rosso quando si è colpiti + cornice rossa costante a vita
+        //    bassa. Bande piene ai 4 bordi (Ui2D non fa gradiente): intensità =
+        //    la più forte fra flash e vita-bassa. Solo in Playing.
+        if (state == 0)
+        {
+            const float pct   = (playerMaxHp > 0) ? playerHp / playerMaxHp : 1.0f;
+            const float flash = (m_damageFlash > 0.0f) ? (m_damageFlash / 0.30f) * 0.45f : 0.0f;
+            const float lowHp = (pct < 0.28f) ? (1.0f - pct / 0.28f) * 0.40f : 0.0f;
+            const float a = (flash > lowHp) ? flash : lowHp;
+            if (a > 0.001f)
+            {
+                const float band = 78.0f;
+                m_ui.rect(0,        0,        W,    band, 0.75f, 0.05f, 0.05f, a);  // alto
+                m_ui.rect(0,        H - band, W,    band, 0.75f, 0.05f, 0.05f, a);  // basso
+                m_ui.rect(0,        0,        band, H,    0.75f, 0.05f, 0.05f, a);  // sx
+                m_ui.rect(W - band, 0,        band, H,    0.75f, 0.05f, 0.05f, a);  // dx
+            }
+        }
 
         // ── Barra HP (basso sinistra) ────────────────────────────────
         const float BW = 220, BH = 18;
@@ -340,6 +376,23 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                 m_ui.rect(cx+d,   cy-d-s, s, s, mkR, mkG, mkB);
                 m_ui.rect(cx-d-s, cy+d,   s, s, mkR, mkG, mkB);
                 m_ui.rect(cx+d,   cy+d,   s, s, mkR, mkG, mkB);
+            }
+
+            // Indicatore di danno DIREZIONALE (feel/vulnerabilità, GDD 3.1): per
+            // ogni colpo subito, un blocco rosso attorno al mirino nella direzione
+            // della SORGENTE, proiettata rispetto alla direzione di vista (ruota
+            // con la camera) e sfumante. Davanti = alto, dietro = basso, lati.
+            for (const auto& di : m_damageInds)
+            {
+                const float ahead = di.dirX * m_viewFwdX + di.dirZ * m_viewFwdZ;
+                const float side  = di.dirX * m_viewFwdZ - di.dirZ * m_viewFwdX;
+                const float ang   = std::atan2(side, ahead);   // 0 = davanti
+                const float R  = 62.0f;
+                const float px = cx + std::sin(ang) * R;
+                const float py = cy - std::cos(ang) * R;
+                const float a  = 1.0f - di.age / 1.2f;          // fade lineare
+                m_ui.rect(px - 11, py - 5, 22, 10, 0.05f, 0.02f, 0.02f, a * 0.55f);
+                m_ui.rect(px - 9,  py - 3, 18, 6,  0.95f, 0.15f, 0.12f, a * 0.90f);
             }
         }
 

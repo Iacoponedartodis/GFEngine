@@ -186,6 +186,21 @@ void CombatSystem::update(World& world, float dt)
                 if (eh->current <= 0.0f) world.combatFeedback.team1Kill = true;
             }
 
+            // Danno SUBITO dal GIOCATORE: registra la direzione della sorgente
+            // (opposta al moto del proiettile) per l'indicatore direzionale.
+            if (eid == world.playerEntity)
+            {
+                const float dx = -(bPos.x - bPrev.x);   // sorgente = da dove arriva
+                const float dz = -(bPos.z - bPrev.z);
+                const float len = std::sqrt(dx * dx + dz * dz);
+                if (len > 1e-4f)
+                {
+                    world.combatFeedback.playerDamaged = true;
+                    world.combatFeedback.hitDirX = dx / len;
+                    world.combatFeedback.hitDirZ = dz / len;
+                }
+            }
+
             // Telemetria: ogni hit nel log (con zona, danno, hp, team) —
             // "i nemici non muoiono" diventa diagnosticabile dal file.
             telemetry::logTrace("hit: team" + std::to_string(bullet->ownerTeam)

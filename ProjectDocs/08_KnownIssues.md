@@ -250,6 +250,34 @@
   (già funzionante via tasto), non un'abilità; lo shield va concepito come GADGET, non abilità.
   Lavoro futuro (abilità/gadget player-side).
 
+## 60. Ruota/scala non abilitate sui marker metadata (LOW — authoring) — RISOLTO 2026-07-20 (ADR-025)
+- Segnalato dall'utente: selezionando una **copertura** non si sceglieva il tool di rotazione.
+  Diagnosi: non era una rottura generale (i box di geometria ruotano/scalano); i **marker metadata**
+  erano solo-sposta by design, e il `facing` del cover si regolava solo via slider.
+- **Cap abilitati (Fase 0, ADR-025)**: gizmo ruota/scala sui metadata dove esiste un campo —
+  cover→ruota(`facing`), veicolo→ruota(`ry`), danger→scala(`radius`), post→scala(`radius`), tactical
+  point→ruota (ADR-027). Gli altri (spawn, route, target) restano solo-sposta.
+- **Fix vero (2026-07-20)**: l'utente segnalava che ruota/scala "ancora non si selezionano" sui
+  metadata. I cap erano corretti: il problema era **l'accesso al tool** (solo scorciatoia tastiera
+  1/2/3, con viewport in hover + mouse libero — poco affidabile). Aggiunti **pulsanti cliccabili**
+  Sposta/Ruota/Scala nel viewport (disabilitati/grigi sui target non supportati). Ora la selezione è
+  affidabile e scopribile. Build-verified; **smoke manuale**: cliccare Ruota/Scala e trascinare.
+
+## 59. ~~Nessun editor di abilità~~ — NON VALIDO (rettificato 2026-07-20)
+- Annotazione errata: **esiste** un editor di abilità nel `BalanceEditor` (tab Abilità) con dropdown
+  del tipo (`shield`/`roll`/`melee`/`jetpack`/`missile`/`command`) e drag dei param. L'authoring delle
+  abilità è coperto; il ClassEditor assegna l'ability alla classe. Nessun buco reale — voce ritirata.
+
+## 58. Il Droide Tattico non "resta nelle retrovie" (MEDIUM) — RISOLTO v1 2026-07-20 (ADR-024, doc 32)
+- Design (GDD App. B + chiarimento utente): il comandante deve stare **nascosto e protetto**, al
+  massimo autodifendersi. La v0 lo spawnava come truppa del roster (molti + avanzavano).
+- **Risolto v1**: è un **singolo obiettivo vivente per mappa** (campo `MapDef.commander`, non
+  `enemy_types`), piazzato nelle **retrovie** e spawnato **stationary** → AiSystem non lo muove mai
+  (movimento sotto `!ai->stationary`); fronteggia/spara solo a chi vede. Profilo AI autorato
+  (`Tactical Droid`, aggression 0). Resta come **tuning-dati** (non bug): abbassare `sight_range` per
+  ingaggiare solo minacce vicine; l'ingaggio "solo-se-attaccato" vero e il ripiego-in-copertura sono
+  raffinamenti futuri (doc 32 Out of Scope). Il comportamento pieno (gerarchia) → [[command-rank-system]].
+
 ## 57. Respawn dentro la geometria di un command post → giocatore incastrato (MEDIUM) — RISOLTO 2026-07-18
 - **Segnalato dal playtest**: rientrando da un command post si spawnava DENTRO il cubo del crinale
   del post e si restava bloccati.

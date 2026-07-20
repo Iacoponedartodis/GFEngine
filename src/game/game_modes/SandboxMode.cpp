@@ -2,6 +2,7 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/MapQuery.hpp"
 #include "mini/game/WeaponAttach.hpp"
+#include "mini/game/ClassResolve.hpp"   // effectiveUnit (ADR-023): classi come tipo-unità
 #include "mini/game/VehicleSpawn.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
@@ -82,7 +83,14 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // spawn + log errore, come in ConquestMode.
     std::vector<std::string> enemyIds;
     if (registry)
+    {
         for (auto& [id, def] : registry->enemies()) enemyIds.push_back(id);
+        // + le CLASSI istanziabili il cui corpo è un NEMICO (ADR-023): così la
+        //   sandbox testa sia i corpi sia le professioni (es. B1 Heavy Battle Droid).
+        for (auto& [cid, c] : registry->classes())
+            if (!c.baseEntityId.empty() && registry->enemies().count(c.baseEntityId))
+                enemyIds.push_back(cid);
+    }
     std::sort(enemyIds.begin(), enemyIds.end());
     if (enemyIds.empty())
         std::cerr << "[Sandbox] ERRORE: nessun nemico in data/enemies/ — "
@@ -97,13 +105,17 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     {
         const int   perRow = 10;
         const float gx = 2.8f, gz = 2.5f;
+        // Guarda verso il nemico: `dirZ` punta al campo avversario (convenzione
+        // ry = atan2(dx,dz) in gradi, come AiSystem). Prima i manichini restavano
+        // a ry=0 → clone e droidi guardavano tutti nella stessa direzione.
+        const float facing = (dirZ > 0.0f) ? 0.0f : 180.0f;
         for (int i = 0; i < n; ++i)
         {
             const int row = i / perRow, col = i % perRow;
             float x = baseX + ((float)col - (float)(perRow - 1) * 0.5f) * gx;
             float z = baseZ + dirZ * (2.5f + (float)row * gz);
             mapquery::findFreeSpot(map, x, z, 0.0f, dirZ, 0.45f, 0.5f, 0.45f);
-            spawnDummy(world, { x, z, ids[i % (int)ids.size()], team });
+            spawnDummy(world, { x, z, ids[i % (int)ids.size()], team, facing });
         }
     };
 
@@ -114,7 +126,12 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Manichini alleati vicino allo spawn team1 (verso il centro) ───────
     std::vector<std::string> allyIds;
     if (registry)
+    {
         for (auto& [id, def] : registry->allies()) allyIds.push_back(id);
+        for (auto& [cid, c] : registry->classes())   // classi con corpo ALLEATO (ADR-023)
+            if (!c.baseEntityId.empty() && registry->allies().count(c.baseEntityId))
+                allyIds.push_back(cid);
+    }
     std::sort(allyIds.begin(), allyIds.end());
     if (allyIds.empty())
         std::cerr << "[Sandbox] ERRORE: nessun alleato in data/allies/ — "
@@ -128,14 +145,17 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
 {
-    // team 1 → definizione alleato, team 2 → nemico
+    // team 1 → alleato, team 2 → nemico. `effectiveUnit` (ADR-023) risolve sia
+    // un'ENTITÀ (corpo) sia una CLASSE (→ corpo + loadout/abilità della classe),
+    // così un manichino-classe usa il modello del corpo e l'arma/abilità della
+    // professione — coerente col gioco.
+    EnemyDef dummyStorage;
     const EnemyDef* def = nullptr;
     if (m_registry)
-        def = (info.team == 1) ? m_registry->getAlly(info.id)
-                               : m_registry->getEnemy(info.id);
+        def = classres::effectiveUnit(*m_registry, info.id, info.team == 1, dummyStorage);
 
     Mesh* useMesh = m_mesh;
-    float rx = 0, ry = 0, scale = 1;
+    float rx = 0, ry = info.facing, scale = 1;
     float footY = 0;
     float cr = 0.80f, cg = 0.15f, cb = 0.15f;
     if (info.team == 1) { cr = 0.25f; cg = 0.45f; cb = 1.0f; }
@@ -143,7 +163,7 @@ EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)
     if (def)
     {
         rx    = def->meshRotX;
-        ry    = def->meshRotY;
+        ry    = info.facing + def->meshRotY;   // guarda il nemico (+ correzione mesh)
         scale = def->meshScale;
         footY = def->footY();
         cr    = def->color[0];

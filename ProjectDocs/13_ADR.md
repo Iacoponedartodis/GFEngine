@@ -888,3 +888,312 @@ nome. La classe del giocatore non si sceglie: si **livella**.
 (cosa sono) *e* nell'11.3 (come si ottengono) — leggere solo il capitolo omonimo ha prodotto un ADR
 sbagliato e una feature contraria al design. Prima di decidere su un sistema, cercare il concetto
 in **tutto** il GDD (`grep`), non solo nel suo capitolo.
+
+## ADR-023 — Entità = corpo, Classe = professione istanziabile su un corpo (con moltiplicatori di stat) (Accepted — in force, 2026-07-19)
+
+> **Raffina la metà NPC di ADR-022.** Non la sostituisce: ADR-022 stabilisce *cosa* è una classe
+> (professione, non preset d'armi; una def usata in due modi). Questo ADR stabilisce *come si
+> istanzia*: chi porta il **corpo** e chi la **professione**, e come i roster referenziano le unità.
+
+### Context — la distinzione che manca
+Chiarimento dell'utente (2026-07-19), intento autoritativo che rifinisce il modello:
+- Un'**entità** deve rappresentare un **corpo reale**: modello, stat base (hp, velocità), hitbox,
+  metadata/attach. Si usa **solo quando il modello è davvero diverso** — B1 vs B2 Super vs Droideka.
+- Una **classe** rappresenta una **professione** che gira **sullo stesso corpo**: differisce per
+  **armi, abilità, gadget** e segni distintivi d'armatura (che appaiono sul modello ma non lo
+  cambiano), più **moltiplicatori** sulle stat base (hp, velocità). Trooper / Sniper / Medic / Heavy
+  sono **un corpo (clone) + quattro classi**, non quattro entità.
+
+Il doc 14 già dichiara metà del principio (*"hitbox/mesh/scala restano dell'entità: è il corpo, non
+il mestiere"*) e cita il caso reale (`Clone Trooper`/`Heavy Clone Trooper` = un corpo, due
+professioni). Ma il modello è **incompleto**: oggi è l'**entità** a referenziare una classe
+(`EnemyDef.classId`), quindi l'entità resta il **tipo-unità** nei roster → per avere uno "Sniper
+Clone Trooper" servirebbe COMUNQUE una seconda entità. È la duplicazione che il modello voleva
+eliminare. Mancano tre cose: (1) la classe che referenzia un **corpo base**; (2) i **moltiplicatori**
+di stat; (3) i roster che referenziano **classi** come tipo-unità.
+
+### Decision
+1. **`ClassDef` guadagna `baseEntityId`** — il corpo da cui prende modello, hitbox, stat base,
+   attach/metadata. Una classe con `baseEntityId` è **istanziabile da sola** (è un tipo-unità).
+   Dropdown dal registry (mai testo libero, 04).
+2. **`ClassDef` guadagna moltiplicatori di stat**: `hpMult`, `speedMult`, `damageMult` (default 1.0).
+   Applicati alle stat base del corpo alla risoluzione. Additivo: 1.0 = corpo invariato.
+3. **I roster (`MapDef.allyTypes/enemyTypes`, e le missioni) possono referenziare una CLASSE** come
+   tipo-unità, non solo un'entità. Istanziare una classe = caricare il corpo (`baseEntityId`) +
+   applicare loadout/abilità (ADR-022) + moltiplicatori. Un'entità referenziata direttamente resta
+   valida (un corpo "nudo" senza professione) → additivo, niente rompe.
+4. **Le entità si riservano ai corpi veri.** I varianti di truppa (Heavy, Sniper, Medic) diventano
+   **classi**; le entità restano per differenze di modello (B1/B2/Droideka; clone/ARC se il modello
+   cambia). `hitbox_profile`, mesh, scala, attach, fazione **restano del corpo** (già vero, ADR-022).
+5. **Aspetto/segni d'armatura**: previsti dal modello dell'utente e da ADR-022 (*"in caso
+   l'aspetto"*); schema additivo quando servirà (non in questo ADR).
+
+### Migrazione (contenuto)
+- `Heavy Clone Trooper` (entità) → **classe** `heavy` con `baseEntityId: Clone Trooper` + arma Z-6 +
+  `hpMult`/`speedMult` a gusto; poi l'entità ridondante si elimina.
+- `Heavy B1 Battle Droid` (entità) → **classe** su `baseEntityId: B1 Battle Droid`.
+- I roster che citavano quelle entità citano le nuove classi.
+Le classi `trooper`/`marksman` esistenti restano; guadagnano `baseEntityId` (Clone Trooper).
+
+### Consequences
+- **Positivo**: un corpo, molte professioni senza duplicare entità (GDD 12.3 finalmente esprimibile
+  pulito); authoring più semplice (crei una classe, non un'entità intera); meno dati da mantenere in
+  sync (una hitbox per corpo, non per variante).
+- **Costo**: tocca `ClassDef`, la risoluzione (`resolveUnitArchetype`/`classres`), il caricamento
+  roster, il ClassEditor (dropdown corpo + moltiplicatori) e l'EntityEditor (marcatura campi decisi
+  dalla classe). Migrazione dati. Da fare in passi **additivi** (i moltiplicatori e `baseEntityId`
+  prima, additivi; poi i roster-referenziano-classi; infine la migrazione).
+- **Gate (ADR-018)**: nuovi controlli — `baseEntityId` deve esistere; moltiplicatori > 0; un roster
+  che referenzia un id deve risolverlo o come entità o come classe.
+
+### Status
+**Accepted — in force (2026-07-19).** Implementato e verificato: `ClassDef.baseEntityId`/`hpMult`/
+`speedMult`/`damageMult`; `effectiveUnit` in ConquestMode (id-roster → corpo+classe); moltiplicatori
+in `resolveUnitArchetype`; roster referenziano classi; gate esteso (base_entity esiste, mult > 0,
+roster risolve come entità o classe). Migrazione fatta: `Heavy Clone Trooper`→classe `Heavy Trooper`
+(corpo `Clone Trooper`); `B1 Heavy Battle Droid`(entità)→classe omonima (corpo `B1 Battle Droid`,
+ai `B1 Heavy Droid`, hp_mult 1.125); entità ridondanti eliminate; firebase/outpost roster espliciti.
+Verificato via `--sim`+telemetria: il Heavy B1 risolve `unit=B1 Battle Droid` (corpo) + `class=B1
+Heavy Battle Droid` → `ai=B1 Heavy Droid`, `weapon=E-5C`. ClassEditor: dropdown corpo + moltiplicatori.
+La metà giocatore (livelli/perk, doc 27) non è toccata: là la classe si livella, non si istanzia — Fase 3.
+
+---
+
+## ADR-024 — Comando nemico: il Droide Tattico è un COMANDANTE (controparte del giocatore), non un buff (Accepted — in force v0, 2026-07-20)
+
+> **Riscritto il 2026-07-20** su chiarimento autoritativo dell'utente. La **prima stesura**
+> (aura di accuratezza locale) è **superata**: un buff ad area non è ciò che è il Droide Tattico.
+> Il concetto corretto è uno **stratega** — la controparte nemica del comando del giocatore — con
+> influenza **globale**, non locale. Vedi memorie [[droide-tattico-concept]] / [[design-coherence-principle]]
+> e la Planned Feature **doc 32 (Comando Nemico)** per lo scope v0.
+
+### Context — cos'è davvero il Droide Tattico
+Chiarimento dell'utente: il Droide Tattico serie T **non combatte** in prima linea. Sta **nascosto e
+protetto** e **gestisce la strategia** — è il "generale" dei droidi. Senza di lui esiste già una
+tattica di base dettata dallo stato partita (obiettivi disponibili/distrutti, metadata, conteggio
+truppe per zona); **con** lui si aggiunge uno **strato strategico** che rende gli ordini più coerenti
+e coordina **TUTTE** le truppe separatiste (non un raggio). È la **controparte** del giocatore: come io
+do ordini ai cloni (ADR-020/doc 26), lui ne dà ai droidi. Ucciderlo → **conseguenza** (i droidi
+perdono coordinamento), come la torre comunicazioni. La meccanica "buff locale ai soldati vicini"
+appartiene invece al **futuro sistema di gradi** (ufficiali a cascata, [[command-rank-system]]), non
+qui. Questa **v0** costruisce solo la **base**: il sistema completo (gradi, strati, entità a sé) verrà
+progettato dopo (§5: base minima, scope in doc 32).
+
+### Decision (v0)
+1. **`AbilityDef.type = "command"`** (marker): assegna il ruolo di comandante. Nessun parametro
+   rilevante in v0. Additivo: nessun tipo esistente cambia. (Sostituisce la bozza `command_aura`.)
+2. **`CommanderComponent`** (marker ECS). Allo spawn `ConquestMode::spawnUnit` traduce l'ability
+   `command` in `CommanderComponent` (pipeline ability→componente dello scudo).
+3. **Direttiva strategica globale** (`World::enemyCommand`, mailbox — controparte di `squadOrder`).
+   `AiSystem` a inizio tick: se ≥1 comandante di **team 2 vivo**, calcola il **focus** = il command
+   post **non separatista** (owner ≠ 2) più vicino al comandante, e lo pubblica. Nessun comandante vivo
+   → `active=false`. La transizione vivo→morto emette il **messaggio-conseguenza** nel feed.
+4. **Consumo** (movimento, non combattimento): nel ramo Patrol (pre-contatto) i droidi di team 2
+   convergono sul focus invece che sulla rotta; arrivati, sostano (presenza = cattura). Il
+   combattimento resta autonomo — identico al guinzaglio-ordine del giocatore (l'ordine vincola il
+   movimento, mai mira/fuoco).
+5. **Il Droide Tattico è una CLASSE (ADR-023)** sul corpo `B1 Battle Droid`: ability `Tactical
+   Command` (+ `Shield`), `hp_mult 1.5` (più coriaceo), **tinta scura**. L'entità a sé è **futura**
+   (serve un modello proprio; [[droide-tattico-concept]]).
+6. **Singolo obiettivo vivente, nelle retrovie** (chiarimento utente 2026-07-20): NON è una truppa
+   del roster (`enemy_types` ne spawnerebbe molti). Nuovo campo mappa `commander { unit, x, z }`
+   (`CommanderSpawnDef`): ConquestMode ne spawna **uno solo** alla posizione autorata, **stationary**
+   → AiSystem non lo muove mai (ogni ramo di movimento è sotto `!ai->stationary`); si limita a
+   fronteggiare e sparare a chi vede (autodifesa). **Non rispawna** (`RespawnEntry.respawns=false` →
+   fuori da `m_trackedUnits`, come i bersagli strategici): resta uno per partita. È l'**autorità strategica più alta** dei
+   separatisti: dirige, non combatte. Gate: il comandante deve risolvere e portare l'ability
+   `command`; **warning** se un comandante finisce in `enemy_types` (previene il bug "ce ne sono molti").
+
+### Consequences
+- **Positivo**: riusa la pipeline ability→componente e le mailbox esistenti; **non** piega il
+  `SquadSystem` (solo-giocatore) né inventa un sistema parallelo; "muore → coordinamento sparisce" è
+  **gratis** (la direttiva si ricalcola per tick). Coerente col mondo (uno stratega dà senso allo Sniper
+  e all'assalto all'HVT) e con una vera catena di comando ([[design-coherence-principle]]).
+- **Costo/limiti (v0)** — tutti **dati o futuro**, non bug: (a) combatte ancora col profilo `B1 Battle
+  Droid` invece di **restare protetto** (KI #58: profilo AI "retrovie" da autorare). (b) **Un solo tipo
+  di direttiva** (concentra sul post di fronte); ventaglio di ordini → espansione. (c) Il calcolo vive
+  nel precompute di AiSystem: quando cresce va **estratto** in uno `StrategicAiSystem` dedicato (§5.3).
+  (d) Entità a sé, gradi, controparte-cloni → futuro (doc 32 Out of Scope).
+- **Gate (ADR-018)**: `command` è un tipo valido (nessuna whitelist di tipi-abilità); la classe che
+  porta l'ability risolve come le altre. Nessun controllo nuovo.
+
+### Status
+**Accepted — in force v1 (2026-07-20).** v0 (direttiva strategica) + **v1** (singolo obiettivo
+vivente, retrovie, stationary). Implementato: `AbilityDef.type "command"`; `CommanderComponent`
+(rinominato dalla bozza `Aura`); mailbox `World::enemyCommand`; calcolo focus + feed + consumo in
+`AiSystem`; **campo mappa** `MapDef.commander` (`CommanderSpawnDef`) + loader (DefinitionRegistry) +
+gate (ContentValidation: risolve, è comandante, warning se nel roster); **spawn singleton stationary**
+in `ConquestMode::start`; ability `data/abilities/Tactical Command.json`; classe `data/classes/Tactical
+Droid.json` (profilo AI autorato `Tactical Droid`); `firebase.commander` (retrovie, non più in
+`enemy_types`). BalanceEditor: tipo `command`. Verificato: build 0/0; `--validate` 0/0; `--sim` senza
+crash, **esattamente 1** `class=Tactical Droid` risolto (prima erano molti). **Manca smoke manuale**:
+in-game, comandante fermo nelle retrovie, droidi che convergono sul post-focus, e alla sua morte il
+messaggio + ritorno alla pattuglia. **Limiti/futuro**: UI di piazzamento nel MapEditor (ora JSON a
+mano, preservato da RMW); ingaggio "solo-se-attaccato" vero; ordini più ricchi; gerarchia gradi.
+
+---
+
+## ADR-025 — World Intelligence Layer: seam di query + Fase 0 dei metadata tattici (Proposed, 2026-07-20)
+
+> **Prima fase del piano doc 33** (World Tactical Intelligence). Filosofia: *"AI semplici in un mondo
+> intelligente"* ([[world-tactical-intelligence]]). Fase 0 = fondamenta a basso rischio che abilitano
+> tutte le fasi successive, **senza cambiare il comportamento AI**. Ogni fase futura avrà il suo ADR.
+
+### Context
+Doc 33 §2 elenca i problemi architetturali. La Fase 0 ne affronta tre, i più bloccanti:
+- **#1 Consumo sparso**: `AiSystem` scandisce direttamente `MapDef.coverPoints` (`pickCover`) e le
+  `dangerZones` (`applyDangerRepulsion`); non c'è un punto unico dove interrogare la conoscenza del
+  mondo → ogni nuovo consumatore ri-scriverebbe scansioni, non ottimizzabili né testabili.
+- **#2 Doppia verità sul pericolo**: `applyDangerRepulsion` (repulsione manuale) è ridondante col
+  costo DANGER del navmesh (doc 22), che già fa aggirare le zone via pathfinding.
+- **#9 Lacune editor**: il fronte dei cover point (e altri campi metadata) non è regolabile col gizmo
+  (KI #60) — l'utente (2026-07-20) ha chiesto di abilitare ruota/scala sui metadata dove ha senso.
+
+### Decision (Fase 0)
+1. **Query layer `mini::worldintel`** — nuovi `include/mini/game/ai/WorldIntel.hpp` +
+   `src/game/ai/WorldIntel.cpp`. È il seme del World Intelligence Layer: **solo dati+query pure** su
+   `MapDef` (nessuna logica AI). API iniziale:
+   - `const CoverPointDef* nearestCoverToward(const MapDef&, float x, float z, float towardX, float towardZ, float maxDist)` — sposta qui la logica di `AiSystem::pickCover`.
+   - `float dangerAt(const MapDef&, float x, float z)` — livello di pericolo aggregato in un punto.
+   `AiSystem` chiama il layer invece di scandire da sé. **Comportamento invariato** (stessa logica di
+   `pickCover`), cambia solo *dove* vive. Scansione lineare per ora; il seam permette di aggiungere un
+   indice spaziale dopo senza toccare i chiamanti.
+2. **Consolida la doppia verità danger**: `applyDangerRepulsion` diventa **fallback** — applicata solo
+   quando il crowd/navmesh NON è attivo (`!useCrowd`). Col crowd, il costo DANGER del navmesh già
+   aggira le zone → niente doppia repulsione. Nessuna regressione (in gioco reale il navmesh c'è sempre).
+3. **Editor: ruota/scala sui marker metadata dove esiste un campo** (KI #60 + richiesta utente):
+   - **Cover point** → **ruota** Y (scrive `facing`).
+   - **Vehicle spawn** → **ruota** Y (scrive `ry`).
+   - **Danger zone** → **scala** (scrive `radius`, uniforme, con minimo).
+   - **Command post** → **scala** (scrive `radius`).
+   Gli altri marker (spawn, route point, target) restano solo-sposta (nessun campo mappabile).
+4. **Doc-accuracy**: 15/18 aggiornati (l'AI consuma già i metadata; il navmesh marca DANGER/COVER).
+
+### Out of Scope (Fase 0 — arrivano nelle fasi successive di doc 33)
+- Dato ricco di copertura (protezione/visibilità/idoneità) → Fase 1. Tactical Points → Fase 2. Rete
+  di navigazione tattica + filtri navmesh per-ruolo → Fase 3. Settori/Combat Areas → Fase 4. Squadre
+  AI → Fase 5. Overlay di visualizzazione completo → fase editor dedicata (Fase 0 fa solo groundwork).
+- Indice spaziale: non ora (scansione lineare); il seam lo rende aggiungibile senza toccare i chiamanti.
+
+### Consequences
+- **Positivo**: seam unico creato **senza cambiare il comportamento** (nearestCoverToward ≡ pickCover);
+  una sola verità sul pericolo; authoring direzionale abilitato. Tutto additivo, basso rischio.
+- **Costo**: nuovi file (WorldIntel) + CMake; AiSystem chiama game/ (già lo fa: include Definitions.hpp).
+- **Gate**: nessun campo dati nuovo → gate invariato.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `mini::worldintel`
+(`game/ai/WorldIntel.hpp/.cpp`, aggiunto a CMake) con `nearestCoverToward` + `dangerAt`; `AiSystem`
+usa il query layer (rimossa la static `pickCover`); `applyDangerRepulsion` gated a fallback
+(`!navActive`); editor ruota/scala sui metadata (cover→`facing`, veicolo→`ry`, danger/post→`radius`).
+Build 0/0; `--validate` 0/0; `--sim` senza crash, AI viva (state change nella telemetria), navmesh
+costruito. **Manca smoke manuale editor**: ruotare un cover point e scalare una danger zone/post col
+gizmo. Prossimo: Fase 1 (Cover Intelligence) — doc 33.
+
+---
+
+## ADR-026 — Cover Intelligence: copertura come dato tattico + auto-generazione (Proposed, 2026-07-20)
+
+> **Fase 1 del piano doc 33.** La copertura smette di essere "posizione+fronte+altezza" e diventa un
+> dato tattico che permette a un'AI semplice di scegliere bene ("protegge ma limita la visuale").
+> Prima applicazione della filosofia [[world-tactical-intelligence]] sul World Intelligence Layer
+> (ADR-025). Additivo: le mappe esistenti restano identiche (default = comportamento attuale).
+
+### Context
+`CoverPointDef` oggi è solo `{x,y,z,facingDeg,height}` (doc 15): l'AI può solo prendere la copertura
+più vicina che guarda il nemico — non può distinguere una buona copertura da una scarsa (problema #3
+doc 33). E l'authoring è 100% manuale (problema #7): serve generazione automatica + correzione.
+
+### Decision (Fase 1)
+1. **`CoverPointDef` guadagna** (additivi, default = oggi): `float protection = 0.5` (0..1, quanto
+   ripara) e `bool canShoot = true` (si può sparare/peekare da qui vs solo nascondersi). `facingDeg`
+   e `height` restano. Loader: chiavi `protection`, `can_shoot` (clamp protection in [0,1]).
+2. **Query layer**: `worldintel::nearestCoverToward` → **`bestCoverToward`** (scoring): fra le
+   coperture entro `maxDist` che guardano verso il bersaglio, sceglie quella col **punteggio** più
+   alto = `protection` pesata meno una penalità di distanza. Con protezione tutta a 0.5 (mappe vecchie)
+   degenera nella "più vicina" → **retrocompatibile**. `AiSystem` usa la nuova query.
+3. **Editor — dato ricco**: `CoverEntry` guadagna `protection`+`canShoot`; slider protezione +
+   checkbox "spara da qui" nel pannello copertura; load/save (RMW).
+4. ~~**Editor — auto-generazione** (bottone "Genera coperture da geometria")~~ — **RIMOSSA
+   (2026-07-20, feedback utente).** L'euristica "un cover per faccia di box" produceva coperture
+   senza senso e su mappe strutturate sarebbe un disastro. Una generazione *buona* richiede analisi
+   di linea-di-vista/direzioni di minaccia/spaziatura — un approccio **diverso**, di cui il codice
+   naive non era una base utile. Le mappe sono **fortemente handcrafted** → valore basso. Funzione e
+   bottone eliminati. La generazione automatica di metadata dalla geometria è **de-scoped per ora**
+   (doc 33 §6): se un giorno servirà, va rifatta con analisi tattica, non con euristiche sui box.
+5. **Robustezza**: `protection` **clampata a [0,1] al load** (il valore runtime è sempre valido → nessuna regola gate separata necessaria).
+
+### Out of Scope (Fase 1 → fasi successive)
+- **Pose alle coperture** (crouch, mira-da-copertura, peek-over/around da `height`): **bloccate** su
+  animazioni ([[animations-blocked]]). Si autora il DATO ora; l'esecuzione della posa dopo.
+- **Idoneità per ruolo** + **link fra coperture** (grafo): servono la tassonomia ruoli e i Tactical
+  Points → Fase 2. `canShoot` è autorato ora, consumo pieno (fuoco-da-copertura) più avanti.
+- **Riduzione danno dietro copertura** in combattimento: integrazione CombatSystem → più avanti.
+- Qualità auto-gen basata su LOS/spazio aperto: la v1 è euristica su facce dei box.
+
+### Consequences
+- **Positivo**: l'AI sceglie coperture *migliori*, non solo vicine (effetto osservabile); authoring
+  molto più veloce (genera + rifinisci); il query layer incapsula il trade-off → l'AI resta semplice.
+- **Costo**: schema + loader + editor + query. Tutto additivo, retrocompatibile.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `CoverPointDef` += `protection`
+(clamp [0,1] al load) + `canShoot`; loader `protection`/`can_shoot`; `worldintel::bestCoverToward`
+(scoring protezione−distanza) usato da `AiSystem`; editor `CoverEntry` += campi, slider protezione +
+checkbox "spara da qui". L'**auto-generazione è stata rimossa** su feedback utente (vedi Decision §4).
+Build 0/0; `--validate` 0/0; `--sim` senza crash, AI viva. Retrocompatibile (protezione 0.5 di default
+→ "più vicina" come prima). **Manca smoke manuale editor**: regolare protezione/canShoot e verificare
+il salvataggio. Prossimo: Fase 2 (Tactical Points) — doc 33.
+
+---
+
+## ADR-027 — Tactical Points: punti d'interesse tattici autorabili (Proposed, 2026-07-20)
+
+> **Fase 2 del piano doc 33.** La mappa può esprimere **posizioni tatticamente rilevanti** oltre alle
+> coperture: punti sopraelevati, difensivi, di osservazione, strettoie. È il dato che gli strati
+> Squad (Fase 5) e Comandante/settori (Fase 4) useranno per posizionare e dirigere. Authoring
+> **manuale** (mappe handcrafted, doc 33 §6), niente auto-gen. Additivo.
+
+### Context
+Oggi la sola conoscenza tattica posizionale sono i cover point (riparo) e le danger zone. Manca il
+concetto generale di **"posizione che conta"**: un tetto da cui dominare, un ingresso da presidiare,
+un punto da tenere. Doc 33 §4.1 lo chiama Tactical Points. Serve il DATO ora (handcrafted), il consumo
+pieno arriva con Squad/settori.
+
+### Decision (Fase 2)
+1. **`TacticalPointDef { x, y, z, facingDeg, type, importance, radius }`** su `MapDef.tacticalPoints`
+   (array, chiave JSON `tactical_points`). `type` (stringa dal set editor): `vantage` (sopraelevato/
+   dominante), `defensive` (da tenere), `chokepoint` (strettoia/ingresso), `observation` (osservazione).
+   `importance` 0..1 (priorità), `radius` = area d'influenza (difensiva/chokepoint). Additivo, vuoto
+   di default → zero impatto sulle mappe esistenti.
+2. **Loader** (DefinitionRegistry): parse `tactical_points` (+ chiave nella whitelist). `importance`
+   clampata [0,1].
+3. **Editor**: lista + property panel (dropdown `type`, slider importanza/raggio/fronte/posizione) +
+   marker nel viewport (colore per tipo + naso del fronte) + gizmo (sposta + ruota→facing). **Il fronte
+   è editabile anche via slider** → l'authoring non dipende dal gizmo. Save RMW.
+4. **Query layer**: `worldintel::nearestTacticalPoint(map, x, z, type, maxDist)` — il seam per i
+   consumatori futuri (nessun consumo AI cablato ora: è groundwork per Fase 4/5).
+
+### Out of Scope (Fase 2 → fasi successive)
+- **Consumo** da AI/squadra/comandante: Fase 4 (settori) e Fase 5 (squad). Ora il dato è autorato e
+  interrogabile, non ancora usato — come height/canShoot prima (authoring-ahead onesto).
+- **Unificazione** cover ↔ tactical point in un'unica struttura: doc 33 §4.1 la prevede, ma rifattorare
+  la Cover Intelligence funzionante è rischioso e senza guadagno ora → i due coesistono; unificazione
+  = cleanup futuro. `TacticalPointDef` è per i punti NON-copertura.
+- **Link fra punti** (grafo) + **visibilità/rischio calcolati**: Fase 3 (rete tattica).
+- **Auto-generazione**: de-scoped (mappe handcrafted, doc 33 §6).
+
+### Consequences
+- **Positivo**: il designer può marcare la struttura tattica delle mappe handcrafted ORA, pronta per
+  gli strati che la useranno; query seam unico (worldintel) → i consumatori futuri non riscansionano.
+- **Costo/onestà**: dato autorato senza consumatore immediato (documentato). Rischio "metadato
+  decorativo" mitigato dal fatto che è groundwork esplicito per fasi vicine e già interrogabile.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `TacticalPointDef` +
+`MapDef.tacticalPoints`; loader `tactical_points` (whitelist + clamp importance); `worldintel::
+nearestTacticalPoint` (seam, non ancora consumato); editor completo (`TacticalEntry`, load/save,
+lista + / -, pannello con dropdown tipo + slider, marker colorati per tipo nel viewport, gizmo
+sposta+ruota). Build 0/0; `--validate` 0/0 (firebase: "0 tactical", additivo ok); `--sim` senza
+crash, AI viva. **Manca smoke manuale editor**: creare un tactical point, cambiarne tipo, salvare e
+ricaricare. Consumo AI = Fase 4/5 (documentato). Prossimo: Fase 3 (rete di navigazione tattica).

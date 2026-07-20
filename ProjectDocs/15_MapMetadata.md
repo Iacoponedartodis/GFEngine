@@ -1,11 +1,18 @@
 # 15 — Map Metadata (Implementato)
 
-**Status: Implementato (schema + loader + authoring) — 2026-07-10.**
+**Status: Implementato (schema + loader + authoring) — 2026-07-10.** Consumo AI implementato
+(doc 18, 2026-07-10): cover in hide, repulsione danger, patrol route come waypoint; il navmesh
+marca DANGER/COVER come aree semantiche (doc 22). **La riga "nessuna AI li consuma" era vera solo
+al 2026-07-10 — ora superata.**
 `MapDef.coverPoints/patrolRoutes/dangerZones` esistono, sono parse-ati dal
 `DefinitionRegistry` (chiavi JSON `cover_points`/`patrol_routes`/`danger_zones`) e sono
 autorabili nel MapEditor (sezione "Metadata AI": gizmo + slider + RMW, marker dedicati
-nel viewport). Come da Out of Scope, NESSUN sistema AI li consuma ancora: il consumo è il
-resto del Todo #3 fase 2 e andrà documentato a parte.
+nel viewport).
+
+> **EVOLUZIONE PIANIFICATA → doc 33 (World Tactical Intelligence).** Questo schema minimo
+> (posizione+fronte+altezza / route / danger) è la **v0** dei metadata. Il piano 33 lo evolve
+> verso una rappresentazione tattica ricca (cover intelligence, tactical points, rete di
+> navigazione tattica, settori) a fasi. Non implementare estensioni qui senza seguire doc 33.
 
 ## Overview
 Map Metadata is a set of optional, author-placed spatial hints on top of the existing
@@ -94,10 +101,11 @@ spatial-indexing needs (e.g. whether a naive linear scan over `coverPoints[]` is
 or whether a spatial index is needed) — do not assume either way here.
 
 ## Future Expansion
-- **Cover più ricche (richiesta utente 2026-07-10):** il cover point è oggi solo
-  posizione+fronte+altezza. In futuro dovrà supportare le meccaniche FPS di base alle
-  coperture — crouch dietro la copertura, mira DA copertura, peek-over/peek-around
-  guidati da `height` — che richiedono pose/animazioni non ancora nel runtime.
+- **Cover più ricche (richiesta utente 2026-07-10):** ~~il cover point è solo posizione+fronte+
+  altezza~~ → **parzialmente fatto (ADR-026, doc 33 Fase 1):** aggiunti `protection` + `canShoot`
+  e la scelta AI per protezione (`bestCoverToward`) + auto-gen editor. Restano le **pose FPS** alle
+  coperture — crouch, mira DA copertura, peek-over/around guidati da `height` — **bloccate** finché
+  non ci sono le animazioni. Idoneità-per-ruolo e link fra coperture → doc 33 Fase 2.
 - **Geometrie oltre i box (richiesta utente 2026-07-10):** mappa, hitbox e collisioni
   sono oggi limitate a parallelepipedi. Servirà un sistema di shape/collision più
   ricco (vedi 06_Todo, voce dedicata) sia per l'ambiente che per le entità.

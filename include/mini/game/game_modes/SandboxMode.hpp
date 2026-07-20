@@ -58,7 +58,7 @@ private:
 
     // Manichino: posizione + tipo + team, per il respawn automatico.
     // team 2 = nemico (da data/enemies), team 1 = alleato (da data/allies).
-    struct DummyInfo { float x = 0, z = 0; std::string id; int team = 2; };
+    struct DummyInfo { float x = 0, z = 0; std::string id; int team = 2; float facing = 0.0f; };
     std::vector<std::pair<EntityId, DummyInfo>> m_dummies;     // attivi
     std::vector<std::pair<float, DummyInfo>>    m_respawnQueue; // in attesa
     float m_respawnDelay = 2.0f;

@@ -45,7 +45,10 @@ private:
     };
 
     // ── Map Metadata (15_MapMetadata): hint spaziali per l'AI ────────────
-    struct CoverEntry  { float x=0, y=0.5f, z=0; float facing=0; float height=1.0f; };
+    struct CoverEntry  { float x=0, y=0.5f, z=0; float facing=0; float height=1.0f;
+                         float protection=0.5f; bool canShoot=true; };   // ADR-026
+    struct TacticalEntry { float x=0, y=1.0f, z=0; float facing=0;       // ADR-027
+                           std::string type="vantage"; float importance=0.5f; float radius=4.0f; };
     struct DangerEntry { float x=0, y=0,    z=0; float radius=4.0f; float level=0.5f; };
     struct RouteEntry  { char id[32] = "route";
                          std::vector<std::array<float,3>> points; };
@@ -59,6 +62,7 @@ private:
     std::vector<BoxEntry>     m_boxes;
     std::vector<PostEntry>    m_posts;
     std::vector<CoverEntry>   m_covers;
+    std::vector<TacticalEntry> m_tacticals;   // ADR-027
     std::vector<DangerEntry>  m_dangers;
     std::vector<RouteEntry>   m_routes;
     std::vector<VehicleSpawnEntry> m_vehSpawns;

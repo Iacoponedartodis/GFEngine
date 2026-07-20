@@ -67,6 +67,13 @@ public:
     void hitmarker(bool kill);                             // colpo a segno
     void toast(const std::string& msg, float seconds = 2.5f); // messaggio a schermo
 
+    // Indicatore di danno DIREZIONALE (feel/vulnerabilità, GDD 3.1): mostra da
+    // dove è arrivato un colpo che ha ferito il giocatore. `worldDir*` = direzione
+    // MONDO XZ della sorgente; l'HUD la proietta rispetto alla direzione di vista
+    // (`setViewDir`, aggiornata ogni frame), così ruota con la camera e sfuma.
+    void addDamageIndicator(float worldDirX, float worldDirZ);
+    void setViewDir(float fwdX, float fwdZ) { m_viewFwdX = fwdX; m_viewFwdZ = fwdZ; }
+
     // ── Log chat (17_SandboxTools): eventi di gioco leggibili ─────────
     void pushFeed(const std::string& msg);   // accoda un evento
     void toggleFeed() { m_feedOpen = !m_feedOpen; m_feedScroll = 0; } // tasto L
@@ -115,6 +122,11 @@ private:
     int         m_wheelSel    = -1;
     RespawnMap  m_respawnMap;              // mappa top-down di respawn (doc 30)
     float       m_mouseX = 0.0f, m_mouseY = 0.0f;   // cursore per l'hover overlay
+    // Indicatori di danno direzionale (mondo XZ + età); direzione di vista corrente.
+    struct DamageInd { float dirX, dirZ, age; };
+    std::vector<DamageInd> m_damageInds;
+    float       m_viewFwdX = 0.0f, m_viewFwdZ = 1.0f;
+    float       m_damageFlash = 0.0f;   // flash rosso ai bordi quando colpito (sfuma)
     float       m_hitTimer    = 0.0f;
     bool        m_hitWasKill  = false;
     float       m_toastTimer  = 0.0f;

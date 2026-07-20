@@ -127,8 +127,9 @@ di HP diverso. Il GDD lo definisce così:
 
 Oggi `AiProfileDef` ha i campi tattici giusti (aggression, retreat, cover_preference, flank) —
 **il gap non è il codice, sono i dati**: gli archetipi vanno autorati per esprimere questi ruoli.
-Il **Droide Tattico è l'unico che richiede codice nuovo** (un'aura che modifica l'AI vicina) e
-va trattato come feature a sé.
+Il **Droide Tattico è l'unico che richiede codice nuovo** e va trattato come feature a sé — non
+un'aura, ma un **comandante** che dà direttive strategiche ai droidi (controparte del comando
+giocatore). Base v0 FATTA: ADR-024 (riscritto) + doc 32.
 
 ### 6. Matrice dei ruoli d'arma
 Le armi coprono quattro ruoli con **trade-off reali**, così nessuna è universalmente migliore:

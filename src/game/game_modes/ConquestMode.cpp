@@ -55,9 +55,20 @@ struct ResolvedEnemyArchetype
     float bulletLifetime = 5.0f;
 };
 
+// Entità effettiva da un id-roster (ADR-023): la regola vive in
+// `classres::effectiveUnit` (una sola definizione, usata anche dalla sandbox);
+// qui solo il guard su registry nullo, per non cambiare i chiamanti.
+static const EnemyDef* effectiveUnit(const DefinitionRegistry* registry,
+                                     const std::string& unitId, bool ally,
+                                     EnemyDef& storage)
+{
+    if (!registry) return nullptr;
+    return classres::effectiveUnit(*registry, unitId, ally, storage);
+}
+
 // Risolve un archetipo unità (nemico O alleato: stessa EnemyDef, cambia il
-// registry di provenienza e i default). Prima il path alleati re-implementava
-// questa logica a mano con stats proiettile hardcoded 8/20/5 (Todo A7).
+// registry di provenienza e i default). `unitId` può essere un'ENTITÀ (corpo) o
+// una CLASSE (professione con baseEntityId, ADR-023) — `effectiveUnit` unifica.
 static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* registry,
                                                    const std::string& unitId, int team)
 {
@@ -72,9 +83,8 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
         out.interval = 3.5f; out.range = 14.0f;
     }
 
-    const EnemyDef* enemy = registry
-        ? (ally ? registry->getAlly(unitId) : registry->getEnemy(unitId))
-        : nullptr;
+    EnemyDef effStorage;
+    const EnemyDef* enemy = effectiveUnit(registry, unitId, ally, effStorage);
     if (!enemy)
     {
         std::cerr << "[ConquestMode] Unita' '" << unitId
@@ -163,6 +173,17 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
             out.bb = wpn->bulletColor[2];
         }
     }
+
+    // ── Moltiplicatori di classe (ADR-023) ───────────────────────────────
+    // La classe scala le stat BASE del corpo: hp, velocità (dopo che il profilo
+    // AI l'ha impostata), danno del proiettile. Default 1.0 = corpo invariato.
+    if (registry && !enemy->classId.empty())
+        if (const ClassDef* cls = registry->getClass(enemy->classId))
+        {
+            out.hp           *= cls->hpMult;
+            out.moveSpeed    *= cls->speedMult;
+            out.bulletDamage *= cls->damageMult;
+        }
 
     // `weapon` e `class` nella diagnostica: la risoluzione della classe era
     // invisibile: si poteva leggere hp/move/range e non accorgersi che l'arma
@@ -393,6 +414,10 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
                 world.addShield(e, sh);
                 hasShield = true;   // un solo scudo per entità
             }
+            else if (ab->type == "command")   // Droide Tattico: comandante (ADR-024, doc 32)
+            {
+                world.addCommander(e, CommanderComponent{});
+            }
             else if (ab->type == "roll")
             {
                 AbilityState st;
@@ -418,8 +443,11 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
     }
 
     // Template di respawn = copia integrale dello spawn spec (Todo A4):
-    // nessuna lista di campi da tenere allineata a mano.
-    m_trackedUnits.push_back({e, info});
+    // nessuna lista di campi da tenere allineata a mano. Le unità con
+    // respawns=false (obiettivo vivente: il comandante) NON si tracciano →
+    // muoiono una volta sola, come i bersagli strategici (ADR-024/doc 32).
+    if (info.respawns)
+        m_trackedUnits.push_back({e, info});
 }
 
 void ConquestMode::checkDeaths(World& world)
@@ -593,12 +621,14 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                               Mesh* weaponMesh = nullptr,
                               const glm::mat4& weaponLocal = glm::mat4(1.0f),
                               const std::string& aiProfileId = "",
-                              const std::vector<std::string>& abilityIds = {})
+                              const std::vector<std::string>& abilityIds = {},
+                              bool respawns = true)
     {
         RespawnEntry info;
         info.timer           = 0;
         info.x = x; info.z = z;
         info.teamId          = team;
+        info.respawns        = respawns;
         info.mr = mr; info.mg = mg; info.mb = mb;
         info.br = br; info.bg = bg; info.bb = bb;
         info.hp              = hp;
@@ -713,9 +743,11 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         const std::string enemyId = enemyIds[i];
         const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, enemyId, 2);
 
-        // Arma in mano dai metadata dell'editor
+        // Arma in mano dai metadata dell'editor — entità EFFETTIVA (corpo+classe,
+        // ADR-023) così un id-roster che è una classe risolve arma/attach del corpo.
+        EnemyDef enemyEff;
         auto wa = weaponattach::resolve(registry, m_meshCache,
-                                        registry ? registry->getEnemy(enemyId) : nullptr);
+                                        effectiveUnit(registry, enemyId, false, enemyEff));
 
         mkUnitWithMesh(p.x, p.z, 2,
                resolved.mr, resolved.mg, resolved.mb,
@@ -729,6 +761,38 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
                resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
                resolved.abilityIds);
+    }
+
+    // ── Comandante strategico (ADR-024, doc 32): UNO per mappa ───────────────
+    // L'autorità strategica separatista. NON è nel roster (spawnerebbe in molti
+    // come truppa): è un'unità SINGOLA piazzata nelle retrovie, che dirige i
+    // droidi (World::enemyCommand, letto da AiSystem) e — spawnando STATIONARY —
+    // non avanza mai, si limita a difendersi da chi lo attacca da vicino.
+    if (const MapDef* md = registry ? registry->getMap(m_mapId) : nullptr)
+    {
+        if (!md->commander.unit.empty())
+        {
+            const std::string cmdrId = md->commander.unit;
+            float cx = md->commander.x, cz = md->commander.z;
+            mapquery::findFreeSpot(m_map, cx, cz, 0.0f, +1.0f, 0.45f, 0.5f, 0.45f);
+
+            const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, cmdrId, 2);
+            EnemyDef cmdrEff;
+            auto wa = weaponattach::resolve(registry, m_meshCache,
+                                            effectiveUnit(registry, cmdrId, false, cmdrEff));
+            mkUnitWithMesh(cx, cz, 2,
+                   resolved.mr, resolved.mg, resolved.mb,
+                   resolved.br, resolved.bg, resolved.bb,
+                   resolved.hp,
+                   cx, cz, cx, cz,                       // waypoint = sua posizione (è stationary)
+                   resolved.moveSpeed, resolved.interval, resolved.range,
+                   resolved.hitboxProfileId, /*stationary=*/true,
+                   resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
+                   resolved.meshPath,
+                   resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
+                   resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
+                   resolved.abilityIds, /*respawns=*/false);   // uno per mappa: non rinasce
+        }
     }
 
     // ── Lista alleati da mappa/registry ─────────────────────────────────────
@@ -759,8 +823,9 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         // non più 8/20/5 hardcoded.
         const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, allyId, 1);
 
+        EnemyDef allyEff;
         auto wa = weaponattach::resolve(registry, m_meshCache,
-                                        registry ? registry->getAlly(allyId) : nullptr);
+                                        effectiveUnit(registry, allyId, true, allyEff));
         mkUnitWithMesh(p.x, p.z, 1,
                        resolved.mr, resolved.mg, resolved.mb,
                        resolved.br, resolved.bg, resolved.bb,

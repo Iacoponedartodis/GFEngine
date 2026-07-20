@@ -210,6 +210,7 @@ void WeaponEditor::loadWeapons()
         w.overheatPenalty    = j.value("overheat_penalty",2.0f);
         w.effectiveRange     = j.value("effective_range", 20.f);
         w.minRange           = j.value("min_range",       0.0f);
+        w.adsFov             = j.value("ads_fov",         35.f);
         w.spreadBase         = j.value("spread_base",     0.02f);
         w.spreadAds          = j.value("spread_ads",      0.005f);
         w.spreadMove         = j.value("spread_move",     0.06f);
@@ -320,6 +321,7 @@ void WeaponEditor::saveSelected()
     j["overheat_penalty"] = w.overheatPenalty;
     j["effective_range"]  = w.effectiveRange;
     j["min_range"]        = w.minRange;
+    j["ads_fov"]          = w.adsFov;
     j["spread_base"]      = w.spreadBase;
     j["spread_ads"]       = w.spreadAds;
     j["spread_move"]      = w.spreadMove;
@@ -745,9 +747,10 @@ void WeaponEditor::drawStatsTab(float panelW)
     drag("Spread salto",     w.spreadJump,   0.f, 1.0f, "%.4f");
 
     ImGui::Separator();
-    ImGui::TextDisabled("Gittata");
+    ImGui::TextDisabled("Gittata e mira");
     drag("Gittata effettiva", w.effectiveRange, 1.f, 100.f);
     drag("Gittata minima (non attiva)", w.minRange, 0.f, 20.f);
+    drag("Zoom in mira / FOV (basso = piu' zoom)", w.adsFov, 10.f, 60.f);
     ImGui::TextDisabled("(non attiva) = salvata ma non consumata dal runtime — KI #25");
 
     ImGui::Separator();

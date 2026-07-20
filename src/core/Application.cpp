@@ -73,6 +73,7 @@ inline Weapon weaponFromDef(const WeaponDef& def)
     w.sprintSpread    = def.sprintSpread;
     w.jumpSpread      = def.jumpSpread;
     w.effectiveRange  = def.effectiveRange;
+    w.adsFov          = def.adsFov;
     return w;
 }
 
@@ -1270,6 +1271,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         // Cursore assoluto all'HUD per l'hover dei bottoni Pausa/Fine partita.
         { int msx = 0, msy = 0; SDL_GetMouseState(&msx, &msy);
           hud.setMousePos((float)msx, (float)msy); }
+        // Direzione di vista all'HUD per l'indicatore di danno direzionale.
+        { const glm::vec3 vf = cam.getForward(); hud.setViewDir(vf.x, vf.z); }
 
         // Il menu sandbox libera il cursore per poterci cliccare; alla chiusura
         // lo riprende. Sincronizzato qui per coprire TUTTE le vie di chiusura.
@@ -1349,6 +1352,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             // Feedback colpi a segno del giocatore → hitmarker sul mirino
             if (world.combatFeedback.team1Kill)     hud.hitmarker(true);
             else if (world.combatFeedback.team1Hit) hud.hitmarker(false);
+            // Danno SUBITO → indicatore direzionale (da dove è arrivato il colpo).
+            if (world.combatFeedback.playerDamaged)
+                hud.addDamageIndicator(world.combatFeedback.hitDirX,
+                                       world.combatFeedback.hitDirZ);
             world.combatFeedback.reset();
             world.killedThisTick.clear();   // mailbox per-tick (ADR-020)
 

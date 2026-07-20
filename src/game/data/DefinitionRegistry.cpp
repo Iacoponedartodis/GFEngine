@@ -118,6 +118,7 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         w.overheatPenalty    = getf(*j, "overheat_penalty", 2);
         w.effectiveRange     = getf(*j, "effective_range", 20);
         w.minRange           = getf(*j, "min_range", 0);
+        w.adsFov             = getf(*j, "ads_fov", 35.0f);
         w.baseSpread         = getf(*j, "spread_base",   0.02f);
         w.adsSpread          = getf(*j, "spread_ads",    0.005f);
         w.moveSpread         = getf(*j, "spread_move",   0.06f);
@@ -151,7 +152,7 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
         noteUnknownKeys(*j, "weapons/" + w.id + ".json",
             {"name","faction","damage","fire_rate","bullet_speed","bullet_lifetime",
              "bullet_scale","bullet_color","heat_per_shot","cooldown_rate",
-             "overheat_penalty","effective_range","min_range","spread_base",
+             "overheat_penalty","effective_range","min_range","ads_fov","spread_base",
              "spread_ads","spread_move","spread_sprint","spread_jump","mesh",
              "projectile_mesh","mesh_scale","mesh_rot_x","mesh_rot_y",
              "attach_points","hand_scale","hand_rot","hand_offset",
@@ -377,7 +378,31 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 c.z         = getf(cp, "z", 0.0f);
                 c.facingDeg = getf(cp, "facing_deg", 0.0f);
                 c.height    = getf(cp, "height", 1.0f);
+                // Cover Intelligence (ADR-026), additivi: default = comportamento vecchio.
+                c.protection = getf(cp, "protection", 0.5f);
+                if (c.protection < 0.0f) c.protection = 0.0f;
+                if (c.protection > 1.0f) c.protection = 1.0f;
+                c.canShoot   = cp.contains("can_shoot") ? (bool)cp["can_shoot"] : true;
                 m.coverPoints.push_back(c);
+            }
+        }
+        // Tactical Points (doc 33 Fase 2, ADR-027): opzionali, additivi.
+        if ((*j).contains("tactical_points") && (*j)["tactical_points"].is_array())
+        {
+            for (auto& tp : (*j)["tactical_points"])
+            {
+                TacticalPointDef t;
+                t.x          = getf(tp, "x", 0.0f);
+                t.y          = getf(tp, "y", 0.0f);
+                t.z          = getf(tp, "z", 0.0f);
+                t.facingDeg  = getf(tp, "facing_deg", 0.0f);
+                t.type       = gets(tp, "type");
+                if (t.type.empty()) t.type = "vantage";
+                t.importance = getf(tp, "importance", 0.5f);
+                if (t.importance < 0.0f) t.importance = 0.0f;
+                if (t.importance > 1.0f) t.importance = 1.0f;
+                t.radius     = getf(tp, "radius", 4.0f);
+                m.tacticalPoints.push_back(t);
             }
         }
         if ((*j).contains("patrol_routes") && (*j)["patrol_routes"].is_array())
@@ -421,6 +446,15 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             }
         }
 
+        // Comandante strategico (ADR-024, doc 32) — uno per mappa, opzionale.
+        if ((*j).contains("commander") && (*j)["commander"].is_object())
+        {
+            auto& c = (*j)["commander"];
+            m.commander.unit = gets(c, "unit");
+            m.commander.x    = getf(c, "x", 0.0f);
+            m.commander.z    = getf(c, "z", 0.0f);
+        }
+
         // LIMITE VOLUTO: solo le chiavi di primo livello. Le sotto-strutture
         // (geometry, command_posts, cover_points, patrol_routes, danger_zones,
         // vehicle_spawns) hanno ognuna il proprio set e non sono ancora coperte:
@@ -429,14 +463,15 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
              "spawn_team1","spawn_team2","enemy_types","ally_types","geometry",
              "command_posts","strategic_targets","cover_points","patrol_routes",
-             "danger_zones","vehicle_spawns","description"}, m_unknownKeys);
+             "danger_zones","vehicle_spawns","tactical_points","commander","description"}, m_unknownKeys);
 
         std::cout << "[Registry] Map: " << m.id
                   << " (geometry: " << m.geometry.size() << " box, "
                   << m.commandPosts.size() << " command post, "
                   << m.coverPoints.size() << " cover, "
                   << m.patrolRoutes.size() << " route, "
-                  << m.dangerZones.size() << " danger)\n";
+                  << m.dangerZones.size() << " danger, "
+                  << m.tacticalPoints.size() << " tactical)\n";
         m_maps[m.id] = std::move(m);
     }
 }
@@ -676,9 +711,15 @@ void DefinitionRegistry::loadClasses(const std::string& dir)
         c.aiProfileId       = gets(*j, "ai_profile");   // ADR-022: il comportamento
         c.role              = gets(*j, "role");
         c.abilityIds        = getStrArray(*j, "abilities");
+        c.baseEntityId      = gets(*j, "base_entity");        // ADR-023: il corpo
+        c.hpMult            = getf(*j, "hp_mult",     1.0f);
+        c.speedMult         = getf(*j, "speed_mult",  1.0f);
+        c.damageMult        = getf(*j, "damage_mult", 1.0f);
+        c.colorMult         = getColor(*j, "color_mult", {1.0f, 1.0f, 1.0f});
         noteUnknownKeys(*j, "classes/" + c.id + ".json",
             {"name","primary_weapon","secondary_weapon","abilities","role",
-             "ai_profile","description"}, m_unknownKeys);
+             "ai_profile","base_entity","hp_mult","speed_mult","damage_mult",
+             "color_mult","description"}, m_unknownKeys);
         std::cout << "[Registry] Class: " << c.id << "\n";
         m_classes[c.id] = std::move(c);
     }

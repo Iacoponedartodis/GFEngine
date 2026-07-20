@@ -50,6 +50,7 @@ private:
         float overheatPenalty= 2.0f;
         float effectiveRange = 20.f;
         float minRange       = 0.0f;
+        float adsFov         = 35.f;   // FOV in mira (basso = più zoom)
         float spreadBase     = 0.02f;
         float spreadAds      = 0.005f;
         float spreadMove     = 0.06f;

@@ -72,6 +72,17 @@ Trooper con lo stesso modello hanno la stessa sagoma colpibile — è esattament
 rende `Clone Trooper`/`Heavy Clone Trooper` un'entità sola con due classi.
 Idem mesh, scala, attach point, fazione.
 
+### Raffinazione — ADR-023 (Accepted/in force, 2026-07-19)
+**Implementata.** Il modello sopra era **incompleto**: era l'**entità** a referenziare una classe (`classId`), quindi
+l'entità resta il tipo-unità nei roster e "un corpo, molte professioni" NON è ancora esprimibile
+senza duplicare entità (è il motivo per cui `Heavy Clone Trooper` è ancora un'entità separata).
+**ADR-023** rovescia la relazione per la metà NPC: la **classe** guadagna `baseEntityId` (il corpo da
+cui prende modello/hitbox/stat-base) + **moltiplicatori** di stat (`hpMult`/`speedMult`/`damageMult`);
+i roster referenziano **classi** come tipo-unità; le **entità si riservano ai corpi veri**
+(B1/B2/Droideka). Heavy/Sniper/Medic diventano classi del corpo clone. **Fatto**: `Heavy Clone
+Trooper` e `B1 Heavy Battle Droid` sono ora **classi** (corpo `Clone Trooper`/`B1 Battle Droid`); le
+entità ridondanti sono eliminate; i roster referenziano classi. Vedi ADR-023 per il modello completo.
+
 ### Authoring
 Modulo **Classi** dell'editor (dropdown-only per arma/abilità/profilo AI, ADR-010 RMW per il save).
 L'**Entity Editor** mostra il selettore di classe in cima al tab "Statistiche" e marca

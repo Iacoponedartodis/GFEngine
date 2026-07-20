@@ -92,6 +92,20 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   sparava un'altra, coi danni di una terza**.
   **Stato dei dati (2026-07-17)**: i due alleati hanno `class: trooper`; i **due droidi nemici sono
   ancora senza classe** (il gate li segnala) e usano i campi legacy.
+  **Aggiornamento (2026-07-19, ADR-023 + ADR-024)**: modello **entità=corpo / classe=professione**
+  in force. `ClassDef.baseEntityId` + `hpMult/speedMult/damageMult` + `colorMult`; una classe con
+  `baseEntityId` è **istanziabile da sola** (tipo-unità nei roster). `classres::effectiveUnit`
+  sintetizza il corpo effettivo + overlay classe (abilità, tinta). I roster firebase/outpost
+  referenziano **classi** (es. `Heavy Trooper`, `B1 Heavy Battle Droid`, `Tactical Droid`); entità
+  Heavy ridondanti eliminate. **Bestiario — comandante nemico (ADR-024 riscritto, doc 32, 2026-07-20)**:
+  il **Droide Tattico serie T** (classe su corpo B1) è la **controparte del comando giocatore** — uno
+  stratega, non un buff. **Uno per mappa**: non è nel roster ma nel campo `MapDef.commander{unit,x,z}`
+  (ConquestMode ne spawna uno solo, **stationary**, nelle retrovie → sta fermo e si difende soltanto).
+  Ability `type "command"` → `CommanderComponent`; finché è vivo, `AiSystem` pubblica un **focus**
+  (`World::enemyCommand`, il command post non-separatista più vicino) e i droidi in pattuglia vi
+  **convergono**; ucciderlo spegne la direttiva (feed + ritorno alla pattuglia). Gate: warning se un
+  comandante finisce in `enemy_types`. Verificato via `--sim`: **esattamente 1** `class=Tactical Droid`
+  (col profilo AI autorato). v1 base: ordini singoli, gerarchia gradi + entità-a-sé futuri (doc 32).
 
 - **Il giocatore NON sceglie una classe (2026-07-17, ADR-022 §4):** la riga **"Classe" del PreMatch
   e' stata RIMOSSA**, insieme a `setClassList`/`getSelectedClassId`/`ClassEntry` — senza i metodi la

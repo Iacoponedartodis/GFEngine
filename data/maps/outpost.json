@@ -3,8 +3,14 @@
     "max_tickets": 10,
     "enemy_count": 6,
     "ally_count": 3,
-    "enemy_types": [],
-    "ally_types": [],
+    "enemy_types": [
+        "B1 Battle Droid",
+        "B1 Heavy Battle Droid"
+    ],
+    "ally_types": [
+        "Clone Trooper",
+        "Heavy Trooper"
+    ],
     "spawn_team1": [0.0, 0.86, 26.0],
     "spawn_team2": [0.0, 0.86, -26.0],
     "command_posts": [
