@@ -1,5 +1,6 @@
 #pragma once
 #include "mini/ecs/ISystem.hpp"
+#include <vector>
 
 namespace mini
 {
@@ -15,6 +16,32 @@ public:
     static constexpr float k_bulletSpeed = 8.0f;
     static constexpr float k_bulletDmg   = 20.0f;
     static constexpr float k_bulletLife  = 5.0f;
+
+private:
+    // ── Contatti condivisi (doc 34) ──────────────────────────────────────
+    // Prima erano ricostruiti da zero ogni tick: un avvistamento si propagava
+    // ISTANTANEAMENTE e non c'era nulla su cui la rete di comunicazione potesse
+    // agire. Ora ogni contatto PERSISTE con la sua età: con le comunicazioni
+    // intatte è utilizzabile subito, senza torre solo dopo `shareDelay` — e la
+    // posizione resta quella dell'avvistamento, quindi i compagni convergono su
+    // dove il nemico ERA. L'informazione vecchia è imprecisa: è il punto.
+    struct SharedContact { float x, z; int team; float age; };
+    std::vector<SharedContact> m_contacts;
+
+    // Rete di comunicazione: quando il comando ha rivalutato la direttiva, per
+    // team. Senza torre il periodo si allunga → si esegue più a lungo un intento
+    // ormai vecchio.
+    float m_lastCommandDecision[3] = {0.0f, -1e9f, -1e9f};
+    float m_time = 0.0f;   // tempo di gioco accumulato (cadenze e età dei contatti)
+
+    // ── Bounding overwatch esplicito (ADR-032) ───────────────────────────
+    // Le AVANZATE avviate questo tick verso una posizione tattica: un compagno
+    // che resta fermo consulta l'elenco del tick PRECEDENTE (niente dipendenza
+    // dall'ordine di iterazione) e va a coprire il punto d'avanzata usando il
+    // grafo `positionCovers`. È il consumo esplicito del grafo, accanto
+    // all'overwatch emergente (ADR-035) che resta.
+    struct Advance { int coveredIdx; int team; float x, z; };
+    std::vector<Advance> m_advances, m_advancesPrev;
 };
 
 } // namespace mini

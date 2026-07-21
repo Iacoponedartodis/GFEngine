@@ -23,8 +23,12 @@ struct RespawnEntry
     float br = 1.0f, bg = 0.5f, bb = 0.0f;
     float hp = 80.0f;
     float pax = 0, paz = 0, pbx = 0, pbz = 0;
+    // Route autorata + segmento di partenza (ADR-028): -1 = nessuna (A/B legacy).
+    // Nel template di respawn così l'unità che rientra riprende la SUA route.
+    int   patrolRoute = -1, patrolSeg = 0;
     float patSpd = 2.5f, interval = 2.2f, range = 18.0f;
     bool  stationary = false;
+    float leashRadius = 0.0f;   // ADR-041: raggio di leash del comandante (0 = nessuno)
     // false = unità NON tracciata per il respawn (obiettivo vivente, es. il
     // comandante: uno per mappa, ADR-024/doc 32). Come i bersagli strategici.
     bool  respawns   = true;

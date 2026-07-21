@@ -68,7 +68,12 @@ glm::vec3 nudgeOutOfColliders(const glm::vec3& pos, const glm::vec3& half,
 
 // True se il segmento from→to NON è bloccato da nessun ColliderComponent.
 // Usa il slab test per ray-AABB intersection.
-bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world);
+// `ignore` (doc 35): entità da NON considerare come ostacolo — serve quando il
+// bersaglio stesso ha un collider. Una struttura colpibile bloccava la visuale
+// verso il proprio centro, quindi nessuna AI poteva "vederla" e ingaggiarla
+// (regressione introdotta dal collider di ADR-036, KI #70).
+bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
+                    EntityId ignore = 0);
 
 } // namespace physics
 } // namespace mini

@@ -29,7 +29,10 @@ public:
     void setAimOnAlly(bool on)   { m_aimOnAlly   = on; }   // mirino su compagno → verde (Revive/CoveringFire)
     // Ruota di comando (doc 26): open = visibile; sel = settore evidenziato
     // (-1 = nessuno). Etichette in `labels`, indicizzate come sel.
-    void setCommandWheel(bool open, int sel) { m_wheelOpen = open; m_wheelSel = sel; }
+    // `followActive` (ADR-037): la squadra sta già seguendo → il 4° settore
+    // diventa LIBERI (revoca) invece di SEGUI.
+    void setCommandWheel(bool open, int sel, bool followActive = false)
+    { m_wheelOpen = open; m_wheelSel = sel; m_wheelFollowActive = followActive; }
 
     // Mappa top-down di selezione del punto di respawn (doc 30, Phase 1, stile
     // Battlefront II 2005). Mentre si è a terra: vista dall'alto della mappa con
@@ -120,6 +123,7 @@ private:
     bool        m_aimOnAlly   = false;
     bool        m_wheelOpen   = false;
     int         m_wheelSel    = -1;
+    bool        m_wheelFollowActive = false;
     RespawnMap  m_respawnMap;              // mappa top-down di respawn (doc 30)
     float       m_mouseX = 0.0f, m_mouseY = 0.0f;   // cursore per l'hover overlay
     // Indicatori di danno direzionale (mondo XZ + età); direzione di vista corrente.

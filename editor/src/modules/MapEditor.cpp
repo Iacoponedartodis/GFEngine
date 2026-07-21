@@ -9,6 +9,10 @@
 #include "util/UiWidgets.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+// Esposizione mostrata al designer (ADR-033): si riusa la STESSA funzione del
+// runtime invece di duplicarne la regola nell'editor.
+#include "mini/game/data/Definitions.hpp"
+#include "mini/game/ai/WorldIntel.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -46,6 +50,16 @@ MapEditor::MapEditor()
                     m_vehicleIds.push_back(entry.path().stem().string());
         std::sort(m_vehicleIds.begin(), m_vehicleIds.end());
     }
+    // Classi per il combo del comandante (id = filename stem, ADR-001/041)
+    {
+        std::error_code ec;
+        fs::path folder = fs::path(getDataDir()) / "classes";
+        if (fs::exists(folder, ec))
+            for (auto& entry : fs::directory_iterator(folder, ec))
+                if (entry.path().extension() == ".json")
+                    m_classIds.push_back(entry.path().stem().string());
+        std::sort(m_classIds.begin(), m_classIds.end());
+    }
 
     loadMaps();
     if (!m_mapList.empty())
@@ -76,12 +90,6 @@ void MapEditor::tick(float dt)
             auto& p = m_posts[-10 - m_selBox];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
         }
-        else if (m_selBox <= -100 && m_selBox > -200
-                 && (-100 - m_selBox) < (int)m_covers.size())
-        {
-            auto& c = m_covers[-100 - m_selBox];
-            c.x += delta.x; c.y += delta.y; c.z += delta.z;
-        }
         else if (m_selBox <= -200 && m_selBox > -300
                  && (-200 - m_selBox) < (int)m_dangers.size())
         {
@@ -111,10 +119,20 @@ void MapEditor::tick(float dt)
             auto& t = m_targets[-500 - m_selBox];
             t.x += delta.x; t.z += delta.z;
         }
-        else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+        else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
         {
-            auto& t = m_tacticals[-1000 - m_selBox];
-            t.x += delta.x; t.y += delta.y; t.z += delta.z;
+            auto& s = m_sectors[-2000 - m_selBox];
+            s.x += delta.x; s.z += delta.z;
+        }
+        else if (m_selBox <= -1000 && m_selBox > -2000
+                 && (-1000 - m_selBox) < (int)m_positions.size())   // ADR-030
+        {
+            auto& p = m_positions[-1000 - m_selBox];
+            p.x += delta.x; p.y += delta.y; p.z += delta.z;
+        }
+        else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
+        {
+            m_commander.x += delta.x; m_commander.z += delta.z;
         }
         m_dirty = true;
         updateViewport();
@@ -132,13 +150,6 @@ void MapEditor::tick(float dt)
             b.ry = wrap(b.ry + rotDelta.y);
             m_dirty = true; updateViewport();
         }
-        else if (m_selBox <= -100 && m_selBox > -200
-                 && (-100 - m_selBox) < (int)m_covers.size())
-        {
-            auto& c = m_covers[-100 - m_selBox];
-            c.facing = wrap(c.facing + rotDelta.y);
-            m_dirty = true; updateViewport();
-        }
         else if (m_selBox <= -400 && m_selBox > -500
                  && (-400 - m_selBox) < (int)m_vehSpawns.size())
         {
@@ -146,10 +157,18 @@ void MapEditor::tick(float dt)
             v.ry = wrap(v.ry + rotDelta.y);
             m_dirty = true; updateViewport();
         }
-        else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+        else if (m_selBox <= -500 && m_selBox > -1000
+                 && (-500 - m_selBox) < (int)m_targets.size())
         {
-            auto& t = m_tacticals[-1000 - m_selBox];
-            t.facing = wrap(t.facing + rotDelta.y);
+            auto& t = m_targets[-500 - m_selBox];
+            t.ry = wrap(t.ry + rotDelta.y);
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -1000 && m_selBox > -2000
+                 && (-1000 - m_selBox) < (int)m_positions.size())   // ADR-030
+        {
+            auto& p = m_positions[-1000 - m_selBox];
+            p.facing = wrap(p.facing + rotDelta.y);
             m_dirty = true; updateViewport();
         }
     }
@@ -179,6 +198,25 @@ void MapEditor::tick(float dt)
         {
             auto& d = m_dangers[-200 - m_selBox];
             d.radius += scaleDelta.x; if (d.radius < 0.5f) d.radius = 0.5f;
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
+        {
+            auto& s = m_sectors[-2000 - m_selBox];
+            s.radius += scaleDelta.x; if (s.radius < 2.0f) s.radius = 2.0f;
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -500 && m_selBox > -1000
+                 && (-500 - m_selBox) < (int)m_targets.size())
+        {
+            auto& t = m_targets[-500 - m_selBox];
+            t.scale += scaleDelta.x * 0.4f; if (t.scale < 0.2f) t.scale = 0.2f;
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041: raggio leash
+        {
+            m_commander.leashRadius += scaleDelta.x;
+            if (m_commander.leashRadius < 0.0f) m_commander.leashRadius = 0.0f;
             m_dirty = true; updateViewport();
         }
     }
@@ -227,8 +265,8 @@ void MapEditor::loadMap(const std::string& id)
     m_mapJsonPath = it->path;
     m_boxes.clear();
     m_posts.clear();
-    m_covers.clear();
-    m_tacticals.clear();
+    m_positions.clear();
+    m_sectors.clear();
     m_dangers.clear();
     m_routes.clear();
     m_vehSpawns.clear();
@@ -240,6 +278,18 @@ void MapEditor::loadMap(const std::string& id)
         m_spawnTeam1 = {j["spawn_team1"][0], j["spawn_team1"][1], j["spawn_team1"][2]};
     if (j.contains("spawn_team2") && j["spawn_team2"].size() >= 3)
         m_spawnTeam2 = {j["spawn_team2"][0], j["spawn_team2"][1], j["spawn_team2"][2]};
+
+    // Comandante strategico (ADR-024/041): uno per mappa, campo `commander`.
+    m_commander = CommanderEntry{};
+    if (j.contains("commander") && j["commander"].is_object())
+    {
+        auto& c = j["commander"];
+        m_commander.exists      = true;
+        m_commander.unit        = c.value("unit", std::string());
+        m_commander.x           = c.value("x", 0.0f);
+        m_commander.z           = c.value("z", 0.0f);
+        m_commander.leashRadius = c.value("leash_radius", 0.0f);
+    }
 
     if (j.contains("geometry") && j["geometry"].is_array())
     {
@@ -295,41 +345,61 @@ void MapEditor::loadMap(const std::string& id)
             t.x  = st.value("x", 0.f);
             t.z  = st.value("z", 0.f);
             t.hp = st.value("hp", 300.f);
+            t.ry    = st.value("ry", 0.f);
+            t.team  = st.value("team", 2);
+            t.scale = st.value("mesh_scale", 1.f);
+            t.halfX = st.value("half_x", 0.f);
+            t.halfY = st.value("half_y", 0.f);
+            t.halfZ = st.value("half_z", 0.f);
+            // Ruolo (doc 34): "comms" = torre di comunicazione della sua fazione.
+            const std::string rl = st.value("role", std::string("generic"));
+            t.role = (rl == "comms") ? 1 : (rl == "control") ? 2 : 0;
+            t.priority     = st.value("priority", 0.5f);       // doc 35
+            t.engageRadius = st.value("engage_radius", 0.0f);
             m_targets.push_back(t);
         }
     }
 
     // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
+    // Posizioni tattiche (ADR-030): chiave nuova + MIGRAZIONE delle due legacy.
+    // Salvando si riscrive solo `tactical_positions` e le legacy spariscono.
+    auto readPos = [&](const nlohmann::json& p, const char* roleKey,
+                       const char* defRole, float defProtection)
+    {
+        PositionEntry e;
+        e.x          = p.value("x", 0.f);
+        e.y          = p.value("y", 0.5f);
+        e.z          = p.value("z", 0.f);
+        e.facing     = p.value("facing_deg", 0.f);
+        e.role       = p.value(roleKey, std::string(defRole));
+        if (e.role.empty()) e.role = defRole;
+        e.height     = p.value("height", 1.f);
+        e.protection = p.value("protection", defProtection);
+        e.canShoot   = p.value("can_shoot", true);
+        e.importance = p.value("importance", 0.5f);
+        e.radius     = p.value("radius", 4.f);
+        e.fireArc    = p.value("fire_arc_deg", 120.f);   // ADR-031
+        e.fireRange  = p.value("fire_range", 25.f);
+        m_positions.push_back(e);
+    };
+    if (j.contains("tactical_positions") && j["tactical_positions"].is_array())
+        for (auto& p : j["tactical_positions"]) readPos(p, "role", "cover", 0.5f);
     if (j.contains("cover_points") && j["cover_points"].is_array())
-    {
-        for (auto& cp : j["cover_points"])
+        for (auto& p : j["cover_points"]) readPos(p, "role", "cover", 0.5f);
+    if (j.contains("tactical_points") && j["tactical_points"].is_array())
+        for (auto& p : j["tactical_points"]) readPos(p, "type", "vantage", 0.0f);
+
+    if (j.contains("sectors") && j["sectors"].is_array())   // ADR-034
+        for (auto& s : j["sectors"])
         {
-            CoverEntry c;
-            c.x      = cp.value("x", 0.f);
-            c.y      = cp.value("y", 0.5f);
-            c.z      = cp.value("z", 0.f);
-            c.facing = cp.value("facing_deg", 0.f);
-            c.height = cp.value("height", 1.f);
-            c.protection = cp.value("protection", 0.5f);   // ADR-026
-            c.canShoot   = cp.value("can_shoot", true);
-            m_covers.push_back(c);
+            SectorEntry e;
+            e.label      = s.value("label", std::string("Settore"));
+            e.x          = s.value("x", 0.f);
+            e.z          = s.value("z", 0.f);
+            e.radius     = s.value("radius", 12.f);
+            e.importance = s.value("importance", 0.5f);
+            m_sectors.push_back(e);
         }
-    }
-    if (j.contains("tactical_points") && j["tactical_points"].is_array())   // ADR-027
-    {
-        for (auto& tp : j["tactical_points"])
-        {
-            TacticalEntry t;
-            t.x          = tp.value("x", 0.f);
-            t.y          = tp.value("y", 1.f);
-            t.z          = tp.value("z", 0.f);
-            t.facing     = tp.value("facing_deg", 0.f);
-            t.type       = tp.value("type", std::string("vantage"));
-            t.importance = tp.value("importance", 0.5f);
-            t.radius     = tp.value("radius", 4.f);
-            m_tacticals.push_back(t);
-        }
-    }
     if (j.contains("danger_zones") && j["danger_zones"].is_array())
     {
         for (auto& dz : j["danger_zones"])
@@ -414,6 +484,18 @@ bool MapEditor::saveMap()
     }
     j["command_posts"] = postsArr;
 
+    // Comandante strategico (ADR-024/041): uno per mappa. Se non è autorato si
+    // RIMUOVE il campo (RMW: non lasciare un residuo che spawnerebbe comunque).
+    if (m_commander.exists && !m_commander.unit.empty())
+    {
+        json c;
+        c["unit"] = m_commander.unit;
+        c["x"] = m_commander.x;  c["z"] = m_commander.z;
+        c["leash_radius"] = m_commander.leashRadius;
+        j["commander"] = c;
+    }
+    else j.erase("commander");
+
     // Bersagli strategici (doc 25, DestroyTarget)
     json targetsArr = json::array();
     for (const auto& t : m_targets)
@@ -422,36 +504,53 @@ bool MapEditor::saveMap()
         st["label"] = t.label;
         st["x"] = t.x;  st["z"] = t.z;
         st["hp"] = t.hp;
+        st["ry"]         = t.ry;
+        st["team"]       = t.team;
+        st["mesh_scale"] = t.scale;
+        st["half_x"] = t.halfX;  st["half_y"] = t.halfY;  st["half_z"] = t.halfZ;
+        st["role"]   = (t.role == 1) ? "comms"            // doc 34
+                     : (t.role == 2) ? "control"          // doc 36
+                                     : "generic";
+        st["priority"]      = t.priority;                 // doc 35
+        st["engage_radius"] = t.engageRadius;
         targetsArr.push_back(st);
     }
     j["strategic_targets"] = targetsArr;
 
     // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
-    json coverArr = json::array();
-    for (const auto& c : m_covers)
+    // Posizioni tattiche unificate (ADR-030). Si scrive SOLO la chiave nuova e si
+    // cancellano le legacy: aprire+salvare una mappa la migra definitivamente.
+    json posArr = json::array();
+    for (const auto& p : m_positions)
     {
-        json cp;
-        cp["x"] = c.x;  cp["y"] = c.y;  cp["z"] = c.z;
-        cp["facing_deg"] = c.facing;
-        cp["height"]     = c.height;
-        cp["protection"] = c.protection;   // ADR-026
-        cp["can_shoot"]  = c.canShoot;
-        coverArr.push_back(cp);
+        json o;
+        o["x"] = p.x;  o["y"] = p.y;  o["z"] = p.z;
+        o["facing_deg"] = p.facing;
+        o["role"]       = p.role;
+        o["height"]     = p.height;
+        o["protection"] = p.protection;
+        o["can_shoot"]  = p.canShoot;
+        o["importance"] = p.importance;
+        o["radius"]     = p.radius;
+        o["fire_arc_deg"] = p.fireArc;     // ADR-031
+        o["fire_range"]   = p.fireRange;
+        posArr.push_back(o);
     }
-    j["cover_points"] = coverArr;
+    j["tactical_positions"] = posArr;
+    j.erase("cover_points");
+    j.erase("tactical_points");
 
-    json tacticalArr = json::array();   // ADR-027
-    for (const auto& t : m_tacticals)
+    json secArr = json::array();   // ADR-034
+    for (const auto& s : m_sectors)
     {
-        json tp;
-        tp["x"] = t.x;  tp["y"] = t.y;  tp["z"] = t.z;
-        tp["facing_deg"] = t.facing;
-        tp["type"]       = t.type;
-        tp["importance"] = t.importance;
-        tp["radius"]     = t.radius;
-        tacticalArr.push_back(tp);
+        json o;
+        o["label"]      = s.label;
+        o["x"] = s.x;  o["z"] = s.z;
+        o["radius"]     = s.radius;
+        o["importance"] = s.importance;
+        secArr.push_back(o);
     }
-    j["tactical_points"] = tacticalArr;
+    j["sectors"] = secArr;
 
     json dangerArr = json::array();
     for (const auto& d : m_dangers)
@@ -528,9 +627,41 @@ void MapEditor::deleteBox(int idx)
     updateViewport();
 }
 
+// ── recomputeExposure (ADR-033) ───────────────────────────────────────────────
+// Costruisce un MapDef temporaneo dai dati dell'editor e chiama la STESSA funzione
+// del runtime: la regola dell'esposizione esiste in un posto solo. Si ricalcola a
+// ogni modifica (updateViewport), non a ogni frame.
+void MapEditor::recomputeExposure()
+{
+    mini::MapDef tmp;
+    tmp.geometry.reserve(m_boxes.size());
+    for (const auto& b : m_boxes)
+    {
+        mini::MapGeometryBox g;
+        g.x = b.x; g.y = b.y; g.z = b.z; g.ry = b.ry;
+        g.sx = b.sx; g.sy = b.sy; g.sz = b.sz;
+        g.collider = b.isCollider;
+        tmp.geometry.push_back(g);
+    }
+    tmp.tacticalPositions.reserve(m_positions.size());
+    for (const auto& p : m_positions)
+    {
+        mini::TacticalPositionDef t;
+        t.x = p.x; t.y = p.y; t.z = p.z;
+        t.facingDeg = p.facing; t.role = p.role;
+        t.height = p.height; t.protection = p.protection; t.canShoot = p.canShoot;
+        t.importance = p.importance; t.radius = p.radius;
+        t.fireArcDeg = p.fireArc; t.fireRange = p.fireRange;
+        tmp.tacticalPositions.push_back(t);
+    }
+    mini::worldintel::buildTacticalLinks(tmp);
+    m_exposure = tmp.positionExposure;
+}
+
 // ── updateViewport ────────────────────────────────────────────────────────────
 void MapEditor::updateViewport()
 {
+    recomputeExposure();   // ADR-033: tenuta in pari con le posizioni
     std::vector<FreeCameraViewport::MapBoxDraw> draws;
     draws.reserve(m_boxes.size() + 2);
 
@@ -603,80 +734,131 @@ void MapEditor::updateViewport()
         draws.push_back(area);
     }
 
-    // Bersagli strategici (DestroyTarget): box arancione ~2.5 m, come in gioco.
+    // Comandante strategico (ADR-041): palo viola alto + disco del raggio di
+    // leash (l'area da cui non esce). Se leash 0 il disco non si disegna (fermo).
+    if (m_commander.exists)
+    {
+        const bool sel = (m_selBox == kSelCommander);
+        FreeCameraViewport::MapBoxDraw pole;
+        pole.x = m_commander.x; pole.y = 1.6f; pole.z = m_commander.z; pole.ry = 0;
+        pole.sx = 0.5f; pole.sy = 3.2f; pole.sz = 0.5f;
+        pole.r = 0.65f; pole.g = 0.25f; pole.b = 0.85f;   // viola = comando
+        pole.selected = sel;
+        pole.pickId = kSelCommander;
+        draws.push_back(pole);
+
+        if (m_commander.leashRadius > 0.01f)
+        {
+            FreeCameraViewport::MapBoxDraw area;
+            area.x = m_commander.x; area.y = 0.06f; area.z = m_commander.z; area.ry = 0;
+            area.sx = m_commander.leashRadius * 2.0f; area.sy = 0.05f;
+            area.sz = m_commander.leashRadius * 2.0f;
+            area.r = 0.40f; area.g = 0.16f; area.b = 0.55f;
+            area.selected = sel;
+            area.pickId = kSelCommander;
+            draws.push_back(area);
+        }
+    }
+
+    // Bersagli strategici: box arancione, con la STESSA scala e rotazione che
+    // avranno in gioco. Prima erano disegnati con `ry = 0` e lato fisso 2.5:
+    // ruotare o scalare cambiava il dato ma non si vedeva nulla, quindi
+    // sembravano "non funzionare" (segnalato dall'utente).
     for (int i = 0; i < (int)m_targets.size(); ++i)
     {
         const auto& t = m_targets[i];
+        const float sc = 2.5f * ((t.scale > 0.0001f) ? t.scale : 1.0f);
         FreeCameraViewport::MapBoxDraw s;
-        s.x = t.x; s.y = 1.25f; s.z = t.z; s.ry = 0;
-        s.sx = 2.5f; s.sy = 2.5f; s.sz = 2.5f;
+        s.x = t.x; s.y = sc * 0.5f; s.z = t.z; s.ry = t.ry;
+        s.sx = sc; s.sy = sc; s.sz = sc;
         s.r = 0.85f; s.g = 0.55f; s.b = 0.15f;
         s.selected = (m_selBox == -500 - i);
         s.pickId = -500 - i;
         draws.push_back(s);
     }
 
-    // ── Map Metadata (15_MapMetadata) ────────────────────────────────────
-    // Cover point: lastra verde-acqua alta `height` + "naso" nella direzione
-    // del fronte di copertura (facing).
-    for (int i = 0; i < (int)m_covers.size(); ++i)
+    // ── Posizioni tattiche (ADR-030) ─────────────────────────────────────
+    // Un solo marker per tutte: colore dal RUOLO, altezza dalla copertura.
+    // Chi ripara (protection > 0) è una lastra alta `height` (si vede cosa
+    // copre); chi non ripara è un pilastro sottile. Naso = fronte; disco = raggio
+    // d'influenza (solo per i ruoli d'area). pickId = -1000 - i.
+    for (int i = 0; i < (int)m_positions.size(); ++i)
     {
-        const auto& c = m_covers[i];
-        const bool sel = (m_selBox == -100 - i);
-
-        FreeCameraViewport::MapBoxDraw slab;
-        slab.x = c.x; slab.y = c.y + c.height * 0.5f; slab.z = c.z; slab.ry = c.facing;
-        slab.sx = 0.9f; slab.sy = c.height; slab.sz = 0.25f;
-        slab.r = 0.15f; slab.g = 0.85f; slab.b = 0.70f;
-        slab.selected = sel;
-        slab.pickId = -100 - i;
-        draws.push_back(slab);
-
-        const float fr = glm::radians(c.facing);
-        FreeCameraViewport::MapBoxDraw nose;
-        nose.x = c.x + std::sin(fr) * 0.45f;
-        nose.y = c.y + c.height * 0.5f;
-        nose.z = c.z + std::cos(fr) * 0.45f;
-        nose.ry = c.facing;
-        nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.4f;
-        nose.r = 0.10f; nose.g = 0.60f; nose.b = 0.50f;
-        nose.selected = sel;
-        nose.pickId = -100 - i;
-        draws.push_back(nose);
-    }
-
-    // Tactical point (ADR-027): pilastro colorato per tipo + naso del fronte +
-    // disco tenue del raggio d'influenza. pickId = -1000 - i.
-    for (int i = 0; i < (int)m_tacticals.size(); ++i)
-    {
-        const auto& t = m_tacticals[i];
+        const auto& p = m_positions[i];
         const bool sel = (m_selBox == -1000 - i);
-        float r = 0.2f, g = 0.8f, b = 0.9f;                 // vantage (ciano)
-        if (t.type == "defensive")  { r = 0.9f; g = 0.4f; b = 0.2f; }
-        else if (t.type == "chokepoint")  { r = 0.7f; g = 0.3f; b = 0.9f; }
-        else if (t.type == "observation") { r = 0.9f; g = 0.85f; b = 0.2f; }
+        float r = 0.15f, g = 0.85f, b = 0.70f;                       // cover (verde-acqua)
+        if      (p.role == "vantage")     { r = 0.2f;  g = 0.8f;  b = 0.9f;  }
+        else if (p.role == "defensive")   { r = 0.9f;  g = 0.4f;  b = 0.2f;  }
+        else if (p.role == "chokepoint")  { r = 0.7f;  g = 0.3f;  b = 0.9f;  }
+        else if (p.role == "observation") { r = 0.9f;  g = 0.85f; b = 0.2f;  }
 
-        FreeCameraViewport::MapBoxDraw pillar;
-        pillar.x = t.x; pillar.y = t.y + 0.6f; pillar.z = t.z; pillar.ry = t.facing;
-        pillar.sx = 0.4f; pillar.sy = 1.2f; pillar.sz = 0.4f;
-        pillar.r = r; pillar.g = g; pillar.b = b;
-        pillar.selected = sel; pillar.pickId = -1000 - i;
-        draws.push_back(pillar);
+        const bool shields = (p.protection > 0.0f);
+        const float h = shields ? p.height : 1.2f;
 
-        const float fr = glm::radians(t.facing);
+        FreeCameraViewport::MapBoxDraw body;
+        body.x = p.x; body.y = p.y + h * 0.5f; body.z = p.z; body.ry = p.facing;
+        body.sx = shields ? 0.9f : 0.4f; body.sy = h; body.sz = shields ? 0.25f : 0.4f;
+        body.r = r; body.g = g; body.b = b;
+        body.selected = sel; body.pickId = -1000 - i;
+        draws.push_back(body);
+
+        const float fr = glm::radians(p.facing);
         FreeCameraViewport::MapBoxDraw nose;
-        nose.x = t.x + std::sin(fr) * 0.5f; nose.y = t.y + 0.6f; nose.z = t.z + std::cos(fr) * 0.5f;
-        nose.ry = t.facing; nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.5f;
+        nose.x = p.x + std::sin(fr) * 0.5f; nose.y = p.y + h * 0.5f;
+        nose.z = p.z + std::cos(fr) * 0.5f;
+        nose.ry = p.facing; nose.sx = 0.2f; nose.sy = 0.2f; nose.sz = 0.5f;
         nose.r = r * 0.6f; nose.g = g * 0.6f; nose.b = b * 0.6f;
         nose.selected = sel; nose.pickId = -1000 - i;
         draws.push_back(nose);
 
-        FreeCameraViewport::MapBoxDraw disc;
-        disc.x = t.x; disc.y = t.y - 0.4f; disc.z = t.z; disc.ry = 0;
-        disc.sx = t.radius * 2.0f; disc.sy = 0.03f; disc.sz = t.radius * 2.0f;
-        disc.r = r; disc.g = g; disc.b = b;
-        disc.selected = sel; disc.pickId = -1000 - i;
-        draws.push_back(disc);
+        if (p.role == "defensive" || p.role == "chokepoint")
+        {
+            FreeCameraViewport::MapBoxDraw disc;
+            disc.x = p.x; disc.y = p.y - 0.4f; disc.z = p.z; disc.ry = 0;
+            disc.sx = p.radius * 2.0f; disc.sy = 0.03f; disc.sz = p.radius * 2.0f;
+            disc.r = r; disc.g = g; disc.b = b;
+            disc.selected = sel; disc.pickId = -1000 - i;
+            draws.push_back(disc);
+        }
+
+        // Settore di tiro (ADR-031): i due bordi dell'arco, come raggi lunghi
+        // quanto la gittata. SOLO sulla posizione selezionata — con 60 posizioni
+        // disegnarli tutti renderebbe il viewport illeggibile. Senza vederlo il
+        // settore non è autorabile con cura, ed è il dato più delicato.
+        if (sel && p.canShoot)
+        {
+            const float halfArc = p.fireArc * 0.5f;
+            const float len = p.fireRange;
+            for (int s = 0; s < 2; ++s)
+            {
+                const float a = glm::radians(p.facing + (s == 0 ? -halfArc : halfArc));
+                FreeCameraViewport::MapBoxDraw ray;
+                ray.x = p.x + std::sin(a) * len * 0.5f;   // centro del raggio
+                ray.y = p.y + 0.15f;
+                ray.z = p.z + std::cos(a) * len * 0.5f;
+                ray.ry = p.facing + (s == 0 ? -halfArc : halfArc);
+                ray.sx = 0.10f; ray.sy = 0.06f; ray.sz = len;
+                ray.r = 1.0f; ray.g = 0.85f; ray.b = 0.25f;   // giallo: linea di tiro
+                ray.selected = false;                          // non ri-evidenziare
+                ray.pickId = -1000 - i;
+                draws.push_back(ray);
+            }
+        }
+    }
+
+    // Settore (ADR-034): disco ampio e tenue, colore per importanza. È l'area su
+    // cui ragiona il comandante. pickId = -2000 - i.
+    for (int i = 0; i < (int)m_sectors.size(); ++i)
+    {
+        const auto& s = m_sectors[i];
+        const bool sel = (m_selBox == -2000 - i);
+        FreeCameraViewport::MapBoxDraw area;
+        area.x = s.x; area.y = 0.02f; area.z = s.z; area.ry = 0;
+        area.sx = s.radius * 2.0f; area.sy = 0.02f; area.sz = s.radius * 2.0f;
+        area.r = 0.35f + s.importance * 0.5f;   // più importante = più acceso
+        area.g = 0.30f; area.b = 0.75f;
+        area.selected = sel; area.pickId = -2000 - i;
+        draws.push_back(area);
     }
 
     // Danger zone: disco arancione (più rosso quanto più pericoloso)
@@ -762,20 +944,17 @@ void MapEditor::updateViewport()
         m_viewport.setGizmoTarget({m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
     }
+    else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
+    {
+        m_viewport.setGizmoTarget({m_commander.x, 1.6f, m_commander.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, true);   // scala → raggio di leash
+    }
     else if (m_selBox <= -10 && m_selBox > -100
              && (-10 - m_selBox) < (int)m_posts.size())
     {
         const auto& p = m_posts[-10 - m_selBox];
         m_viewport.setGizmoTarget({p.x, p.y, p.z}, true);
         m_viewport.setGizmoCanRotateScale(false, true);   // scala → raggio (ADR-025)
-    }
-    else if (m_selBox <= -100 && m_selBox > -200
-             && (-100 - m_selBox) < (int)m_covers.size())
-    {
-        const auto& c = m_covers[-100 - m_selBox];
-        m_viewport.setGizmoTarget({c.x, c.y, c.z}, true);
-        m_viewport.setGizmoRotAxes(false, true, false);   // fronte copertura (facing)
-        m_viewport.setGizmoCanRotateScale(true, false);   // ruota → facing (ADR-025)
     }
     else if (m_selBox <= -200 && m_selBox > -300
              && (-200 - m_selBox) < (int)m_dangers.size())
@@ -810,14 +989,22 @@ void MapEditor::updateViewport()
     {
         const auto& t = m_targets[-500 - m_selBox];
         m_viewport.setGizmoTarget({t.x, 1.25f, t.z}, true);
-        m_viewport.setGizmoCanRotateScale(false, false);
+        m_viewport.setGizmoRotAxes(false, true, false);   // orientamento struttura
+        m_viewport.setGizmoCanRotateScale(true, true);    // ruota → ry, scala → scale
     }
-    else if (m_selBox <= -1000 && (-1000 - m_selBox) < (int)m_tacticals.size())   // ADR-027
+    else if (m_selBox <= -1000 && m_selBox > -2000
+             && (-1000 - m_selBox) < (int)m_positions.size())   // ADR-030
     {
-        const auto& t = m_tacticals[-1000 - m_selBox];
-        m_viewport.setGizmoTarget({t.x, t.y, t.z}, true);
-        m_viewport.setGizmoRotAxes(false, true, false);   // fronte del punto (facing)
+        const auto& p = m_positions[-1000 - m_selBox];
+        m_viewport.setGizmoTarget({p.x, p.y, p.z}, true);
+        m_viewport.setGizmoRotAxes(false, true, false);   // fronte della posizione
         m_viewport.setGizmoCanRotateScale(true, false);
+    }
+    else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
+    {
+        const auto& s = m_sectors[-2000 - m_selBox];
+        m_viewport.setGizmoTarget({s.x, 0.5f, s.z}, true);
+        m_viewport.setGizmoCanRotateScale(false, true);   // scala → raggio del settore
     }
     else
         m_viewport.setGizmoTarget({0,0,0}, false);
@@ -962,9 +1149,29 @@ void MapEditor::drawToolbar()
     ImGui::SameLine(0, 16);
     ImGui::TextDisabled("|");
     ImGui::SameLine(0, 16);
-    // Modalità gizmo: gli spawn point supportano solo Sposta.
-    const bool boxSel = (m_selBox >= 0 && m_selBox < (int)m_boxes.size());
-    editor::ui::gizmoModeBar(m_viewport, boxSel, boxSel);
+    // Modalità gizmo, PER TIPO di selezione. Prima Ruota/Scala erano abilitati
+    // solo sui box della geometria (`boxSel, boxSel`): su un bersaglio strategico
+    // i pulsanti restavano grigi e la modalità ricadeva su Sposta, quindi ruota e
+    // scala risultavano semplicemente assenti (segnalato dall'utente).
+    // Ogni tipo dichiara cosa sa fare, coerentemente con i gizmo gestiti in tick().
+    bool canRot = false, canSca = false;
+    if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+    { canRot = true;  canSca = true; }                       // box: ry + dimensioni
+    else if (m_selBox <= -500 && m_selBox > -1000)
+    { canRot = true;  canSca = true; }                       // bersaglio: ry + scala
+    else if (m_selBox <= -400 && m_selBox > -500)
+    { canRot = true;  canSca = false; }                      // spawn veicolo: solo ry
+    else if (m_selBox <= -1000 && m_selBox > -2000)
+    { canRot = true;  canSca = false; }                      // posizione tattica: facing
+    else if (m_selBox <= -2000)
+    { canRot = false; canSca = true; }                       // settore: raggio
+    else if (m_selBox <= -10 && m_selBox > -100)
+    { canRot = false; canSca = true; }                       // command post: raggio
+    else if (m_selBox <= -200 && m_selBox > -300)
+    { canRot = false; canSca = true; }                       // danger zone: raggio
+    else if (m_selBox == kSelCommander)
+    { canRot = false; canSca = true; }                       // comandante: raggio leash
+    editor::ui::gizmoModeBar(m_viewport, canRot, canSca);
 
     // Popups
     if (ImGui::BeginPopup("##saved_ok")) {
@@ -1028,6 +1235,30 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     if (ImGui::Selectable("[T2] Spawn Nemici", spawnT2)) { m_selBox = -3; updateViewport(); }
     ImGui::PopStyleColor();
 
+    // ── Comandante strategico (ADR-041): uno per mappa ───────────────────
+    ImGui::Separator();
+    ImGui::TextDisabled("Comando");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.45f, 0.95f, 1.0f));
+    if (m_commander.exists)
+    {
+        bool selC = (m_selBox == kSelCommander);
+        char lbl[96];
+        std::snprintf(lbl, sizeof(lbl), "[CMD] %s##cmd",
+                      m_commander.unit.empty() ? "(nessuna classe)"
+                                               : m_commander.unit.c_str());
+        if (ImGui::Selectable(lbl, selC)) { m_selBox = kSelCommander; updateViewport(); }
+    }
+    else if (ImGui::SmallButton("+ Comandante (Droide Tattico)"))
+    {
+        m_commander.exists = true;
+        if (!m_classIds.empty()) m_commander.unit = m_classIds.front();
+        m_commander.x = m_spawnTeam2[0]; m_commander.z = m_spawnTeam2[2];
+        m_commander.leashRadius = 6.0f;
+        m_selBox = kSelCommander;
+        m_dirty = true; updateViewport();
+    }
+    ImGui::PopStyleColor();
+
     // ── Command post ─────────────────────────────────────────────────────
     ImGui::Separator();
     ImGui::TextDisabled("Command Post (%d)", (int)m_posts.size());
@@ -1073,7 +1304,12 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     for (int i = 0; i < (int)m_targets.size(); ++i)
     {
         char lbl[96];
-        std::snprintf(lbl, sizeof(lbl), "[BG] %s##tg%d", m_targets[i].label, i);
+        // [COM] rende leggibile a colpo d'occhio quali strutture alimentano la
+        // rete di comunicazione (doc 34), e di quale fazione.
+        std::snprintf(lbl, sizeof(lbl), "%s %s (T%d)##tg%d",
+                      m_targets[i].role == 1 ? "[COM]"
+                    : m_targets[i].role == 2 ? "[CTRL]" : "[BG]",
+                      m_targets[i].label, m_targets[i].team, i);
         bool sel = (m_selBox == -500 - i);
         if (ImGui::Selectable(lbl, sel)) { m_selBox = -500 - i; updateViewport(); }
     }
@@ -1104,52 +1340,53 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     ImGui::Separator();
     ImGui::TextDisabled("Metadata AI");
 
-    // Cover point
+    // Posizioni tattiche (ADR-030): una sola lista, il ruolo è nell'etichetta.
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.75f, 1.0f));
-    for (int i = 0; i < (int)m_covers.size(); ++i)
+    for (int i = 0; i < (int)m_positions.size(); ++i)
     {
-        char lbl[48];
-        std::snprintf(lbl, sizeof(lbl), "[CV] Cover %d##cv%d", i + 1, i);
-        if (ImGui::Selectable(lbl, m_selBox == -100 - i))
-        { m_selBox = -100 - i; updateViewport(); }
-    }
-    ImGui::PopStyleColor();
-    if (ImGui::SmallButton("+ Cover"))
-    {
-        m_covers.push_back({});
-        m_selBox = -100 - ((int)m_covers.size() - 1);
-        m_dirty = true; updateViewport();
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("-##cv") && m_selBox <= -100 && m_selBox > -200)
-    {
-        int i = -100 - m_selBox;
-        if (i >= 0 && i < (int)m_covers.size())
-        { m_covers.erase(m_covers.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
-    }
-
-    // Tactical point (ADR-027)
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 0.95f, 1.0f));
-    for (int i = 0; i < (int)m_tacticals.size(); ++i)
-    {
-        char lbl[64];
-        std::snprintf(lbl, sizeof(lbl), "[TP] %s %d##tp%d", m_tacticals[i].type.c_str(), i + 1, i);
+        char lbl[72];
+        std::snprintf(lbl, sizeof(lbl), "[%s] %d##tpos%d",
+                      m_positions[i].role.c_str(), i + 1, i);
         if (ImGui::Selectable(lbl, m_selBox == -1000 - i))
         { m_selBox = -1000 - i; updateViewport(); }
     }
     ImGui::PopStyleColor();
-    if (ImGui::SmallButton("+ Tactical"))
+    if (ImGui::SmallButton("+ Posizione"))
     {
-        m_tacticals.push_back({});
-        m_selBox = -1000 - ((int)m_tacticals.size() - 1);
+        m_positions.push_back({});
+        m_selBox = -1000 - ((int)m_positions.size() - 1);
         m_dirty = true; updateViewport();
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("-##tp") && m_selBox <= -1000)
+    if (ImGui::SmallButton("-##tpos") && m_selBox <= -1000)
     {
         int i = -1000 - m_selBox;
-        if (i >= 0 && i < (int)m_tacticals.size())
-        { m_tacticals.erase(m_tacticals.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+        if (i >= 0 && i < (int)m_positions.size())
+        { m_positions.erase(m_positions.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
+    }
+
+    // Settori / Combat Areas (ADR-034): il livello su cui ragiona il comandante.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.55f, 0.95f, 1.0f));
+    for (int i = 0; i < (int)m_sectors.size(); ++i)
+    {
+        char lbl[72];
+        std::snprintf(lbl, sizeof(lbl), "[SET] %s##sec%d", m_sectors[i].label.c_str(), i);
+        if (ImGui::Selectable(lbl, m_selBox == -2000 - i))
+        { m_selBox = -2000 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ Settore"))
+    {
+        m_sectors.push_back({});
+        m_selBox = -2000 - ((int)m_sectors.size() - 1);
+        m_dirty = true; updateViewport();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##sec") && m_selBox <= -2000)
+    {
+        int i = -2000 - m_selBox;
+        if (i >= 0 && i < (int)m_sectors.size())
+        { m_sectors.erase(m_sectors.begin() + i); m_selBox = -1; m_dirty = true; updateViewport(); }
     }
 
     // Danger zone
@@ -1240,6 +1477,50 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 {
     float sliderW = panelW - 16.0f;
 
+    // ── Comandante strategico (ADR-024/041) ──────────────────────────────
+    if (m_selBox == kSelCommander)
+    {
+        if (!m_commander.exists) { ImGui::TextDisabled("Seleziona un elemento."); return; }
+        ImGui::TextColored({0.75f,0.45f,0.95f,1.0f}, "Comandante strategico");
+        ImGui::TextDisabled("Uno per mappa. NON e' nel roster: e' un obiettivo vivente\n"
+                            "(come le torri). Non combatte, si difende soltanto.");
+        ImGui::Separator();
+        bool changed = false;
+
+        // Classe dal registry (dropdown, mai testo libero — regola di progetto).
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::BeginCombo("Classe##cmd",
+                              m_commander.unit.empty() ? "-- scegli --"
+                                                       : m_commander.unit.c_str()))
+        {
+            for (const auto& cid : m_classIds)
+                if (ImGui::Selectable(cid.c_str(), m_commander.unit == cid))
+                { m_commander.unit = cid; changed = true; }
+            ImGui::EndCombo();
+        }
+        ImGui::TextDisabled("Deve avere un'ability 'command' per dirigere i droidi\n"
+                            "(il gate di validazione lo verifica).");
+
+        ImGui::TextDisabled("Posizione (retrovie, al sicuro)");
+        changed |= editor::ui::sliderRow("X##cmd", m_commander.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z##cmd", m_commander.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+
+        ImGui::TextDisabled("Raggio di movimento (leash)");
+        changed |= editor::ui::sliderRow("Raggio (m)##cmd", m_commander.leashRadius,
+                                         0.f, 20.f, 0.5f, "%.1f m");
+        if (m_commander.leashRadius <= 0.01f)
+            ImGui::TextDisabled("0 = FERMO sul posto (si gira e spara soltanto).");
+        else
+            ImGui::TextDisabled("Area circolare da cui NON esce: si muove al suo\n"
+                                "interno per coprirsi, mai fuori. Gizmo Scala = raggio.");
+
+        if (ImGui::SmallButton("Rimuovi comandante"))
+        { m_commander = CommanderEntry{}; m_selBox = -1; m_dirty = true; updateViewport(); return; }
+
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
     if (m_selBox == -2 || m_selBox == -3)
     {
         // Spawn point
@@ -1255,66 +1536,109 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         return;
     }
 
-    // ── Cover point selezionato (15_MapMetadata) ─────────────────────────
-    if (m_selBox <= -100 && m_selBox > -200)
+    // ── Settore selezionato (ADR-034) ────────────────────────────────────
+    if (m_selBox <= -2000)
     {
-        int ci = -100 - m_selBox;
-        if (ci < 0 || ci >= (int)m_covers.size())
+        int si = -2000 - m_selBox;
+        if (si < 0 || si >= (int)m_sectors.size())
         { ImGui::TextDisabled("Seleziona un elemento."); return; }
 
-        auto& c = m_covers[ci];
-        ImGui::TextColored({0.3f,0.9f,0.75f,1.0f}, "Cover Point %d", ci + 1);
+        auto& s = m_sectors[si];
+        ImGui::TextColored({0.7f,0.55f,0.95f,1.0f}, "Settore %d", si + 1);
         ImGui::Separator();
         bool changed = false;
-        ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", c.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Y", c.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", c.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        ImGui::TextDisabled("Copertura");
-        changed |= editor::ui::sliderRow("Fronte°", c.facing, -180.f, 180.f, 1.f, "%.0f");
-        changed |= editor::ui::sliderRow("Altezza", c.height, 0.4f, 3.0f, 0.05f, "%.2f");
-        ImGui::TextDisabled(c.height < 1.2f ? "Bassa: l'AI fara' peek-over"
-                                            : "Alta: l'AI fara' peek-around");
-        // Cover Intelligence (ADR-026): dato tattico che pesa la scelta dell'AI.
-        changed |= editor::ui::sliderRow("Protezione", c.protection, 0.f, 1.f, 0.05f, "%.2f");
-        ImGui::TextDisabled(c.protection >= 0.75f ? "Ottima: l'AI la preferisce"
-                          : c.protection <= 0.35f ? "Scarsa: ripiego"
-                                                  : "Media");
-        changed |= ImGui::Checkbox("Si puo' sparare da qui", &c.canShoot);
+
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s", s.label.c_str());
+        if (editor::ui::textRow("Nome", buf, sizeof(buf))) { s.label = buf; changed = true; }
+
+        ImGui::TextDisabled("Area");
+        changed |= editor::ui::sliderRow("X", s.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", s.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Raggio", s.radius, 2.f, 40.f, 0.5f, "%.1f");
+
+        ImGui::TextDisabled("Valore strategico");
+        changed |= editor::ui::sliderRow("Importanza", s.importance, 0.f, 1.f, 0.05f, "%.2f");
+        ImGui::TextDisabled("Il Droide Tattico sceglie l'obiettivo fra i settori,\n"
+                            "pesando importanza e quanto la zona e' contesa.");
+
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }
 
-    // ── Tactical point selezionato (ADR-027) ─────────────────────────────
-    if (m_selBox <= -1000)
+    // ── Posizione tattica selezionata (ADR-030) ──────────────────────────
+    // Un solo pannello: il RUOLO descrive, i campi dicono cosa la posizione SA
+    // fare. Le sezioni si adattano al ruolo per non mostrare campi inutili.
+    if (m_selBox <= -1000 && m_selBox > -2000)
     {
-        int ti = -1000 - m_selBox;
-        if (ti < 0 || ti >= (int)m_tacticals.size())
+        int pi = -1000 - m_selBox;
+        if (pi < 0 || pi >= (int)m_positions.size())
         { ImGui::TextDisabled("Seleziona un elemento."); return; }
 
-        auto& t = m_tacticals[ti];
-        ImGui::TextColored({0.5f,0.8f,0.95f,1.0f}, "Tactical Point %d", ti + 1);
+        auto& p = m_positions[pi];
+        ImGui::TextColored({0.3f,0.9f,0.75f,1.0f}, "Posizione tattica %d", pi + 1);
         ImGui::Separator();
         bool changed = false;
 
-        static const char* kTypes[] = {"vantage", "defensive", "chokepoint", "observation"};
-        int typeIdx = 0;
-        for (int k = 0; k < 4; ++k) if (t.type == kTypes[k]) { typeIdx = k; break; }
-        if (ImGui::Combo("Tipo", &typeIdx, kTypes, 4)) { t.type = kTypes[typeIdx]; changed = true; }
-        ImGui::TextDisabled(typeIdx == 0 ? "Sopraelevato / dominante"
-                          : typeIdx == 1 ? "Posizione da tenere"
-                          : typeIdx == 2 ? "Strettoia / ingresso da presidiare"
+        static const char* kRoles[] = {"cover", "vantage", "defensive",
+                                       "chokepoint", "observation"};
+        int roleIdx = 0;
+        for (int k = 0; k < 5; ++k) if (p.role == kRoles[k]) { roleIdx = k; break; }
+        if (ImGui::Combo("Ruolo", &roleIdx, kRoles, 5)) { p.role = kRoles[roleIdx]; changed = true; }
+        ImGui::TextDisabled(roleIdx == 0 ? "Riparo da cui combattere"
+                          : roleIdx == 1 ? "Sopraelevato / dominante"
+                          : roleIdx == 2 ? "Posizione da tenere"
+                          : roleIdx == 3 ? "Strettoia / ingresso da presidiare"
                                          : "Punto d'osservazione");
 
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Y", t.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", p.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", p.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", p.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Fronte", p.facing, -180.f, 180.f, 1.f, "%.0f");
+
+        ImGui::TextDisabled("Riparo");
+        changed |= editor::ui::sliderRow("Protezione", p.protection, 0.f, 1.f, 0.05f, "%.2f");
+        ImGui::TextDisabled(p.protection <= 0.0f  ? "Non ripara: non e' una copertura"
+                          : p.protection >= 0.75f ? "Ottima: l'AI la preferisce"
+                          : p.protection <= 0.35f ? "Scarsa: ripiego"
+                                                  : "Media");
+        if (p.protection > 0.0f)
+        {
+            changed |= editor::ui::sliderRow("Altezza", p.height, 0.4f, 3.0f, 0.05f, "%.2f");
+            ImGui::TextDisabled(p.height < 1.2f ? "Bassa: l'AI fara' peek-over"
+                                                : "Alta: l'AI fara' peek-around");
+        }
+        changed |= ImGui::Checkbox("Si puo' fare fuoco da qui", &p.canShoot);
+
+        // Settore di tiro (ADR-031): cosa questa posizione BATTE. È ciò che
+        // permette all'AI di venirci per ATTACCARE, non solo per nascondersi.
+        if (p.canShoot)
+        {
+            ImGui::TextDisabled("Settore di tiro (giallo nel viewport)");
+            changed |= editor::ui::sliderRow("Ampiezza", p.fireArc, 10.f, 360.f, 5.f, "%.0f");
+            changed |= editor::ui::sliderRow("Gittata", p.fireRange, 3.f, 60.f, 1.f, "%.0f");
+            ImGui::TextDisabled(p.fireArc <= 60.f  ? "Stretto: posizione specializzata"
+                              : p.fireArc >= 240.f ? "Molto ampio: copre quasi ovunque"
+                                                   : "Medio");
+        }
+
+        // Esposizione (ADR-033): DERIVATA, sola lettura. Non si autora, ma vederla
+        // guida l'authoring — un punto molto esposto è una cattiva posizione di tiro.
+        if (pi < (int)m_exposure.size())
+        {
+            const float ex = m_exposure[pi];
+            ImGui::TextDisabled("Esposizione (calcolata): %.0f%%", ex * 100.0f);
+            ImGui::TextDisabled(ex >= 0.5f ? "Molto allo scoperto: battuta da meta' mappa"
+                              : ex <= 0.15f ? "Riparata: pochi angoli di tiro la battono"
+                                            : "Media");
+        }
+
         ImGui::TextDisabled("Tattica");
-        changed |= editor::ui::sliderRow("Fronte'", t.facing, -180.f, 180.f, 1.f, "%.0f");
-        changed |= editor::ui::sliderRow("Importanza", t.importance, 0.f, 1.f, 0.05f, "%.2f");
-        changed |= editor::ui::sliderRow("Raggio", t.radius, 0.5f, 20.f, 0.1f, "%.2f");
-        ImGui::TextDisabled("(Consumo AI: Fase 4/5 - doc 33)");
+        changed |= editor::ui::sliderRow("Importanza", p.importance, 0.f, 1.f, 0.05f, "%.2f");
+        if (p.role == "defensive" || p.role == "chokepoint")
+            changed |= editor::ui::sliderRow("Raggio", p.radius, 0.5f, 20.f, 0.1f, "%.2f");
+
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }
@@ -1360,9 +1684,59 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         ImGui::TextDisabled("Posizione");
         changed |= editor::ui::sliderRow("X##tg", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Z##tg", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Rotazione##tg", t.ry, -180.f, 180.f, 1.f, "%.0f");
+        changed |= editor::ui::sliderRow("Scala##tg", t.scale, 0.2f, 8.f, 0.05f, "%.2f");
+
+        ImGui::TextDisabled("Fazione");
+        int teamIdx = (t.team == 1) ? 0 : 1;
+        static const char* kTeams[] = {"Repubblica (cloni)", "Separatisti (droidi)"};
+        if (ImGui::Combo("Team##tg", &teamIdx, kTeams, 2))
+        { t.team = (teamIdx == 0) ? 1 : 2; changed = true; }
+        ImGui::TextDisabled("Serve per dare a ogni fazione le PROPRIE strutture\n"
+                            "(torre comunicazioni/controllo).");
+
+        ImGui::TextDisabled("Ruolo (doc 34/36)");
+        static const char* kRoles[] = {"Generico (solo bersaglio)",
+                                       "Torre di comunicazione",
+                                       "Torre di controllo"};
+        if (ImGui::Combo("Ruolo##tg", &t.role, kRoles, 3)) changed = true;
+        if (t.role == 1)
+            ImGui::TextDisabled("Finche' e' viva la sua fazione comunica bene. Se cade,\n"
+                                "informazioni/ordini/rinforzi RALLENTANO - mai bloccati.");
+        else if (t.role == 2)
+            ImGui::TextDisabled("Da' visione d'insieme alla SUA fazione: SEGNALA i posti\n"
+                                "che contano (settori contesi, strutture nemiche).\n"
+                                "NON da' ordini e non manda nessuno in un punto preciso:\n"
+                                "e' ogni soldato a scegliere quale segnale seguire.");
+
+        ImGui::TextDisabled("Valore tattico per l'AI (doc 35)");
+        changed |= editor::ui::sliderRow("Priorita'##tg", t.priority, 0.f, 1.f, 0.05f, "%.2f");
+        ImGui::TextDisabled("Quanto la fazione AVVERSARIA vuole distruggerla.\n"
+                            "E' il peso con cui il comando la confronta coi settori.");
+        changed |= editor::ui::sliderRow("Raggio ingaggio (m)##tg", t.engageRadius,
+                                         0.f, 60.f, 1.f, "%.0f m");
+        if (t.engageRadius <= 0.0f)
+            ImGui::TextDisabled("0 = MAI ingaggiata di iniziativa: resta affare del\n"
+                                "giocatore e del comando. E' il default.");
+        else if (t.engageRadius < 3.0f)
+            ImGui::TextColored({1.0f, 0.6f, 0.2f, 1.0f},
+                               "Troppo piccolo: nessuna AI si trovera' mai cosi'\n"
+                               "vicino. Indicativamente servono 15-30 m.");
+        else
+            ImGui::TextDisabled("Un'unita' avversaria entro questo raggio la attacca\n"
+                                "di iniziativa, ma SOLO se non ha bersagli-unita':\n"
+                                "una struttura non spara, viene sempre dopo.\n"
+                                "Riferimento: la mappa firebase e' 50x40 m.");
+
         ImGui::TextDisabled("Resistenza");
         changed |= editor::ui::sliderRow("HP##tg", t.hp, 10.f, 2000.f, 10.f, "%.0f");
-        ImGui::TextDisabled("Struttura statica colpibile (box di fallback finche' non ha un mesh).");
+
+        ImGui::TextDisabled("Collisione (0 = ricavata dalla scala)");
+        changed |= editor::ui::sliderRow("Semiasse X##tg", t.halfX, 0.f, 10.f, 0.1f, "%.2f");
+        changed |= editor::ui::sliderRow("Semiasse Y##tg", t.halfY, 0.f, 10.f, 0.1f, "%.2f");
+        changed |= editor::ui::sliderRow("Semiasse Z##tg", t.halfZ, 0.f, 10.f, 0.1f, "%.2f");
+        ImGui::TextDisabled("Struttura statica colpibile e SOLIDA: prima AI e giocatore\n"
+                            "ci passavano attraverso (mancava il collider).");
 
         if (changed) { m_dirty = true; updateViewport(); }
         return;

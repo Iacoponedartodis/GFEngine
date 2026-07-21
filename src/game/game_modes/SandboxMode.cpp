@@ -4,6 +4,7 @@
 #include "mini/game/WeaponAttach.hpp"
 #include "mini/game/ClassResolve.hpp"   // effectiveUnit (ADR-023): classi come tipo-unità
 #include "mini/game/VehicleSpawn.hpp"
+#include "mini/game/StrategicTargets.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/World.hpp"
@@ -70,6 +71,12 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Command post: visibili e catturabili anche in sandbox ─────────────
     if (map)
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
+
+    // ── Strutture strategiche (doc 25/34/35, helper condiviso) ────────────
+    // Mancavano del tutto: le torri erano dati della mappa ma in sandbox non
+    // comparivano, quindi non erano né provabili né osservabili lì dove si prova
+    // tutto il resto (segnalato dall'utente).
+    structures::spawnAll(world, map, registry, mesh, tex, meshCache);
 
     // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ─────────────
     // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).

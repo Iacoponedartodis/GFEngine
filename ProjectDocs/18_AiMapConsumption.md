@@ -39,10 +39,11 @@ comportamento AI nella simulazione sandbox, senza riscrivere l'AiSystem.
    repulsione dalle danger zone (pesata su `dangerLevel` e distanza). In Alert
    non si applica: sotto ingaggio si combatte.
 4. **Patrol route come pattuglie**: se la mappa ha `patrolRoutes`, ConquestMode
-   assegna alle unità segmenti consecutivi delle route (round-robin) al posto
-   dei waypoint procedurali verso i post. Limite attuale documentato:
-   `AiComponent` supporta due waypoint (A/B) → ogni unità pattuglia UN segmento
-   della route, non l'intera sequenza.
+   assegna le route alle unità al posto dei waypoint procedurali verso i post.
+   ~~Limite: `AiComponent` supporta due waypoint (A/B) → ogni unità pattuglia UN
+   segmento~~ → **SUPERATO 2026-07-20 (ADR-028)**: ogni unità riceve una **route
+   intera** (con segmento di partenza sfalsato) e avanza di segmento in segmento
+   (`advancePatrol`), percorrendo il tracciato autorato. I respawn la conservano.
 
 ## Out of Scope (per ora)
 - Pose alle coperture (crouch, mira da copertura, peek-over vs peek-around

@@ -81,7 +81,7 @@ NavBuildStats build(const MapDef&);   void clear();   bool ready();   unsigned g
 bool findPath(start, end, out[]);
 bool crowdReady();
 int  addAgent(pos, radius, height, maxSpeed);   void removeAgent(idx);
-void requestMoveTarget(idx, target);            // pathfinding (salta se target ~uguale)
+void requestMoveTarget(idx, target);            // pathfinding (aggancia al navmesh; salta se target ~uguale)
 void requestMoveVelocity(idx, vel);             // steering diretto + avoidance
 void updateCrowd(dt);   bool agentPos(idx, out&);   // out = superficie reale (bias tolto)
 ```
@@ -98,6 +98,19 @@ void updateCrowd(dt);   bool agentPos(idx, out&);   // out = superficie reale (b
   spawn1→spawn2 che aggira la geometria centrale; 5 poligoni DANGER + 7 COVER taggati.
 - `--stress 20`: 40/40 agenti on-mesh, traversano e combattono, reap ok, 0 crash. Stuck da ~80 a
   ~35 e spostato via dal cover z=-6 → obstacle-stuck risolto; il residuo è congestione crowd.
+
+## Fluidità dei percorsi — fix 2026-07-20 (feedback utente)
+- **`requestMoveTarget` aggancia il target al navmesh con estensioni CRESCENTI** (2 → 6 → 14 m).
+  Prima usava le *query extents* del crowd (≈ raggio agente, ~0.8 m): un target dentro un muro o poco
+  fuori mesh — **lastKnown in Hunt, punto casuale in Search** — non trovava poligoni e la richiesta
+  veniva **scartata in silenzio**, lasciando l'agente fermo. Il confronto "stesso target" ora usa il
+  punto **già agganciato**: altrimenti un target agganciato metri più in là sembrava sempre diverso e
+  si ripianificava ogni frame (moto a scatti).
+- **Segnale `stuck` reso affidabile**: in Alert il timer si **azzera** (stare fermi in copertura è
+  legittimo); prima il log era soppresso ma il timer accumulava e sparava all'uscita dallo stato.
+  Soglia anti-stuck ora **proporzionale alla velocità** (prima 0.05 m/tick fissa marcava "bloccato"
+  un droide in pattuglia a 2.5 m/s = 0.042 m/tick). Effetto misurato: `--sim` 20 s, eventi `stuck`
+  **da 9 a 0**.
 
 ## Aperti / rischi (vedi anche ADR-017, KI #31)
 - **AI attraversano i veicoli** (KI #31): il crowd non li conosce (navmesh = solo geometria

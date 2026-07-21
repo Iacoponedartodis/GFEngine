@@ -33,19 +33,70 @@ constexpr float AI_HALF_Y     = 0.50f;
 constexpr float AI_HALF_Z     = 0.40f;
 constexpr float AI_GRAVITY    = -14.0f;
 constexpr float AI_STUCK_TIME =   1.2f;   // secondi prima di anti-stuck
+
+// Raggio entro cui un contatto avvistato viene condiviso coi compagni (m).
+// Prima l'avvistamento era propagato a TUTTO l'esercito: bastava che uno vedesse
+// un nemico perché ogni unità del team convergesse sullo stesso punto → un unico
+// blocco, sempre lo stesso fronte, ogni partita identica (feedback utente
+// 2026-07-20). Con un raggio locale nascono fronti INDIPENDENTI: uno scontro a
+// ovest non risucchia chi presidia a est, che continua il suo compito.
+// Rivisto 2026-07-20 (misurato): a 20 m su una mappa 50×40 il raggio copriva
+// quasi tutto il campo, quindi un contatto qualsiasi richiamava comunque l'intera
+// forza → telemetria: alert 6-7 su 9, hunt e search SEMPRE 0, cioè tutti in
+// contatto permanente nello stesso punto. A 10 m gli scontri restano locali e
+// chi è altrove continua il proprio compito.
+constexpr float AI_CONTACT_SHARE_RADIUS = 10.0f;
 constexpr float AI_JUMP_IMPULSE = 5.5f;   // salto anti-ostacolo (se jump_enabled)
+// Quanti cloni un singolo segnale della torre di controllo può attirare prima di
+// considerarsi "coperto" (KI #73). Oltre, i cloni in più vanno su altri segnali o
+// tornano alla pattuglia invece di ammassarsi tutti sullo stesso posto. Basso =
+// più dispersione. Taratura di sensazione, verificabile solo in partita.
+constexpr int   ALLY_SIGNAL_CAPACITY = 3;
+// Quanto un'unità insegue un contatto perduto prima di degradare a Search
+// (KI #68). Ora è **per-profilo** (`AiProfileDef::huntTimeout`, doc 16): è una
+// scelta di carattere, non una costante globale. Questo valore resta come DEFAULT
+// documentato per i profili che non lo specificano. 20 s = doppio della sosta in
+// Search (15 s): inseguire deve durare più del cercare, ma non per sempre.
+constexpr float AI_HUNT_TIMEOUT_DEFAULT = 20.0f;  // s
+
+// ── Rete di comunicazione (doc 34, ADR-038) ───────────────────────────────
+// Quanto peggiora la comunicazione di una fazione che ha PERSO la sua torre.
+// MIGRATI a `data/config/gameplay.json` (ADR-043): autorabili dal BalanceEditor.
+// Vedi `mini::gameplay()`. Default lì: comms_lost_range_mult 0.5,
+// comms_lost_share_delay 2.5, comms_lost_order_mult 2.5, comms_lost_reinforce_mult 1.6.
+// (Nessuno azzera nulla: la direttiva è "rallentare", mai bloccare — doc 34.)
+// Ogni quanto il comando rivaluta la direttiva strategica (doc 32). Prima era
+// OGNI TICK: istantaneo e quindi impossibile da rallentare. Un periodo esplicito
+// serve sia al realismo (un ordine non cambia 60 volte al secondo) sia come leva
+// su cui la rete di comunicazione può agire.
+constexpr float COMMAND_DECISION_PERIOD   = 3.0f;  // s, con comunicazioni intatte
+// Per quanto un contatto resta utilizzabile DOPO essere arrivato. Con la torre
+// viva (ritardo 0) la finestra utile è 0..FRESH secondi, cioè in pratica gli
+// avvistamenti correnti: il comportamento nominale resta quello di prima, quando
+// i contatti venivano ricostruiti da zero ogni tick. Senza torre la finestra si
+// sposta in avanti (DELAY..DELAY+FRESH) senza allargarsi: non si sa di PIÙ, si sa
+// più TARDI.
+constexpr float COMMS_CONTACT_FRESH       = 1.0f;  // s
+// Cap duro di vita di un contatto: deve superare DELAY + FRESH (2.5 + 1.0).
+constexpr float COMMS_CONTACT_TTL         = 4.0f;  // s
+// Deduplica dei campioni: senza, OGNI unità che vede OGNI tick di sensing
+// aggiunge un contatto → misurati 1066 contatti vivi in 10v10, cioè migliaia di
+// confronti per tick per un'informazione che si ripete. Un nuovo campione si
+// registra solo se in quell'area non ce n'è già uno recente: il flusso resta
+// continuo (serve a nutrire il canale ritardato) ma smette di duplicarsi.
+constexpr float COMMS_CONTACT_MERGE_DIST  = 3.0f;  // m
+constexpr float COMMS_CONTACT_MERGE_AGE   = 0.3f;  // s
 constexpr float AI_SPREAD_MAX   = 0.12f;  // dispersione colpi AI a accuracy 0 (rad)
 
 // ── Combat ────────────────────────────────────────────────────────────────
 constexpr float HIT_RADIUS    = 0.7f;     // raggio collisione proiettile
 
 // ── Squadra: stato "a terra" + rianimazione (Phase C, doc 26) ───────────────
-// Valori segnaposto da rifinire provando (il todo: "impostare valori temporanei
-// da rifinire più avanti"). Globali, non per-definizione → stanno qui (CLAUDE.md).
-constexpr float SQUAD_BLEEDOUT_TIME = 20.0f;  // s a terra prima della morte definitiva
-constexpr float SQUAD_REVIVE_RADIUS =  2.5f;  // distanza per rianimare un compagno (m)
-constexpr float SQUAD_REVIVE_TIME   =  3.0f;  // s di vicinanza per completare la rianimazione
-constexpr float SQUAD_REVIVE_HP     =  0.5f;  // frazione di HP max al risveglio
+// MIGRATI a `data/config/gameplay.json` (ADR-043): ora sono AUTORABILI dal
+// BalanceEditor, non più `constexpr`. Vedi `mini::gameplay()` in
+// `mini/game/data/GameplayBalance.hpp`. I default lì SONO questi valori:
+//   squad_bleedout_time 15, squad_revive_radius 2.5, squad_revive_time 10,
+//   squad_revive_hp 0.15, squad_down_lethal_hit_frac 0.20, squad_max_revives 1.
 
 // Command post: ogni post posseduto da una squadra RALLENTA il respawn della
 // squadra AVVERSARIA di questa frazione (additivo per post). Sostituisce il

@@ -494,6 +494,63 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
                     "Imposta 'capture_time' > 0 se vuoi che serva presenza.");
         for (const auto& vs : m.vehicleSpawns)
             checkRef(d, reg.vehicles(), vs.vehicleId, f, "veicolo");
+
+        // ── Strutture strategiche (doc 34/35/36) ─────────────────────────
+        // Questi errori sono tutti SILENZIOSI a runtime: la struttura nasce e
+        // si vede, ma non fa ciò che l'autore credeva. È il caso per cui esiste
+        // il gate (ADR-018).
+        int commsPerTeam[3] = {0,0,0}, controlPerTeam[3] = {0,0,0};
+        for (const auto& st : m.strategicTargets)
+        {
+            if (st.role != "generic" && st.role != "comms" && st.role != "control")
+                add(d, L::Error, "Map", f,
+                    "struttura '" + st.label + "': role '" + st.role + "' sconosciuto "
+                    "→ trattata come 'generic', non fara' nulla",
+                    "Usa 'generic', 'comms' (torre comunicazioni) o 'control' "
+                    "(torre di controllo).");
+            if (st.role == "comms"   && (st.team == 1 || st.team == 2)) ++commsPerTeam[st.team];
+            if (st.role == "control" && (st.team == 1 || st.team == 2)) ++controlPerTeam[st.team];
+
+            if (st.hp <= 0.0f)
+                add(d, L::Error, "Map", f,
+                    "struttura '" + st.label + "' con hp <= 0",
+                    "Imposta 'hp' > 0.");
+            // Un raggio piccolissimo è formalmente valido e praticamente inerte:
+            // nessuna unità si troverà mai così vicina. Segnalato dall'utente
+            // dopo averlo impostato a 1 (metro) aspettandosi un effetto.
+            if (st.engageRadius > 0.0f && st.engageRadius < 3.0f)
+                add(d, L::Warn, "Map", f,
+                    "struttura '" + st.label + "': engage_radius "
+                    + std::to_string((int)st.engageRadius) + " m e' troppo piccolo "
+                    "→ nessuna AI la ingaggera' mai",
+                    "Il raggio e' in METRI: usa 0 per 'mai di iniziativa', "
+                    "oppure indicativamente 15-30 m.");
+        }
+        // La torre di controllo serve solo alla Repubblica (allyIntel e' team 1):
+        // una autorata per i Separatisti e' lavoro buttato, non un errore fatale.
+        if (controlPerTeam[2] > 0)
+            add(d, L::Warn, "Map", f,
+                "torre di controllo di team 2 (Separatisti): non ha alcun effetto",
+                "I droidi sono diretti dal comandante (campo 'commander'). "
+                "La torre di controllo e' della Repubblica (team 1).");
+        for (int team = 1; team <= 2; ++team)
+        {
+            if (commsPerTeam[team] > 1)
+                add(d, L::Warn, "Map", f,
+                    "team " + std::to_string(team) + ": " + std::to_string(commsPerTeam[team])
+                    + " torri di comunicazione → basta distruggerne una per degradare tutto",
+                    "Ne serve una per fazione: le altre non aggiungono resistenza.");
+            if (controlPerTeam[team] > 1)
+                add(d, L::Warn, "Map", f,
+                    "team " + std::to_string(team) + ": piu' di una torre di controllo",
+                    "Le altre non fanno nulla: i segnali sono gia' pubblicati dalla prima.");
+        }
+        // Asimmetria involontaria: una fazione ha la torre e l'altra no.
+        if ((commsPerTeam[1] > 0) != (commsPerTeam[2] > 0))
+            add(d, L::Warn, "Map", f,
+                "solo una fazione ha la torre di comunicazione → vantaggio strutturale "
+                "non dichiarato",
+                "Autorane una per entrambe, o accetta l'asimmetria di proposito.");
     }
 
     // ── Missioni e obiettivi (ADR-019): STESSE regole del runtime ─────────

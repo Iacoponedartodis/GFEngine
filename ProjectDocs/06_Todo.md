@@ -30,10 +30,107 @@ Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici i
   observation + importanza/raggio/fronte), loader, `nearestTacticalPoint` (seam), editor completo
   (lista/dropdown/slider/marker/gizmo). Authoring manuale. **Consumo = Fase 4/5**. + pulsanti gizmo
   cliccabili (KI #60). Build/validate/sim OK.
-- **▶ Prossima: Fase 3 — Rete di navigazione tattica**: cablare i filtri per-ruolo del navmesh (già
-  pronti, doc 22); grafo tattico fra Tactical Points con semantica d'arco (esposizione/copertura/
-  avanzamento/ritirata/aggiramento); route con `purpose`; superare il limite 2-waypoint di AiComponent.
-- Poi: settori (4 — rende intelligente il comandante), Squad layer entrambi i team (5),
+- **✅ Fase 3a FATTA (ADR-028)**: le pattuglie seguono la **route intera** (`patrolRoute/patrolSeg` +
+  `advancePatrol`), segmento di partenza sfalsato, respawn conservano la route. Superato il limite
+  2-waypoint: le route autorate diventano percorsi veri. Build/validate/sim OK.
+- **DIREZIONE CONFERMATA (utente 2026-07-20)**: continuare a **migliorare i metadata** il più
+  possibile, e **poi** rendere più intelligenti sia le **AI normali** sia quella del **Droide
+  Tattico** — nel senso di *usare meglio le informazioni che hanno, analizzare meglio la situazione
+  e prendere decisioni più coerenti e tattiche*. Vincolo permanente: il comandante dà **intento**
+  (obiettivi + advance/hold/retreat), **i droidi decidono il come** ([[droide-tattico-concept]]).
+- **▶ PRIORITÀ RIVISTA (utente 2026-07-20): completare i METADATA, poi l'AI.** Si mette in pausa il
+  miglioramento dell'intelligenza AI e si finisce il percorso metadata "con il massimo della cura".
+  Piano in **doc 33 §5-bis**. Ordine scelto dall'utente: **unificare prima**, così M1/M3/M4 si
+  costruiscono una volta sola. Visibilità: **calcolata al load** (sempre coerente con la geometria).
+  - **✅ M2 FATTA (ADR-030)**: `TacticalPositionDef` unica (ruolo + protezione/altezza/canShoot/
+    importanza/raggio); query per **capacità** non per ruolo; migrazione legacy trasparente.
+  - **✅ M1 FATTA (ADR-031)**: settore di tiro (`fireArcDeg`/`fireRange`) + query
+    `bestFiringPosition` → l'AI va su una copertura **per colpire**, non per sparire. Due query
+    distinte: riparo vs posizione di tiro. Editor con settore disegnato.
+  - **✅ M3+M4 FATTE INSIEME (ADR-032)**: `hasLineOfFire` su MapDef; la posizione di tiro verifica la
+    linea di tiro (**cade il limite geometrico di M1**); grafo `positionCovers` "chi copre chi"
+    calcolato al load (derivato, mai stale); `bestOverwatchFor`. Costo: **638 link / 60 pos in 2,4 ms**.
+  - **✅ Aggiramento FATTO (ADR-033)**: `positionExposure` derivata (invertendo il grafo) +
+    `bestFlankingPosition` (attacca da direzione diversa, preferendo il coperto). Le "corsie" sono
+    espresse come **destinazione**, non come tracciato da autorare → zero authoring aggiuntivo.
+    Editor mostra l'esposizione in sola lettura, con la stessa funzione del runtime.
+  - **✅ M5 FATTA (ADR-034)**: `SectorDef` autorato + `sectorStates` runtime (presenze/controllo/
+    pressione); il comandante sceglie l'obiettivo fra i **settori**, i droidi il punto dentro la zona.
+  - **✅ PERCORSO METADATA COMPLETO.** Restano due follow-up minori: visualizzazione dei **link** in
+    editor (verifica; sono derivati, non si autorano) e `purpose` delle route (se servirà).
+
+**▶ FASE AI (in corso)** — far sfruttare davvero i metadata completati.
+- **✅ Manovra in combattimento (ADR-035)**: l'AI ingaggiata si riposiziona (aggiramento / posizione
+  di tiro) **continuando a sparare**, col pathfinding; bounding overwatch **emergente** dal cap di
+  concorrenza. Effetto misurato: cambi di stato 11 → **33**, `stuck` → **1**. Era il gap che rendeva
+  inutilizzati i metadata proprio durante lo scontro. Firebase ha ora **7 settori** autorati.
+- **✅ Truppe indipendenti per default (ADR-037)** — direttiva utente #1 delle tre. Rimosso il
+  `Follow` fisso che `SquadSystem` imponeva a chiunque non avesse ordini: era la causa reale del
+  "si muovono tutti insieme / sempre le stesse strade / tutti aggregati", e rendeva i **cloni meno
+  indipendenti dei droidi**. Ora il default è **nessun ordine**; `Follow` è il 4° settore della ruota
+  di comando e lo stesso settore **revoca** (LIBERI). Misurato: `sq_follow` 9 → **0**, 10/10 senza
+  ordini a inizio partita, 3 manovre avviate al picco.
+- **▶ DIRETTIVE UTENTE RESTANTI (2026-07-20)** — asimmetria di fazione, vedi [[command-rank-system]]:
+  - **✅ #2 Torre di comunicazione — FATTA (ADR-038, doc 34)**: `role: "comms"` + `World::comms` per
+    fazione. Direttiva utente: **distruggerla NON blocca i rinforzi**, li rallenta — insieme a
+    informazioni (raggio di condivisione dimezzato, avviso in ritardo → si accorre dove il nemico
+    **era**) e ordini (il comando ri-decide 2.5× più di rado). Autorata su firebase per entrambe le
+    fazioni; quella della Repubblica è in **posizione segnaposto, da riposizionare in editor**.
+  - **✅ Interazione AI↔strutture — FATTA (ADR-039, doc 35)**: KI #70 era **tre bug** (LOS che non
+    escludeva il bersaglio, mira all'origine a terra, LOS al tiro con entrambi i difetti), non una
+    decisione mancante. Ora le AI abbattono le strutture, il comando le considera fra gli obiettivi e
+    `World::strategicTargets` è la **sorgente unica di intel** che leggerà anche la torre di controllo.
+    **Authoring pronto e inerte** (`priority`, `engage_radius`; 0 = mai di iniziativa): **i valori sulle
+    mappe li autora l'utente**.
+  - **✅ #3 Torre di controllo — FATTA (ADR-040, doc 36)**: `role: "control"` → `World::allyIntel`,
+    una **lista** di segnali (settori contesi + strutture nemiche) da cui **ogni clone sceglie da sé**,
+    decorrelato dal `bias`. **Nessun ordine, nessuna destinazione imposta.** Canale separato da
+    `enemyCommand` per costruzione. Autorata su firebase in posizione **segnaposto**.
+- **▶ FASE AUTHORING (prossima, richiesta utente 2026-07-21)** — audit completo in **doc 37**.
+  Ordine consigliato, e il motivo dell'ordine:
+  1. **KI #73** (torre di controllo che ammassa) → **✅ RISOLTO 2026-07-21** (saturazione:
+     `ALLY_SIGNAL_CAPACITY`, un segnale coperto non attira altri, i restanti pattugliano).
+     **B1 (grafo overwatch)** → **✅ CONSUMATO 2026-07-21** (l'utente: "provare a metterlo"):
+     `bestOverwatchForPosition` legge `positionCovers`, chi non avanza copre chi avanza. Funziona ma
+     scatta di rado su firebase — se lo si vuole vedere di più servono posizioni che si coprano meglio.
+  2. ~~**Estendere il gate ADR-018**~~ → **✅ FATTO 2026-07-21**: `role` validato (niente più
+     normalizzazione silenziosa), `hp`, `engage_radius` inerte, torre di controllo di team 2, torri
+     duplicate, asimmetria fra fazioni. Ha subito intercettato le 3 strutture di firebase a
+     `engage_radius: 1`.
+  3. **Rendere autorabile** (decisioni di casa prese con l'utente 2026-07-21):
+     - `hunt_timeout` → **✅ FATTO**: nei profili AI (carattere).
+     - rianimazione: **cap → ✅ FATTO** (2ª caduta uccide). **✅ TUTTI E 6 i parametri squadra +
+       i 4 `comms_lost_*` sono ora AUTORABILI (ADR-043, 2026-07-21)**: `data/config/gameplay.json` +
+       tab **Gameplay** nel BalanceEditor (slider, salva RMW, ripristina default). Verificato
+       end-to-end (cap=0 → zero cadute a terra). NB: i `comms_lost_*` stanno per ora nel tab Gameplay;
+       se nascerà l'editor "Strutture & Comando" (ADR-041 §4) migreranno lì.
+       Resta il **per-classe** (medico che rianima prima / alza il cap): moltiplicatore sopra il
+       globale, col sistema classi.
+     - soglie tecniche dei contatti (`MERGE_*`, `TTL`, `FRESH`) → **non esposte**: tarature interne.
+  4. **Droide Tattico** (ADR-041): **✅ Fase 1 FATTA 2026-07-21** — spawn dedicato con raggio di
+     **leash** autorabile nel MapEditor (marker, pannello, gizmo), comportamento AI (non insegue,
+     clamp nel raggio). Chiude anche la UI di piazzamento del comandante.
+     **✅ Stance v2 FATTA 2026-07-21 (ADR-042)**: `enemyCommand` = lista di direttive, 3 fronti con
+     stance per-settore, droidi distribuiti, ripiegamento globale — fine del "sempre avanzata".
+     **Restano**: migrazione fuori da `class`, editor dedicato "Strutture & Comando" (casa dei
+     `COMMS_LOST_*`), e il **grado intermedio** ([[command-rank-system]]) che interpreterà le
+     direttive per il micro del suo gruppo. Ciclo dedicato.
+  5. ~~**`Hunt` che scade**~~ → **✅ FATTO 2026-07-21** (KI #68 chiuso): 20 s → Search → Patrol.
+- **▶ Altri candidati** (da scegliere dopo il playtest): (a) il **comandante** che usa
+  `sectorStates` per una stance per-settore invece che globale; (b) **coppie di overwatch esplicite**
+  dal grafo `positionCovers` (chi copre chi) invece che emergenti; (c) rifinitura del *feel*
+  (quanto spesso manovrano, distanze, timer) in base a come si vede in partita.
+Poi la mappa più grande, e con essa il sistema di **geometrie oltre i box** (registrato sopra).
+  - Solo DOPO: la fase AI che sfrutta tutto questo (bounding overwatch, aggiramenti, pathfinding
+    semplificato dai metadata), e poi la mappa più grande.
+  - Solo DOPO: sistemi AI che li sfruttano, e poi una mappa più grande.
+- **REGISTRATO, NON ORA — geometrie oltre i box**: mappe complesse da Blender lette e trattate
+  correttamente (impatta collisioni, navmesh, hitbox). Sistema a sé, con proprio ADR, **dopo** i
+  metadata. L'attuale limite a cubi/parallelepipedi è riconosciuto come vincolante.
+- **Fase 3b** (filtri navmesh per-ruolo, già pronti in doc 22): resta pianificata, dopo i metadata.
+- **Rimandati di proposito (3c)**: grafo tattico fra Tactical Points + `purpose` delle route → quando
+  esisteranno i consumatori (Fase 4/5), altrimenti dato decorativo.
+- Poi: **settori (4 — rende intelligente il comandante)**, Squad layer entrambi i team (5),
   predisposizione simulazione (6).
 
 ## PROSSIMO SALTO — derivato da GDD + master plan (2026-07-15)

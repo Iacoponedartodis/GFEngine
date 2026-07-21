@@ -23,6 +23,7 @@
 #include "mini/game/Weapon.hpp"
 #include "mini/game/VehicleDrive.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/data/GameplayBalance.hpp"
 #include "mini/game/nav/NavManager.hpp"
 #include "mini/physics/Collision.hpp"
 #include "mini/physics/HitTest.hpp"
@@ -145,6 +146,17 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     DefinitionRegistry registry;
     const std::string dataPath = getDataPath();
     registry.loadAll(dataPath);
+
+    // Bilanciamento globale data-driven (ADR-043): sovrascrive i default coi
+    // valori autorati. File assente → default = vecchie costanti (invariato).
+    if (loadGameplayBalance(dataPath + "/config/gameplay.json"))
+        telemetry::logInfo("gameplay balance caricato: max_revives="
+            + std::to_string(gameplay().squadMaxRevives)
+            + " revive_time=" + std::to_string(gameplay().squadReviveTime)
+            + " comms_delay=" + std::to_string(gameplay().commsLostShareDelay));
+    else
+        telemetry::logWarn("gameplay balance NON caricato (file assente o invalido): "
+                           "uso i default compile-time");
     telemetry::logInfo("registry caricato da '" + dataPath + "': "
         + std::to_string(registry.weapons().size()) + " armi, "
         + std::to_string(registry.enemies().size()) + " nemici, "
@@ -327,6 +339,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     // Ruota di comando (doc 26): stato che vive fra i frame mentre il tasto è
     // tenuto. `wheelDirX/Y` accumula il movimento mouse per scegliere il settore.
     bool  wheelOpen = false; float wheelDirX = 0.0f, wheelDirY = 0.0f; int wheelSel = -1;
+    // ADR-037: campionato all'apertura della ruota — decide se il 4° settore
+    // legge SEGUI (impartisci) o LIBERI (revoca → stato privo di ordini).
+    bool  wheelFollowActive = false;
     // Selezione del punto di respawn mentre si è a terra (mappa top-down, doc
     // 30). `respawnSel` = indice in mode->availableSpawns() (0 = spawn base);
     // `deathPos` = dove si è caduti (marker di orientamento sulla mappa).
@@ -868,8 +883,23 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             std::cout << "[Stress] " << n << " AI per team (sim)\n";
         }
 
-        // --sim: entra direttamente nella simulazione AI-vs-AI (test/debug)
-        if (autoSim) startSimulation();
+        // --sim: entra direttamente nella simulazione AI-vs-AI (test/debug).
+        // I conteggi vengono dalla MAPPA, non da MatchSettings: il default
+        // `team1AiCount = 1` rendeva la simulazione un 1-contro-6, cioè uno
+        // scenario che in partita non esiste — e ogni misura sul comportamento
+        // degli ALLEATI (squadra, ordini, manovre) era presa su un campione
+        // inesistente. Con i valori di mappa la sim rispecchia la partita vera.
+        if (autoSim)
+        {
+            if (const MapDef* md = registry.getMap(currentSettings.mapId))
+            {
+                if (md->allyCount  > 0) sbMenu.allyCount  = md->allyCount;
+                if (md->enemyCount > 0) sbMenu.enemyCount = md->enemyCount;
+                std::cout << "[Sim] forze dalla mappa: " << sbMenu.allyCount
+                          << " alleati vs " << sbMenu.enemyCount << " nemici\n";
+            }
+            startSimulation();
+        }
     }
 
     // ── Gestione dei Result dei menu, condivisa fra tastiera e mouse ──
@@ -1422,18 +1452,32 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             wheelOpen = canWheel && input.isDown(Action::CommandWheel);
             if (wheelOpen)
             {
-                if (!wheelWasOpen) { wheelDirX = wheelDirY = 0.0f; wheelSel = -1; }
+                if (!wheelWasOpen)
+                {
+                    wheelDirX = wheelDirY = 0.0f; wheelSel = -1;
+                    // ADR-037: il 4° settore è SEGUI, ma se la squadra sta già
+                    // seguendo diventa LIBERI (revoca → stato privo di ordini).
+                    wheelFollowActive = false;
+                    for (EntityId id : world.getEntities())
+                    {
+                        const auto* s = world.getSquad(id);
+                        if (!s || s->squadId == 0 || s->isLeader) continue;
+                        if (s->hasActiveOrder() && s->order == OrderType::Follow)
+                        { wheelFollowActive = true; break; }
+                    }
+                }
                 wheelDirX += (float)input.mouseDX();
                 wheelDirY += (float)input.mouseDY();
                 const float mag = std::sqrt(wheelDirX*wheelDirX + wheelDirY*wheelDirY);
                 if (mag > 24.0f)   // dead zone: un micromovimento non seleziona
                 {
                     const float ang = std::atan2(wheelDirY, wheelDirX);
-                    // Centri: Regroup basso-sx, Hold basso-dx, Advance in alto
-                    // (Y schermo verso il basso → Advance = -90°).
-                    const float c[3] = { 2.356f, 0.785f, -1.5708f };
+                    // Centri sulle 4 diagonali (Y schermo verso il basso):
+                    // Regroup basso-sx, Hold basso-dx, Advance alto-dx,
+                    // Segui/Liberi alto-sx.
+                    const float c[4] = { 2.356f, 0.785f, -0.785f, -2.356f };
                     int best = 0; float bestD = 1e9f;
-                    for (int i = 0; i < 3; ++i)
+                    for (int i = 0; i < 4; ++i)
                     {
                         const float dd = std::fabs(std::atan2(std::sin(ang-c[i]),
                                                               std::cos(ang-c[i])));
@@ -1453,7 +1497,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 { req.order = OrderType::MoveTo; req.targetX = pp.x; req.targetZ = pp.z; }
                 else if (wheelSel == 1)   // HOLD: ognuno tiene la propria posizione
                 { req.order = OrderType::HoldPosition; }
-                else                      // ADVANCE: avanza nella direzione di mira
+                else if (wheelSel == 2)   // ADVANCE: avanza nella direzione di mira
                 {
                     glm::vec3 fwd = cam.getForward(); fwd.y = 0.0f;
                     const float fl = glm::length(fwd);
@@ -1462,13 +1506,21 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     req.targetX = pp.x + fwd.x * 15.0f;
                     req.targetZ = pp.z + fwd.z * 15.0f;
                 }
+                else                      // SEGUI ⇄ LIBERI (ADR-037)
+                {
+                    req.order        = wheelFollowActive ? OrderType::None
+                                                         : OrderType::Follow;
+                    req.targetEntity = player.entity;
+                }
                 world.squadOrder = req;
                 hud.toast(wheelSel==0 ? "Squadra: REGROUP"
                         : wheelSel==1 ? "Squadra: HOLD"
-                                      : "Squadra: ADVANCE");
+                        : wheelSel==2 ? "Squadra: ADVANCE"
+                        : wheelFollowActive ? "Squadra: LIBERI"
+                                            : "Squadra: SEGUI");
                 wheelSel = -1;
             }
-            hud.setCommandWheel(wheelOpen, wheelSel);
+            hud.setCommandWheel(wheelOpen, wheelSel, wheelFollowActive);
         }
 
         // ── 4. CAMERA + PHYSICS ──────────────────────────────────────
@@ -1695,8 +1747,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         if (const MapDef* md = world.activeMap)
                         {
                             float best2 = 4.0f * 4.0f;
-                            for (const auto& c : md->coverPoints)
+                            for (const auto& c : md->tacticalPositions)
                             {
+                                if (c.protection <= 0.0f) continue;   // deve riparare (ADR-030)
                                 const float dx = c.x - gp.x, dz = c.z - gp.z;
                                 const float d2 = dx*dx + dz*dz;
                                 if (d2 < best2)
@@ -1853,7 +1906,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s%s",
                                       members, orderName(ord), downTag);
                     else
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)%s", members, downTag);
+                        // ADR-037: nessun ordine attivo NON è un buco d'informazione,
+                        // è lo stato normale — truppe indipendenti.
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  LIBERI%s",
+                                      members, downTag);
                     hud.setSquadOrder(sb);
                 }
             }
@@ -2052,11 +2108,22 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             int aliveAllies = 0, aliveEnemies = 0;
             if (worldReady)
             {
+                // Conta solo le TRUPPE. Prima finiva nel conteggio qualunque entità
+                // con team+vita: la torre comunicazioni (bersaglio strategico) e il
+                // Droide Tattico risultavano "nemici vivi" — con la sola torre e il
+                // comandante rimasti l'HUD segnava 2 nemici inesistenti (segnalato
+                // dall'utente 2026-07-20). Fuori: bersagli strategici (strutture),
+                // veicoli e il comandante (è un obiettivo vivente, non una truppa).
                 for (EntityId id : world.getEntities())
                 {
                     const auto* tm = world.getTeam(id);
                     const auto* hp = world.getHealth(id);
                     if (!tm || !hp || hp->current <= 0 || world.getBullet(id)) continue;
+                    if (world.getVehicle(id) || world.hasCommander(id)) continue;
+                    bool isStructure = false;
+                    for (const auto& st : world.strategicTargets)
+                        if (st.entity == id) { isStructure = true; break; }
+                    if (isStructure) continue;
                     if (tm->teamId == 1) ++aliveAllies;
                     else if (tm->teamId == 2) ++aliveEnemies;
                 }

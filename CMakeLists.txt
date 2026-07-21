@@ -260,6 +260,7 @@ add_executable(GFEditor
     src/core/Telemetry.cpp
     src/game/data/DefinitionRegistry.cpp
     src/game/data/ContentValidation.cpp   # ADR-018: STESSO gate del runtime, mai una copia
+    src/game/ai/WorldIntel.cpp            # ADR-032: il loader costruisce il grafo dei link
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
     src/render/Camera.cpp

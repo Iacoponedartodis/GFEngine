@@ -1,0 +1,12 @@
+﻿{
+    "squad_bleedout_time": 15.0,
+    "squad_revive_radius": 2.5,
+    "squad_revive_time": 10.0,
+    "squad_revive_hp": 0.15,
+    "squad_down_lethal_hit_frac": 0.2,
+    "squad_max_revives": 1,
+    "comms_lost_range_mult": 0.5,
+    "comms_lost_share_delay": 2.5,
+    "comms_lost_order_mult": 2.5,
+    "comms_lost_reinforce_mult": 1.6
+}

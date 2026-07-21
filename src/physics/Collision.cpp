@@ -267,12 +267,14 @@ static bool rayBlockedByAABB(const glm::vec3& o, const glm::vec3& d,
     return true;
 }
 
-bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world)
+bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
+                    EntityId ignore)
 {
     const glm::vec3 dir = to - from;
 
     for (EntityId id : world.getEntities())
     {
+        if (id == ignore) continue;   // il bersaglio non si occlude da sé (doc 35)
         const auto* col = world.getCollider(id);
         const auto* t   = world.getTransform(id);
         if (!col || !t) continue;

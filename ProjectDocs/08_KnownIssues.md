@@ -250,6 +250,224 @@
   (già funzionante via tasto), non un'abilità; lo shield va concepito come GADGET, non abilità.
   Lavoro futuro (abilità/gadget player-side).
 
+## 71. Le strutture erano "autorabili" solo sulla carta (HIGH) — RISOLTO 2026-07-21
+**Quattro difetti segnalati dall'utente in una volta, tutti confermati.** Avevo dichiarato
+"rotazione e scala autorabili con gizmo" in ADR-036 e nel changelog (33): **non era vero**, e non
+l'avevo verificato. Le quattro cause erano indipendenti fra loro.
+1. **Barra gizmo**: `gizmoModeBar(m_viewport, boxSel, boxSel)` abilitava Ruota/Scala **solo per i box
+   della geometria**. Su un bersaglio i pulsanti restavano grigi e la modalità ricadeva su Sposta.
+   I gestori dei delta per i bersagli **esistevano già** in `tick()` — non venivano mai raggiunti.
+   → Ora ogni tipo di selezione dichiara cosa sa fare.
+2. **Viewport dell'editor**: i bersagli erano disegnati con `ry = 0` e lato **fisso 2.5**, ignorando
+   `t.ry` e `t.scale`. Gli slider cambiavano il dato e chiamavano `updateViewport()`, ma il disegno
+   non li leggeva → sembrava che non facessero nulla. → Ora usa scala e rotazione autorate.
+3. **Runtime**: `sc = box ? 2.5f : meshScale` — con il box di fallback (nessuna mesh) `meshScale` era
+   **ignorata del tutto**, quindi la scala non aveva effetto nemmeno in gioco. → Ora la scala
+   **moltiplica** la base 2.5 (default 1.0 → comportamento invariato).
+4. **Sandbox**: `SandboxMode` **non spawnava affatto** le strutture — il codice viveva solo dentro
+   `ConquestMode`. Erano dati della mappa che in sandbox non esistevano. → Estratto in
+   `structures::spawnAll` (header condiviso), chiamato da entrambi i mode.
+- **Lezione**: tre di questi quattro sono "il dato cambia ma non si vede". Avevo verificato che il
+  campo si salvasse nel JSON e ho chiamato la feature fatta. **Il criterio giusto non è "il dato è
+  scritto" ma "si vede l'effetto"**, e quello richiede lo smoke manuale che avevo dichiarato dovuto
+  e mai preteso prima di dire "fatto".
+
+## 72. Le AI attraversavano le strutture: il collider non tocca il navmesh (HIGH) — RISOLTO 2026-07-21
+- **Segnalato dall'utente** già la prima volta e da me "risolto" in ADR-036 aggiungendo il
+  `ColliderComponent`. **Il collider era necessario ma non sufficiente**: governa giocatore e
+  proiettili, mentre **le AI si muovono sul navmesh via DetourCrowd**. `NavManager::build`
+  voxelizzava **solo `map.geometry`**, quindi sotto la torre il navmesh non aveva alcun buco e il
+  crowd ci passava dentro tranquillamente.
+- **Fix**: le strutture entrano nell'input del navmesh usando **esattamente i semiassi del collider**
+  (derivazione unica in `StrategicTargetDef::solidHalfExtents`), così collisione e navigazione non
+  possono divergere.
+- **Misurato**: `input_tris` **264 → 288** su firebase, cioè (22 box + **2 strutture**) × 12.
+- **Lezione**: "solido" in questo motore ha **due** significati indipendenti — collisione e
+  navigazione. Aggiungerne uno solo e dichiarare la cosa risolta è stato un errore di comprensione
+  del sistema, non una svista.
+
+## 70. Le AI non prendono di mira le strutture (MEDIUM) — RISOLTO 2026-07-20 (ADR-039, doc 35)
+- **La causa NON era di design** (avevo ipotizzato che il selettore di bersaglio ignorasse le
+  strutture): erano **tre bug in fila**, ognuno sufficiente da solo a rendere una struttura
+  inattaccabile.
+  1. **`hasLineOfSight` non escludeva il bersaglio** → il collider aggiunto da ADR-036 **bloccava la
+     visuale verso il centro della struttura stessa**. Regressione mia, introdotta senza accorgermene.
+  2. **Si mirava all'origine del transform**, che per una struttura sta **a terra**: il segmento
+     raschiava il collider del pavimento.
+  3. **Il LOS al momento del tiro** aveva entrambi i difetti → dopo aver corretto la sola *selezione*,
+     la telemetria mostrava **396 ingaggi per finestra e zero danni**: le AI sceglievano la torre e poi
+     non le sparavano.
+- **Fix**: `ignore` in `hasLineOfSight`; punto di mira sul **corpo** (`y + hy/2`) in selezione e tiro;
+  strutture fuori dalla lista bersagli-unità e reintrodotte solo dal percorso autorato (doc 35).
+- **Misurato**: prima **0** ingaggi possibili; dopo, torre distrutta dalle AI a t=41.5 s con HP reali
+  (300) → rete di comunicazione degradata di conseguenza.
+- **Lezione**: avevo classificato questo come "decisione di design da prendere" quando era un difetto
+  da diagnosticare. La differenza l'ha fatta misurare invece di ragionare — e i tre bug si
+  nascondevano l'uno dietro l'altro: sistemarne uno solo non produceva **nessun** cambiamento visibile.
+
+## 70b. (diagnosi originale, superata) Le AI non prendono di mira le strutture — APERTO 2026-07-20
+- **Emerso** verificando ADR-038: in `--sim` una torre di comunicazione da 300 HP **non viene mai
+  distrutta**, nemmeno piazzata dentro lo spawn avversario. Abbassata a 5 HP cade dopo ~30 s — cioè
+  muore di **fuoco vagante**, non perché qualcuno la stia attaccando.
+- **Causa probabile** (non ancora confermata leggendo il selettore di bersaglio): l'AI sceglie il
+  bersaglio più vicino fra le entità con Team+Transform, ma una struttura non si comporta come
+  un'unità (non spara, non si muove) e in pratica non entra mai nel ciclo di ingaggio — resta un
+  bersaglio del **giocatore**.
+- **Perché conta ora**: con la rete di comunicazione (doc 34) la torre è un obiettivo che *cambia la
+  battaglia*. Se solo il giocatore può abbatterla, l'intero sistema esiste solo nella direzione
+  "il giocatore attacca i droidi", mai il contrario: i droidi non minacceranno mai la torre dei cloni.
+- **Non è una svista da correggere di corsa**: "le AI devono attaccare le strutture" è una **decisione
+  di design** (con quale priorità? solo su ordine? solo alcune classi?). Va deciso, non improvvisato.
+
+## 69. Il `Follow` fisso era la causa del "si muovono tutti insieme" (HIGH) — RISOLTO 2026-07-20 (ADR-037)
+- **Segnalato dall'utente** in più forme: *"si muovono tutti insieme, facendo sempre le stesse strade
+  e finendo tutti abbastanza aggregati"*; e la direttiva finale, *"dobbiamo togliere il comando
+  'follow' fisso"*.
+- **Causa**: `SquadSystem` assegnava `Follow` a **chiunque non avesse un ordine attivo** — un
+  placeholder di Phase A mai rimosso. Non era un difetto dell'AI: era l'ordine Follow che faceva
+  correttamente il suo mestiere su **tutta la squadra, tutto il tempo**. Telemetria: `sq_follow` 4-9
+  su 9 membri. Da qui discendevano anche (a) la rianimazione troppo efficace, perché i membri
+  restavano ammassati e c'era sempre un soccorritore a portata, e (b) il fatto che i **cloni fossero
+  meno indipendenti dei droidi**, che non avendo squadra non hanno guinzaglio.
+- **Fix (ADR-037)**: nessun ordine di default (`OrderType::None` → Patrol/Alert/Hunt normali, truppa
+  indipendente); `Follow` diventa il 4° settore della ruota di comando, che legge **LIBERI** e revoca
+  quando la squadra sta già seguendo; ramo esplicito di revoca in `SquadSystem` (il blocco di
+  assegnazione filtra su `isImplemented()`, che `None` non soddisfa); HUD che dichiara `LIBERI`.
+- **Misurato**: `sq_follow` **0 per tutta la partita**; a t=4 s 10/10 senza ordini e 21 unità in
+  patrol insieme; al picco 3 manovre avviate su 6 valutate — i cloni ora manovrano come i droidi.
+- **Lezione**: un default messo "per far funzionare qualcosa" diventa invisibile e viene scambiato per
+  comportamento emergente. Andava rimosso quando è nato il vero sistema di ordini, non due fasi dopo.
+
+## 73. La torre di controllo ammassa i cloni quando i segnali sono pochi (MEDIUM) — RISOLTO 2026-07-21
+- **Segnalato dall'utente**: *"dopo un po' non so perché hanno iniziato ad aggregarsi tutti lì
+  vicino"* (vicino alla torre di comunicazione nemica).
+- **Causa**: la scelta decorrelata dal `bias` (ADR-040) disperdeva i cloni **solo se c'erano
+  abbastanza segnali**. A fine partita i settori tenuti venivano filtrati e ne restavano 1-2: tutti i
+  cloni convergevano lì — esattamente il comportamento che ADR-040 esisteva per evitare.
+- **Fix (saturazione)**: ogni segnale conta le truppe già presenti (`Signal.crowd`); oltre
+  `ALLY_SIGNAL_CAPACITY` (=3) **smette di attirarne altri**. Chi è già dentro un segnale ci **resta**
+  (stabilità: senza, un segnale saturo verrebbe abbandonato → si svuota → tutti tornano → pendolo).
+  Quando tutti i segnali sono coperti, i cloni in più **tornano alla propria pattuglia** invece di
+  ammassarsi. La dispersione non è più solo emergente dal numero di segnali.
+- **Misurato**: `segnale_affollamento_max` **0-1** per tutta la partita (prima tutti sullo stesso
+  punto); a fine partita 7-8 cloni pattugliano invece di pilarsi su 1-2 segnali. **Non-regressione**:
+  il comportamento "ultimo bersaglio" (ramo separato) resta — struttura finale distrutta a t=103.
+- **Leva**: `ALLY_SIGNAL_CAPACITY` (basso = più dispersione). Sensazione da rifinire in partita.
+
+## 68. `Hunt` non scade mai (MEDIUM) — RISOLTO 2026-07-21 (riformulato lo stesso giorno)
+- **Fix**: dopo `AI_HUNT_TIMEOUT` (20 s) l'unità degrada a **Search**, non direttamente a Patrol —
+  guardarsi intorno prima di rinunciare è il comportamento sensato, e Search ha già il suo timeout
+  (15 s) verso Patrol. La catena completa Alert → Hunt → Search → Patrol ora si chiude sempre.
+- **Misurato** (sim 150 s): `in_hunt` 3 → `in_search` 6 → `in_patrol` 7 nelle finestre successive.
+  Prima: `in_hunt` inchiodato a 1 per centinaia di secondi.
+- Il valore 20 s è il doppio della sosta in Search: inseguire deve durare più del cercare, ma non
+  per sempre. È una leva da rifinire provando.
+
+### Diagnosi originale e sua correzione (storico)
+> ⚠️ **La diagnosi originale era sbagliata.** Avevo scritto "la partita non finisce quando una
+> fazione è spazzata via". **La partita finisce**: quello che prosegue è la **simulazione in
+> sandbox** — e *deve* proseguire, serve all'utente per osservare il comportamento delle AI
+> (chiarito dall'utente il 2026-07-21). Avevo scambiato lo strumento di osservazione per un difetto
+> del game mode. Resta valido **solo** il secondo difetto, qui sotto.
+- **`Hunt` non ha timeout**: un'unità insegue un `lastKnown` indefinitamente invece di degradare a
+  Search e poi a Patrol. In sandbox si vede bene: unità che restano in `hunt` per centinaia di
+  secondi su un contatto che non esiste più. Vale per entrambe le fazioni.
+
+## 68b. (diagnosi originale, SUPERATA) La partita non finisce quando una fazione è spazzata via
+- **Osservato** nella run 10v10 di ADR-037: distrutta la torre, i rinforzi nemici si bloccano
+  (consequenza voluta) e a ~130 s i separatisti sono azzerati. Ma la partita **prosegue per oltre 400
+  secondi**: 4 alleati in patrol e 1 in `hunt` permanente su un contatto che non esiste più, con
+  `stuck` 4-5/minuto. Nessuna condizione di vittoria scatta.
+- **Due difetti distinti, da non confondere**:
+  1. **Nessuna condizione di annientamento** nel game mode: la vittoria è legata a post/rinforzi, non
+     al "nemico azzerato e senza rinforzi".
+  2. **`Hunt` non scade**: un'unità insegue un `lastKnown` indefinitamente invece di degradare a
+     Search e poi a Patrol. Vale per entrambe le fazioni.
+- **Non ancora affrontato.** Il punto 2 è il più rilevante per il comportamento; il punto 1 è di
+  regola del mode.
+
+## 67. La simulazione `--sim` non era rappresentativa (HIGH — strumento di misura) — RISOLTO 2026-07-20
+- `MatchSettings.team1AiCount = 1` di default e `--sim` lo usava → **1 alleato contro 6 nemici**.
+  Tutte le misure sul comportamento degli alleati (squadra, ordini, manovre) erano prese su uno
+  scenario che in partita non esiste: per questo i problemi riportati dall'utente non comparivano nei
+  dati. **Il difetto era nello strumento, non nel gioco.**
+- **Fix**: `--sim` prende `ally_count`/`enemy_count` **dalla mappa**. Lezione: un tool di misura va
+  validato prima di fidarsi delle sue conclusioni.
+
+## 66. Bersagli strategici senza collisione, team cablato, non ruotabili (MEDIUM) — RISOLTO 2026-07-20
+- **Segnalato dall'utente** ("le AI ci passano in mezzo"). Confermato: lo spawn dava Transform, Team,
+  Health, MeshRenderer e Hitbox ma **nessun `ColliderComponent`**.
+- Inoltre il **team era cablato a 2**: una torre dei cloni sarebbe nata separatista. E la rotazione
+  era fissa a 0, la scala non autorabile dall'editor.
+- **Fix**: collider (semiassi autorabili, 0 = dalla scala; altezza piena per compensare l'offset di
+  grounding della mesh), `team` autorato, `ry` + scala autorabili con gizmo ruota/scala.
+  Prerequisito delle torri di comunicazione/controllo per entrambe le fazioni.
+
+## 64. Il guinzaglio di squadra annullava le manovre tattiche dei cloni (HIGH) — RISOLTO 2026-07-20
+- **Sintomo (utente)**: nessun cambiamento visibile nel comportamento; cloni ammassati che fanno
+  avanti-indietro o "girano su sé stessi all'infinito"; **"i droidi sembrano funzionare un po' meglio
+  dei cloni"**.
+- **Causa**: il blocco del guinzaglio (`Follow`) gira **DOPO** il blocco Alert e **sovrascrive**
+  `moveDX/moveDZ`. Un clone che avviava una manovra tattica (ADR-035) veniva riagganciato verso il
+  leader al primo passo fuori raggio → la manovra non partiva mai e l'unità oscillava. **I droidi non
+  hanno squadra, quindi nessun guinzaglio**: ecco perché sembravano più intelligenti. Il sintomo
+  "girano all'infinito" è il facing ricalcolato su un delta che cambia segno a ogni tick.
+- **Fix**: il guinzaglio **non si applica** durante una manovra attiva (`!repositionActive`), e in
+  **Alert** il raggio del Follow si allarga (8 → 15 m): un membro ingaggiato deve poter manovrare e
+  chiudere la distanza, pur senza inseguire attraverso la mappa.
+- **Lezione di processo**: il bug è esistito per più incrementi perché si misuravano solo crash e
+  stuck, mai le DECISIONI. Vedi KI #65.
+
+## 65. Nessuna osservabilità sulle decisioni tattiche dell'AI (MEDIUM) — RISOLTO 2026-07-20
+- **Segnalato dall'utente**: *"non so nemmeno come controllare se le AI stanno davvero leggendo e
+  capendo i metadata, o se li stanno effettivamente utilizzando"*. Valeva anche per me: si misuravano
+  crash, stuck e cambi di stato — nulla che dicesse se le query tattiche venissero chiamate, cosa
+  rispondessero e cosa l'AI decidesse. Si sono così accumulati incrementi non verificati.
+- **Fix**: evento telemetria periodico **`AI / tactical decisions`** con: censimento degli stati
+  (patrol/alert/hunt/search/fermi/in_manovra), approcci scelti (diretto/fianco/tiro/dominante),
+  manovre valutate/avviate/bloccate, e soprattutto **hit vs miss delle query** (`tiro_trovato` /
+  `tiro_assente`, idem fianco) — che distingue "il mondo non offre nulla" da "l'AI non chiede".
+- **Primo uso**: ha mostrato che i metadata **funzionano** (`tiro_assente` sempre 0) ma che
+  `hunt`/`search` erano **sempre 0** → tutti in contatto permanente nello stesso punto: il problema
+  non era nelle query ma nell'aggregazione. Da lì i fix #64 e il raggio di condivisione contatti.
+
+## 63. Battaglia sempre uguale: due blocchi sullo stesso fronte (MEDIUM) — RISOLTO 2026-07-20
+- **Segnalato dall'utente**: ogni partita identica, tutti in gruppo sullo stesso fronte nonostante le
+  route coprissero la mappa; a fine scontro i cloni ammassati oscillavano su 1-2 m.
+- **Causa principale**: `AiSystem` aveva una **shared awareness a livello di esercito** — UNA sola
+  `lastKnown` per team propagata a TUTTE le unità. Un solo avvistamento mandava l'intero esercito in
+  Hunt sullo stesso punto → nessuna indipendenza possibile, per costruzione.
+- **Fix**: contatti come **lista con posizione**, adottati solo entro `AI_CONTACT_SHARE_RADIUS` (20 m)
+  → fronti indipendenti. Inoltre: in `Advance` ogni droide sceglie il **proprio** post catturabile più
+  vicino (non il focus unico del comandante); i membri in `Follow` non pattugliano (fine
+  dell'oscillazione da tira-e-molla col guinzaglio); punti di Search **clampati ai confini mappa**.
+- **Misurato**: unità sparse su tutta la mappa in `--sim`; `stuck` 5 → 3. Dinamicità reale = giudizio
+  in partita. **Leva di tuning**: `AI_CONTACT_SHARE_RADIUS` (più basso = più indipendenza/caos).
+
+## 62. AI non seguivano i percorsi in modo fluido (MEDIUM) — RISOLTO 2026-07-20 (4 cause)
+- **Segnalato dall'utente** più volte ("non riescono a usare in maniera fluida i path"). Diagnosi
+  partendo dalla telemetria `stuck` (stato + posizione + durata), non da ipotesi. Quattro cause:
+  1. **Anti-stuck a soglia fissa** (0.05 m/tick) vs `patrol_speed 2.5` → 0.042 m/tick a 60 Hz: un
+     droide in marcia normale risultava bloccato dopo 1.2 s e `advancePatrol` lo faceva **saltare al
+     segmento successivo senza arrivarci**. → soglia ora **proporzionale alla velocità**.
+  2. **`patrolDwell = 12 s` applicata a OGNI waypoint** (serviva solo a catturare i post): pattuglie
+     ferme quasi sempre. → sosta lunga **solo sui command post** (`worldintel::nearCommandPost`).
+  3. **`requestMoveTarget` scartava in silenzio** i target non agganciabili col piccolo extent del
+     crowd (lastKnown in Hunt, punto casuale in Search) → agente immobile. → **extent crescenti**
+     (2/6/14 m) + confronto "stesso target" sul punto agganciato (evita replan a ogni frame).
+  4. **Segnale `stuck` inaffidabile**: in Alert il timer accumulava (log soppresso ma non il timer) →
+     falsi positivi da ~2.8 s riportati all'uscita dallo stato. → in Alert il timer si **azzera**.
+- **Misurato**: `--sim` 20 s, eventi `stuck` **da 9 a 0**. NB: la sim entra in combattimento quasi
+  subito → non misura bene la pattuglia; i punti 1-2 restano da valutare **in partita**.
+
+## 61. HUD contava strutture e comandante come "nemici vivi" (MEDIUM) — RISOLTO 2026-07-20
+- **Segnalato dall'utente**: con in campo solo il Droide Tattico l'HUD segnava **2 nemici vivi**.
+  Ipotesi dell'utente (corretta): venivano contati il **comandante** e la **torre comunicazioni**.
+- **Causa**: il conteggio in `Application` sommava **qualunque** entità con `Team` + `Health` viva e
+  non-proiettile → includeva bersagli strategici (strutture), veicoli e il comandante.
+- **Fix**: si contano solo le **truppe** — esclusi `strategicTargets`, entità con `VehicleComponent`
+  e con `CommanderComponent` (il Droide Tattico è un obiettivo vivente, non una truppa: doc 32).
+
 ## 60. Ruota/scala non abilitate sui marker metadata (LOW — authoring) — RISOLTO 2026-07-20 (ADR-025)
 - Segnalato dall'utente: selezionando una **copertura** non si sceglieva il tool di rotazione.
   Diagnosi: non era una rottura generale (i box di geometria ruotano/scalano); i **marker metadata**

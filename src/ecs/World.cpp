@@ -22,6 +22,14 @@ void World::initialize()
     commandPostStates.clear();
     battleState = {};           // conseguenze: stato PER-MISSIONE (doc 25)
     missionStats = {};          // statistiche PER-MISSIONE, non per-sessione
+    // Anche queste sono PER-MISSIONE. `comms` in particolare: senza azzerarlo una
+    // fazione che aveva perso la torre restava degradata anche nella partita
+    // DOPO (i sistemi sopravvivono a initialize(), lo stato del World no).
+    for (auto& c : comms) c = {};
+    enemyCommand = {};
+    allyIntel    = {};
+    sectorStates.clear();
+    strategicTargets.clear();
     activeMission = nullptr;   // mailbox missione (ADR-019)
     objectiveDefs = nullptr;
     std::cout << "[World] Inizializzato." << std::endl;

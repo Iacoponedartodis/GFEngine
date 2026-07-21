@@ -36,6 +36,11 @@ BalanceEditor::BalanceEditor() { reload(); }
 void BalanceEditor::reload()
 {
     m_registry.loadAll(getSourceDataDir());
+    // Bilanciamento globale (ADR-043): stessa load del runtime → stessi valori.
+    // File assente → default (= vecchie costanti compile-time).
+    mini::mutableGameplayBalance() = mini::GameplayBalance{};
+    mini::loadGameplayBalance(getSourceDataDir() + "config/gameplay.json");
+    m_gameplay = mini::gameplay();
     m_selWeapon.clear();
     m_selAI.clear();
     m_dirty = false;
@@ -692,6 +697,69 @@ void BalanceEditor::drawPlayerDefTab()
 
 // ── Draw principale ──────────────────────────────────────────────────────
 
+// ── Gameplay globale (ADR-043) ───────────────────────────────────────────
+// I parametri di sensazione che erano `constexpr` (ricompilare per tararli):
+// ora vivono in data/config/gameplay.json, letti dal runtime all'avvio.
+void BalanceEditor::saveGameplay()
+{
+    const std::string path = getSourceDataDir() + "config/gameplay.json";
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+        for (auto& [k, v] : mini::gameplayBalanceToJson(m_gameplay).items())
+            j[k] = v;
+        return true;
+    });
+    std::cout << "[Balance] Gameplay salvato: " << path << "\n";
+}
+
+void BalanceEditor::drawGameplayTab()
+{
+    auto& g = m_gameplay;
+    bool ch = false;
+
+    ImGui::TextDisabled("Parametri GLOBALI di gameplay (data/config/gameplay.json).");
+    ImGui::TextDisabled("Il runtime li carica all'avvio: salva e riavvia la partita per provarli.");
+    ImGui::Separator();
+
+    ImGui::TextColored({0.55f,0.85f,0.55f,1.0f}, "Squadra: a terra e rianimazione (doc 26)");
+    ch |= editor::ui::sliderRow("Bleed-out (s)",  g.squadBleedoutTime, 3.f, 60.f, 0.5f, "%.0f s", 150.0f);
+    ImGui::TextDisabled("Quanto resta a terra prima della morte definitiva.");
+    ch |= editor::ui::sliderRow("Raggio soccorso (m)", g.squadReviveRadius, 1.f, 8.f, 0.1f, "%.1f m", 150.0f);
+    ch |= editor::ui::sliderRow("Canalizzazione (s)",  g.squadReviveTime, 1.f, 30.f, 0.5f, "%.1f s", 150.0f);
+    ImGui::TextDisabled("Secondi di presenza continua per completare la rianimazione.");
+    ch |= editor::ui::sliderRow("HP al risveglio",     g.squadReviveHp, 0.05f, 1.f, 0.01f, "%.2f", 150.0f);
+    ch |= editor::ui::sliderRow("Colpo letale (fraz.)", g.squadDownLethalHitFrac, 0.05f, 1.f, 0.01f, "%.2f", 150.0f);
+    ImGui::TextDisabled("Un colpo che toglie almeno questa frazione degli HP max\n"
+                        "uccide sul posto invece di mettere a terra.");
+    {
+        int mr = g.squadMaxRevives;
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputInt("Rianimazioni per vita", &mr))
+        { g.squadMaxRevives = (mr < 0) ? 0 : (mr > 9 ? 9 : mr); ch = true; }
+        ImGui::TextDisabled("Oltre il cap la caduta e' LETALE. 0 = mai a terra,\n"
+                            "chi cade muore. Si azzera col respawn.");
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored({0.55f,0.75f,0.95f,1.0f}, "Rete di comunicazione: degrado senza torre (doc 34)");
+    ImGui::TextDisabled("Quanto peggiora una fazione che ha PERSO la sua torre.\n"
+                        "Nessun valore blocca nulla: la regola e' RALLENTARE.");
+    ch |= editor::ui::sliderRow("Raggio contatti (x)",  g.commsLostRangeMult, 0.1f, 1.f, 0.05f, "x%.2f", 150.0f);
+    ch |= editor::ui::sliderRow("Ritardo avviso (s)",   g.commsLostShareDelay, 0.f, 10.f, 0.1f, "%.1f s", 150.0f);
+    ImGui::TextDisabled("L'avvistamento arriva ai compagni in ritardo: si accorre\n"
+                        "dove il nemico ERA.");
+    ch |= editor::ui::sliderRow("Cadenza ordini (x)",   g.commsLostOrderMult, 1.f, 6.f, 0.1f, "x%.1f", 150.0f);
+    ch |= editor::ui::sliderRow("Ritardo rinforzi (x)", g.commsLostReinforceMult, 1.f, 4.f, 0.05f, "x%.2f", 150.0f);
+
+    if (ch) m_dirty = true;
+
+    ImGui::Separator();
+    if (ImGui::Button("Salva gameplay")) { saveGameplay(); m_dirty = false; }
+    ImGui::SameLine();
+    if (ImGui::Button("Ripristina default"))
+    { m_gameplay = mini::GameplayBalance{}; m_dirty = true; }
+    if (m_dirty) { ImGui::SameLine(); ImGui::TextColored({1.f,0.8f,0.3f,1.f}, "modifiche non salvate"); }
+}
+
 void BalanceEditor::draw()
 {
     if (ImGui::BeginTabBar("##btabs"))
@@ -703,6 +771,7 @@ void BalanceEditor::draw()
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Abilita'"))    { drawAbilitiesTab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Gameplay"))    { drawGameplayTab();   ImGui::EndTabItem(); }
         // Veicoli: modulo dedicato "Vehicle Editor" (19_Vehicles)
         ImGui::EndTabBar();
     }

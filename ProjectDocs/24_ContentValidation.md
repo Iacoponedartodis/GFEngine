@@ -58,6 +58,13 @@ Derivati dai problemi reali già visti, non teorici:
 - **Nessun orfano/duplicato:** nessun file dati non referenziato che duplichi un id vicino
   (chiude KI #7 in modo strutturale invece che manuale).
 - **Mappa:** `spawnTeam1/2` presenti; `commandPosts` riferiscono zone valide; `geometry` non vuota.
+- **Strutture strategiche** (aggiunto 2026-07-21, doc 34/35/36): `role` dentro la whitelist
+  (`generic`/`comms`/`control`) — **Errore**, perché il loader **non normalizza più in silenzio** e un
+  refuso produrrebbe una torre che si vede ma non fa nulla; `hp > 0`; `engage_radius` sotto i 3 m →
+  **Warning** ("il raggio è in METRI, nessuna AI la ingaggerà mai"); torre di **controllo di team 2**
+  → Warning (è un sistema della sola Repubblica); più di una torre per fazione → Warning; una sola
+  fazione con torre di comunicazione → Warning (asimmetria non dichiarata).
+  Sono tutti errori **silenziosi a runtime**: la struttura nasce, si vede, e non fa il suo mestiere.
 - **Arma:** i campi consumati dal runtime sono presenti e sensati (rateo > 0, gittata > 0).
 - **Unità:** ha hitbox profile valido, mesh risolvibile, profilo AI valido.
 - **Abilità:** i `param` usati dal tipo di abilità sono presenti.

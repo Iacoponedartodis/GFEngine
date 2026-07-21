@@ -33,11 +33,75 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   renderebbe gli alleati telecomandati). Ordine del tick: `Movement → Combat → Squad → Ai → Crowd`.
   Squadra alleata formata a runtime (leader = giocatore se entità valida di team 1, altrimenti la
   prima AI alleata; i respawn creano entità nuove → ri-arruolo ogni tick, via mailbox
-  `World::playerEntity`). Ordine di default `Follow`; ciclo di vita con telemetria
-  (`order issued/completed/failed`); gli ordini dichiarati ma non eseguiti falliscono **con causa
-  esplicita**. **Modello a guinzaglio:** l'ordine ha precedenza solo fuori dal raggio di
-  soddisfazione (Follow 8 m, HoldPosition 2 m, MoveTo 1.5 m); dentro, l'AI è autonoma. Vincola il
+  `World::playerEntity`). **Nessun ordine di default** (ADR-037, 2026-07-20): senza ordine il membro
+  resta `OrderType::None` e si muove come **truppa indipendente** (Patrol/Alert/Hunt normali);
+  `Follow` è un ordine impartito dalla ruota di comando, revocabile dallo stesso settore. Ciclo di
+  vita con telemetria (`order issued/cleared/completed/failed`); gli ordini dichiarati ma non
+  eseguiti falliscono **con causa esplicita**. **Modello a guinzaglio:** l'ordine ha precedenza solo
+  fuori dal raggio di soddisfazione (Follow 8 m — **15 m in Alert**, HoldPosition 2 m, MoveTo 1.5 m;
+  sospeso durante una manovra attiva, KI #64); dentro, l'AI è autonoma. Vincola il
   **movimento**, mai mira/fuoco → il comando funziona *durante* il firefight.
+- **Rete di comunicazione (2026-07-20, ADR-038 / doc 34):** una struttura strategica con
+  `role: "comms"` è la **torre di comunicazione** della sua fazione. Finché è viva quella fazione
+  comunica normalmente; quando cade, `World::comms[team]` degrada e **rallenta** — raggio di
+  condivisione dei contatti ×0.5, avviso con **2.5 s di ritardo** (si accorre dove il nemico *era*),
+  direttiva del comando rivalutata 2.5× più di rado, rimpiazzi ×1.6. **Nulla viene mai bloccato.**
+  Si degrada solo chi la torre l'aveva (`hadTower`) → mappe senza torri invariate. I contatti
+  condivisi sono ora **persistenti e datati** (finestra `[ritardo, ritardo+1 s]`, deduplicati per
+  area+recenza). Cadenza di decisione del comando: `COMMAND_DECISION_PERIOD` 3 s (prima: ogni tick).
+- **Ciclo di stato AI chiuso (2026-07-21, KI #68):** Alert → Hunt → Search → Patrol **termina
+  sempre**. `Hunt` scade dopo `AI_HUNT_TIMEOUT` (20 s) degradando a Search (che a sua volta scade a
+  15 s verso Patrol). Prima Hunt non aveva timeout e un'unità inseguiva un contatto inesistente per
+  centinaia di secondi — ben visibile nella simulazione sandbox, che **di proposito non si ferma**
+  (serve a osservare le AI; non è un difetto del game mode, la partita vera finisce).
+- **Torre di controllo dei cloni (2026-07-21, ADR-040 / doc 36):** `role: "control"` → `World::allyIntel`
+  pubblica una **lista** di segnali (settori non saldamente tenuti + strutture nemiche vive).
+  Un clone **senza ordini e senza route** ne sceglie uno **decorrelato dal proprio `bias`** — non il
+  migliore — e decide da sé il punto dentro l'area. **Nessun ordine, nessuna destinazione imposta**:
+  è il canale opposto a `enemyCommand` (un intento unico su cui tutti i droidi convergono), e i due
+  non vanno mai fusi. Senza torre viva il canale è spento e i cloni restano puramente autonomi.
+  **Saturazione (KI #73)**: ogni segnale conta le presenze (`Signal.crowd`); oltre
+  `ALLY_SIGNAL_CAPACITY` non ne attira altri e i cloni in più pattugliano — così non si ammassano
+  tutti sui pochi segnali di fine partita. Chi è già in un segnale ci resta (niente oscillazione).
+- **Strutture: solide in DUE sensi (2026-07-21, KI #72):** una struttura ha un `ColliderComponent`
+  (giocatore, proiettili, LOS) **e** entra nell'input di `NavManager::build` come ostacolo del
+  navmesh (AI, che si muovono via DetourCrowd). I due volumi derivano dalla **stessa** funzione
+  (`StrategicTargetDef::solidHalfExtents`) e non possono divergere. Il solo collider **non** basta a
+  fermare le AI. Spawn condiviso fra i mode: `structures::spawnAll` (Conquest **e** Sandbox).
+- **Bilanciamento globale data-driven (2026-07-21, ADR-043):** rianimazione (6 parametri) e degrado
+  comunicazioni (4) vivono in **`data/config/gameplay.json`**, caricato all'avvio
+  (`mini::gameplay()`, header-only condiviso runtime/editor). Tab **Gameplay** nel BalanceEditor.
+  Default = vecchie costanti; file assente → invariato. NB: il runtime legge la **`data/` sorgente**
+  del repo (la copia in build è fallback).
+- **Comando nemico v2 (2026-07-21, ADR-042):** `World::enemyCommand` è una **lista di direttive**, non
+  un intento singolo. Il Droide Tattico tiene i **3 fronti** più preziosi (settori + strutture), con
+  stance **per-settore** dal bilancio locale (TIENI dove controlla ma è pressato, SPINGI altrove); i
+  droidi si **distribuiscono** sui fronti (pesati dal bias) e seguono la stance del proprio. Unico
+  override globale: **ripiegamento** se i droidi calano sotto metà. Fine del "sempre avanzata".
+- **Droide Tattico con leash (2026-07-21, ADR-041 Fase 1):** il campo `commander` ha ora
+  `leash_radius` — area circolare da cui il comandante non esce (0 = fermo, legacy). Con raggio > 0
+  non è più `stationary`: si muove per difendersi ma **non insegue obiettivi/segnali** e un clamp
+  universale lo tiene nel raggio (misurato: deriva ≤ raggio). Autorabile nel MapEditor (marker viola +
+  disco, pannello con classe dal registry, gizmo Sposta/Scala). Resta una **classe** su corpo B1
+  (migrazione a entità propria = fase successiva).
+- **Bersagli a priorità bassa + FocusFire (2026-07-21, doc 35):** una struttura si ingaggia solo se
+  l'unità **non ha un bersaglio-unità**; entra in gioco entro `engage_radius` (proattivo) o come
+  **ultimo bersaglio** quando non restano unità nemiche (entro l'aggro) — poi, distrutta, si
+  ripattuglia. `FocusFire` (e comandi futuri) può forzarne la priorità. `AiProfileDef::huntTimeout`
+  porta la pazienza di Hunt nel profilo (carattere).
+- **Bounding overwatch esplicito (2026-07-21, ADR-032):** il grafo `positionCovers` è finalmente
+  **consumato** — `worldintel::bestOverwatchForPosition` trova una posizione che copre il punto verso
+  cui un compagno avanza; chi non avanza in una valutazione si sposta a coprirlo. Accanto
+  all'overwatch **emergente** (ADR-035), che resta. Su firebase scatta di rado (posizioni con poca
+  copertura reciproca).
+- **Strutture come fatto tattico (2026-07-20, ADR-039 / doc 35):** `World::strategicTargets` è la
+  **sorgente unica di intel** sulle strutture (posizione, fazione, ruolo, `priority`,
+  `engage_radius`) — la leggono AiSystem, il comando nemico e la futura torre di controllo. Un'unità
+  ingaggia una struttura nemica **solo se non ha bersagli-unità** ed è entro `engage_radius`
+  (**default 0 = mai di iniziativa**: il sistema è inerte finché non lo si autora). Le strutture sono
+  **escluse** dalla lista bersagli-unità e dal rapporto di forze del comandante.
+  `physics::hasLineOfSight` accetta ora un'entità da **ignorare** e si mira al **corpo** del bersaglio
+  (`y + hy/2`): senza queste due cose una struttura con collider era invisibile e incolpibile (KI #70).
 - **Comando contestuale — Phase B (2026-07-15):** tasto **G** (`Action::SquadOrder`, rimappabile);
   il contesto lo decide il mirino — nemico → `FocusFire`, cover point reale del MapDef entro 4 m →
   `TakeCover`, altrimenti → `MoveTo`. Riusa l'entità già risolta dal loop del mirino (ciò che il

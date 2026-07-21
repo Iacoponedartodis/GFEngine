@@ -71,6 +71,11 @@ struct SquadComponent
     bool  downed            = false;
     float bleedoutRemaining = 0.0f;   // secondi prima della morte definitiva
     float reviveProgress    = 0.0f;   // 0..SQUAD_REVIVE_TIME mentre un vivo è vicino
+    // Quante volte questa VITA è già stata rianimata. Esaurito il cap, la prossima
+    // caduta è letale: un uomo non si rialza all'infinito (bilanciamento — la
+    // rianimazione restava troppo efficace anche coi tempi/HP corretti). Si azzera
+    // col respawn, che crea una nuova entità → nuovo SquadComponent.
+    int   revivesUsed       = 0;
 
     [[nodiscard]] bool hasActiveOrder() const
     { return order != OrderType::None &&

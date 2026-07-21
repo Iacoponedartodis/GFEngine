@@ -1,5 +1,7 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/ai/WorldIntel.hpp"   // grafo dei link tattici (ADR-032)
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -191,13 +193,14 @@ void DefinitionRegistry::loadAiProfiles(const std::string& dir)
         a.shootInterval    = getf(*j, "shoot_interval", 2.5f);
         a.patrolSpeed      = getf(*j, "patrol_speed", 2.5f);
         a.seekSpeed        = getf(*j, "seek_speed", 4);
+        a.huntTimeout      = getf(*j, "hunt_timeout", 20.0f);
         a.jumpEnabled      = getb(*j, "jump_enabled", true);
         noteUnknownKeys(*j, "ai/" + a.id + ".json",
             {"role","sight_range","fov_deg","hearing_range","reaction_time",
              "aggression","accuracy","cover_preference","retreat_hp_threshold",
              "peek_duration_min","peek_duration_max","hide_duration_min",
              "hide_duration_max","reposition_chance","flank_chance","shoot_interval",
-             "patrol_speed","seek_speed","jump_enabled","name","description"},
+             "patrol_speed","seek_speed","hunt_timeout","jump_enabled","name","description"},
             m_unknownKeys);
         std::cout << "[Registry] AI Profile: " << a.id << " (role:" << a.role << ")\n";
         m_aiProfiles[a.id] = std::move(a);
@@ -359,52 +362,77 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 t.label     = gets(st, "label", "Bersaglio");
                 t.x         = getf(st, "x", 0.0f);
                 t.z         = getf(st, "z", 0.0f);
+                t.ry        = getf(st, "ry", 0.0f);
                 t.hp        = getf(st, "hp", 300.0f);
+                t.team      = geti(st, "team", 2);
+                if (t.team != 1 && t.team != 2) t.team = 2;
+                // Ruolo (doc 34): whitelist. Un valore ignoto degraderebbe in
+                // silenzio a torre non-funzionante → si riporta a "generic".
+                // Il valore si conserva GREZZO: un refuso normalizzato qui in
+                // silenzio farebbe credere all'autore di aver messo una torre
+                // che non esiste. Il runtime tratta comunque ogni valore ignoto
+                // come "generic" (confronta ==), e il gate ADR-018 lo segnala.
+                t.role      = gets(st, "role", "generic");
+                // Valore tattico (doc 35). engage_radius 0 = mai ingaggiata di
+                // iniziativa: è il default, il sistema resta inerte finché non
+                // lo si autora.
+                const float pr = getf(st, "priority", 0.5f);
+                t.priority     = pr < 0.0f ? 0.0f : (pr > 1.0f ? 1.0f : pr);
+                t.engageRadius = getf(st, "engage_radius", 0.0f);
+                if (t.engageRadius < 0.0f) t.engageRadius = 0.0f;
                 t.meshPath  = gets(st, "mesh");
                 t.meshScale = getf(st, "mesh_scale", 1.0f);
+                t.halfX     = getf(st, "half_x", 0.0f);
+                t.halfY     = getf(st, "half_y", 0.0f);
+                t.halfZ     = getf(st, "half_z", 0.0f);
                 if (st.contains("color") && st["color"].size() >= 3)
                     t.color = {st["color"][0], st["color"][1], st["color"][2]};
                 m.strategicTargets.push_back(t);
             }
         }
-        // ── Map Metadata (15_MapMetadata): opzionali, additivi ─────────
+        // ── Posizioni tattiche (ADR-030) ───────────────────────────────
+        // Chiave nuova `tactical_positions` + MIGRAZIONE TRASPARENTE delle due
+        // legacy (`cover_points`, `tactical_points`): le mappe non ancora
+        // convertite continuano a funzionare senza toccarle. L'editor, salvando,
+        // scrive la chiave nuova e cancella le legacy.
+        auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        auto readPos = [&](const nlohmann::json& p, const char* roleKey,
+                           const char* defRole) {
+            TacticalPositionDef t;
+            t.x          = getf(p, "x", 0.0f);
+            t.y          = getf(p, "y", 0.0f);
+            t.z          = getf(p, "z", 0.0f);
+            t.facingDeg  = getf(p, "facing_deg", 0.0f);
+            t.role       = gets(p, roleKey);
+            if (t.role.empty()) t.role = defRole;
+            t.height     = getf(p, "height", 1.0f);
+            t.protection = clamp01(getf(p, "protection", 0.5f));
+            t.canShoot   = p.contains("can_shoot") ? (bool)p["can_shoot"] : true;
+            t.importance = clamp01(getf(p, "importance", 0.5f));
+            t.radius     = getf(p, "radius", 4.0f);
+            // Settore di tiro (ADR-031): default ampio → le posizioni già
+            // autorate restano utilizzabili senza ri-autorarle.
+            t.fireArcDeg = getf(p, "fire_arc_deg", 120.0f);
+            if (t.fireArcDeg < 5.0f)   t.fireArcDeg = 5.0f;
+            if (t.fireArcDeg > 360.0f) t.fireArcDeg = 360.0f;
+            t.fireRange  = getf(p, "fire_range", 25.0f);
+            if (t.fireRange < 1.0f) t.fireRange = 1.0f;
+            m.tacticalPositions.push_back(t);
+        };
+
+        if ((*j).contains("tactical_positions") && (*j)["tactical_positions"].is_array())
+            for (auto& p : (*j)["tactical_positions"]) readPos(p, "role", "cover");
+        // Legacy: una copertura è una posizione con role "cover".
         if ((*j).contains("cover_points") && (*j)["cover_points"].is_array())
-        {
-            for (auto& cp : (*j)["cover_points"])
-            {
-                CoverPointDef c;
-                c.x         = getf(cp, "x", 0.0f);
-                c.y         = getf(cp, "y", 0.0f);
-                c.z         = getf(cp, "z", 0.0f);
-                c.facingDeg = getf(cp, "facing_deg", 0.0f);
-                c.height    = getf(cp, "height", 1.0f);
-                // Cover Intelligence (ADR-026), additivi: default = comportamento vecchio.
-                c.protection = getf(cp, "protection", 0.5f);
-                if (c.protection < 0.0f) c.protection = 0.0f;
-                if (c.protection > 1.0f) c.protection = 1.0f;
-                c.canShoot   = cp.contains("can_shoot") ? (bool)cp["can_shoot"] : true;
-                m.coverPoints.push_back(c);
-            }
-        }
-        // Tactical Points (doc 33 Fase 2, ADR-027): opzionali, additivi.
+            for (auto& p : (*j)["cover_points"]) readPos(p, "role", "cover");
+        // Legacy: il vecchio `type` diventa `role`; non riparavano (protection 0)
+        // salvo che il dato lo dica.
         if ((*j).contains("tactical_points") && (*j)["tactical_points"].is_array())
-        {
-            for (auto& tp : (*j)["tactical_points"])
+            for (auto& p : (*j)["tactical_points"])
             {
-                TacticalPointDef t;
-                t.x          = getf(tp, "x", 0.0f);
-                t.y          = getf(tp, "y", 0.0f);
-                t.z          = getf(tp, "z", 0.0f);
-                t.facingDeg  = getf(tp, "facing_deg", 0.0f);
-                t.type       = gets(tp, "type");
-                if (t.type.empty()) t.type = "vantage";
-                t.importance = getf(tp, "importance", 0.5f);
-                if (t.importance < 0.0f) t.importance = 0.0f;
-                if (t.importance > 1.0f) t.importance = 1.0f;
-                t.radius     = getf(tp, "radius", 4.0f);
-                m.tacticalPoints.push_back(t);
+                readPos(p, "type", "vantage");
+                if (!p.contains("protection")) m.tacticalPositions.back().protection = 0.0f;
             }
-        }
         if ((*j).contains("patrol_routes") && (*j)["patrol_routes"].is_array())
         {
             for (auto& pr : (*j)["patrol_routes"])
@@ -453,6 +481,8 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             m.commander.unit = gets(c, "unit");
             m.commander.x    = getf(c, "x", 0.0f);
             m.commander.z    = getf(c, "z", 0.0f);
+            m.commander.leashRadius = getf(c, "leash_radius", 0.0f);
+            if (m.commander.leashRadius < 0.0f) m.commander.leashRadius = 0.0f;
         }
 
         // LIMITE VOLUTO: solo le chiavi di primo livello. Le sotto-strutture
@@ -463,15 +493,47 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
              "spawn_team1","spawn_team2","enemy_types","ally_types","geometry",
              "command_posts","strategic_targets","cover_points","patrol_routes",
-             "danger_zones","vehicle_spawns","tactical_points","commander","description"}, m_unknownKeys);
+             "danger_zones","vehicle_spawns","tactical_positions","tactical_points",
+             "sectors","commander","description"}, m_unknownKeys);
+
+        // Settori / Combat Areas (ADR-034): autorati, opzionali.
+        if ((*j).contains("sectors") && (*j)["sectors"].is_array())
+        {
+            for (auto& s : (*j)["sectors"])
+            {
+                SectorDef sec;
+                sec.label      = gets(s, "label");
+                if (sec.label.empty()) sec.label = "Settore";
+                sec.x          = getf(s, "x", 0.0f);
+                sec.z          = getf(s, "z", 0.0f);
+                sec.radius     = getf(s, "radius", 12.0f);
+                if (sec.radius < 1.0f) sec.radius = 1.0f;
+                sec.importance = clamp01(getf(s, "importance", 0.5f));
+                m.sectors.push_back(sec);
+            }
+        }
+
+        // Grafo "chi copre chi" (ADR-032): derivato dalle posizioni autorate +
+        // geometria. Si calcola QUI, una volta al load, così a runtime le AI lo
+        // leggono e basta — è la scelta "meccaniche pesanti precalcolate nel mondo".
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            worldintel::buildTacticalLinks(m);
+            const auto ms = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - t0).count();
+            size_t links = 0;
+            for (const auto& v : m.positionCovers) links += v.size();
+            std::cout << "[Registry]   link tattici: " << links << " su "
+                      << m.tacticalPositions.size() << " posizioni ("
+                      << ms << " ms)\n";
+        }
 
         std::cout << "[Registry] Map: " << m.id
                   << " (geometry: " << m.geometry.size() << " box, "
                   << m.commandPosts.size() << " command post, "
-                  << m.coverPoints.size() << " cover, "
                   << m.patrolRoutes.size() << " route, "
                   << m.dangerZones.size() << " danger, "
-                  << m.tacticalPoints.size() << " tactical)\n";
+                  << m.tacticalPositions.size() << " posizioni tattiche)\n";
         m_maps[m.id] = std::move(m);
     }
 }

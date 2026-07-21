@@ -99,12 +99,15 @@ space); `Model::merged()` combines multi-primitive models into one `Mesh`.
   HP in CombatSystem, regen dopo `regenDelay`; assegnato allo spawn da `abilities[]`
   con AbilityDef `type=="shield"` (param1/2/3 = hp/regen/delay). Doc 16.
 - **World Intelligence Layer** (`mini::worldintel`, `game/ai/WorldIntel`; ADR-025, doc 33): il seam
-  UNICO di query tattiche sulla mappa (solo dati+query pure). Oggi `bestCoverToward` (scelta cover per
-  protezione, ADR-026; usato da AiSystem) + `dangerAt` + `nearestTacticalPoint` (Tactical Points,
-  ADR-027; seam non ancora consumato). `MapDef.tacticalPoints` (vantage/defensive/chokepoint/
-  observation) autorati nel MapEditor. Crescerà con rete
-  tattica e settori (doc 33, a fasi). Scansione lineare per ora; indice spaziale aggiungibile senza
-  toccare i chiamanti.
+  UNICO di query tattiche sulla mappa (solo dati+query pure). Oggi `bestCoverToward` (scelta per
+  protezione, ADR-026), `dangerAt`, `nearCommandPost`, `nearestPositionByRole` (ADR-030).
+  **`MapDef.tacticalPositions`** (ADR-030) è l'UNICO tipo di "posizione che conta": ruolo
+  (cover/vantage/defensive/chokepoint/observation) + protezione, altezza, canShoot, importanza, raggio.
+  Le query filtrano per **capacità**, non per ruolo (es. una copertura = `protection > 0`, quindi una
+  `vantage` che ripara vale anche come copertura). Sostituisce `coverPoints`+`tacticalPoints`; il
+  loader migra le chiavi legacy, l'editor le riscrive salvando. Crescerà con settore di tiro (M1),
+  rete tattica e settori (doc 33 §5-bis). Scansione lineare per ora; indice spaziale aggiungibile
+  senza toccare i chiamanti.
 - **Comando nemico** (`CommanderComponent` marker + mailbox `World::enemyCommand`; ADR-024, doc 32):
   controparte del comando giocatore. **Uno per mappa**: campo `MapDef.commander{unit,x,z}`
   (`CommanderSpawnDef`, loader in DefinitionRegistry, gate in ContentValidation); ConquestMode ne

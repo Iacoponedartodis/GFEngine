@@ -1,5 +1,6 @@
 #pragma once
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/data/GameplayBalance.hpp"   // ADR-043: bilanciamento globale
 #include <string>
 #include <filesystem>
 
@@ -27,12 +28,17 @@ private:
     mini::EnemyDef  m_editAlly;
     mini::PlayerDef m_editPlayerDef;
 
+    // Bilanciamento globale data-driven (ADR-043): rianimazione + rete di
+    // comunicazione. Vive in data/config/gameplay.json, non più in constexpr.
+    mini::GameplayBalance m_gameplay;
+
     // ── Tab draw ─────────────────────────────────────────────────────
     void drawWeaponsTab();
     void drawAITab();
     void drawMapsTab();
     void drawPlayerDefTab();
     void drawAbilitiesTab();
+    void drawGameplayTab();
 
     // ── Salvataggio ──────────────────────────────────────────────────
     void saveWeapon   (const mini::WeaponDef&     w);
@@ -40,6 +46,7 @@ private:
     void saveMap      (const mini::MapDef&         m);
     void savePlayerDef(const mini::PlayerDef&     p);
     void saveAbility  (const mini::AbilityDef&    a);
+    void saveGameplay ();
 
     void reload();
 };

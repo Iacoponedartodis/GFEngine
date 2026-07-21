@@ -985,13 +985,24 @@ progettato dopo (§5: base minima, scope in doc 32).
 2. **`CommanderComponent`** (marker ECS). Allo spawn `ConquestMode::spawnUnit` traduce l'ability
    `command` in `CommanderComponent` (pipeline ability→componente dello scudo).
 3. **Direttiva strategica globale** (`World::enemyCommand`, mailbox — controparte di `squadOrder`).
-   `AiSystem` a inizio tick: se ≥1 comandante di **team 2 vivo**, calcola il **focus** = il command
-   post **non separatista** (owner ≠ 2) più vicino al comandante, e lo pubblica. Nessun comandante vivo
-   → `active=false`. La transizione vivo→morto emette il **messaggio-conseguenza** nel feed.
-4. **Consumo** (movimento, non combattimento): nel ramo Patrol (pre-contatto) i droidi di team 2
-   convergono sul focus invece che sulla rotta; arrivati, sostano (presenza = cattura). Il
-   combattimento resta autonomo — identico al guinzaglio-ordine del giocatore (l'ordine vincola il
-   movimento, mai mira/fuoco).
+   **v2 (2026-07-20, correzione utente): il comandante dà un INTENTO, non una destinazione.**
+   Prima pubblicava un *punto* verso cui tutti i droidi camminavano → era un **cervello unico che
+   pensava al posto delle singole AI**, esattamente ciò che NON serve. Ora `AiSystem` a inizio tick,
+   se ≥1 comandante di **team 2 vivo**: (a) **identifica l'obiettivo** (command post non separatista
+   più vicino) e (b) **decide uno `stance`** analizzando la situazione — euristica v1 sul rapporto di
+   forze: molto in inferiorità → `Retreat`, in inferiorità → `Hold`, altrimenti → `Advance`. Pubblica
+   obiettivo + stance. Ogni cambio di intento va nel feed ("Ordine del Droide Tattico: AVANZATA —
+   obiettivo Alpha"). Nessun comandante vivo → `active=false` + messaggio-conseguenza.
+4. **Consumo — l'intento modula, l'AI decide il COME** (movimento, non combattimento). Nel ramo
+   Patrol (pre-contatto), per i droidi di team 2:
+   - `Hold` → **presidia**: ognuno pattuglia la sua route / la sua area (è così che i percorsi
+     autorati vengono davvero usati);
+   - `Advance` → la **forza di manovra** (unità senza route) spinge sull'obiettivo identificato;
+     chi è su una route continua a presidiare — un comandante non manda tutti sullo stesso punto;
+   - `Retreat` → si ripiega verso lo spawn separatista.
+   In ogni caso **percorso, coperture e ingaggio restano decisioni della singola AI** (navmesh,
+   cover intelligence, peek/hide): il comandante non li sceglie. Il combattimento resta autonomo —
+   identico al guinzaglio-ordine del giocatore (l'ordine vincola il movimento, mai mira/fuoco).
 5. **Il Droide Tattico è una CLASSE (ADR-023)** sul corpo `B1 Battle Droid`: ability `Tactical
    Command` (+ `Shield`), `hp_mult 1.5` (più coriaceo), **tinta scura**. L'entità a sé è **futura**
    (serve un modello proprio; [[droide-tattico-concept]]).
@@ -1197,3 +1208,976 @@ lista + / -, pannello con dropdown tipo + slider, marker colorati per tipo nel v
 sposta+ruota). Build 0/0; `--validate` 0/0 (firebase: "0 tactical", additivo ok); `--sim` senza
 crash, AI viva. **Manca smoke manuale editor**: creare un tactical point, cambiarne tipo, salvare e
 ricaricare. Consumo AI = Fase 4/5 (documentato). Prossimo: Fase 3 (rete di navigazione tattica).
+
+---
+
+## ADR-028 — Le pattuglie seguono la ROUTE, non un segmento (Fase 3a) (Proposed, 2026-07-20)
+
+> **Fase 3 del piano doc 33, primo incremento.** Il pezzo con valore immediato e osservabile:
+> oggi le route autorate sono in gran parte **sprecate**. Gli altri elementi della Fase 3 (filtri
+> navmesh per-ruolo, grafo tattico fra Tactical Points, `purpose` delle route) restano pianificati
+> ma NON in questo ADR — vedi Out of Scope.
+
+### Context
+`AiComponent` ha **due soli waypoint** (A/B): ConquestMode appiattisce tutte le `patrolRoutes` in
+segmenti e ne assegna **uno** per unità (doc 18, limite documentato). Risultato: su firebase (16
+segmenti autorati) ogni droide fa avanti-indietro su un singolo tratto e la **sequenza** del percorso
+non viene mai percorsa. Il dato è autorato ma non produce il comportamento previsto — è il caso peggiore
+di "metadato quasi decorativo".
+
+### Decision (Fase 3a)
+1. **`AiComponent` guadagna `patrolRoute` (indice route, -1 = nessuna) e `patrolSeg`** (segmento
+   corrente). Additivo: `-1` → comportamento legacy A/B invariato.
+2. **Avanzamento lungo la route**: quando l'unità completa il segmento corrente (arrivo, fine sosta,
+   o stuck), invece di invertire A↔B passa al **segmento successivo** della sua route (wrap alla fine)
+   e ricalcola A/B dai punti autorati. Nuovo helper `advancePatrol(ai, map)` in AiSystem: un solo
+   punto di verità, sostituisce i tre `goingToB = !goingToB`. Senza route → inversione legacy.
+3. **Assegnazione allo spawn**: ConquestMode assegna a ogni unità una **route** (round-robin) e un
+   **segmento di partenza** diverso (le unità si distribuiscono lungo il percorso invece di ammassarsi).
+   `RespawnEntry` porta i due campi → **anche i respawn** mantengono la loro route.
+4. **Presidio vs manovra (rivisto 2026-07-20 su feedback).** Prima stesura: la direttiva del Droide
+   Tattico vinceva sempre sulla pattuglia — ma con un comandante vivo questo annullava **tutte** le
+   route e i percorsi autorati non venivano mai percorsi. Ora: le unità **con una route restano in
+   pattuglia**; il comandante dirige la **forza di manovra** (unità senza route). Lo spawn divide la
+   forza (metà su route, metà libera). Coerente col mondo: un comandante assegna l'obiettivo a una
+   parte delle forze e lascia le altre a presidiare, non manda tutti sullo stesso punto.
+
+### Out of Scope (Fase 3, incrementi successivi)
+- **Filtri navmesh per-ruolo** (doc 22 li dà "pronti, non cablati"): incremento 3b.
+- **Grafo tattico fra Tactical Points** (archi con esposizione/copertura/aggiramento): ha senso quando
+  esistono i consumatori (Fase 4 settori / Fase 5 squad) → non ora, eviterebbe dato decorativo.
+- **`purpose` delle route** (avanzamento/ritirata/flanking/rinforzo): additivo, ma senza consumatori
+  distinti oggi ogni route è "pattuglia" → rimandato con il grafo.
+- Waypoint per-unità arbitrari (lista libera): non serve, la route autorata è la sorgente.
+
+### Consequences
+- **Positivo**: le route autorate diventano finalmente **percorsi veri** (le pattuglie girano la mappa
+  come progettato dal designer); le unità partono sparse lungo il percorso; costo nullo (2 int per AI,
+  nessuna allocazione); i respawn conservano la route. Sblocca level design tattico sulle mappe handcrafted.
+- **Costo**: tocca AiComponent, RespawnEntry, spawn di ConquestMode e il ramo Patrol di AiSystem.
+  Tutto additivo e con fallback legacy (`patrolRoute = -1`).
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `AiComponent.patrolRoute/patrolSeg`;
+helper `advancePatrol(ai, map)` in AiSystem (sostituisce i tre `goingToB = !goingToB`); `RespawnEntry`
++ `mkUnitWithMesh` portano route/segmento (respawn inclusi); `genPositions` assegna una route intera
+per unità (round-robin) con segmento di partenza sfalsato; fallback legacy invariato quando non ci
+sono route. Build 0/0; `--validate` 0/0; `--sim` senza crash, AI in pattuglia. Il presidio/manovra è
+stato poi rivisto (§4) e l'obiettivo in Advance reso individuale (ADR-029/giro 24).
+
+---
+
+## ADR-035 — Manovra in combattimento: l'AI si riposiziona invece di stare ferma (Proposed, 2026-07-20)
+
+> **Prima fase AI**, dopo il completamento dei metadata. È il consumo che mancava: le query esistono,
+> sono economiche, ma nessuno le usava *durante* lo scontro.
+
+### Context
+Il difetto strutturale: appena l'AI ha contatto diretto entra in `Alert` e **azzera l'approccio**
+(`flankActive = false`). Da lì in poi strafa, fa peek/hide e usa la copertura solo come *nascondiglio*
+in fase evasiva. Conseguenza: **tutto il lavoro sui metadata è usato solo PRIMA del contatto**, e la
+battaglia degenera in due gruppi che si sparano da fermi — esattamente ciò che l'utente descrive come
+"finto e meccanico". Le query pronte e mai chiamate: `bestFlankingPosition`, `bestOverwatchFor`,
+`positionExposure`; `bestFiringPosition` solo in avvicinamento.
+
+### Decision
+1. **Riposizionamento tattico in combattimento.** Un'AI ingaggiata valuta **periodicamente** (timer
+   sfasato dal `bias`, quindi non tutte insieme) se spostarsi in una posizione migliore:
+   - **aggiramento** — `bestFlankingPosition` (peso ∝ `flank_chance`): colpire da un'altra direzione;
+   - **posizione di tiro** — `bestFiringPosition` (peso ∝ `cover_preference`): sparare da coperto;
+   - **restare** e combattere com'è ora (peso ∝ `aggression`).
+   La scelta è pesata dal profilo: i profili del BalanceEditor governano *come* si manovra.
+2. **Muoversi NON smette di combattere.** Durante il riposizionamento l'AI continua a mirare e
+   sparare: si vincola il MOVIMENTO, mai il fuoco — lo stesso principio del guinzaglio-ordine
+   (ADR-020) e della direttiva del comandante (ADR-024). Il tragitto usa il **pathfinding**
+   (`requestMoveTarget` via il flag `orderTravel`), non lo steering diretto: deve aggirare gli ostacoli.
+3. **Bounding overwatch EMERGENTE**: un tetto al numero di unità della stessa squadra che si
+   riposizionano contemporaneamente. Alcune si spostano, le altre restano a fare fuoco — l'effetto
+   "ci copriamo a vicenda" **senza macchinari di coordinamento**, coerente con "AI semplici in un
+   mondo intelligente". Chi non può muoversi ora, si muoverà al prossimo ciclo.
+4. **Quando NON ci si riposiziona**: in ritirata (sotto `retreat_hp_threshold`), con ordine
+   `CoveringFire` ("stand and deliver", doc 26), se `stationary` (il comandante non lascia la sua
+   posizione), o senza bersaglio.
+5. **Fine manovra**: arrivo, perdita del bersaglio, o timeout — poi cooldown prima di rivalutare, così
+   non oscilla.
+
+### Out of Scope
+- Coordinamento esplicito (assegnare chi aggira e chi copre): qui è **emergente** dal cap di
+  concorrenza e dal `bias`. Il coordinamento negoziato è lo Squad layer (doc 33 Fase 5).
+- Uso del grafo `positionCovers` per scegliere coppie overwatch precise: possibile evoluzione.
+- Comandante che usa `sectorStates` per stance per-settore: incremento successivo.
+
+### Consequences
+- **Positivo**: il combattimento smette di essere statico; i metadata vengono finalmente usati *quando
+  conta*; i profili diventano leve reali sul comportamento in mischia; l'effetto "alcuni avanzano,
+  altri coprono" nasce da due regole semplici.
+- **Rischio**: unità che si spostano troppo diventano bersagli facili e sembrano indecise → mitigato da
+  cooldown, cap di concorrenza e pesi dal profilo. Va tarato provando.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `AiComponent` +=
+`repositionTimer/Active/X/Z`; valutazione periodica in Alert (sfasata dal `bias`) fra **aggiramento**
+(`bestFlankingPosition`, ∝ `flank_chance`) e **posizione di tiro** (`bestFiringPosition`, ∝
+`cover_preference`), con soglia minima di 3 m per non sembrare indecisi; durante la manovra si viaggia
+col **pathfinding** (`orderTravel`) **continuando a mirare e sparare**; cap di concorrenza per squadra
+→ bounding overwatch emergente; esclusi ritirata, `CoveringFire`, `stationary`; `enterHunt` azzera la
+manovra. Build 0/0; `--validate` 0/0; `--sim` 25 s: **33 cambi di stato** (erano 11 → AI molto più
+attiva), **`stuck` 1** (le manovre non creano ingorghi), 0 errori.
+**Da valutare in partita**: se il movimento risulta naturale o eccessivo. Leve: `flank_chance` e
+`cover_preference` nei profili, i timer di rivalutazione, il cap di concorrenza.
+
+---
+
+## ADR-034 — Settori (Combat Areas): il livello su cui ragiona il comandante (M5) (Proposed, 2026-07-20)
+
+> **Chiude il percorso metadata** (doc 33 §5-bis) e lo ricollega all'obiettivo iniziale: dare al
+> Droide Tattico qualcosa su cui ragionare davvero.
+
+### Context
+Il comandante (ADR-024 v2) sceglie l'obiettivo guardando **solo l'owner dei command post**: un dato
+binario e puntiforme. Non sa dove si sta combattendo, dove è in inferiorità, quale zona conta di più.
+Doc 33 §4.4 identifica il livello mancante: **aree** con importanza, controllo, presenze e pressione.
+È anche il livello che una futura simulazione fuori-visuale userebbe (doc 33 §9), quindi va tenuto
+**astratto**: dati puri, nessuna dipendenza da entità vive o rendering.
+
+### Decision
+1. **`SectorDef` autorato** (`MapDef.sectors`): `label`, posizione, `radius`, `importance` (0..1).
+   Aree circolari come danger zone e command post — coerenti con l'authoring esistente e sufficienti
+   per mappe handcrafted. Autorate a mano: sono poche e sono **scelte di design**, non dati derivabili.
+2. **Stato runtime `World::sectorStates`** (parallelo a `map.sectors`), ricalcolato ogni tick nel
+   precompute di `AiSystem` con **una sola passata sulle entità**: `allies`, `enemies`,
+   `controllingTeam` (0 = conteso/vuoto), `pressure` (0..1, quanto è realmente conteso). È **stato di
+   partita**, quindi vive nel World come le altre mailbox, non nel MapDef.
+3. **Il comandante ragiona sui settori**: l'obiettivo non è più "il post non-separatista più vicino"
+   ma il **settore di maggior valore** — importanza, pressione, e non già saldamente controllato.
+   L'annuncio nel feed nomina il settore.
+4. **I droidi restano padroni del COME** (vincolo ADR-024 v2): in `Advance` ciascuno sceglie il post
+   catturabile più vicino **dentro/vicino al settore-obiettivo** se ce n'è uno, altrimenti il più
+   vicino a sé. Il comandante indirizza la forza su una zona; i singoli scelgono il punto.
+5. **Senza settori autorati nulla cambia**: se `sectors` è vuoto il comandante torna alla regola
+   precedente. Additivo, nessuna mappa si rompe.
+
+### Out of Scope
+- Simulazione fuori-visuale: qui si predispone soltanto (§9). `SectorState` è dato puro, riusabile.
+- Pressione basata su danni/perdite reali: la v1 la deriva dalle **presenze contrapposte**, che è
+  economico e già informativo. Raffinabile.
+- Ordini per-settore (stance diversa per zona): il comandante ha ancora un intento globale.
+
+### Consequences
+- **Positivo**: il comandante passa da un dato binario puntiforme a una **lettura della situazione**;
+  i settori sono pochi e autorati, quindi il costo di authoring è basso e il controllo del designer
+  alto; la struttura è pronta per la simulazione futura.
+- **Costo**: una passata per tick sulle entità (già se ne fa una nel precompute) + schema/editor.
+- **Rischio**: settori mal autorati danno decisioni strane — mitigato dal fatto che sono pochi e
+  visibili nel viewport.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `SectorDef` + `MapDef.sectors`
+(loader + whitelist + clamp); `World::sectorStates` con `updateSectorStates` (una passata per tick,
+solo truppe — strutture/veicoli/comandante esclusi); `pickObjectiveSector` (importanza + contesa,
+salta le zone già saldamente separatiste); il comandante pubblica il **settore** come obiettivo
+(x/z/raggio/label) e in `Advance` ogni droide sceglie il **proprio** post catturabile dentro quella
+zona (fallback: il più vicino in assoluto) — direzione al comandante, punto al droide;
+editor: lista + pannello (nome/area/importanza) + disco viola nel viewport, scala → raggio.
+Build 0/0; `--validate` 0/0; `--sim` senza crash. **Senza settori autorati il comportamento è
+invariato** (firebase non ne ha ancora: vanno autorati per vederne l'effetto).
+**Chiude il percorso metadata** (doc 33 §5-bis).
+
+---
+
+## ADR-033 — Esposizione derivata e aggiramento: le corsie senza autorarle (Proposed, 2026-07-20)
+
+> Chiude il pezzo "corsie di avvicinamento / aggirare restando coperti" (doc 33 §5-bis) **senza**
+> introdurre un nuovo tipo di dato da autorare a mano.
+
+### Context
+La richiesta è: *"aggirare… sparando da luoghi più coperti e tattici"*, con **corsie di avvicinamento
+a bassa esposizione**. La strada ovvia — far disegnare al designer delle corsie — significherebbe
+centinaia di dati a mano su ogni mappa: esattamente ciò che si è deciso di evitare (doc 33 §6).
+Ma dopo ADR-032 esiste il **grafo "chi copre chi"**, e da lì due cose sono **derivabili**:
+- **quanto un punto è esposto** = da quante posizioni può essere battuto;
+- **da dove si attacca di fianco** = con che angolo si colpisce il bersaglio rispetto a chi lo
+  ingaggia già.
+Derivare da dati autorati a mano non è l'auto-gen fallita (che *inventava* posizioni dalla geometria):
+qui il designer autora le posizioni e i settori, il resto si calcola.
+
+### Decision
+1. **`MapDef.positionExposure` (derivato, 0..1)**: per ogni posizione, quanto è esposta = frazione
+   delle altre posizioni che la possono battere, ottenuta **invertendo** il grafo di ADR-032. Costo
+   nullo (si riusa una computazione già fatta). Ricalcolato al load come il grafo → mai stale.
+2. **`worldintel::bestFlankingPosition(map, fromX, fromZ, targetX, targetZ, threatX, threatZ, maxDist)`**:
+   fra le posizioni che possono battere il bersaglio (settore + gittata + linea di tiro, ADR-031/032),
+   sceglie quella che lo attacca **da una direzione diversa** da dove il bersaglio è già ingaggiato
+   (`threat`) e che è **meno esposta**. Punteggio: angolo di fianco + protezione + (1 − esposizione)
+   − distanza. È la corsia d'aggiramento, espressa come destinazione invece che come tracciato.
+3. **Editor**: l'esposizione della posizione selezionata è mostrata **in sola lettura** ("quanto è
+   allo scoperto"). È un dato derivato: non si autora, ma vederlo guida l'authoring — un punto molto
+   esposto probabilmente non è una buona posizione di tiro.
+
+### Out of Scope (e perché)
+- **Corsie autorate a mano** (polilinee con esposizione per tratto): non servono finché il grafo dà
+  lo stesso risultato senza costo di authoring. Se un giorno servirà controllo fine sul *percorso*
+  (non solo sulla destinazione), si aggiungono allora — la porta resta aperta.
+- **`purpose` delle route**: rimandato di nuovo. Senza consumatori distinti resterebbe decorativo, e
+  la funzione "da dove attacco" è ora coperta dalle posizioni.
+- **Consumo AI** (usare `bestFlankingPosition` per manovrare davvero): fase AI.
+
+### Consequences
+- **Positivo**: l'aggiramento diventa una **query**, non un dato da disegnare; zero authoring
+  aggiuntivo; l'esposizione rende visibile al designer quali posizioni sono allo scoperto.
+- **Limite dichiarato**: l'esposizione è misurata *rispetto alle posizioni autorate*, quindi riflette
+  la qualità della copertura di quella mappa — su una mappa con poche posizioni è poco informativa.
+  È un'euristica utile, non una verità fisica.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `MapDef.positionExposure` derivata
+invertendo il grafo di ADR-032 (costo nullo, ricalcolata al load); `worldintel::bestFlankingPosition`
+(angolo di fianco + protezione + basso-esposizione − distanza, con gittata/settore/linea di tiro);
+editor mostra l'**esposizione in sola lettura** sulla posizione selezionata, calcolata con la **stessa
+funzione del runtime** (regola in un posto solo, niente duplicazione). Build 0/0; `--validate` 0/0
+(638 link / 60 posizioni, 1.2 ms); `--sim` senza crash. **Manca**: consumo AI di
+`bestFlankingPosition` → fase AI.
+
+---
+
+## ADR-032 — Rete tattica: linea di tiro reale + grafo "chi copre chi" (M3+M4) (Proposed, 2026-07-20)
+
+> **M3 e M4 vengono fatti INSIEME**, per la stessa ragione che ha portato a unificare prima (ADR-030):
+> il grafo dei link e il precalcolo della visibilità sono **la stessa computazione**. Farli separati
+> significherebbe costruire un grafo geometrico (sbagliato attraverso i muri) e poi rifarlo.
+
+### Context
+- M1 (ADR-031) ha dichiarato un limite: il settore di tiro è **geometrico**, quindi una posizione può
+  "battere" un bersaglio dietro un muro. Finché resta così, ogni scelta costruita sopra è inquinata.
+- La richiesta "coprirsi a vicenda mentre si avanza" (bounding overwatch) richiede di sapere **quale
+  posizione copre quale**. Con i settori di tiro già autorati, questa relazione è **derivabile** — non
+  va autorata a mano (sarebbero centinaia di link) né inventata dalla geometria come la fallita
+  auto-gen: si **calcola da dati autorati a mano**, che è tutt'altra cosa.
+- L'utente ha scelto il **calcolo al load**: sempre coerente con la geometria, nessun dato da tenere
+  aggiornato.
+
+### Decision
+1. **`worldintel::hasLineOfFire(map, ax,ay,az, bx,by,bz)`** — segmento contro i box `collider` della
+   mappa (slab test nel frame locale del box, gestisce `ry`). Lavora su `MapDef`, non sul `World`:
+   serve al load e in editor, dove il World non esiste. È il mattone che mancava.
+2. **`bestFiringPosition` verifica la linea di tiro** → cade il limite dichiarato in ADR-031: una
+   posizione non "batte" più un bersaglio attraverso un muro.
+3. **Grafo "chi copre chi", calcolato al load**: per ogni posizione, l'elenco delle posizioni che
+   **copre** (dentro settore + gittata + linea di tiro libera). Sta in `MapDef.positionCovers`
+   (indici paralleli a `tacticalPositions`): **dato derivato**, non autorato e non salvato nel JSON —
+   si ricalcola a ogni load, quindi non può diventare stale.
+4. **Query di appoggio `bestOverwatchFor(map, fromX, fromZ, advanceX, advanceZ, maxDist)`**: la
+   posizione di tiro raggiungibile che **copre il punto verso cui un compagno sta avanzando**. È il
+   dato che rende possibile il bounding overwatch quando arriverà la fase AI.
+5. **Costo**: O(n²) sulle posizioni (60 → 3600 coppie) × box collider, una volta al load. Da misurare
+   e riportare; se su mappe grandi diventasse pesante, il rimedio è una griglia spaziale, non un
+   cambio di modello.
+
+### Out of Scope
+- **Corsie di avvicinamento** (route con esposizione per arco): concetto distinto dai link fra
+  posizioni, va con l'evoluzione delle `patrolRoutes` → incremento successivo.
+- **Consumo AI** (bounding overwatch vero, avanzare a sbalzi): siamo in fase metadata; qui si produce
+  il dato e la query. L'unica eccezione è il punto 2, che *corregge* un consumo già esistente.
+- Visualizzazione dei link nell'editor: i link sono **derivati**, non autorati, quindi non servono per
+  autorare; utili per verificare → follow-up.
+
+### Consequences
+- **Positivo**: le posizioni di tiro diventano corrette (niente muri); nasce la relazione che serve a
+  coprirsi a vicenda; tutto precalcolato una volta invece che a runtime per ogni NPC — la filosofia
+  "meccaniche pesanti spostate nel mondo" diventa concreta.
+- **Costo/rischio**: il costo al load va misurato. Il grafo è derivato, quindi non può essere
+  incoerente col resto — ma dipende dalla qualità dei settori autorati.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `worldintel::hasLineOfFire`
+(segmento vs box collider, slab test nel frame locale, gestisce `ry`); `bestFiringPosition` ora
+verifica la linea di tiro → **cade il limite geometrico di ADR-031**; `MapDef.positionCovers` (grafo
+derivato) costruito da `buildTacticalLinks` al load; `bestOverwatchFor`. `WorldIntel.cpp` aggiunto
+anche al target GFEditor (il loader è condiviso). Build 0/0; `--validate` 0/0; `--sim` senza crash.
+**Costo misurato**: firebase **638 link su 60 posizioni in 2.4 ms**; outpost 2 link in 0.01 ms —
+trascurabile. Scala O(n²·box): su una mappa molto più grande il rimedio è una griglia spaziale, non
+un cambio di modello (previsto). **Manca**: consumo AI del grafo (bounding overwatch) → fase AI;
+visualizzazione dei link in editor → follow-up; corsie di avvicinamento → incremento successivo.
+
+---
+
+## ADR-031 — Settore di tiro: la copertura diventa una posizione di combattimento (M1) (Proposed, 2026-07-20)
+
+> **Il cambio che rende le coperture offensive** (doc 33 §5-bis, M1). Costruito su ADR-030, quindi il
+> campo nasce una volta sola sulla posizione tattica unificata.
+
+### Context
+Oggi una copertura risponde solo alla domanda *"dove mi sottraggo al fuoco?"*. In `AiSystem`, al
+contatto diretto si azzera l'approccio (`flankActive = false`) e la copertura serve unicamente nella
+fase evasiva del ciclo peek/hide: è **un posto dove nascondersi**, mai **un posto da cui combattere**.
+Manca il dato che permette la domanda opposta — *"dammi una posizione riparata da cui BATTO quella
+zona"* — e senza quel dato nessuna intelligenza aggiuntiva potrà far attaccare o aggirare in modo
+credibile (richiesta utente: "cover che non servono solo a nascondersi ma anche ad attaccare e
+aggirare il nemico sparando da luoghi più coperti e tattici").
+
+### Decision
+1. **`TacticalPositionDef` guadagna il settore di tiro**: `fireArcDeg` (ampiezza del settore centrato
+   su `facingDeg`, default 120°) e `fireRange` (gittata utile, default 25 m). Additivi: i default
+   danno un settore ampio e generoso, quindi le posizioni già autorate restano utilizzabili.
+2. **Nuova query `worldintel::bestFiringPosition(map, fromX, fromZ, targetX, targetZ, maxDist)`**:
+   fra le posizioni raggiungibili entro `maxDist` restituisce la migliore che **può battere** il
+   bersaglio, cioè: `canShoot`, bersaglio entro `fireRange`, e bersaglio **dentro il settore**
+   (angolo con `facingDeg` ≤ `fireArcDeg/2`). Punteggio: premia la **protezione**, penalizza la
+   distanza da chi cerca. È la domanda "posizione riparata da cui batto quella zona".
+3. **Due domande distinte, due query** (la separazione concettuale è il punto):
+   - `bestCoverToward` → *"dove mi riparo dalla minaccia"* (difensiva, ciclo peek/hide);
+   - `bestFiringPosition` → *"da dove la colpisco restando coperto"* (offensiva, approccio/manovra).
+4. **Consumo AI**: nella scelta dell'approccio (ADR-029) l'opzione "copertura" diventa **posizione di
+   tiro**: non più una copertura qualsiasi rivolta verso il bersaglio, ma una da cui si può davvero
+   fare fuoco su di esso. Il resto della logica AI resta invariato (siamo in fase metadata).
+5. **Editor**: campi autorabili + **visualizzazione del settore** nel viewport **solo per la posizione
+   selezionata** (con 60 posizioni disegnarli tutti sarebbe illeggibile). Senza vederlo, il settore
+   non è autorabile con cura — ed è il dato più delicato di questa fase.
+
+### Out of Scope
+- **Visibilità reale precalcolata** (M4): qui il settore è geometrico (arco + gittata), non tiene conto
+  degli ostacoli fra posizione e bersaglio. M4 aggiungerà la verifica vera; il settore resta il filtro
+  economico di primo livello.
+- **Riposizionamento in combattimento** (spostarsi su una posizione di tiro durante l'ingaggio): è
+  lavoro della fase AI, non di questa.
+- Link fra posizioni / overwatch (M3).
+
+### Consequences
+- **Positivo**: esiste finalmente il dato per attaccare da coperto; la query è economica (arco +
+  distanza, nessun raycast); i due significati di "copertura" smettono di essere confusi.
+- **Costo**: 2 campi + 1 query + editor. Additivo; con i default il comportamento resta simile a oggi.
+- **Limite dichiarato**: un settore geometrico può includere bersagli dietro un muro finché M4 non
+  aggiunge la visibilità — accettabile come primo livello, va detto nell'authoring.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `TacticalPositionDef` +=
+`fireArcDeg`/`fireRange` (clamp al load, default ampi → le 60 posizioni già autorate restano valide);
+`worldintel::bestFiringPosition` (canShoot + gittata + settore, punteggio protezione−distanza);
+`AiSystem` usa la posizione di TIRO al posto della copertura generica nella scelta dell'approccio;
+editor: slider Ampiezza/Gittata + **visualizzazione del settore** (due raggi gialli) sulla sola
+posizione selezionata. Build 0/0; `--validate` 0/0 (60 posizioni); `--sim` senza crash.
+**Manca smoke manuale**: selezionare una posizione nell'editor, vedere il settore giallo, regolarlo,
+salvare e ricaricare. Prossimo: M3 (link fra posizioni + corsie di avvicinamento) — doc 33 §5-bis.
+
+---
+
+## ADR-030 — Una sola "posizione tattica": unificazione cover ↔ tactical point (M2) (Proposed, 2026-07-20)
+
+> **Primo incremento del completamento metadata** (doc 33 §5-bis). Scelta dell'utente: **unificare
+> prima**, poi aggiungere il settore di tiro (M1) — così il campo nuovo nasce una volta sola e la rete
+> tattica (M3) e il precalcolo visibilità (M4) si costruiscono su una base unica invece che doppia.
+
+### Context
+Esistono **due tipi paralleli** che descrivono "un posto che conta":
+- `CoverPointDef` (ADR-026): posizione, fronte, altezza, `protection`, `canShoot` — usata dall'AI.
+- `TacticalPointDef` (ADR-027): posizione, fronte, `type`, `importance`, `radius` — non ancora consumata.
+Erano stati tenuti separati di proposito (non rifattorare la Cover Intelligence funzionante), con
+l'unificazione già prevista come cleanup (doc 33 §4.1). **Ora è il momento**: M3 (link fra posizioni)
+e M4 (visibilità precalcolata) andrebbero altrimenti implementati due volte, e i link dovrebbero
+collegare tipi diversi. Inoltre l'authoring è confuso: due liste per un concetto solo.
+
+### Decision
+1. **`TacticalPositionDef`** sostituisce entrambi. Campi: posizione, `facingDeg`, **`role`**
+   (`cover` | `vantage` | `defensive` | `chokepoint` | `observation`), `height`, `protection`,
+   `canShoot`, `importance`, `radius`. `MapDef.tacticalPositions` sostituisce `coverPoints` +
+   `tacticalPoints`.
+2. **Il ruolo è descrittivo, le CAPACITÀ sono nei campi.** Le query non filtrano per `role` ma per ciò
+   che serve: una copertura è una posizione con `protection > 0`; una posizione di tiro (M1) sarà una
+   con un settore di tiro. Così una `vantage` che ripara vale anche come copertura, senza casi speciali.
+3. **Migrazione trasparente nel loader**: si legge `tactical_positions` e **anche** le chiavi legacy
+   `cover_points` (→ `role: cover`) e `tactical_points` (→ `role` dal vecchio `type`). Le mappe
+   esistenti funzionano **senza toccarle**. L'editor salva la chiave nuova e **cancella le legacy**:
+   aprire+salvare una mappa la migra definitivamente. I file `data/maps/*.json` vengono migrati subito.
+4. **Consumatori aggiornati** (impatto tracciato, CLAUDE.md §1.4): `DefinitionRegistry` (parse +
+   whitelist + log), `worldintel` (`bestCoverToward` → `TacticalPositionDef`; `nearestTacticalPoint` →
+   `nearestPositionByRole`), `AiSystem` (3 punti), **`NavManager`** (marcatura area COVER nel navmesh),
+   `Application` (ordine contestuale TakeCover del giocatore), `MapEditor` (una sola lista/pannello).
+
+### Out of Scope (arriva dopo, su questa base)
+- **Settore di tiro** (M1): è il passo successivo — questa unificazione serve proprio a farlo una volta sola.
+- **Link fra posizioni** (M3) e **visibilità precalcolata al load** (M4, scelta utente).
+- Ruoli aggiuntivi o gerarchie di ruolo: si aggiungono come stringhe quando servono.
+
+### Consequences
+- **Positivo**: un solo concetto da autorare e da interrogare; M1/M3/M4 si costruiscono una volta;
+  authoring più chiaro (una lista con un ruolo, non due liste).
+- **Costo**: migrazione di schema che tocca 8 punti + i JSON mappa. Mitigato dalla lettura legacy nel
+  loader (nessuna mappa si rompe) e dal fatto che i dati autorati sono pochi (firebase 17 cover).
+- **Rischio**: se un consumatore restasse indietro leggerebbe una lista ormai vuota → l'impatto è stato
+  tracciato prima di scrivere codice, e la build lo rileva (i campi vecchi non esistono più).
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `TacticalPositionDef` +
+`MapDef.tacticalPositions` (rimossi `CoverPointDef`/`TacticalPointDef` e i due vettori); loader con
+migrazione trasparente delle chiavi legacy; `worldintel` (`bestCoverToward` filtra per
+`protection > 0`, `nearestTacticalPoint` → `nearestPositionByRole`); `AiSystem` (3 punti);
+`NavManager` (marca COVER solo ciò che ripara); `Application` (ordine contestuale TakeCover);
+`MapEditor` (una sola lista/pannello/marker, salva `tactical_positions` e cancella le legacy).
+Build 0/0; `--validate` 0/0 con **60 posizioni migrate** su firebase e 4 su outpost; `--sim` senza
+crash. **Nota sui dati**: i `data/maps/*.json` NON sono stati riscritti a mano — l'utente li sta
+autorando attivamente e la migrazione è trasparente al load; la conversione definitiva del file
+avviene al primo salvataggio dall'editor. **Manca smoke manuale**: aprire firebase nell'editor,
+verificare la lista unica con le coperture migrate, salvare e ricaricare.
+
+---
+
+## ADR-029 — Approccio tattico all'ingaggio + personalità individuale (Proposed, 2026-07-20)
+
+> Primo passo **costruttivo** verso "AI più intelligenti" (dopo aver rimosso ciò che *impediva*
+> l'indipendenza, giro 24). Vale per **entrambe le fazioni**: è lo stesso sistema, non due
+> implementazioni separate (direttiva utente 2026-07-20).
+
+### Context
+Due difetti osservati in partita:
+1. **All'ingaggio l'AI va sempre addosso.** Vede/riceve un contatto e punta la posizione nota. Non
+   valuta le alternative che il mondo ORA offre — coperture con `protection` (ADR-026), tactical
+   point `vantage` (ADR-027), aggiramenti — pur avendo già `flank_chance`, `cover_preference` e
+   `aggression` nel profilo (autorabili nel BalanceEditor: l'utente vuole differenziare i profili).
+2. **Decidono tutte allo stesso modo.** Stesso profilo + stessi input ⇒ stesse scelte: si muovono in
+   gruppo anche senza nemici, e la squadra alleata si ammassa/immobilizza attorno al leader (peggiorato
+   dal fix del giro 24 che, per togliere l'oscillazione, le faceva stare ferme). Risultato: AI
+   "meccaniche e finte".
+
+### Decision
+1. **`AiComponent.bias`** — valore per-unità in [0,1), assegnato allo spawn (hash dell'entity id:
+   deterministico ma diverso per ogni unità). È la **personalità**: rompe le parità, scaglia i tempi,
+   sceglie lato e distanza degli aggiramenti. Senza questo nessuna variazione è possibile.
+2. **Scelta dell'approccio all'ingaggio** (`enterHunt` → valutazione pesata). All'acquisizione del
+   contatto l'unità costruisce le opzioni che il **mondo** offre e ne sceglie una **pesata dal
+   PROFILO** (mondo intelligente + AI semplice):
+   - **Diretto** (peso ∝ `aggression`);
+   - **Aggiramento** laterale (peso ∝ `flank_chance`; lato e distanza 5-9 m dal `bias` → unità diverse
+     aggirano da lati diversi);
+   - **Copertura** che guarda il bersaglio (`worldintel::bestCoverToward`; peso ∝ `cover_preference`
+     × protezione della copertura);
+   - **Punto dominante** vicino al bersaglio (`worldintel::nearestTacticalPoint("vantage")`; peso ∝
+     importanza + inclinazione tattica del profilo).
+   Riusa il meccanismo esistente `flankActive/flankX/flankZ` (waypoint di approccio, poi prosegue
+   sulla posizione nota) → nessuna macchina a stati nuova.
+3. **La squadra si DISPONE invece di ammassarsi**: un membro in `Follow` entro il guinzaglio prende
+   una posizione attorno al leader con angolo/raggio derivati dal `bias` (anello 3-5.5 m) invece di
+   stare fermo. Toglie sia l'oscillazione sia l'immobilità.
+
+### Out of Scope
+- Coordinamento esplicito fra unità (chi aggira a sinistra vs destra concordato): qui la varietà è
+  **emergente** dal bias, non negoziata. Il coordinamento vero è lo Squad layer (doc 33 Fase 5).
+- Riscrittura della macchina a stati AI: si riusa Hunt + waypoint di approccio.
+
+### Consequences
+- **Positivo**: attacchi da più punti, uso reale dei metadata autorati, profili finalmente
+  differenzianti (il BalanceEditor conta davvero), fine del "tutti la stessa decisione".
+- **Costo**: 1 campo in AiComponent + logica di scelta in `enterHunt`. Additivo; con
+  `flank_chance = cover_preference = 0` il comportamento resta quello diretto di prima.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `AiComponent.bias` (hash entity id,
+assegnato in `spawnUnit`); `enterHunt` valuta 4 opzioni (diretto / aggiramento / copertura via
+`bestCoverToward` / punto dominante via `nearestTacticalPoint("vantage")`) con pesi dal profilo e
+scelta decorrelata dal bias; membri in `Follow` prendono una posizione in formazione attorno al leader
+(anello 3-5.5 m, angolo dal bias). Build 0/0; `--validate` 0/0; `--sim` 25 s senza crash, unità sparse
+su tutti i quadranti, `stuck` 3. **Vale per entrambe le fazioni** (stesso AiSystem). **Da valutare in
+partita**: naturalezza e varietà degli approcci; le leve sono i profili nel BalanceEditor
+(`flank_chance`, `cover_preference`, `aggression`).
+
+---
+
+## ADR-036 — Le strutture strategiche sono oggetti SOLIDI, autorati e per fazione (Proposed, 2026-07-20)
+
+> Retro-documenta la decisione presa nel changelog (33). Il numero era già citato in memoria e nei
+> documenti: senza questo ADR restava un riferimento senza contenuto.
+
+### Context
+`StrategicTargetDef` (doc 25, `DestroyTarget`) nasceva come "obiettivo da distruggere" e basta. Nel
+codice questo si traduceva in tre limiti concreti:
+1. **Nessun `ColliderComponent`**: il bersaglio aveva Transform/Team/Health/MeshRenderer/Hitbox ma
+   nessuna collisione — AI e giocatore lo attraversavano. Segnalato dall'utente sulla torre di
+   comunicazione.
+2. **`team` cablato a 2**: qualunque struttura nasceva **separatista**. Una torre dei CLONI era
+   quindi impossibile da autorare, non per scelta ma per un letterale nel game mode.
+3. **Nessuna rotazione né scala**: la struttura era piazzabile ma non orientabile né dimensionabile.
+
+Il vincolo è arrivato dal design, non dall'ingegneria: le torri di comunicazione servono a
+**entrambe le fazioni** (memoria `command-rank-system`), quindi la struttura strategica non può
+essere "una cosa dei droidi".
+
+### Decision
+1. **La struttura strategica è una struttura solida**: `ColliderComponent` sempre, con semiassi
+   autorabili (`half_x/y/z`); `0` = ricavati dalla scala della mesh. L'altezza usa il semiasse
+   **pieno** per compensare l'offset di grounding della mesh.
+2. **La fazione è un dato autorato**, non un letterale: `StrategicTargetDef.team` (1 Repubblica /
+   2 Separatisti). Il game mode legge `t.team`.
+3. **Orientamento e dimensione autorati**: `ry` + `mesh_scale`, con gizmo ruota/scala abilitato sui
+   bersagli nell'editor (la stessa richiesta che l'utente aveva fatto per i metadata).
+
+### Out of Scope
+- **Effetto funzionale** della torre (accelerare/rendere più efficaci i comandi dall'alto): qui si
+  costruisce solo il *corpo* autorabile. L'effetto è la torre di comunicazione vera e propria, che
+  richiede il sistema di comando — vedi memoria `command-rank-system`.
+- Geometria non-box (mesh Blender → collisione/navmesh/hitbox): registrato, non in questo ADR.
+
+### Consequences
+- **Positivo**: le strutture di entrambe le fazioni diventano autorabili con lo stesso schema; le AI
+  ci sbattono contro invece di attraversarle (la copertura che offrono diventa reale); prerequisito
+  sbloccato per torre di comunicazione e torre di controllo dei cloni.
+- **Costo**: 5 campi additivi in `StrategicTargetDef` con default retrocompatibili — le mappe
+  esistenti si caricano invariate (`team` default 2, semiassi 0 = dalla scala).
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato e verificato: `StrategicTargetDef` con
+`ry`/`team`/`halfX`/`halfY`/`halfZ`; `ConquestMode` spawna con `ColliderComponent` e legge il team
+autorato; editor con pannello e gizmo ruota/scala. Build 0/0. **Manca smoke manuale**: autorare una
+torre di team 1, verificarne in partita collisione e appartenenza.
+
+> ⚠️ **Correzione 2026-07-21 — questo Status era in parte FALSO** (KI #71/#72). Lo smoke manuale
+> mancante ha poi rivelato che: il gizmo ruota/scala **non** era abilitato sui bersagli (la barra
+> permetteva Ruota/Scala solo per i box); il viewport li disegnava con rotazione 0 e lato fisso; il
+> runtime **ignorava** `mesh_scale` col box di fallback; e il `ColliderComponent` **non rende una
+> struttura solida per le AI**, che camminano sul navmesh — quello andava costruito includendo le
+> strutture. Erano stati aggiunti i campi, non l'effetto. Corretto nel changelog (37).
+
+---
+
+## ADR-037 — Lo stato privo di ordini: le truppe sono indipendenti per default (Proposed, 2026-07-20)
+
+### Context
+`SquadSystem` imponeva un default: **chi non ha un ordine attivo riceve `Follow` sul leader**. Non
+era una scelta di design, era un placeholder di Phase A rimasto in piedi. Le conseguenze misurate:
+- La telemetria mostrava `sq_follow` 4-9 su 9 membri: **tutti i cloni permanentemente al guinzaglio**.
+- Da lì discendeva quasi tutto ciò che l'utente riportava: "si muovono tutti insieme", "sempre le
+  stesse strade", "finiscono tutti aggregati". Non erano difetti dell'AI: erano **l'ordine Follow**
+  che faceva esattamente il suo mestiere su tutta la squadra, tutto il tempo.
+- Era anche la causa della rianimazione troppo efficace (KI risolto): il Follow teneva i membri
+  ammassati, quindi c'era sempre un soccorritore a portata.
+- E rendeva i **cloni meno indipendenti dei droidi**, che non hanno squadra e quindi nessun
+  guinzaglio — l'opposto della differenza di fazione voluta.
+
+### Decision
+1. **Nessun ordine di default.** Un membro senza ordine resta `OrderType::None` e ricade sul
+   comportamento AI normale (Patrol/Alert/Hunt): si muove per la mappa come **truppa indipendente**.
+   Questo è lo stato **normale**, non un fallback degradato.
+2. **`Follow` diventa un ordine come gli altri**, impartito dal giocatore dalla **ruota di comando**
+   (4° settore). Se la squadra sta già seguendo, lo stesso settore legge **LIBERI** e **revoca**
+   l'ordine — il giocatore può sempre tornare allo stato indipendente.
+3. **La revoca è un ordine valido**: `SquadOrderRequest` con `order == None` azzera l'ordine dei
+   membri. Serve un ramo esplicito, perché il blocco di assegnazione filtra su `isImplemented()`,
+   che `None` non soddisfa — senza il ramo la revoca sarebbe stata silenziosamente ignorata.
+4. **L'HUD dichiara lo stato**: senza ordini la squadra legge `LIBERI`, non una riga vuota. Uno stato
+   di design deve essere visibile, altrimenti si legge come un bug.
+
+### Out of Scope
+- **Maggiore indipendenza dei cloni rispetto ai droidi** oltre a questa: qui si rimuove il vincolo
+  che li rendeva *meno* indipendenti. La differenza di fazione vera nasce dall'asimmetria
+  torre di controllo (segnala) ↔ Droide Tattico (ordina) — prossimo passo, memoria
+  `command-rank-system`.
+- Comportamento di squadra autonomo (i membri che si coordinano fra loro senza il giocatore): è lo
+  Squad layer, doc 33 Fase 5.
+
+### Consequences
+- **Positivo**: i cloni si distribuiscono sulla mappa invece di seguire il giocatore in fila; il
+  Follow torna a essere una **scelta tattica** con un costo (li togli dal resto del campo) invece di
+  uno stato ambientale; le manovre tattiche costruite in ADR-029/035 possono finalmente esprimersi su
+  tutta la squadra, non solo sui droidi.
+- **Costo/rischio**: il giocatore perde la scorta gratuita — se vuole compagni addosso deve
+  chiederla. È voluto, ma va verificato in partita che non risulti "la squadra mi ignora". La leva è
+  la ruota di comando, che ora ha un settore in più.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato: rimosso il default in `SquadSystem`; ramo di
+revoca per `order == None`; 4° settore della ruota (`Application` angoli sulle diagonali + `Hud`
+etichetta SEGUI/LIBERI con `wheelFollowActive`); HUD squadra che dichiara `LIBERI`. Build 0/0;
+`--validate` 0/0.
+
+**Misurato (`--sim` 10v10 su firebase, ~550 s):** `sq_follow` **0 per tutta la partita** (era 4-9);
+a t=4 s `sq_senza_ordine` **10/10** e **21 unità in patrol contemporaneamente** — la squadra si
+distribuisce invece di incolonnarsi. Al picco d'ingaggio (t=64 s): `in_alert` 9, `manovra_valutata`
+6 → `manovre_avviate` 3, `tiro_trovato` 3, `fianco_trovato` 1 — i cloni ora **manovrano davvero**,
+non solo i droidi. `stuck` costante ~4-5 per minuto, invariato rispetto a prima (non è una
+regressione: prima erano 2-3 su finestre da 25 s).
+
+**Da verificare in partita (smoke manuale)**: che la squadra senza ordini non risulti "che ti
+ignora"; ruota di comando a 4 settori (SEGUI impartisce, LIBERI revoca); il toast e la riga HUD.
+
+---
+
+## ADR-038 — La torre di comunicazione degrada, non spegne (doc 34) (Proposed, 2026-07-20)
+
+### Context
+Direttiva dell'utente: *"le torri di comunicazione se distrutte non devono bloccare i rinforzi, però
+senza torre di comunicazioni tutte le informazioni, gli ordini e i rinforzi vengono rallentati,
+quindi anche per esempio il fatto che un'AI avverte gli alleati nelle vicinanze quando trova un
+nemico, senza torre di comunicazione il raggio entro il quale può avvertire i suoi alleati è ridotto
+e la comunicazione arriva in ritardo."*
+
+Il codice esistente andava nella direzione opposta su due fronti:
+1. **La conseguenza era un interruttore**: `block_enemy_reinforcements` azzera i rimpiazzi. Binaria e
+   definitiva — una volta scattata la partita è decisa, non resa più difficile. E incoerente: perdere
+   le comunicazioni non impedisce ai rinforzi di partire, li rende disorganizzati e in ritardo.
+2. **La comunicazione non era modellata affatto**: `AI_CONTACT_SHARE_RADIUS` era una costante uguale
+   per tutti e per sempre, e un avvistamento si propagava **istantaneamente** (i contatti erano
+   ricostruiti da zero ogni tick). Non esisteva alcuna grandezza su cui una torre potesse agire.
+   Anche la direttiva del comandante si ricalcolava **ogni tick**: un comando istantaneo, quindi
+   impossibile da rallentare.
+
+### Decision
+1. **`StrategicTargetDef.role`** (`"generic"` | `"comms"`, whitelist nel loader): solo le strutture
+   con ruolo `comms` alimentano la rete della loro fazione. Autorabile in editor con un **combo**, mai
+   testo libero.
+2. **`World::comms[team]`** (mailbox): `hadTower` / `towerAlive` + quattro moltiplicatori — raggio di
+   condivisione, ritardo dell'informazione, periodo di decisione del comando, ritardo dei rimpiazzi.
+   Scritto dal game mode (che possiede le strutture), letto da `AiSystem` e dal mode stesso.
+3. **Regola di non-regressione**: si degrada **solo chi una torre l'aveva e l'ha persa** (`hadTower`).
+   Una fazione senza torre autorata comunica normalmente → le mappe esistenti non cambiano.
+4. **I contatti diventano persistenti e datati** (`SharedContact{x,z,team,age}`). Un'unità adotta un
+   contatto solo nella finestra `[shareDelay, shareDelay + FRESH]`: con la torre viva la finestra è
+   `[0, 1s]`, cioè in pratica gli avvistamenti correnti — **comportamento nominale invariato**. Senza
+   torre la finestra **si sposta**, non si allarga: non si sa di più, si sa più tardi, e la posizione
+   è quella di allora → si accorre dove il nemico **era**.
+5. **Il comando acquista una cadenza** (`COMMAND_DECISION_PERIOD`, 3 s), che il degrado moltiplica.
+   La **morte** del comandante resta rilevata subito: è un fatto, non un ordine.
+6. **I rimpiazzi tardano** (moltiplicatore sul timer di respawn). **Mai bloccati.**
+
+### Out of Scope
+- Consequence type `degrade_comms`: **tolto in implementazione** — lo stato si ricalcola dal vivo
+  dalle torri, quindi una conseguenza che scrivesse lo stesso campo creerebbe due sorgenti di verità
+  che si sovrascrivono. Se servirà, va composto come modificatore separato (doc 34).
+- Bonus attivo della torre sopra la baseline; riparazione; comunicazione per-unità; effetti sull'HUD
+  del giocatore. Vedi doc 34 Out of Scope.
+- **La torre di CONTROLLO** (coordinazione e visione d'insieme per i cloni) è un sistema diverso: la
+  torre di comunicazione riguarda la **qualità del canale**, quella di controllo **cosa passa nel
+  canale**. Non vanno fusi.
+
+### Consequences
+- **Positivo**: la comunicazione diventa una risorsa attaccabile e graduale; nasce una differenza di
+  fazione reale e simmetrica (entrambe hanno una torre da difendere); il comando smette di essere
+  onnisciente e istantaneo; e si stabilisce il principio "una struttura distrutta **degrada** una
+  capacità, non la rimuove" per tutte le strutture future.
+- **Costo**: i contatti ora persistono → serve deduplica (misurati **1066** contatti vivi prima di
+  introdurla, ~112 dopo) e un TTL. Un tick di AI fa qualche confronto in più.
+- **Rischio**: il degrado potrebbe risultare impercettibile o, al contrario, punitivo. I valori sono
+  in `GameConfig.hpp` (`COMMS_LOST_*`) proprio per essere rifiniti provando.
+
+### Status
+**Accepted — in force (2026-07-20).** Implementato: `role` nello schema + loader (whitelist) +
+editor (combo, marker `[COM]` in lista); `World::comms` con la regola `hadTower`; contatti persistenti
+e datati con deduplica; cadenza di decisione del comando; moltiplicatore sul respawn. Build 0/0;
+`--validate` 0/0.
+
+**Misurato.** In `--sim` normale le torri **non vengono distrutte** (le AI non le prendono di mira e i
+colpi vaganti non bastano in 160 s — vedi KI #70), quindi il ramo degradato è stato verificato su una
+**mappa di prova usa-e-getta** con torri a 5 HP, poi rimossa:
+- `strategic target destroyed` (team 2, `comms: true`) a t=29.8 s → da t=35 s in poi la telemetria
+  segna `comms_droidi: "degradate"` mentre `comms_cloni` resta `"ok"`: il degrado è **per fazione**,
+  come previsto, e non tocca chi la torre ce l'ha ancora.
+- Rinforzi: `respawn in 6.4s (COMUNICAZIONI DEGRADATE)` contro i 4.0 s nominali — ×1.6, e i rimpiazzi
+  **continuano ad arrivare**, che era il punto della direttiva.
+- Contatti vivi: 1066 → **112** al picco dopo la deduplica, ~64-80 a regime.
+
+**Da verificare in partita (smoke manuale)**: che il degrado si *senta* — compagni che non accorrono
+da lontano e arrivano dove il nemico era, droidi che insistono su un ordine vecchio. I valori sono in
+`GameConfig.hpp` (`COMMS_LOST_*`).
+
+---
+
+## ADR-039 — Le strutture sono un fatto tattico autorabile (doc 35) (Proposed, 2026-07-20)
+
+### Context
+KI #70: in `--sim` una torre da 300 HP **non veniva mai distrutta**, nemmeno piazzata dentro lo spawn
+avversario — cadeva solo per fuoco vagante. Direttiva dell'utente: *"il modo in cui le AI si
+relazionano con strutture e bersagli va autorato per bene, per adesso magari intanto crea il sistema
+per farli interagire... e il sistema per autorare l'interazione, poi ci penso io ad autorarlo"*, con
+la nota che **queste informazioni devono essere considerate anche dalla torre di controllo e dal
+Droide Tattico**.
+
+Indagando, il difetto non era di design ma **tre bug in fila**, ognuno dei quali da solo bastava a
+rendere le strutture inattaccabili:
+1. **`hasLineOfSight` non escludeva il bersaglio**: il collider aggiunto da ADR-036 **bloccava la
+   visuale verso il centro della struttura stessa**. Regressione introdotta senza accorgersene.
+2. **Si mirava all'origine del transform**, che per una struttura sta **a terra**: il segmento
+   raschiava il collider del pavimento → LOS fallito comunque.
+3. **Il controllo LOS al momento del tiro** aveva entrambi i difetti: dopo aver corretto la
+   *selezione*, la telemetria mostrava 396 ingaggi per finestra e **zero danni** — le AI sceglievano
+   la torre e poi non le sparavano.
+
+### Decision
+1. **`hasLineOfSight(from, to, world, ignore = 0)`** — un bersaglio non si occlude da sé.
+2. **Punto di mira = CORPO del bersaglio** (`y + hy/2` se ha un collider), sia nella selezione sia
+   nel tiro. Per un'unità, priva di collider, resta il transform: nessun cambiamento.
+3. **Due campi autorati** su `StrategicTargetDef`: `priority` (0..1) e `engage_radius`
+   (**0 = mai ingaggiata di iniziativa**, default). Editor: slider + spiegazione.
+4. **Le strutture ESCONO dalla lista dei bersagli-unità.** Corretto il LOS, sarebbero state ingaggiate
+   per semplice vicinanza come un soldato qualsiasi — scavalcando il raggio autorato e facendo sparare
+   i droidi a un edificio invece che a chi gli spara addosso. Rientrano **solo** dal percorso
+   opportunistico, e solo quando l'unità **non ha un bersaglio-unità**: una struttura non spara, e
+   preferirla a chi ti sta uccidendo sarebbe stupido.
+5. **`World::strategicTargets` è la sorgente unica di intel sulle strutture** (posizione, fazione,
+   ruolo, priorità, raggio): la leggono l'AI, il comando nemico e — quando esisterà — la torre di
+   controllo dei cloni. Nessuno se le ricostruisce per conto proprio.
+6. **Il comando considera le strutture** nella scelta dell'obiettivo, pesate da `priority`, con un
+   premio alla torre di comunicazione (è un moltiplicatore di tutta la fazione, non un edificio
+   qualsiasi). Indica **dove**, non il singolo colpo.
+7. **Le strutture non contano come truppe** nel rapporto di forze del comandante (stesso difetto di
+   KI #61 sull'HUD): gonfiavano `nFoes` e falsavano la stance.
+
+### Out of Scope
+Ordine di squadra "distruggi quella struttura"; restrizioni per classe/ruolo; strutture che
+reagiscono; danno anti-struttura differenziato; **autorazione dei valori sulle mappe reali** (l'utente
+ci pensa lui — su firebase i campi restano ai default conservativi). Vedi doc 35.
+
+### Consequences
+- **Positivo**: una struttura diventa un obiettivo vivo per entrambe le fazioni, non solo un bersaglio
+  che aspetta il giocatore; il sistema di comunicazione (doc 34) acquista un antagonista reale; e i
+  livelli di comando presenti e futuri leggono **una sola lista**.
+- **Costo/rischio**: `engage_radius` mal tarato può far deviare truppe su un edificio mentre il fronte
+  cede. Mitigato dalla precedenza assoluta ai bersagli-unità e dal default `0`.
+- **Non-regressione**: con `engage_radius = 0` ovunque (default) il comportamento delle mappe esistenti
+  è invariato — tranne la correzione dei tre bug, che vale sempre.
+
+### Status
+**Accepted — in force (2026-07-20).** Build 0/0; `--validate` 0/0.
+
+**Misurato** su una mappa di prova usa-e-getta (`engage_radius 45`, `priority 0.9`, HP 300 reali), poi
+rimossa — su firebase i valori restano ai default:
+- Il comandante droide sceglie **"Torre Comunicazioni Repubblica"** come obiettivo e lo mantiene:
+  le strutture sono entrate nella sua lettura della situazione.
+- Ingaggi opportunistici: **46** per finestra al picco (erano **0**: prima non era possibile).
+- **Torre separatista distrutta dalle AI a t=41.5 s** — la prima volta che una struttura cade per
+  fuoco mirato invece che vagante → `comms_droidi: "degradate"` da t=54 s. La catena
+  struttura → ingaggio → distruzione → degrado della rete gira **end-to-end**.
+
+**Da verificare in partita**: i valori giusti di `priority`/`engage_radius`, che sono authoring
+dell'utente, non ingegneria.
+
+---
+
+## ADR-040 — La torre di controllo SEGNALA, il comandante ORDINA (doc 36) (Proposed, 2026-07-21)
+
+### Context
+Direttiva dell'utente: la torre di controllo dei cloni *"si ferma ad un livello più basso per
+lasciare più indipendenza, al massimo può segnalare i vari possibili obiettivi, ma non indirizzare i
+cloni in un punto specifico o dare direttamente ordini"*, mentre il Droide Tattico *"oltre a questo
+dà anche ordini"*.
+
+Dopo ADR-037 i cloni sono truppe indipendenti ma **cieche**: nessun equivalente della lettura della
+situazione che il comandante dà ai droidi. La strada facile — dare anche a loro un comandante —
+avrebbe reso le due fazioni la stessa cosa con modelli diversi, cancellando la differenza che la
+direttiva chiede di costruire.
+
+### Decision
+1. **Due canali SEPARATI, mai fusi**: `World::enemyCommand` (un intento unico, droidi) e
+   `World::allyIntel` (una **lista** di segnali, cloni). Non condividono struttura né codice: è la
+   separazione a impedire che uno diventi l'altro per deriva.
+2. **`role: "control"`** sulla struttura strategica. Senza torre viva, `allyIntel` è spento e i cloni
+   restano puramente autonomi.
+3. **Segnali, non destinazioni**: settori non saldamente tenuti (peso = importanza × pressione) e
+   strutture nemiche vive (peso = `priority`, premio alla torre di comunicazione). Ogni segnale dice
+   *"qui conta qualcosa"*, non *"vai qui"*.
+4. **La scelta è del singolo clone**: seleziona un segnale **decorrelato dal proprio `bias`**, non il
+   migliore, e poi decide **da sé** il punto dentro l'area. Due cloni con la stessa informazione
+   vanno in posti diversi.
+5. **Il gate resta sull'indipendenza**: il ramo vale solo per un clone **senza ordini e senza route**.
+   Un ordine del giocatore ha sempre la precedenza; chi presidia una route continua a presidiarla.
+
+### Out of Scope
+Qualunque forma di ordine dalla torre (sarebbe un altro sistema, altro ADR); marker sull'HUD;
+effetti sul giocatore; torre di controllo per i droidi (hanno il comandante); degrado graduale alla
+perdita. Vedi doc 36.
+
+### Consequences
+- **Positivo**: la differenza fra le fazioni diventa **strutturale e osservabile** — i droidi si
+  muovono come forza diretta, i cloni come soldati informati che decidono. E i cloni smettono di
+  essere ciechi senza smettere di essere indipendenti.
+- **Costo/rischio**: un sistema che *sembra* fare poco. La tentazione futura sarà farlo "funzionare
+  meglio" facendo scegliere a tutti il segnale migliore — che ricostruirebbe un comando unico e
+  annullerebbe ADR-037. La scelta decorrelata dal bias **è** la feature, non un'approssimazione.
+- **Non-regressione**: nessuna torre di controllo autorata → `allyIntel` spento → comportamento
+  identico a prima.
+
+### Status
+**Accepted — in force (2026-07-21).** Implementato: `role: "control"`; `World::allyIntel`;
+`updateAllyIntel` + `pickAllySignal` in AiSystem; ramo di pattuglia per cloni senza ordini né route;
+editor con combo a 3 ruoli e marker `[CTRL]`; telemetria `torre_controllo` / `segnali_cloni` /
+`segnali_seguiti`. Build 0/0; `--validate` 0/0.
+
+**Misurato** (`--sim` 10v10 su firebase, torre autorata in posizione **segnaposto**): torre
+`attiva`, **2-6 segnali** pubblicati e seguiti dai cloni in pattuglia (`segnali_seguiti` è un conteggio
+per-tick, non per-unità: dice che il ramo è esercitato, non quanti cloni). Navmesh `input_tris` 300 =
+(22 box + **3 strutture**) × 12. `stuck` 1, nessun crash.
+
+**Da verificare in partita**: che si *veda* la differenza fra le due fazioni, e che i cloni non
+risultino dispersivi. La leva è il peso dei segnali; il vincolo da non toccare è la scelta
+decorrelata dal bias.
+
+---
+
+## ADR-041 — Il Droide Tattico è un'entità a sé, non una classe (Proposed, 2026-07-21)
+
+> **Piano, non ancora implementato.** Nasce dalla direttiva dell'utente (2026-07-21) e da tre
+> osservazioni convergenti: il Droide Tattico è al tempo stesso una **truppa**, un **bersaglio** e un
+> **coordinatore**, e forzarlo nel modello "classe" (ADR-023) lo gestisce male su tutti e tre i piani.
+> Vedi memorie [[droide-tattico-concept]] / [[command-rank-system]].
+
+### Context
+Oggi il comandante è una classe con ability `command` (ADR-024), spawnata dal campo `MapDef.commander`.
+Funziona per il gancio v0, ma la direttiva dell'utente ne chiarisce la natura, che la classe non
+sa esprimere:
+1. **Non combatte**: sta in un punto sicuro, si difende solo se attaccato direttamente. Una classe è
+   fatta per combattere — tutto il suo apparato (arma, hitbox offensiva, ingaggio) qui è rumore.
+2. **È un bersaglio** con un ruolo strategico, come le torri (doc 34/35): distruggerlo ha una
+   conseguenza. Ma le strutture sono `StrategicTargetDef`, le classi no: due modelli per la stessa
+   idea di "nodo che, eliminato, degrada il nemico".
+3. **Ha un raggio di movimento limitato**: idealmente sta in una struttura dedicata e si muove solo
+   in un piccolo raggio attorno ad essa. Le classi non hanno un guinzaglio spaziale autorato.
+4. **Coordina come la torre di controllo, MA dà anche ordini** (doc 36 vs ADR-024): è il livello
+   sopra la torre di controllo, non un suo gemello.
+
+### Decision (piano)
+1. **Migrare il Droide Tattico fuori da `class`**, in una definizione/entità propria. Resta una
+   truppa (ha corpo, salute, si difende), ma la sua definizione vive accanto a strutture e bersagli,
+   non fra le classi combattenti.
+2. **Spawn dedicato autorato nel MapEditor**, con un **raggio di leash**: un'area circolare da cui non
+   può uscire. Riusa e generalizza l'idea di spawn: posizione + raggio autorabili. Dentro il raggio
+   si muove (per coprirsi, ripiegare su una struttura); fuori non va mai.
+3. **Unificare il concetto di "nodo strategico"**: il comandante è un bersaglio come le torri —
+   `World::strategicTargets` lo elenca già come intel (doc 35), la sua morte degrada il coordinamento
+   (già oggi: `enemyCommand` si spegne). Il piano allinea l'AUTHORING a questo: lo si autora dove si
+   autorano torri e bersagli, non nel roster.
+4. **Un editor dedicato "Strutture & Comando"** (o pannello del MapEditor) come casa d'autorazione di:
+   torri (comunicazione/controllo), bersagli strategici, spawn del Droide Tattico + leash, e i
+   **parametri globali collegati** che oggi non hanno casa (i moltiplicatori `COMMS_LOST_*`, doc 34).
+   Risolve la domanda aperta dell'audit (§E) su dove vivono quei parametri: non nel BalanceEditor
+   dell'AI, ma accanto alle strutture il cui effetto governano.
+
+### Out of Scope
+- **La gerarchia dei gradi intermedi** ([[command-rank-system]]): il grado sotto il Droide Tattico
+  (un ufficiale per ~N truppe, che interpreta le direttive e coordina il proprio gruppo) è un sistema
+  a sé, successivo. Questo ADR prepara il vertice, non la catena.
+- **Migrazione dati automatica** delle mappe esistenti: `MapDef.commander` resta letto come fallback
+  finché la nuova forma non è in produzione (transizione documentata, come da CLAUDE.md).
+
+### Consequences
+- **Positivo**: il Droide Tattico smette di essere una classe che non combatte; l'authoring diventa
+  coerente (nodi strategici tutti nello stesso posto); il leash spaziale diventa un dato di design
+  autorabile invece che un `stationary` hardcoded; e i parametri della rete di comunicazione trovano
+  una casa sensata.
+- **Costo/rischio**: tocca ADR-023 (entità=corpo, classe=professione) e ADR-024. Va fatto con una
+  transizione, non con un big-bang: prima la nuova definizione + spawn/leash, poi lo spostamento
+  dell'authoring, poi la rimozione del fallback `commander`-come-classe.
+
+### Status
+**Proposed — Fase 1 IMPLEMENTATA (2026-07-21).**
+
+**Fase 1 (fatta): spawn dedicato con raggio di leash, autorabile.** `CommanderSpawnDef.leashRadius`
+(+ loader `leash_radius`); `AiComponent.leashX/Z/Radius`; lo spawn passa da `stationary=true` a un
+**leash** quando il raggio è > 0 (0 = fermo, retrocompatibile). In `AiSystem`: (a) un comandante con
+leash NON insegue obiettivi/segnali — tiene la sua area; (b) **clamp universale** prima
+dell'esecuzione del movimento: qualunque cosa voglia fare, non esce dal raggio. Editor completo:
+marker viola + disco del raggio, pannello (classe dal registry, posizione, slider raggio), gizmo
+Sposta/Scala, selezione dal viewport, save RMW. **Misurato** (leash 6 su firebase): la deriva del
+comandante dalla casa resta **0 → 5.5 → 6.0**, mai oltre il raggio — si muove per difendersi ma non
+esce. Build 0/0; `--validate` 0/0. **Chiude anche l'item audit "UI del commander nel MapEditor".**
+
+**Fasi successive (ancora Proposed, non iniziate):** migrazione fuori da `class` (§Decision 1);
+unificazione "nodo strategico" nell'authoring (§3); editor dedicato "Strutture & Comando" con i
+parametri `COMMS_LOST_*` (§4). E, separata, la **stance v2 multi-settore** (doc 32 Direzione v2).
+
+---
+
+## ADR-042 — Comando nemico v2: più fronti insieme, stance per-settore (doc 32) (Proposed, 2026-07-21)
+
+> Realizza la "Direzione v2" del doc 32, su direttiva dell'utente: il Droide Tattico deve essere
+> coerente con ciò che è in Star Wars — **analizza la situazione, imposta priorità e impartisce ordini,
+> anche più alla volta, gestendo più settori/fronti insieme e dividendo le truppe** — restando al
+> livello delle RISORSE e del COORDINAMENTO, non del micro delle singole truppe.
+
+### Context
+La v1 (ADR-024) produceva **un** intento globale: un solo obiettivo, una sola stance calcolata dal
+rapporto di teste `nDroids`/`nFoes`. A forze pari usciva quasi sempre "avanzata" (KI/audit): sembrava
+leggere la situazione, in realtà **contava le teste**. E tutti i droidi convergevano sullo stesso
+obiettivo — un solo fronte, quando una battaglia ne ha diversi.
+
+### Decision
+1. **`World::EnemyCommand` diventa una LISTA di direttive** (`Directive{x,z,radius,stance,weight,label}`)
+   invece di un intento singolo. Il comandante gestisce **più fronti insieme**.
+2. **Stance PER-SETTORE dal bilancio LOCALE** (`sectorStates.allies/enemies`): dove i droidi
+   controllano ma sono pressati → **TIENI**; settori contesi o in mano nemica → **SPINGI**. La stance
+   varia per settore e nel tempo — fine del "sempre avanzata".
+3. **Il comandante CONCENTRA**: valuta tutti i settori + le strutture nemiche, li pesa (importanza ×
+   contesa + priorità autorata), e tiene i **top-K (=3)** fronti. Non disperde su tutto.
+4. **I droidi si DISTRIBUISCONO sui fronti** (`pickEnemyDirective`, scelta pesata ma decorrelata dal
+   `bias`, stesso meccanismo della torre di controllo): la forza si divide invece di convergere. Ogni
+   droide segue la **stance del suo fronte** ma sceglie da sé il punto/percorso/ingaggio.
+5. **Ripiegamento GLOBALE come override**: se i droidi vanno in netta inferiorità (≤ 50% dei cloni),
+   un'unica direttiva Retreat verso lo spawn. È l'unica decisione che resta globale — ed è giusto che
+   lo sia.
+6. **Fallback** senza settori autorati: una singola direttiva sul post non-separatista più vicino
+   (comportamento v1) → le mappe senza settori funzionano come prima.
+
+### Out of Scope
+- **Saturazione hard dei fronti** (un fronte "pieno" smette di attirare): la distribuzione pesata dal
+  bias già divide; se in playtest i droidi si ammassano si aggiunge (come KI #73 per i cloni).
+- **Il grado intermedio** che interpreta le direttive e coordina il micro del suo gruppo
+  ([[command-rank-system]]): resta il livello sotto, futuro. Questo ADR è il vertice.
+- **Migrazione del comandante fuori da `class`** (ADR-041 fasi successive): indipendente da questo.
+
+### Consequences
+- **Positivo**: il Droide Tattico gestisce davvero una battaglia su più fronti con posture diverse; la
+  stance smette di essere un termostato sul conteggio; la forza si divide. È percepibilmente "un
+  comandante che ragiona" invece di "tutti addosso allo stesso punto".
+- **Costo**: `enemyCommand` da POD a lista + un helper di scelta. Superficie contenuta (solo AiSystem
+  + World). I lettori del vecchio `.stance/.x/.z` sono stati riscritti.
+- **Rischio**: senza saturazione i droidi potrebbero pesare troppo sul fronte top; da verificare.
+
+### Status
+**Accepted — in force (2026-07-21).** Build 0/0; `--validate` 0/0. **Misurato** (`--sim` 10v10):
+il comandante gestisce **3 fronti**; le posture variano nel tempo — a t=33 s **2 AVANZATA + 1 TIENI**
+insieme (tiene "Settore Enemy 2" mentre spinge altrove), l'obiettivo prioritario cambia (Ally 1 →
+Enemy 2 → Charlie), e a t=73 s scatta il **RIPIEGAMENTO globale** quando i droidi calano sotto metà.
+`stuck` 7 (varianza normale). **Da valutare in partita**: distribuzione della forza fra i fronti e
+naturalezza; le leve sono i pesi dei settori e la soglia di ripiegamento.
+
+---
+
+## ADR-043 — Bilanciamento globale data-driven: `data/config/gameplay.json` (Accepted, 2026-07-21)
+
+### Context
+L'audit (doc 37 §E) aveva contato **17 costanti di gameplay** introdotte fra ADR-035 e ADR-040, tutte
+`constexpr` in `GameConfig.hpp`, **zero autorabili**: per tarare la rianimazione bisognava
+ricompilare. Le case dei dati erano già state decise con l'utente (doc 37/06): rianimazione base +
+degrado comunicazioni → **globali autorabili**; `hunt_timeout` → nei profili AI (già fatto); soglie
+tecniche dei contatti → **non esposte**.
+
+### Decision
+1. **`data/config/gameplay.json`** + `mini::GameplayBalance` (header-only,
+   `include/mini/game/data/GameplayBalance.hpp`): struct con i **default = vecchie costanti**, load
+   all'avvio che sovrascrive **solo le chiavi presenti**. File assente o invalido → default →
+   comportamento invariato (non-regressione per costruzione).
+2. **Migrati 10 parametri**: i 6 della squadra/rianimazione (`squad_bleedout_time`,
+   `squad_revive_radius`, `squad_revive_time`, `squad_revive_hp`, `squad_down_lethal_hit_frac`,
+   `squad_max_revives`) e i 4 del degrado comunicazioni (`comms_lost_*`). Le costanti in
+   `GameConfig.hpp` sono state RIMOSSE (restano commenti-puntatore): una costante morta ma compilabile
+   è una trappola.
+3. **Tab "Gameplay" nel BalanceEditor**: slider con spiegazioni, salvataggio via `saveJsonRMW`,
+   ripristino default. Stessa load del runtime → stessi valori.
+4. Header-only con `inline` + static locale: **nessuna modifica a CMake**, nessuna nuova dipendenza
+   fra i due binari (ADR-002 rispettato — condividono il FILE, non il codice di uno dei due).
+
+### Out of Scope
+- **Rianimazione per-classe** (medico): il layer globale è la base; il per-classe sarà un
+  moltiplicatore sopra, con il sistema classi.
+- Hot-reload in partita: si carica all'avvio (il tab lo dichiara: "salva e riavvia la partita").
+- Le altre costanti di GameConfig (fisica, AI interne): restano compile-time di proposito.
+
+### Consequences
+- **Positivo**: la taratura chiesta dall'utente ("rendere tutto il più autorabile possibile") smette
+  di richiedere una ricompilazione; runtime ed editor leggono la stessa fonte.
+- **Trappola scoperta verificando** (e ora in memoria): `getDataPath()` del runtime **preferisce la
+  `data/` SORGENTE** (3 livelli su dall'exe) e usa la copia accanto all'exe solo come fallback.
+  Editare la copia in `build/.../Debug/data/` non ha alcun effetto quando si lancia dalla build tree.
+  Tre run di test sprecate prima di capirlo — la diagnosi iniziale (BOM) era sbagliata.
+
+### Status
+**Accepted — in force (2026-07-21).** Build 0/0; `--validate` 0/0. **Verificato end-to-end in modo
+deterministico**: `squad_max_revives = 0` nel JSON sorgente → log `max_revives=0` → **zero** eventi
+`member downed/revived` in 110 s di sim (chi cade muore); ripristinato 1 → baseline identica
+(8 downed / 5 revived / 3 bled out, tutti a `revives_used: 1`). **Manca smoke manuale**: il tab
+Gameplay nell'editor (slider → salva → riavvia partita → effetto).

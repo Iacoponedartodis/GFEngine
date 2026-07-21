@@ -126,6 +126,10 @@ struct AiProfileDef
     float shootInterval    = 2.5f;
     float patrolSpeed      = 2.5f;
     float seekSpeed        = 4.0f;
+    // Quanto insiste su un contatto perduto prima di degradare a Search (doc 16).
+    // È una scelta di CARATTERE (un cecchino paziente insegue meno di un'unità
+    // aggressiva), quindi vive nel profilo, non fra le costanti globali.
+    float huntTimeout      = 20.0f;
     bool  jumpEnabled      = true;
 };
 
@@ -231,9 +235,50 @@ struct StrategicTargetDef
 {
     std::string label = "Bersaglio";
     float x = 0, z = 0;          // posizione (y = suolo della mappa)
+    float ry = 0.0f;             // rotazione attorno a Y (gradi)
     float hp = 300.0f;           // resistenza: si distrugge a fuoco
+    // Fazione proprietaria: prima era CABLATA a 2, quindi una struttura dei
+    // CLONI (torre comunicazioni/controllo) sarebbe comunque nata nemica.
+    int   team = 2;              // 1 = Repubblica, 2 = Separatisti
+    // Ruolo della struttura (doc 34). "generic" = solo bersaglio da distruggere;
+    // "comms" = torre di comunicazione: finché è viva la sua fazione comunica
+    // bene, quando cade informazioni/ordini/rinforzi RALLENTANO (mai bloccati).
+    std::string role = "generic";
+    // ── Valore tattico autorato (doc 35) ────────────────────────────────
+    // `priority`: quanto la fazione avversaria vuole distruggerla — è il numero
+    // che i livelli di comando confrontano con i settori.
+    // `engageRadius`: entro quanto un'unità avversaria la ingaggia DI PROPRIA
+    // INIZIATIVA. 0 = mai spontaneamente (default conservativo: accendere questo
+    // sistema non deve cambiare le mappe già autorate e bilanciate).
+    float priority     = 0.5f;
+    float engageRadius = 0.0f;
     std::string meshPath;        // vuoto = box di fallback
+
+    // ── Derivazioni geometriche (una sola fonte) ────────────────────────
+    // Le usano il game mode (transform + collider), il navmesh (ostacolo) e
+    // l'editor (anteprima). Tenerle qui è ciò che impedisce a collisione,
+    // navigazione e viewport di divergere.
+    // Il box di fallback ha una base di 2.5 m e `meshScale` la MOLTIPLICA: prima
+    // per il fallback era ignorata, quindi la scala autorata non aveva alcun
+    // effetto in gioco (segnalato dall'utente).
+    float visualScale() const
+    {
+        const float base = meshPath.empty() ? 2.5f : 1.0f;
+        return base * ((meshScale > 0.0001f) ? meshScale : 1.0f);
+    }
+    // Semiassi solidi: autorati se dati, altrimenti dalla scala visiva.
+    // L'altezza usa la scala PIENA perché la mesh è alzata di mezza altezza per
+    // appoggiare a terra mentre il collider è centrato sul transform.
+    void solidHalfExtents(float sc, float& hx, float& hy, float& hz) const
+    {
+        hx = (halfX > 0.0f) ? halfX : sc * 0.5f;
+        hy = (halfY > 0.0f) ? halfY : sc;
+        hz = (halfZ > 0.0f) ? halfZ : sc * 0.5f;
+    }
     float meshScale = 1.0f;
+    // Semiassi di COLLISIONE (m). 0 = derivati dalla scala visiva. Prima queste
+    // strutture non avevano collider: le AI e il giocatore ci passavano dentro.
+    float halfX = 0.0f, halfY = 0.0f, halfZ = 0.0f;
     std::array<float,3> color = {0.7f, 0.5f, 0.2f};
 };
 
@@ -275,31 +320,46 @@ struct VehicleSpawnDef
 // Hint spaziali opzionali autorati nel Map Editor. Solo dati: nessun
 // sistema runtime li consuma ancora (sarà l'AI tattica, Todo #3 fase 2).
 
-// Posizione + direzione da cui un'AI può coprirsi e sparare.
-// height distingue copertura bassa (peek-over) da alta (peek-around).
-// Cover Intelligence (ADR-026): protection/canShoot rendono la copertura un dato
-// tattico — l'AI sceglie in base a QUANTO ripara e se può sparare, non solo alla
-// vicinanza. Additivi: default = comportamento pre-ADR-026.
-struct CoverPointDef
+// ── Posizione tattica (ADR-030) ──────────────────────────────────────────
+// UN SOLO tipo per "un posto che conta": sostituisce CoverPointDef (ADR-026) e
+// TacticalPointDef (ADR-027), che erano due concetti paralleli per la stessa
+// cosa. Il `role` è DESCRITTIVO (aiuta l'authoring e le query per ruolo); le
+// CAPACITÀ stanno nei campi: una copertura è una posizione con protection > 0,
+// e una `vantage` che ripara vale anche come copertura senza casi speciali.
+// Il settore di tiro (M1, doc 33 §5-bis) si aggiunge qui — una volta sola.
+struct TacticalPositionDef
 {
     float x = 0, y = 0, z = 0;
-    float facingDeg  = 0.0f;   // direzione del fronte di copertura (gradi, yaw)
-    float height     = 1.0f;   // altezza della copertura (m)
-    float protection = 0.5f;   // quanto ripara (0..1) — pesa la scelta dell'AI
-    bool  canShoot   = true;   // si può sparare/peekare da qui (vs solo nascondersi)
+    float facingDeg  = 0.0f;      // fronte / direzione d'interesse (gradi, yaw)
+    std::string role = "cover";   // cover | vantage | defensive | chokepoint | observation
+    float height     = 1.0f;      // altezza della copertura (peek-over vs peek-around)
+    float protection = 0.5f;      // quanto ripara (0..1); 0 = non ripara affatto
+    bool  canShoot   = true;      // si può fare fuoco da qui (vs solo nascondersi)
+    float importance = 0.5f;      // priorità tattica (0..1)
+    float radius     = 4.0f;      // area d'influenza (defensive/chokepoint)
+
+    // ── Settore di tiro (ADR-031) ─────────────────────────────────────────
+    // Cosa questa posizione BATTE: arco centrato su facingDeg + gittata utile.
+    // È ciò che la rende una posizione da cui ATTACCARE e non solo un riparo:
+    // permette la query "posizione coperta da cui colpisco quella zona".
+    // Filtro geometrico ed economico (niente raycast); la visibilità reale
+    // contro gli ostacoli arriverà col precalcolo (M4, doc 33 §5-bis).
+    float fireArcDeg = 120.0f;    // ampiezza totale del settore (gradi)
+    float fireRange  = 25.0f;     // gittata utile dalla posizione (m)
 };
 
-// Tactical Point (doc 33 Fase 2, ADR-027): posizione tatticamente rilevante che
-// NON è una copertura — punto sopraelevato/dominante, difensivo, strettoia,
-// osservazione. Dato autorato a mano (mappe handcrafted); consumo da Squad/settori
-// (Fase 4/5). Additivo: array vuoto = zero impatto.
-struct TacticalPointDef
+// ── Settore / Combat Area (ADR-034) ──────────────────────────────────────
+// Zona con significato tattico: è il livello su cui ragiona il comandante
+// (importanza + chi la controlla + quanto è contesa) invece di guardare solo
+// l'owner dei command post. Autorato a mano: i settori sono pochi e sono SCELTE
+// DI DESIGN, non un dato derivabile. Lo STATO (presenze, controllo, pressione)
+// non sta qui: è stato di partita e vive in World::sectorStates.
+struct SectorDef
 {
-    float x = 0, y = 0, z = 0;
-    float facingDeg  = 0.0f;   // direzione d'interesse (vantaggio/osservazione)
-    std::string type = "vantage"; // vantage | defensive | chokepoint | observation
-    float importance = 0.5f;   // 0..1, priorità tattica
-    float radius     = 4.0f;   // area d'influenza (difensiva/chokepoint)
+    std::string label = "Settore";
+    float x = 0, z = 0;
+    float radius     = 12.0f;   // area d'influenza (XZ)
+    float importance = 0.5f;    // 0..1, quanto vale strategicamente
 };
 
 // Percorso di pattuglia con nome (riusabile da più squadre in futuro).
@@ -326,6 +386,10 @@ struct CommanderSpawnDef
 {
     std::string unit;            // id classe/entità (di norma una classe con ability "command")
     float x = 0.0f, z = 0.0f;    // posizione strategica nelle retrovie (XZ)
+    // Raggio di LEASH (ADR-041): area circolare da cui il comandante non esce. Si
+    // muove al suo interno per difendersi/coprirsi, mai fuori. 0 = fermo sul posto
+    // (comportamento legacy `stationary`): retrocompatibile con le mappe esistenti.
+    float leashRadius = 0.0f;
 };
 
 // ── MapDef ────────────────────────────────────────────────────────────────
@@ -351,10 +415,27 @@ struct MapDef
     std::vector<StrategicTargetDef> strategicTargets;   // DestroyTarget (doc 25)
 
     // Map Metadata (15_MapMetadata) — opzionali, vuoti finché non autorati
-    std::vector<CoverPointDef>  coverPoints;
     std::vector<PatrolRouteDef> patrolRoutes;
     std::vector<DangerZoneDef>  dangerZones;
-    std::vector<TacticalPointDef> tacticalPoints;   // doc 33 Fase 2, ADR-027
+    // Posizioni tattiche unificate (ADR-030): coperture, punti dominanti,
+    // difensivi, strettoie, osservazione. Sostituisce coverPoints+tacticalPoints.
+    std::vector<TacticalPositionDef> tacticalPositions;
+
+    // Grafo "chi copre chi" (ADR-032) — DATO DERIVATO, non autorato e non salvato:
+    // `positionCovers[i]` = indici delle posizioni coperte da `tacticalPositions[i]`
+    // (dentro settore + gittata + linea di tiro libera). Ricalcolato a ogni load da
+    // `worldintel::buildTacticalLinks`, quindi non può diventare incoerente.
+    std::vector<std::vector<int>> positionCovers;
+
+    // Esposizione (ADR-033) — DERIVATA invertendo il grafo: `positionExposure[i]`
+    // è la frazione (0..1) delle altre posizioni che possono BATTERE la posizione i.
+    // Alta = allo scoperto, bassa = riparata dagli angoli di tiro della mappa.
+    // Serve a preferire approcci coperti e a segnalare al designer i punti esposti.
+    std::vector<float> positionExposure;
+
+    // Settori / Combat Areas (ADR-034) — autorati, opzionali. Vuoto = il
+    // comandante usa la regola precedente (post più vicino).
+    std::vector<SectorDef> sectors;
 
     // Veicoli in mappa (19_Vehicles, Fase A) — opzionale
     std::vector<VehicleSpawnDef> vehicleSpawns;

@@ -338,18 +338,22 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
             m_ui.rect(cx+gap,     cy-thick, arm, thick*2, cr, cg, cb);
 
             // ── Ruota di comando (doc 26, livello 2) ─────────────────────
-            // 3 settori attorno al mirino: Advance (alto), Regroup (basso-sx),
-            // Hold (basso-dx). Il settore puntato dal mouse è evidenziato; si
-            // impartisce al rilascio del tasto. Ordine = indice: 0/1/2.
+            // 4 settori sulle diagonali attorno al mirino: Regroup (basso-sx),
+            // Hold (basso-dx), Advance (alto-dx), Segui/Liberi (alto-sx, ADR-037).
+            // Il settore puntato dal mouse è evidenziato; si impartisce al
+            // rilascio del tasto. Ordine = indice: 0/1/2/3.
             if (m_wheelOpen)
             {
                 m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.35f);   // vela di fondo
-                const char* wlabels[3] = { "REGROUP", "HOLD", "ADVANCE" };
+                const char* wlabels[4] = { "REGROUP", "HOLD", "ADVANCE",
+                                           m_wheelFollowActive ? "LIBERI" : "SEGUI" };
                 const float R = 120.0f, bw = 108.0f, bh = 40.0f;
-                // Posizioni dei 3 settori (x,y del centro box)
-                const float px[3] = { cx - R,        cx + R,        cx        };
-                const float py[3] = { cy + R*0.55f,  cy + R*0.55f,  cy - R    };
-                for (int i = 0; i < 3; ++i)
+                // Posizioni dei 4 settori (x,y del centro box)
+                const float px[4] = { cx - R,       cx + R,
+                                      cx + R,       cx - R       };
+                const float py[4] = { cy + R*0.55f, cy + R*0.55f,
+                                      cy - R*0.55f, cy - R*0.55f };
+                for (int i = 0; i < 4; ++i)
                 {
                     const bool on = (m_wheelSel == i);
                     const float bx = px[i] - bw*0.5f, by = py[i] - bh*0.5f;

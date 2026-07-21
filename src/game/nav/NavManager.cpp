@@ -1,6 +1,7 @@
 // NavManager.cpp — pipeline Recast (solo-mesh) + query Detour (ADR-017, Phase A).
 #include "mini/game/nav/NavManager.hpp"
 #include "mini/game/data/Definitions.hpp"   // MapDef, MapGeometryBox
+#include "mini/game/MapQuery.hpp"            // groundHeightAt (base delle strutture)
 #include "mini/core/GameConfig.hpp"          // STEP_HEIGHT, PLAYER_HALF
 
 #include <Recast.h>
@@ -91,6 +92,26 @@ NavBuildStats NavManager::build(const MapDef& map)
     std::vector<int>   tris;
     for (const auto& b : map.geometry)
         if (b.collider) appendBox(b, verts, tris);
+
+    // Le STRUTTURE strategiche sono ostacoli solidi anche per la NAVIGAZIONE.
+    // Il `ColliderComponent` (ADR-036) governa giocatore e proiettili, ma le AI
+    // si muovono sul navmesh via DetourCrowd: senza il volume qui dentro il
+    // navmesh non aveva alcun buco sotto la torre e le AI ci passavano
+    // attraverso (segnalato dall'utente). Si usano ESATTAMENTE i semiassi del
+    // collider, così collisione e navigazione non possono divergere.
+    for (const auto& t : map.strategicTargets)
+    {
+        float hx, hy, hz;
+        t.solidHalfExtents(t.visualScale(), hx, hy, hz);
+        MapGeometryBox sb;
+        sb.x = t.x;
+        sb.y = mapquery::groundHeightAt(&map, t.x, t.z);
+        sb.z = t.z;
+        sb.ry = t.ry;
+        sb.sx = hx * 2.0f; sb.sy = hy * 2.0f; sb.sz = hz * 2.0f;
+        appendBox(sb, verts, tris);
+    }
+
     const int nverts = (int)(verts.size() / 3);
     const int ntris  = (int)(tris.size() / 3);
     st.inputTris = ntris;
@@ -164,8 +185,11 @@ NavBuildStats NavManager::build(const MapDef& map)
         const float pos[3] = {d.x, bmin[1] - 1.0f, d.z};
         rcMarkCylinderArea(&ctx, pos, d.radius, cylH, kAreaDanger, *chf);
     }
-    for (const auto& c : map.coverPoints)
+    // Solo le posizioni che RIPARANO davvero vengono marcate COVER (ADR-030):
+    // un punto d'osservazione senza protezione non è un'area di copertura.
+    for (const auto& c : map.tacticalPositions)
     {
+        if (c.protection <= 0.0f) continue;
         const float pos[3] = {c.x, bmin[1] - 1.0f, c.z};
         rcMarkCylinderArea(&ctx, pos, 1.2f, cylH, kAreaCover, *chf);  // raggio piccolo
     }
@@ -319,23 +343,42 @@ void NavManager::removeAgent(int idx)
 void NavManager::requestMoveTarget(int idx, const glm::vec3& target)
 {
     if (!m_crowd || idx < 0) return;
-    // Se il target è ~invariato NON ripianificare: chiamare requestMoveTarget
-    // ogni frame resetta il path e rende il movimento lento/a scatti. Lascia
-    // che il crowd segua il corridoio già calcolato.
-    const dtCrowdAgent* a = m_crowd->getAgent(idx);
-    if (a && a->active && a->targetState == DT_CROWDAGENT_TARGET_VALID)
-    {
-        const float dx = a->targetPos[0] - target.x;
-        const float dz = a->targetPos[2] - target.z;
-        if (dx * dx + dz * dz < 0.5f * 0.5f) return;   // stesso target
-    }
+
+    // 1) AGGANCIO al navmesh con estensioni CRESCENTI. Prima si usavano le query
+    //    extents del crowd (≈ raggio agente, ~0.8 m): un target dentro un muro o
+    //    poco fuori mesh — l'ultima posizione nota in Hunt, il punto casuale in
+    //    Search — non trovava alcun poligono e la richiesta veniva SCARTATA IN
+    //    SILENZIO. L'agente restava fermo finché non cambiava stato: sono gli
+    //    "stuck" in Hunt/Search osservati in telemetria (feedback utente
+    //    2026-07-20: "non usano i path in maniera fluida"). Ora si aggancia al
+    //    punto camminabile più vicino e l'AI ci va comunque.
     const dtQueryFilter* filter = m_crowd->getFilter(0);
-    const float* ext = m_crowd->getQueryExtents();
     const float t[3] = {target.x, target.y, target.z};
     dtPolyRef ref = 0;
     float nearest[3];
-    m_crowd->getNavMeshQuery()->findNearestPoly(t, ext, filter, &ref, nearest);
-    if (ref) m_crowd->requestMoveTarget(idx, ref, nearest);
+    const float exts[3][3] = {{2.0f, 4.0f, 2.0f},
+                              {6.0f, 8.0f, 6.0f},
+                              {14.0f, 12.0f, 14.0f}};
+    for (const auto& ex : exts)
+    {
+        m_crowd->getNavMeshQuery()->findNearestPoly(t, ex, filter, &ref, nearest);
+        if (ref) break;
+    }
+    if (!ref) return;   // davvero nulla di camminabile: niente da chiedere
+
+    // 2) Se il target AGGANCIATO è ~invariato NON ripianificare: chiamare
+    //    requestMoveTarget ogni frame resetta il path e rende il moto a scatti.
+    //    Il confronto va fatto sul punto agganciato (non su quello grezzo):
+    //    altrimenti un target dentro un muro, agganciato metri più in là,
+    //    sembrerebbe sempre "diverso" e si ripianificherebbe ogni frame.
+    const dtCrowdAgent* a = m_crowd->getAgent(idx);
+    if (a && a->active && a->targetState == DT_CROWDAGENT_TARGET_VALID)
+    {
+        const float dx = a->targetPos[0] - nearest[0];
+        const float dz = a->targetPos[2] - nearest[2];
+        if (dx * dx + dz * dz < 0.5f * 0.5f) return;   // stesso target
+    }
+    m_crowd->requestMoveTarget(idx, ref, nearest);
 }
 
 void NavManager::requestMoveVelocity(int idx, const glm::vec3& vel)

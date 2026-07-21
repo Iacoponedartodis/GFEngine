@@ -48,7 +48,7 @@ Squad                                   Order
    implicito. Copertura → `TakeCover`; nemico → `FocusFire`; alleato a terra → `Revive`;
    posizione → `MoveTo`. La risoluzione del contesto usa il raycast già esistente
    (`physics/HitTest`, condiviso mirino/proiettili) + i `coverPoints` del MapDef (doc 15).
-2. **Ruota di comando:** ordini ampi (regroup, hold, advance).
+2. **Ruota di comando:** ordini ampi (regroup, hold, advance, segui/liberi).
 
 Il punto di design: la tattica sta **dentro il flusso dell'azione**. Un sistema di comando che
 richiede di fermarsi ha già fallito.
@@ -134,8 +134,44 @@ una finestra di bleed-out. Dà peso alle perdite — la squadra è una risorsa, 
   non alla caduta — una perdita evitata non deve pesare sul giudizio (doc 25).
 - **AiSystem**: un'unità a terra è inerme (non sente/decide/spara/muove).
 - **HUD**: pannello squadra mostra `[A TERRA n — Xs]` col conto alla rovescia più urgente.
-- **Costanti** in `core/GameConfig.hpp` (segnaposto da rifinire): bleed-out 20s, raggio 2.5m,
-  canalizzazione 3s, HP al risveglio 50%.
+- **Costanti** in `core/GameConfig.hpp`: bleed-out 20s, raggio 2.5m, canalizzazione ~~3s~~ → **6s**,
+  HP al risveglio ~~50%~~ → **30%**.
+
+#### Bilanciamento 2026-07-20 (feedback utente: "non muore mai nessuno") — due giri
+**Causa strutturale (giro 2, la vera):** `reviverNearby` contava un compagno **QUALSIASI** entro il
+raggio. Ma il `Follow` tiene la squadra ammassata → c'era sempre qualcuno vicino: la rianimazione era
+**gratis e passiva**, e nessun aumento dei secondi poteva risolverlo.
+- **Ora è un atto DELIBERATO**: contano solo il **giocatore-leader** (sceglie di fermarsi accanto) e
+  il compagno **dispacciato con l'ordine `Revive` su quel caduto** (smette di combattere). Un
+  compagno che passa di lì sparando non rianima. **Soccorrere costa un uomo e del tempo.**
+- Se il soccorritore muore o viene distolto, il progresso riparte da capo (logica invariata).
+- **Nota 2026-07-20 (ADR-037)**: il `Follow` fisso — la condizione che rendeva la rianimazione
+  gratuita — **non esiste più**: ora i membri sono sparsi per default. La correzione qui sopra resta
+  quella giusta (soccorrere deve costare), ma la squadra è anche strutturalmente meno ammassata. Se
+  in playtest la rianimazione risultasse ora **troppo rara**, la leva da toccare è il raggio di
+  dispaccio dell'auto-soccorso, non il ritorno a un default di prossimità.
+
+**Cap di rianimazioni (2026-07-21) — la correzione decisiva.** Tempi e HP da soli non bastavano
+perché mancava una **regola**: lo stesso soldato era rianimabile **all'infinito**. Ora
+`SQUAD_MAX_REVIVES` (=1) limita le rianimazioni per **vita**: esaurito il cap, la caduta successiva è
+**letale** (ramo morte, non "a terra"). Si azzera col respawn (nuova entità → `revivesUsed = 0`).
+Misurato (10v10): tutte le rianimazioni a `revives_used: 1`, nessun membro rialzato due volte. È il
+pezzo che le tre correzioni precedenti (deliberata, più lenta, HP bassi) non potevano dare da sole.
+
+**Numeri (valori correnti — dal 2026-07-21 AUTORABILI in `data/config/gameplay.json`, tab
+Gameplay del BalanceEditor, ADR-043; non più `constexpr`):**
+- `SQUAD_MAX_REVIVES` **1** (`CombatSystem`): oltre, la caduta uccide. Candidato all'authoring
+  per-classe (un "medico" potrebbe alzare il cap dei compagni).
+- `SQUAD_REVIVE_TIME` 3s → 6s → **10s** (canalizzazione).
+- `SQUAD_REVIVE_HP` 50% → 30% → **15%** (chi si rialza è fragilissimo).
+- `SQUAD_BLEEDOUT_TIME` 20s → **15s** (il soccorso va avviato subito).
+- `SQUAD_DOWN_LETHAL_HIT_FRAC` 0.35 → **0.20** (`CombatSystem`): un colpo che toglie ≥20% degli HP
+  max **uccide sul posto**, saltando la finestra → **"a terra" torna a essere l'eccezione**, non la
+  regola. I colpi leggeri/di striscio mettono a terra.
+
+Resta una funzione **base**: la futura classe **medico** potrà accorciare la canalizzazione e/o
+alzare gli HP di risveglio (è la leva naturale per differenziarla). Tutti i valori sono da rifinire
+provando: sono tuning di sensazione, non verificabili headless.
 - **Verificato in `--sim`** (`--stress 8`, telemetria ADR-016): 9 a terra / 7 rianimati / ordini
   `Revive` auto-emessi (es. bot 11 → rianima #15, ciclo down→dispaccio→revive completo). Path
   bleed-out esercitato abbassando la costante a 1.5s → 2 morti per bleed-out. Tutti e tre gli esiti
@@ -158,14 +194,33 @@ quindi i compagni e i caduti non erano mirabili).
 - **Indicatore**: tint ROSSO sul clone a terra (manca una posa prone; riutilizzabile per un HUD
   cloni).
 
-### Ruota di comando (livello 2) — FATTA 2026-07-17
+### Ruota di comando (livello 2) — FATTA 2026-07-17, 4 settori dal 2026-07-20
 Tasto `CommandWheel` (default **B**, rimappabile) TENUTO → la camera si congela, il mouse sceglie il
-settore, al rilascio l'ordine va a tutta la squadra:
-- **Regroup**: raduna sul leader (MoveTo sulla posizione del giocatore).
-- **Hold**: ognuno tiene la PROPRIA posizione (HoldPosition per-membro, non un punto condiviso).
-- **Advance**: avanza ~15 m nella direzione di mira.
-HUD radiale a 3 settori col settore puntato evidenziato. Il **mirino diventa verde** su un compagno
-(feedback per Revive/CoveringFire).
+settore, al rilascio l'ordine va a tutta la squadra. Quattro settori sulle diagonali:
+- **Regroup** (basso-sx): raduna sul leader (MoveTo sulla posizione del giocatore).
+- **Hold** (basso-dx): ognuno tiene la PROPRIA posizione (HoldPosition per-membro, non un punto
+  condiviso).
+- **Advance** (alto-dx): avanza ~15 m nella direzione di mira.
+- **Segui / Liberi** (alto-sx, ADR-037): impartisce `Follow`, oppure **revoca** se la squadra sta già
+  seguendo. L'etichetta cambia di conseguenza.
+HUD radiale col settore puntato evidenziato. Il **mirino diventa verde** su un compagno (feedback per
+Revive/CoveringFire).
+
+### Stato privo di ordini (ADR-037) — è il DEFAULT, non un fallback
+Fino al 2026-07-20 `SquadSystem` assegnava `Follow` a chiunque non avesse un ordine attivo. Era un
+placeholder di Phase A, ed era la causa reale di "la squadra si muove come un blocco unico": nessun
+membro era mai davvero autonomo. Ora:
+- un membro senza ordine resta `OrderType::None` e ricade sull'AI normale (Patrol/Alert/Hunt) —
+  **truppa indipendente** che si muove per la mappa per conto suo;
+- `Follow` è un ordine come gli altri, con un costo tattico (toglie i compagni dal resto del campo);
+- una `SquadOrderRequest` con `order == None` è una **revoca** valida (ramo esplicito: il blocco di
+  assegnazione filtra su `isImplemented()`, che `None` non soddisfa);
+- l'HUD squadra dichiara **`LIBERI`**: uno stato di design invisibile verrebbe letto come un bug.
+
+Questa è anche la base dell'asimmetria di fazione voluta: i **cloni devono risultare più indipendenti
+dei droidi**. Finché il Follow era fisso valeva l'opposto, perché i droidi non hanno squadra e quindi
+nessun guinzaglio. Il resto dell'asimmetria arriva dalla coppia torre di controllo (segnala) ↔ Droide
+Tattico (ordina) — vedi doc 32 e memoria `command-rank-system`.
 
 ### Non ancora fatto
 - **Punti Comando**: bloccati su N2 (si guadagnano completando obiettivi, non uccidendo).

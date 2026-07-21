@@ -189,7 +189,18 @@ public:
     //    alla label senza conoscere il codice di gioco (mailbox, doc 10). Popolata
     //    a inizio partita, immutata dopo (le entità muoiono, la voce resta: serve
     //    a riconoscere QUALE bersaglio è caduto).
-    struct StrategicTargetEntity { EntityId entity = 0; std::string label; };
+    // `team`/`isComms` (doc 34): servono a ricostruire lo stato della rete di
+    // comunicazione senza rileggere il MapDef ogni tick.
+    // Posizione + valore tattico (doc 35): questa lista è la SORGENTE UNICA di
+    // intel sulle strutture. La leggono l'AI (ingaggio opportunistico), il
+    // comando nemico (scelta dell'obiettivo) e — quando esisterà — la torre di
+    // controllo dei cloni. Nessuno se le ricostruisce per conto proprio.
+    struct StrategicTargetEntity { EntityId entity = 0; std::string label;
+                                   int team = 2; bool isComms = false;
+                                   bool isControl = false;
+                                   float x = 0.0f, z = 0.0f;
+                                   float priority = 0.5f;
+                                   float engageRadius = 0.0f; };
     std::vector<StrategicTargetEntity> strategicTargets;
 
     // ── Stato della battaglia (doc 25: conseguenze degli obiettivi) ──────
@@ -209,6 +220,50 @@ public:
         int   pendingAllyReinforcements = 0;
     };
     BattleState battleState;
+
+    // ── Rete di comunicazione per fazione (doc 34, ADR-038) ──────────────
+    //    La torre di comunicazione non è un interruttore: finché è viva la sua
+    //    fazione comunica bene, quando cade informazioni/ordini/rinforzi
+    //    RALLENTANO — non si fermano mai. Scritto dal game mode (che possiede le
+    //    strutture), letto da AiSystem (contatti, comandante) e dal mode stesso
+    //    (rimpiazzi). Mailbox: `ecs/` non deve conoscere i game mode.
+    struct CommsState
+    {
+        // `hadTower` distingue "questa fazione ha PERSO la torre" da "questa
+        // mappa non ne autora nessuna". Senza, ogni mappa esistente degraderebbe
+        // in silenzio: chi non ha mai avuto una torre comunica normalmente.
+        bool  hadTower  = false;
+        bool  towerAlive = false;
+        float shareRangeMult   = 1.0f;   // raggio di propagazione di un avvistamento
+        float shareDelay       = 0.0f;   // s prima che l'informazione sia utilizzabile
+        float orderPeriodMult  = 1.0f;   // il comando ri-decide più di rado
+        float reinforceMult    = 1.0f;   // i rimpiazzi tardano (MAI bloccati)
+        bool  degraded() const { return hadTower && !towerAlive; }
+    };
+    CommsState comms[3];   // indicizzato per team: [1] Repubblica, [2] Separatisti
+
+    // ── Torre di controllo dei cloni (doc 36, ADR-040) ───────────────────
+    //    NON è il gemello del Droide Tattico, ed è importante che non lo
+    //    diventi. Il comandante droide pubblica UN focus e tutti i droidi vi
+    //    convergono (`enemyCommand`). La torre di controllo pubblica una LISTA
+    //    di posti che contano e si ferma lì: **nessun ordine, nessuna
+    //    destinazione imposta**. È ogni clone a scegliere per conto suo quale
+    //    segnale seguire — ed è così che i cloni restano più indipendenti dei
+    //    droidi (direttiva utente 2026-07-20).
+    struct AllyIntel
+    {
+        bool active = false;   // esiste una torre di controllo VIVA di team 1
+        struct Signal
+        {
+            float x = 0.0f, z = 0.0f;
+            float radius = 8.0f;
+            float weight = 0.5f;      // quanto quel posto conta
+            int   crowd  = 0;         // truppe team-1 già presenti (saturazione, KI #73)
+            std::string label;
+        };
+        std::vector<Signal> signals;
+    };
+    AllyIntel allyIntel;
 
     // ── Statistiche di missione (doc 25, GDD 9.6) ────────────────────────
     //    Accumulate DURANTE la missione da chi conosce il fatto — nessuno le
@@ -255,12 +310,41 @@ public:
     //    nessun comandante vivo → `active=false` e i droidi tornano alla pattuglia.
     //    `commanderAlive` serve solo a distinguere "nessun bersaglio" da "comandante
     //    ucciso" per il messaggio-conseguenza. Vedi [[droide-tattico-concept]].
+    // ── Stato dei settori (ADR-034) ──────────────────────────────────────
+    //    Parallelo a `activeMap->sectors`. Ricalcolato ogni tick da AiSystem con
+    //    una sola passata sulle entità. È STATO DI PARTITA (non dato di mappa):
+    //    presenze contrapposte, chi controlla, quanto è conteso. È il livello su
+    //    cui il comandante ragiona invece di guardare solo l'owner dei post.
+    //    Dato puro e astratto: riusabile da una futura simulazione (doc 33 §9).
+    struct SectorState
+    {
+        int   allies = 0, enemies = 0;
+        int   controllingTeam = 0;   // 0 = conteso o vuoto
+        float pressure = 0.0f;       // 0..1: quanto le due parti si contendono la zona
+    };
+    std::vector<SectorState> sectorStates;
+
     struct EnemyCommand
     {
-        bool  active         = false;  // c'è un focus valido da seguire
+        // v2 (ADR-042 / doc 32): il comandante gestisce PIÙ FRONTI insieme. Non un
+        // intento unico globale ma una LISTA di direttive, ciascuna con la sua
+        // stance derivata dal bilancio LOCALE del settore (spingi dove domini,
+        // tieni dove sei pressato). I droidi si distribuiscono sulle direttive
+        // (pesati dal bias) e scelgono da sé il COME (percorso, copertura,
+        // ingaggio): il comandante gestisce RISORSE e PRIORITÀ, non il micro
+        // (correzione utente 2026-07-20). Il micro fine andrà al grado intermedio.
+        enum Stance { Hold = 0, Advance = 1, Retreat = 2 };
+        struct Directive
+        {
+            float x = 0.0f, z = 0.0f;   // centro del settore-obiettivo (ZONA, non waypoint)
+            float radius = 0.0f;        // raggio della zona
+            int   stance = Hold;        // Advance = spingi, Hold = tieni, Retreat = ripiega
+            float weight = 0.0f;        // priorità del fronte (per la distribuzione)
+            std::string label;
+        };
+        bool  active         = false;  // c'è almeno una direttiva valida
         bool  commanderAlive = false;  // ≥1 comandante di team 2 vivo (edge → feed)
-        float x = 0.0f, z = 0.0f;      // posizione del focus (XZ)
-        std::string label;             // etichetta del post-focus (diagnostica)
+        std::vector<Directive> directives;   // i fronti gestiti insieme
     };
     EnemyCommand enemyCommand;
 

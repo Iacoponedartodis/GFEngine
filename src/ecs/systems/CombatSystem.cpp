@@ -3,6 +3,7 @@
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/components/SquadComponent.hpp"   // Phase C: stato "a terra"
 #include "mini/core/GameConfig.hpp"                 // costanti bleed-out/rianimazione
+#include "mini/game/data/GameplayBalance.hpp"       // ADR-043: rianimazione data-driven
 #include "mini/physics/HitTest.hpp"
 #include "mini/physics/Collision.hpp"
 #include "mini/core/Telemetry.hpp"
@@ -176,7 +177,10 @@ void CombatSystem::update(World& world, float dt)
             // comportamento storico: il campo e' neutro finche' i dati non lo
             // cambiano (KI #35). Guardia su <= 0: un dato assurdo non deve
             // trasformarsi in danno infinito o negativo.
-            eh->current -= (eh->armor > 0.01f) ? (toHp / eh->armor) : toHp;
+            // Danno EFFETTIVO agli HP di questo colpo: serve anche a decidere se
+            // un alleato va a terra o muore sul posto (config::SQUAD_DOWN_LETHAL_HIT_FRAC).
+            const float hpDamage = (eh->armor > 0.01f) ? (toHp / eh->armor) : toHp;
+            eh->current -= hpDamage;
 
             // Feedback HUD (hitmarker) SOLO per i colpi del giocatore —
             // non per quelli degli alleati AI (stesso team).
@@ -241,19 +245,31 @@ void CombatSystem::update(World& world, float dt)
                 const auto* tmv = world.getTeam(eid);
                 const bool allySquad = sq && tmv && tmv->teamId == 1
                                        && eid != world.playerEntity;
-                if (allySquad && !sq->downed)
+                // Colpo pesante = morte sul posto, niente finestra di rianimazione
+                // (bilanciamento 2026-07-20): finire gli HP non significa sempre
+                // "a terra". Armi pesanti e colpi alla testa (moltiplicatore hitbox)
+                // superano la soglia e uccidono; il fuoco leggero mette a terra.
+                const bool lethalBlow =
+                    eh->max > 0.0f
+                    && hpDamage >= gameplay().squadDownLethalHitFrac * eh->max;
+                // Cap di rianimazioni per vita: esaurito, la caduta è LETALE — un
+                // uomo non si rialza all'infinito. Chiude il "non muore mai
+                // nessuno" che tempi/HP da soli non risolvevano.
+                const bool revivesLeft =
+                    sq && sq->revivesUsed < gameplay().squadMaxRevives;
+                if (allySquad && !sq->downed && !lethalBlow && revivesLeft)
                 {
                     sq->downed            = true;
-                    sq->bleedoutRemaining = config::SQUAD_BLEEDOUT_TIME;
+                    sq->bleedoutRemaining = gameplay().squadBleedoutTime;
                     sq->reviveProgress    = 0.0f;
                     sq->order             = OrderType::None;   // smette di eseguire
                     sq->state             = OrderState::None;
                     eh->current           = 0.0f;              // inerme, ma NON distrutto
                     telemetry::event(telemetry::Level::Info, "Squad", "member downed",
                                      {{"entity", (int)eid},
-                                      {"bleedout", config::SQUAD_BLEEDOUT_TIME}});
+                                      {"bleedout", gameplay().squadBleedoutTime}});
                     world.pushEvent("A TERRA #" + std::to_string(eid)
-                        + " — rianimabile per " + std::to_string((int)config::SQUAD_BLEEDOUT_TIME) + "s");
+                        + " — rianimabile per " + std::to_string((int)gameplay().squadBleedoutTime) + "s");
                     break;   // niente morte/distruzione questo tick
                 }
 

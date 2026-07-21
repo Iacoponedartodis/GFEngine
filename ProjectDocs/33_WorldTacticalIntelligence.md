@@ -171,10 +171,16 @@ specifici** invece di decidere da soli — è la concretizzazione della filosofi
 - Nota: cover e tactical point **coesistono** (l'unificazione §4.1 è cleanup futuro, non rifattoro la
   Cover Intelligence funzionante). Link/visibilità calcolati → Fase 3.
 
-### Fase 3 — Rete di navigazione tattica
-- **Cabla i filtri per-ruolo del navmesh** (già pronti, doc 22). Grafo tattico fra Tactical Points
-  con semantica di arco (esposizione/copertura/avanzamento/ritirata/aggiramento). Route con
-  `purpose`. Supera il limite 2-waypoint (lista in `AiComponent`).
+### Fase 3 — Rete di navigazione tattica — **3a ✅ FATTA (ADR-028, 2026-07-20)**
+- **3a ✅ Le pattuglie seguono la ROUTE, non un segmento**: `AiComponent.patrolRoute/patrolSeg` +
+  `advancePatrol` → completato un segmento si passa al successivo (wrap). Spawn: una route per unità
+  con segmento di partenza sfalsato; i respawn conservano la route. Supera il limite 2-waypoint:
+  le route autorate diventano percorsi veri (prima ogni unità faceva avanti-indietro su un tratto).
+- **3b** (da fare): **cabla i filtri per-ruolo del navmesh** (già pronti, doc 22) → unità caute
+  evitano di più le danger zone, aggressive tagliano.
+- **3c** (rimandato di proposito): **grafo tattico** fra Tactical Points (archi con esposizione/
+  copertura/aggiramento) e **`purpose`** delle route — hanno senso quando esistono i consumatori
+  (Fase 4 settori / Fase 5 squad), altrimenti sarebbero dato decorativo.
 
 ### Fase 4 — Combat Areas / Settori
 - `SectorDef` (aree) + stato runtime (controllo/pressione/presenza) calcolato da presenze e post.
@@ -193,6 +199,66 @@ specifici** invece di decidere da soli — è la concretizzazione della filosofi
   Nessun codice di simulazione ora: solo non chiudere la porta (§9).
 
 ---
+
+## 5-bis. COMPLETAMENTO DEI METADATA (direttiva utente 2026-07-20) — la fase delicata
+
+> **Decisione di priorità dell'utente:** si mette in pausa il lavoro sull'*intelligenza* dell'AI e si
+> **completa prima il percorso dei metadata**, "con il massimo della cura, perché potrebbe davvero
+> svoltare la base tattica del gioco". Solo dopo si migliorano i sistemi AI per sfruttarli, e solo a
+> quel punto ha senso costruire una mappa più grande e complessa.
+
+### Il principio che guida questa fase
+Le meccaniche tattiche "pesanti" (valutazione continua di linee di tiro, esposizione, aggiramenti)
+**non vanno rinunciate né simulate a runtime da ogni NPC**: vanno **precalcolate nel mondo** e lette
+come dati. È la versione operativa di "AI semplici in un mondo intelligente": il costo si paga una
+volta (load/authoring), non 40 volte per tick.
+
+### Cosa manca, partendo dai COMPORTAMENTI richiesti
+| Comportamento voluto | Dato che oggi manca |
+|---|---|
+| Sparare **da** un posto coperto e tattico (non solo nascondersi) | **Settore di tiro** della posizione: cosa batte, in che direzione, fino a che distanza |
+| Aggirare davvero | **Corsie di avvicinamento** con esposizione: da dove si arriva ai fianchi restando coperti |
+| Coprirsi a vicenda avanzando (bounding overwatch) | **Link fra posizioni**: quale posizione batte quale |
+| Scegliere in fretta senza calcoli pesanti | **Visibilità precalcolata** fra posizioni/zone |
+| Percorsi complessi | Rete tattica con **scopo** ed **esposizione** per arco |
+
+### Il cambio di modello (il cuore della fase)
+Oggi una `CoverPointDef` è *un posto dove sottrarsi al fuoco*: l'AI la usa **solo** nella fase evasiva
+(in `AiSystem`, al contatto diretto si fa `flankActive = false` e la copertura torna difensiva).
+Deve diventare una **posizione di combattimento**: protezione **+ settore di tiro**. È questo che
+permette "attacco da un luogo più coperto e tattico" invece di "mi nascondo quando scendo di vita".
+
+### Incrementi proposti (ognuno con ADR, additivi, verificabili)
+- **M1 — Posizioni di tiro** — **✅ FATTA (ADR-031, 2026-07-20)**: `fireArcDeg` + `fireRange` sulla
+  posizione; query `worldintel::bestFiringPosition` (*"posizione coperta entro X che batte la zona Y"*);
+  l'AI la usa nell'approccio per **attaccare da coperto**, non solo per nascondersi. Due domande
+  distinte, due query: `bestCoverToward` = "dove mi riparo", `bestFiringPosition` = "da dove colpisco".
+  Editor: slider + settore disegnato sulla posizione selezionata. **Limite dichiarato**: filtro
+  geometrico, non verifica ostacoli fra posizione e bersaglio — lo farà M4.
+- **M2 — Unificazione `CoverPointDef` ↔ `TacticalPointDef`** — **✅ FATTA (ADR-030, 2026-07-20)**:
+  un'unica `TacticalPositionDef` con **ruolo** (cover/vantage/defensive/chokepoint/observation).
+  Le query filtrano per **capacità** (`protection > 0` = copertura), non per ruolo. Migrazione
+  trasparente delle chiavi legacy nel loader; l'editor riscrive salvando. **Fatta per prima** (scelta
+  utente) proprio perché M1/M3/M4 si costruiscano una volta sola.
+- **M3+M4 — Rete tattica + visibilità** — **✅ FATTE INSIEME (ADR-032, 2026-07-20)**: erano la stessa
+  computazione. `hasLineOfFire` (segmento vs geometria, su MapDef); `bestFiringPosition` ora verifica
+  la linea di tiro (**cade il limite geometrico di M1**); grafo `positionCovers` "chi copre chi"
+  costruito al load (**derivato**, mai stale); `bestOverwatchFor` per il bounding overwatch.
+  **Costo misurato**: 638 link / 60 posizioni in **2,4 ms**. Restano: **corsie di avvicinamento**
+  (evoluzione delle route con esposizione) e la **visualizzazione dei link** in editor.
+- **M5 — Settori/Combat Areas** — **✅ FATTA (ADR-034, 2026-07-20)**: `SectorDef` autorato +
+  `World::sectorStates` (presenze/controllo/pressione, una passata per tick). Il comandante sceglie
+  l'obiettivo fra i **settori** (importanza + contesa) invece dell'owner dei post; i droidi scelgono
+  il proprio punto dentro la zona. **Chiude il percorso metadata.**
+- **Editor, trasversale**: authoring ergonomico + **visualizzazione** (settori di tiro, link,
+  esposizione) + debug. Senza vederli, questi dati non sono autorabili con cura.
+
+### Fuori da questa fase (registrato, non fatto ora)
+- **Geometrie oltre i box** (mesh Blender complesse lette e trattate correttamente): l'utente lo
+  segnala come necessario per mappe grandi. Impatta collisioni, navmesh e hitbox → **sistema a sé**,
+  da affrontare **dopo** i metadata e con il suo ADR. Vedi anche 15_MapMetadata Future Expansion.
+- Miglioramento dei sistemi AI (fiancheggiamento, aggiramento, pathfinding): **dopo**, per sfruttare
+  i metadata completati.
 
 ## 6. Editor & Workflow (trasversale a tutte le fasi)
 

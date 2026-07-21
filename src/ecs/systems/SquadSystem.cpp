@@ -4,6 +4,7 @@
 #include "mini/ecs/Components.hpp"
 #include "mini/core/Telemetry.hpp"
 #include "mini/core/GameConfig.hpp"   // Phase C: bleed-out/rianimazione
+#include "mini/game/data/GameplayBalance.hpp"   // ADR-043: rianimazione data-driven
 
 #include <nlohmann/json.hpp>   // data degli eventi (doc 21)
 #include <algorithm>
@@ -31,13 +32,21 @@ bool isImplemented(OrderType t)
         || t == OrderType::CoveringFire;
 }
 
-// C'è un compagno VIVO (o il leader) abbastanza vicino da rianimare? La
-// rianimazione è per PROSSIMITÀ: la squadra unita si auto-soccorre (il Follow la
-// tiene insieme), un membro isolato che cade rischia il bleed-out — è la tensione
-// tattica voluta (doc 26: la squadra è una risorsa, le perdite pesano).
+// C'è qualcuno che sta DELIBERATAMENTE rianimando questo caduto?
+// Bilanciamento 2026-07-20 (feedback utente: "non muore mai nessuno"): prima
+// bastava un compagno QUALSIASI entro il raggio — ma il `Follow` tiene la squadra
+// ammassata, quindi c'era sempre qualcuno vicino e la rianimazione era di fatto
+// GRATIS e automatica. Ora conta solo chi si sta davvero dedicando al soccorso:
+//  - il leader (il GIOCATORE): sceglie lui di fermarsi lì accanto;
+//  - il compagno DISPACCIATO con l'ordine `Revive` proprio su questo caduto
+//    (smette di combattere per soccorrerlo).
+// Un compagno che passa di lì sparando non rianima più nessuno: soccorrere costa
+// un uomo e del tempo. Se il soccorritore muore o viene distolto, il progresso
+// riparte da capo (logica invariata a valle).
 bool reviverNearby(World& world, EntityId downed, EntityId leader, float dx, float dz)
 {
-    const float r2 = config::SQUAD_REVIVE_RADIUS * config::SQUAD_REVIVE_RADIUS;
+    const float rr = gameplay().squadReviveRadius;
+    const float r2 = rr * rr;
     auto within = [&](EntityId o) -> bool {
         const auto* otr = world.getTransform(o);
         if (!otr) return false;
@@ -52,14 +61,16 @@ bool reviverNearby(World& world, EntityId downed, EntityId leader, float dx, flo
         if (o == downed) continue;
         const auto* osq = world.getSquad(o);
         if (!osq || osq->squadId != kAlliedSquadId || osq->downed) continue;
+        // SOLO il soccorritore dedicato a QUESTO caduto.
+        if (osq->order != OrderType::Revive || osq->targetEntity != downed) continue;
         if (within(o)) return true;
     }
     return false;
 }
 
 // Ordini impartiti dal giocatore: vanno annunciati sull'HUD e, una volta finiti,
-// lasciano il posto al default (Follow). Il default NON si annuncia (sarebbe rumore).
-bool isPlayerOrder(OrderType t) { return t != OrderType::Follow; }
+// lasciano il posto allo stato privo di ordini (ADR-037), che non si annuncia.
+bool isPlayerOrder(OrderType t) { return t != OrderType::None; }
 
 // Eventi DISCRETI (transizioni), mai per-frame (disciplina doc 21).
 void emitOrder(const char* msg, EntityId e, const SquadComponent& sq,
@@ -107,16 +118,20 @@ void SquadSystem::update(World& world, float dt)
             if (reviverNearby(world, e, m_leader, tr->x, tr->z))
             {
                 sq->reviveProgress += dt;
-                if (sq->reviveProgress >= config::SQUAD_REVIVE_TIME)
+                if (sq->reviveProgress >= gameplay().squadReviveTime)
                 {
                     sq->downed = false;
                     sq->reviveProgress = 0.0f;
+                    ++sq->revivesUsed;   // consuma una rianimazione: la prossima caduta sarà letale
                     if (auto* h = world.getHealth(e))
-                        h->current = h->max * config::SQUAD_REVIVE_HP;
-                    sq->order = OrderType::None;   // riparte dal default (Follow)
+                        h->current = h->max * gameplay().squadReviveHp;
+                    sq->order = OrderType::None;   // riparte senza ordini (ADR-037)
                     sq->state = OrderState::None;
                     telemetry::event(telemetry::Level::Info, "Squad", "member revived",
-                                     {{"entity", (int)e}});
+                                     {{"entity", (int)e},
+                                      {"revives_used", sq->revivesUsed},
+                                      {"revives_left",
+                                       gameplay().squadMaxRevives - sq->revivesUsed}});
                     world.pushEvent("RIANIMATO #" + std::to_string(e));
                 }
             }
@@ -133,7 +148,20 @@ void SquadSystem::update(World& world, float dt)
         // Ordine DIRETTO: se req.directedMember è impostato, solo quel membro lo
         // riceve (comandi che puntano un compagno). 0 = tutta la squadra (default).
         const bool addressed = (req.directedMember == 0 || req.directedMember == e);
-        if (req.pending && isImplemented(req.order) && addressed)
+        // REVOCA (ADR-037): OrderType::None come richiesta è un ordine valido —
+        // "liberi", si torna truppa indipendente. Va gestito qui perché il blocco
+        // di assegnazione filtra su isImplemented(), che None non soddisfa.
+        if (req.pending && req.order == OrderType::None && addressed)
+        {
+            if (sq->hasActiveOrder())
+            {
+                sq->order         = OrderType::None;
+                sq->state         = OrderState::None;
+                sq->failureReason = nullptr;
+                emitOrder("order cleared", e, *sq, telemetry::Level::Info);
+            }
+        }
+        else if (req.pending && isImplemented(req.order) && addressed)
         {
             sq->order         = req.order;
             sq->targetEntity  = req.targetEntity;
@@ -165,16 +193,10 @@ void SquadSystem::update(World& world, float dt)
             continue;
         }
 
-        // ── Default Phase A: chi non ha ordini segue il leader ───────────
-        if (!sq->hasActiveOrder())
-        {
-            sq->order         = OrderType::Follow;
-            sq->targetEntity  = m_leader;
-            sq->state         = OrderState::Active;
-            sq->failureReason = nullptr;
-            sq->issuedTick    = world.getTickCount();
-            emitOrder("order issued", e, *sq, telemetry::Level::Info);
-        }
+        // ── Stato privo di ordini (ADR-037) ──────────────────────────────
+        // Nessun default: chi non ha un ordine attivo resta OrderType::None e
+        // si muove come truppa indipendente (AiSystem → Patrol/Alert normali).
+        // Follow è un ordine come gli altri, impartito dalla ruota di comando.
 
         // ── Ciclo di vita dell'ordine ────────────────────────────────────
         switch (sq->order)
@@ -209,7 +231,7 @@ void SquadSystem::update(World& world, float dt)
                                     + " completato");
                     m_outcomeAnnounced = true;
                 }
-                sq->order = OrderType::None;   // → torna al default (Follow)
+                sq->order = OrderType::None;   // → torna senza ordini (ADR-037)
             }
             break;
         }

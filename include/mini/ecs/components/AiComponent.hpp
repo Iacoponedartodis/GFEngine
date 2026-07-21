@@ -41,6 +41,13 @@ struct AiComponent
     float patrolBx = 0, patrolBz = 0;
     float patrolSpeed = 2.0f;
 
+    // Route autorata seguita da questa unità (ADR-028): indice in
+    // MapDef.patrolRoutes e segmento corrente. -1 = nessuna route → A/B legacy
+    // (avanti-indietro). Con una route, completato un segmento si passa al
+    // successivo (wrap) invece di invertire: la pattuglia PERCORRE il tracciato.
+    int patrolRoute = -1;
+    int patrolSeg   = 0;
+
     // Sosta ai waypoint di pattuglia (secondi). > del capture_time dei
     // command post → l'AI resta nell'area abbastanza da catturarli.
     // 0 = comportamento legacy (inversione immediata).
@@ -60,6 +67,24 @@ struct AiComponent
     float hideMin = 0.8f, hideMax = 1.8f; // durata finestra evasiva (s)
     float flankChance     = 0.0f;  // probabilità di approccio laterale in Hunt
 
+    // ── Personalità individuale (ADR-029) ─────────────────────────────
+    // Valore [0,1) assegnato allo spawn (hash dell'entity id): deterministico ma
+    // DIVERSO per ogni unità. Rompe le parità, sfasa i tempi, sceglie lato e
+    // distanza degli aggiramenti e la posizione in formazione. Senza di esso
+    // unità con lo stesso profilo prendono SEMPRE la stessa decisione e la
+    // squadra si muove come un corpo solo (feedback utente 2026-07-20).
+    float bias = 0.5f;
+
+    // ── Manovra in combattimento (ADR-035) ────────────────────────────
+    // Prima, entrati in Alert, l'AI restava dov'era: tutti i metadata tattici
+    // erano usati SOLO prima del contatto e lo scontro diventava statico. Ora
+    // valuta periodicamente se spostarsi su una posizione migliore (aggiramento
+    // o posizione di tiro) CONTINUANDO a sparare. `repositionTimer` sfasa le
+    // valutazioni e fa da cooldown; `repositionActive` dice che è in movimento.
+    float repositionTimer  = 0.0f;
+    bool  repositionActive = false;
+    float repositionX = 0.0f, repositionZ = 0.0f;
+
     // Roll attivo (abilità "roll", 16 est.): scatto in corso
     float rollTimer = 0.0f;
     float rollVX = 0.0f, rollVZ = 0.0f;
@@ -69,6 +94,8 @@ struct AiComponent
     bool  hasCover = false;
     float coverX = 0.0f, coverZ = 0.0f;
     float searchTimer = 0.0f;   // tempo in Search: oltre il limite → Patrol
+    float huntTimer   = 0.0f;   // tempo in Hunt: oltre il limite → Search (KI #68)
+    float huntPatience = 20.0f; // soglia di huntTimer, dal profilo AI (doc 16)
     float exposeTimer = 0.0f;   // countdown della fase corrente
     bool  evading     = false;  // true = fase evasiva (non spara)
     bool  flankActive = false;  // sta raggiungendo il punto di fiancheggiamento
@@ -83,6 +110,10 @@ struct AiComponent
     float strafeSign  = 1.0f;
     float velY        = 0.0f;
     bool  stationary  = false;
+    // Leash del comandante (ADR-041): area circolare da cui non esce. `leashRadius`
+    // 0 = nessun leash (le altre unità). Dentro il raggio si muove per difendersi;
+    // oltre, viene ricondotto verso `leashX/Z`. Non insegue e non cerca obiettivi.
+    float leashX = 0.0f, leashZ = 0.0f, leashRadius = 0.0f;
 
     float stuckTimer  = 0.0f;
     bool  stuckReported = false;   // telemetria: una WARN per episodio (ADR-016)

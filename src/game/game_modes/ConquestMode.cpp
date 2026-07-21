@@ -1,9 +1,11 @@
-#include "mini/game/game_modes/ConquestMode.hpp"
+﻿#include "mini/game/game_modes/ConquestMode.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
+#include "mini/game/data/GameplayBalance.hpp"   // ADR-043: degrado comunicazioni data-driven
 #include "mini/game/MapQuery.hpp"
 #include "mini/game/WeaponAttach.hpp"
 #include "mini/game/ClassResolve.hpp"   // ADR-022: unica fonte di "la classe vince"
 #include "mini/game/VehicleSpawn.hpp"
+#include "mini/game/StrategicTargets.hpp"
 #include "mini/ecs/components/HitboxComponent.hpp"
 #include "mini/ecs/Components.hpp"
 #include "mini/ecs/World.hpp"
@@ -342,16 +344,26 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
         .patrolBx       = info.pbx,
         .patrolBz       = info.pbz,
         .patrolSpeed    = info.patSpd,
+        .patrolRoute    = info.patrolRoute,   // ADR-028: segue la route autorata
+        .patrolSeg      = info.patrolSeg,
         .seekSpeed      = info.patSpd + 1.5f,
         .strafeTimer    = 1.4f,
         .strafeSign     = 1.0f,
         .stationary     = info.stationary
     };
+    // Leash del comandante (ADR-041): centro = punto di spawn, raggio autorato.
+    aic.leashRadius = info.leashRadius;
+    aic.leashX      = info.x;
+    aic.leashZ      = info.z;
 
     // Sosta ai waypoint: con i command post in mappa, l'AI resta nell'area
     // abbastanza a lungo da completare la cattura (dwell > capture_time).
     if (m_map && !m_map->commandPosts.empty())
         aic.patrolDwell = 12.0f;
+
+    // Personalità individuale (ADR-029): hash dell'entity id → [0,1). Due unità
+    // dello stesso profilo NON prendono più la stessa decisione.
+    aic.bias = (float)((e * 2654435761u) % 1024u) / 1024.0f;
 
     // ── Profilo AI: seekSpeed reale + salto/precisione/reazione ──────────
     if (m_registry && !info.aiProfileId.empty())
@@ -362,6 +374,7 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
             aic.jumpEnabled  = ap->jumpEnabled;
             aic.accuracy     = ap->accuracy;
             aic.reactionTime = ap->reactionTime;
+            aic.huntPatience = ap->huntTimeout;
 
             // Comportamento tattico (16_AiBehavior)
             aic.aggression      = ap->aggression;
@@ -460,10 +473,38 @@ void ConquestMode::checkDeaths(World& world)
         if (st.entity != 0 && !world.isValidEntity(st.entity))
         {
             telemetry::event(telemetry::Level::Info, "Objective", "strategic target destroyed",
-                             {{"label", st.label}});
+                             {{"label", st.label}, {"team", st.team},
+                              {"comms", st.isComms}});
             world.pushEvent("BERSAGLIO DISTRUTTO: " + st.label);
             st.entity = 0;
         }
+
+    // ── Rete di comunicazione (doc 34, ADR-038) ──────────────────────────
+    // Ricalcolata dalle torri ancora in piedi. NON blocca nulla: una fazione
+    // senza torre continua a combattere e a ricevere rimpiazzi, solo più piano e
+    // con informazioni più vecchie e più locali.
+    for (int team = 1; team <= 2; ++team)
+    {
+        auto& cs = world.comms[team];
+        if (!cs.hadTower) continue;   // nessuna torre autorata → comunicazione nominale
+
+        bool alive = false;
+        for (const auto& st : world.strategicTargets)
+            if (st.isComms && st.team == team && st.entity != 0
+                && world.isValidEntity(st.entity))
+            { alive = true; break; }
+
+        if (cs.towerAlive && !alive)   // transizione: conseguenza LEGGIBILE, una volta sola
+            world.pushEvent(team == 1
+                ? "Torre comunicazioni perduta: ordini e rinforzi rallentati"
+                : "Torre comunicazioni nemica distrutta: i droidi comunicano peggio");
+
+        cs.towerAlive     = alive;
+        cs.shareRangeMult = alive ? 1.0f : gameplay().commsLostRangeMult;
+        cs.shareDelay     = alive ? 0.0f : gameplay().commsLostShareDelay;
+        cs.orderPeriodMult= alive ? 1.0f : gameplay().commsLostOrderMult;
+        cs.reinforceMult  = alive ? 1.0f : gameplay().commsLostReinforceMult;
+    }
 
     auto it = m_trackedUnits.begin();
     while (it != m_trackedUnits.end())
@@ -498,12 +539,18 @@ void ConquestMode::checkDeaths(World& world)
                 // (rinforzi al fronte) è l'altra faccia del controllo territoriale.
                 const int foePosts = m_commandPosts.countOwnedBy(tpl.teamId == 1 ? 2 : 1);
                 entry.timer = respawnDelay * (1.0f + config::POST_RESPAWN_SLOW * foePosts);
+                // Rete di comunicazione (doc 34): senza torre i rimpiazzi TARDANO.
+                // Moltiplicatore, mai un blocco — la direttiva è "rallentare".
+                const float commsMult = world.comms[tpl.teamId].reinforceMult;
+                entry.timer *= commsMult;
                 m_respawnQueue.push_back(entry);
 
                 const char* team = (tpl.teamId == 1) ? "Alleato" : "Nemico";
                 std::cout << "[Respawn] " << team << " eliminato. Ticket rimasti: "
                           << tickets << " — respawn in " << entry.timer
-                          << "s (post nemici: " << foePosts << ")\n";
+                          << "s (post nemici: " << foePosts
+                          << (commsMult > 1.0f ? ", COMUNICAZIONI DEGRADATE" : "")
+                          << ")\n";
             }
             else
             {
@@ -622,13 +669,18 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                               const glm::mat4& weaponLocal = glm::mat4(1.0f),
                               const std::string& aiProfileId = "",
                               const std::vector<std::string>& abilityIds = {},
-                              bool respawns = true)
+                              bool respawns = true,
+                              int patrolRoute = -1, int patrolSeg = 0,
+                              float leashRadius = 0.0f)
     {
         RespawnEntry info;
         info.timer           = 0;
+        info.leashRadius     = leashRadius;   // ADR-041
         info.x = x; info.z = z;
         info.teamId          = team;
         info.respawns        = respawns;
+        info.patrolRoute     = patrolRoute;   // ADR-028
+        info.patrolSeg       = patrolSeg;
         info.mr = mr; info.mg = mg; info.mb = mb;
         info.br = br; info.bg = bg; info.bb = bb;
         info.hp              = hp;
@@ -662,7 +714,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     };
 
     // ── Posizioni generate attorno agli spawn point della mappa ───────────
-    struct UnitPos { float x, z, pax, paz, pbx, pbz; bool stat; };
+    struct UnitPos { float x, z, pax, paz, pbx, pbz; bool stat;
+                     int routeIdx = -1, segIdx = 0; };   // ADR-028
 
     // Base spawn: dal MapDef se disponibile, altrimenti default.
     float enemyBaseX = 0.0f, enemyBaseZ = -SPAWN_Z;
@@ -685,17 +738,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         const float dx = 3.5f, dz = 3.0f;
         const int   nPosts = m_map ? (int)m_map->commandPosts.size() : 0;
 
-        // Patrol route autorate (18_AiMapConsumption): se la mappa ne ha,
-        // le unità pattugliano segmenti consecutivi delle route (round-robin)
-        // invece dei waypoint procedurali verso i post. Limite documentato:
-        // AiComponent ha due waypoint → un segmento per unità.
-        struct Seg { float ax, az, bx, bz; };
-        std::vector<Seg> routeSegs;
-        if (m_map)
-            for (const auto& r : m_map->patrolRoutes)
-                for (size_t k = 0; k + 1 < r.points.size(); ++k)
-                    routeSegs.push_back({r.points[k][0],   r.points[k][2],
-                                         r.points[k+1][0], r.points[k+1][2]});
+        // Patrol route autorate (18_AiMapConsumption + ADR-028): a ogni unità si
+        // assegna una ROUTE INTERA (round-robin) e un segmento di PARTENZA diverso,
+        // così le unità si distribuiscono lungo il tracciato invece di ammassarsi.
+        // Da lì AiSystem le fa avanzare di segmento in segmento (advancePatrol):
+        // la pattuglia percorre davvero il percorso, non un solo tratto.
+        const int nRoutes = m_map ? (int)m_map->patrolRoutes.size() : 0;
 
         for (int i = 0; i < count; ++i)
         {
@@ -708,13 +756,26 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
             UnitPos p;
             p.x = x;  p.z = z;
-            if (!routeSegs.empty())
+            // Una PARTE della forza va in pattuglia sulle route autorate (presidio
+            // del territorio), il resto resta "forza di manovra" senza route: è
+            // quella che il Droide Tattico dirige sull'obiettivo (ADR-024/028).
+            // Senza questa divisione una direttiva del comandante annullerebbe TUTTE
+            // le route (i percorsi autorati non verrebbero mai percorsi), oppure —
+            // dando la route a tutti — il comandante non dirigerebbe più nessuno.
+            if (nRoutes > 0 && (i % 2) == 0)
             {
-                const Seg& s = routeSegs[i % (int)routeSegs.size()];
-                p.pax = s.ax; p.paz = s.az;
-                p.pbx = s.bx; p.pbz = s.bz;
+                const int ri = (i / 2) % nRoutes;
+                const auto& pts = m_map->patrolRoutes[ri].points;
+                const int segCount = (int)pts.size() - 1;
+                if (segCount > 0)
+                {
+                    const int si = (i / (2 * nRoutes)) % segCount;
+                    p.routeIdx = ri; p.segIdx = si;
+                    p.pax = pts[si][0];       p.paz = pts[si][2];
+                    p.pbx = pts[si + 1][0];   p.pbz = pts[si + 1][2];
+                }
             }
-            else if (nPosts > 0)
+            if (p.routeIdx < 0 && nPosts > 0)
             {
                 const auto& cp = m_map->commandPosts[i % nPosts];
                 p.pax = x;
@@ -723,7 +784,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                 p.pbx = cp.x + (float)((i % 3) - 1) * 2.0f;
                 p.pbz = cp.z + ((i % 2) ? 1.8f : -1.8f);
             }
-            else
+            else if (p.routeIdx < 0)
             {
                 p.pax = x - 1.5f; p.paz = z;
                 p.pbx = x + 1.5f; p.pbz = z;
@@ -760,7 +821,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                resolved.meshPath,
                resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
                resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
-               resolved.abilityIds);
+               resolved.abilityIds, /*respawns=*/true, p.routeIdx, p.segIdx);
     }
 
     // ── Comandante strategico (ADR-024, doc 32): UNO per mappa ───────────────
@@ -776,6 +837,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
             float cx = md->commander.x, cz = md->commander.z;
             mapquery::findFreeSpot(m_map, cx, cz, 0.0f, +1.0f, 0.45f, 0.5f, 0.45f);
 
+            // Leash (ADR-041): con un raggio autorato il comandante NON è più fermo
+            // — si muove per difendersi entro il raggio, ma non ne esce. Senza
+            // raggio (0) resta `stationary` come prima (retrocompatibile).
+            const float leash = md->commander.leashRadius;
+            const bool  frozen = (leash <= 0.0f);
+
             const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, cmdrId, 2);
             EnemyDef cmdrEff;
             auto wa = weaponattach::resolve(registry, m_meshCache,
@@ -784,14 +851,15 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                    resolved.mr, resolved.mg, resolved.mb,
                    resolved.br, resolved.bg, resolved.bb,
                    resolved.hp,
-                   cx, cz, cx, cz,                       // waypoint = sua posizione (è stationary)
+                   cx, cz, cx, cz,                       // "casa" = sua posizione (leash o fermo)
                    resolved.moveSpeed, resolved.interval, resolved.range,
-                   resolved.hitboxProfileId, /*stationary=*/true,
+                   resolved.hitboxProfileId, /*stationary=*/frozen,
                    resolved.bulletSpeed, resolved.bulletDamage, resolved.bulletLifetime,
                    resolved.meshPath,
                    resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
                    resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
-                   resolved.abilityIds, /*respawns=*/false);   // uno per mappa: non rinasce
+                   resolved.abilityIds, /*respawns=*/false,   // uno per mappa: non rinasce
+                   /*patrolRoute=*/-1, /*patrolSeg=*/0, /*leashRadius=*/leash);
         }
     }
 
@@ -837,7 +905,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                        resolved.meshPath,
                        resolved.meshRotX, resolved.meshRotY, resolved.meshScale,
                        resolved.weaponId, wa.mesh, wa.local, resolved.aiProfileId,
-                       resolved.abilityIds);
+                       resolved.abilityIds, /*respawns=*/true, p.routeIdx, p.segIdx);
     }
 
     // ── Geometria ─────────────────────────────────────────────────────────
@@ -891,54 +959,12 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     if (map)
         m_commandPosts.init(world, map->commandPosts, mesh, tex);
 
-    // ── Bersagli strategici distruttibili (doc 25, DestroyTarget) ─────────
-    // Struttura statica di team 2: colpibile da giocatore e alleati, niente AI
-    // (non spara). Distruggerla completa un obiettivo DestroyTarget e ne scatena
-    // la conseguenza. La mailbox entità→label lascia l'ObjectiveSystem agnostico.
-    world.strategicTargets.clear();
-    if (map && registry)
-    {
-        for (const auto& t : map->strategicTargets)
-        {
-            const float gy = mapquery::groundHeightAt(map, t.x, t.z);
-            EntityId e = world.createEntity();
+    // ── Bersagli strategici distruttibili (doc 25/34/35) ─────────────────
+    // Helper CONDIVISO (structures::spawnAll): la stessa struttura deve nascere
+    // identica in ogni mode — viveva solo qui, e infatti in sandbox le torri
+    // della mappa non comparivano affatto (segnalato dall'utente).
+    structures::spawnAll(world, map, registry, mesh, tex, m_meshCache);
 
-            Mesh* useMesh = mesh;   // box di fallback
-            if (m_meshCache && !t.meshPath.empty())
-            {
-                auto it = m_meshCache->find(t.meshPath);
-                if (it != m_meshCache->end()) useMesh = it->second;
-            }
-            const bool box = (useMesh == mesh);
-            // Fallback box: dimensione FISSA visibile (2.5 m), scala uniforme così
-            // la hitbox (che usa sx) resta coerente. Mesh reale: usa meshScale.
-            const float sc = box ? 2.5f
-                                 : ((t.meshScale > 0.0001f) ? t.meshScale : 1.0f);
-            world.addTransform(e, {t.x, gy, t.z, 0, 0, 0, sc, sc, sc});
-            world.addTeam(e, {2});
-            world.addHealth(e, {t.hp, t.hp});
-
-            MeshRendererComponent mrc;
-            mrc.mesh = useMesh; mrc.texture = tex;
-            mrc.r = t.color[0]; mrc.g = t.color[1]; mrc.b = t.color[2];
-            // Grounding: il cubo di fallback è centrato (±0.5), quindi va alzato di
-            // mezza altezza (0.5·scala) perché la base tocchi il suolo — NON floti.
-            // La hitbox sintetica usa lo stesso meshOffsetY → resta allineata.
-            // Mesh reale (base a Y=0, come i GLB): nessun offset.
-            mrc.meshOffsetY = box ? (0.5f * sc) : 0.0f;
-            world.addMeshRenderer(e, mrc);
-
-            if (const auto* hp = registry->getHitboxProfile("__strategic_target"))
-                world.addHitbox(e, HitboxComponent{hp});
-
-            world.strategicTargets.push_back({e, t.label});
-            std::cout << "[ConquestMode] Bersaglio strategico '" << t.label
-                      << "' (hp " << (int)t.hp << ") a (" << t.x << ", " << t.z << ")\n";
-            telemetry::event(telemetry::Level::Info, "Objective", "strategic target spawned",
-                             {{"label", t.label}, {"hp", t.hp},
-                              {"x", t.x}, {"z", t.z}});
-        }
-    }
 
     // ── Veicoli in mappa (19_Vehicles, helper condiviso — R6) ────────────
     // Il tracker li fa respawnare al loro spawn quando distrutti (Fase B).
