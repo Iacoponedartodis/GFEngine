@@ -115,6 +115,14 @@ unset(CMAKE_POLICY_VERSION_MINIMUM)
 # ── Sanitizers (opt-in: rallentano molto, non per il playtest) ────────────────
 # MSVC supporta solo ASan (/fsanitize=address); UBSan NON esiste su MSVC.
 option(GF_ENABLE_ASAN "Abilita AddressSanitizer (e UBSan dove supportato)" OFF)
+if(GF_ENABLE_ASAN AND MSVC)
+    # MSVC aggiunge /RTC1 di default nella config Debug, ma /RTC è INCOMPATIBILE con
+    # /fsanitize=address (errore di configurazione/compilazione). Lo si toglie dai
+    # flag Debug quando ASan è attivo. NB: serve anche il componente "C++
+    # AddressSanitizer" installato dal Visual Studio Installer (fornisce clang_rt.asan).
+    string(REGEX REPLACE "/RTC[1csu]+" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    string(REGEX REPLACE "/RTC[1csu]+" "" CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG}")
+endif()
 function(gf_apply_sanitizers target)
     if(NOT GF_ENABLE_ASAN)
         return()

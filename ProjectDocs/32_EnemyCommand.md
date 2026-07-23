@@ -52,8 +52,9 @@ cloni via SquadSystem). Il Droide Tattico riempie entrambi i vuoti con **una** m
   unico al posto delle singole AI, l'opposto della filosofia "AI semplici in un mondo intelligente".
 - **Conseguenza leggibile**: alla morte del comandante, messaggio nel feed ("i droidi perdono
   coordinamento") + ritorno alla pattuglia.
-- **Contenuto**: il Droide Tattico è una **classe** sul corpo `B1 Battle Droid` (tinta scura,
-  hp_mult 1.5, ability `Tactical Command` + `Shield`), piazzato in `firebase.commander` (retrovie).
+- **Contenuto**: il Droide Tattico è un **`CommanderDef`** (ADR-044, `data/commanders/tactical_droid.json`)
+  — **non più una classe** — con corpo `base_entity: B1 Battle Droid` (tinta scura, hp 120, arma di
+  autodifesa E5, ability `Tactical Command` + `Shield`), piazzato in `firebase.commander` (retrovie).
 
 ## v2 IMPLEMENTATA (2026-07-21, ADR-042) — più fronti, stance per-settore
 `enemyCommand` è ora una **lista di direttive** (`Directive{x,z,radius,stance,weight,label}`). Il
@@ -115,4 +116,5 @@ La ristrutturazione del comandante come **entità a sé** con spawn e leash auto
 - **World mailbox** `commandPostStates` (owner per post) + `activeMap->commandPosts` (posizioni per
   label): la fonte di "situazione" che il comandante osserva; `enemyCommand` è il canale d'uscita.
 - **ADR-020 / doc 26** (comando del giocatore): il modello concettuale di cui questa è la controparte.
-- **ADR-023** (classe su corpo): il Droide Tattico è una classe, non un'entità.
+- **ADR-044** (CommanderDef): il Droide Tattico è un tipo proprio (`data/commanders/`), fuori dal
+  sistema classi; riusa un `base_entity` per il corpo (ADR-023 vale per il corpo, non per il tipo).

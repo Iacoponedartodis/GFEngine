@@ -1,0 +1,18 @@
+{
+    "abilities": [
+        "Tactical Command"
+    ],
+    "ai_profile": "Tactical Droid",
+    "base_entity": "B1 Battle Droid",
+    "color_mult": [
+        0.15000000596046448,
+        0.10000000149011612,
+        0.02500000037252903
+    ],
+    "hp": 120.0,
+    "mesh_scale": 1.0,
+    "name": "Droide Tattico serie T",
+    "self_defense_weapon": "E5 Blaster Rifle",
+    "speed_mult": 0.8999999761581421,
+    "team": 2
+}

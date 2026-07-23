@@ -28,6 +28,14 @@ void SandboxMenu::setMaps(const std::vector<std::pair<std::string, std::string>>
     if (m_mapSel >= (int)m_maps.size()) m_mapSel = 0;
 }
 
+// Seleziona una mappa per id (usato da `--map <id>`: senza, il sandbox partiva
+// dalla mappa all'indice 0 — arbitraria — ignorando il flag CLI).
+void SandboxMenu::selectMapById(const std::string& id)
+{
+    for (int i = 0; i < (int)m_maps.size(); ++i)
+        if (m_maps[i].first == id) { m_mapSel = i; return; }
+}
+
 const std::string& SandboxMenu::selectedMapId() const
 {
     static const std::string fallback = "firebase";

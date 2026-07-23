@@ -362,6 +362,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 t.label     = gets(st, "label", "Bersaglio");
                 t.x         = getf(st, "x", 0.0f);
                 t.z         = getf(st, "z", 0.0f);
+                t.y         = getf(st, "y", 0.0f);   // altezza sopra il suolo (0 = a terra)
                 t.ry        = getf(st, "ry", 0.0f);
                 t.hp        = getf(st, "hp", 300.0f);
                 t.team      = geti(st, "team", 2);
@@ -757,6 +758,35 @@ bool parseMissionRule(const std::string& s, MissionRule& out)
 
 } // namespace
 
+void DefinitionRegistry::loadCommanders(const std::string& dir)
+{
+    fs::path folder = dir + "/commanders";
+    if (!fs::exists(folder)) return;
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        CommanderDef c;
+        c.id                = entry.path().stem().string();   // ADR-001
+        c.name              = gets(*j, "name", c.id);
+        c.baseEntity        = gets(*j, "base_entity");
+        c.selfDefenseWeapon = gets(*j, "self_defense_weapon");
+        c.aiProfile         = gets(*j, "ai_profile");
+        c.abilities         = getStrArray(*j, "abilities");
+        c.hp                = getf(*j, "hp", 120.0f);
+        c.speedMult         = getf(*j, "speed_mult", 0.9f);
+        c.meshScale         = getf(*j, "mesh_scale", 1.0f);
+        c.colorMult         = getColor(*j, "color_mult", {1.0f, 1.0f, 1.0f});
+        c.team              = geti(*j, "team", 2);
+        if (c.team != 1 && c.team != 2) c.team = 2;
+        noteUnknownKeys(*j, "commanders/" + c.id + ".json",
+            {"name","base_entity","self_defense_weapon","ai_profile","abilities",
+             "hp","speed_mult","mesh_scale","color_mult","team","description"}, m_unknownKeys);
+        std::cout << "[Registry] Commander: " << c.id << "\n";
+        m_commanders[c.id] = std::move(c);
+    }
+}
+
 void DefinitionRegistry::loadClasses(const std::string& dir)
 {
     fs::path folder = dir + "/classes";
@@ -889,6 +919,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     m_hitboxProfiles.clear();
     m_playerDefs.clear();
     m_vehicles.clear();
+    m_commanders.clear();
     m_loaded = false;
 
     std::cout << "[Registry] Caricamento definizioni da '" << dataRoot << "'...\n";
@@ -903,6 +934,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadPlayerDefs(dataRoot);
     loadVehicles(dataRoot);
     loadClasses(dataRoot);
+    loadCommanders(dataRoot);   // ADR-044: dopo classi/entità (riusa baseEntity)
     loadObjectives(dataRoot);
     loadMissions(dataRoot);
 
@@ -933,6 +965,7 @@ GETTER(m_vehicles,       VehicleDef,       getVehicle)
 GETTER(m_hitboxProfiles, HitboxProfile,    getHitboxProfile)
 GETTER(m_playerDefs,     PlayerDef,        getPlayerDef)
 GETTER(m_classes,        ClassDef,         getClass)
+GETTER(m_commanders,     CommanderDef,     getCommander)
 GETTER(m_objectives,     ObjectiveDef,     getObjective)
 GETTER(m_missions,       MissionDef,       getMission)
 #undef GETTER

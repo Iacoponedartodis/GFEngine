@@ -234,7 +234,12 @@ struct CommandPostDef
 struct StrategicTargetDef
 {
     std::string label = "Bersaglio";
-    float x = 0, z = 0;          // posizione (y = suolo della mappa)
+    float x = 0, z = 0;          // posizione XZ
+    // Altezza sopra il suolo (m). 0 = appoggiata a terra (comportamento storico,
+    // retro-compatibile). >0 = struttura ALZATA (es. torre su una piattaforma):
+    // il game mode la piazza a `groundHeightAt(x,z) + y`. È efficace perché la
+    // struttura è STATICA (a differenza di un'unità, che cadrebbe per gravità).
+    float y = 0.0f;
     float ry = 0.0f;             // rotazione attorno a Y (gradi)
     float hp = 300.0f;           // resistenza: si distrugge a fuoco
     // Fazione proprietaria: prima era CABLATA a 2, quindi una struttura dei
@@ -382,9 +387,33 @@ struct DangerZoneDef
 // (`enemy_types` ne spawnerebbe molti come truppa): è un'unità SINGOLA, piazzata
 // in una posizione protetta nelle retrovie, che dirige i droidi (World::enemyCommand)
 // e si difende soltanto (spawna stationary). `unit` vuoto = nessun comandante.
+// ── CommanderDef (ADR-044): il comandante NON è una classe ─────────────────
+// Il Droide Tattico non è una professione istanziabile (ADR-023): è un'unità
+// UNICA a ruolo strategico — non combatte (si difende soltanto), sta al sicuro,
+// dà ordini, e ucciderlo ha una conseguenza (come una torre). Vive quindi in una
+// definizione propria (`data/commanders/<id>.json`), fuori dal roster delle
+// classi giocabili. Riusa un `baseEntity` per il CORPO (mesh/hitbox/proiettile),
+// applicandovi sopra i propri override; il `CommanderComponent` è implicito (non
+// serve un'ability "command"). data/commanders/<id>.json
+struct CommanderDef
+{
+    std::string id;
+    std::string name;
+    std::string baseEntity;          // corpo (EnemyDef): mesh, hitbox, proiettile
+    std::string selfDefenseWeapon;   // arma per difendersi se attaccato
+    std::string aiProfile;           // profilo AI (di norma poco aggressivo)
+    std::vector<std::string> abilities;  // deve includerne una di tipo "command"
+                                         // (→ CommanderComponent); es. anche "Shield"
+    float hp        = 120.0f;         // ASSOLUTI (non un moltiplicatore): è un obiettivo
+    float speedMult = 0.9f;           // sul corpo base (si muove poco, nel leash)
+    float meshScale = 1.0f;
+    std::array<float,3> colorMult = {1.0f, 1.0f, 1.0f};   // tinta sul corpo
+    int   team      = 2;             // 1 Repubblica / 2 Separatisti
+};
+
 struct CommanderSpawnDef
 {
-    std::string unit;            // id classe/entità (di norma una classe con ability "command")
+    std::string unit;            // id CommanderDef (nuovo) o classe legacy (fallback)
     float x = 0.0f, z = 0.0f;    // posizione strategica nelle retrovie (XZ)
     // Raggio di LEASH (ADR-041): area circolare da cui il comandante non esce. Si
     // muove al suo interno per difendersi/coprirsi, mai fuori. 0 = fermo sul posto

@@ -19,6 +19,17 @@ void Ui2D::begin() const
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Il sistema di coordinate 2D DEVE combaciare col viewport GL reale, non con
+    // la dimensione di creazione della finestra: in fullscreen il drawable cresce
+    // (es. 1280×720 → 1920×1080) mentre `m_w/m_h` restavano 1280×720. L'UI si
+    // stirava a schermo (sembrava ok) ma il MOUSE arriva in pixel reali → click e
+    // hover sfasati del rapporto di scala (segnalato 2026-07-21). Sincronizzando
+    // qui, coordinate UI == pixel finestra == coordinate del mouse. `width()/
+    // height()` (letti dopo begin()) tornano quindi il valore giusto.
+    GLint vp[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    if (vp[2] > 0 && vp[3] > 0) { m_w = vp[2]; m_h = vp[3]; }
+
     glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
     glOrtho(0.0, m_w, m_h, 0.0, -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity();

@@ -24,6 +24,7 @@ public:
 
     void setWeapons(const std::vector<std::pair<std::string, std::string>>& idName);
     void setMaps   (const std::vector<std::pair<std::string, std::string>>& idName);
+    void selectMapById(const std::string& id);   // sincronizza col flag --map
     [[nodiscard]] const std::string& selectedWeaponId() const;
     [[nodiscard]] const std::string& selectedMapId() const;
     [[nodiscard]] int weaponSlot() const { return m_weaponSlot; } // 0 primaria, 1 secondaria

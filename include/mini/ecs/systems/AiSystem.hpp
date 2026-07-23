@@ -40,7 +40,10 @@ private:
     // dall'ordine di iterazione) e va a coprire il punto d'avanzata usando il
     // grafo `positionCovers`. È il consumo esplicito del grafo, accanto
     // all'overwatch emergente (ADR-035) che resta.
-    struct Advance { int coveredIdx; int team; float x, z; };
+    // `ttl`: l'avanzata resta leggibile per l'overwatch per la durata della
+    // manovra (~5 s), non un solo tick — altrimenti il segnale (raro) e la
+    // valutazione di chi copre (sparsa) non coincidono quasi mai (ADR-032).
+    struct Advance { int coveredIdx; int team; float x, z; float ttl; };
     std::vector<Advance> m_advances, m_advancesPrev;
 };
 

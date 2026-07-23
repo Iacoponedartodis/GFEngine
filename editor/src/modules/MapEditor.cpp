@@ -50,15 +50,15 @@ MapEditor::MapEditor()
                     m_vehicleIds.push_back(entry.path().stem().string());
         std::sort(m_vehicleIds.begin(), m_vehicleIds.end());
     }
-    // Classi per il combo del comandante (id = filename stem, ADR-001/041)
+    // CommanderDef per il combo del comandante (ADR-044: fuori dalle classi)
     {
         std::error_code ec;
-        fs::path folder = fs::path(getDataDir()) / "classes";
+        fs::path folder = fs::path(getDataDir()) / "commanders";
         if (fs::exists(folder, ec))
             for (auto& entry : fs::directory_iterator(folder, ec))
                 if (entry.path().extension() == ".json")
-                    m_classIds.push_back(entry.path().stem().string());
-        std::sort(m_classIds.begin(), m_classIds.end());
+                    m_commanderIds.push_back(entry.path().stem().string());
+        std::sort(m_commanderIds.begin(), m_commanderIds.end());
     }
 
     loadMaps();
@@ -117,7 +117,8 @@ void MapEditor::tick(float dt)
                  && (-500 - m_selBox) < (int)m_targets.size())
         {
             auto& t = m_targets[-500 - m_selBox];
-            t.x += delta.x; t.z += delta.z;
+            t.x += delta.x; t.y += delta.y; t.z += delta.z;
+            if (t.y < 0.0f) t.y = 0.0f;   // non sotto il suolo
         }
         else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
         {
@@ -263,6 +264,13 @@ void MapEditor::loadMap(const std::string& id)
 
     m_mapId      = id;
     m_mapJsonPath = it->path;
+    // Nome visualizzato (campo `name`): è ciò che partita/sandbox MOSTRANO, ed è
+    // separato dall'id/filename. Fallback = id (come fa il runtime).
+    {
+        std::string nm = j.value("name", id);
+        std::strncpy(m_mapDisplayName, nm.c_str(), sizeof(m_mapDisplayName) - 1);
+        m_mapDisplayName[sizeof(m_mapDisplayName) - 1] = '\0';
+    }
     m_boxes.clear();
     m_posts.clear();
     m_positions.clear();
@@ -344,6 +352,7 @@ void MapEditor::loadMap(const std::string& id)
             std::strncpy(t.label, lbl.c_str(), sizeof(t.label) - 1);
             t.x  = st.value("x", 0.f);
             t.z  = st.value("z", 0.f);
+            t.y  = st.value("y", 0.f);   // altezza sopra il suolo (0 = a terra)
             t.hp = st.value("hp", 300.f);
             t.ry    = st.value("ry", 0.f);
             t.team  = st.value("team", 2);
@@ -453,6 +462,9 @@ bool MapEditor::saveMap()
     // saveJsonRMW (ADR-010): unico canale di scrittura JSON dell'editor.
     return editor::jsonsave::saveJsonRMW(m_mapJsonPath, [&](json& j) {
     j.erase("id"); // deprecato: id = nome file (ADR-001)
+    // Nome visualizzato: se vuoto usa l'id, così il campo non resta un residuo
+    // vecchio (era la causa del "il rename non cambia il nome", 2026-07-21).
+    j["name"] = (m_mapDisplayName[0] != '\0') ? std::string(m_mapDisplayName) : m_mapId;
     j["spawn_team1"] = {m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]};
     j["spawn_team2"] = {m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]};
 
@@ -503,6 +515,7 @@ bool MapEditor::saveMap()
         json st;
         st["label"] = t.label;
         st["x"] = t.x;  st["z"] = t.z;
+        st["y"] = t.y;                  // altezza sopra il suolo (0 = a terra)
         st["hp"] = t.hp;
         st["ry"]         = t.ry;
         st["team"]       = t.team;
@@ -595,8 +608,9 @@ bool MapEditor::saveMap()
 void MapEditor::addBox()
 {
     BoxEntry b;
-    // Posiziona al centro della scena
-    b.x = 0; b.y = 1.0f; b.z = 0;
+    // Nasce davanti alla camera (dove stai guardando), non al centro mappa.
+    const glm::vec3 fp = m_viewport.groundFocusPoint();
+    b.x = snap(fp.x); b.y = 1.0f; b.z = snap(fp.z);
     std::strncpy(b.type, "wall", sizeof(b.type) - 1);
     std::strncpy(b.label, "Nuovo Box", sizeof(b.label) - 1);
     m_boxes.push_back(b);
@@ -614,6 +628,82 @@ void MapEditor::duplicateBox(int idx)
     m_boxes.insert(m_boxes.begin() + idx + 1, b);
     m_selBox = idx + 1;
     m_dirty  = true;
+    updateViewport();
+}
+
+// ── duplicateSelected (F4, doc 39) ────────────────────────────────────────────
+// Duplica l'elemento selezionato QUALUNQUE sia il tipo, copiando TUTTI i campi
+// autorati (ruolo/arco/gittata di una posizione, raggio di un settore, ecc.):
+// l'authoring dei metadata era laborioso perché ogni nuovo elemento partiva dai
+// default e andava ri-regolato. Ora si autora una volta e si duplica in serie.
+// Copia spostata di +2 in XZ per non sovrapporre. Spawn e comandante (unici) no.
+void MapEditor::duplicateSelected()
+{
+    const float off = 2.0f;
+    if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+    { duplicateBox(m_selBox); return; }
+    else if (m_selBox <= -10 && m_selBox > -100)
+    {
+        int i = -10 - m_selBox;
+        if (i < 0 || i >= (int)m_posts.size()) return;
+        PostEntry p = m_posts[i]; p.x += off; p.z += off;
+        m_posts.push_back(p);
+        m_selBox = -10 - ((int)m_posts.size() - 1);
+    }
+    else if (m_selBox <= -200 && m_selBox > -300)
+    {
+        int i = -200 - m_selBox;
+        if (i < 0 || i >= (int)m_dangers.size()) return;
+        DangerEntry d = m_dangers[i]; d.x += off; d.z += off;
+        m_dangers.push_back(d);
+        m_selBox = -200 - ((int)m_dangers.size() - 1);
+    }
+    else if (m_selBox <= -300 && m_selBox > -400)
+    {
+        int i = -300 - m_selBox;
+        if (i < 0 || i >= (int)m_routes.size()) return;
+        RouteEntry r = m_routes[i];
+        std::snprintf(r.id, sizeof(r.id), "route_%d", (int)m_routes.size() + 1);
+        for (auto& pt : r.points) { pt[0] += off; pt[2] += off; }
+        m_routes.push_back(std::move(r));
+        m_selBox = -300 - ((int)m_routes.size() - 1);
+        m_selRoutePt = 0;
+    }
+    else if (m_selBox <= -400 && m_selBox > -500)
+    {
+        int i = -400 - m_selBox;
+        if (i < 0 || i >= (int)m_vehSpawns.size()) return;
+        VehicleSpawnEntry v = m_vehSpawns[i]; v.x += off; v.z += off;
+        m_vehSpawns.push_back(v);
+        m_selBox = -400 - ((int)m_vehSpawns.size() - 1);
+    }
+    else if (m_selBox <= -500 && m_selBox > -1000)
+    {
+        int i = -500 - m_selBox;
+        if (i < 0 || i >= (int)m_targets.size()) return;
+        TargetEntry t = m_targets[i]; t.x += off; t.z += off;
+        m_targets.push_back(t);
+        m_selBox = -500 - ((int)m_targets.size() - 1);
+    }
+    else if (m_selBox <= -1000 && m_selBox > -2000)
+    {
+        int i = -1000 - m_selBox;
+        if (i < 0 || i >= (int)m_positions.size()) return;
+        PositionEntry p = m_positions[i]; p.x += off; p.z += off;
+        m_positions.push_back(p);
+        m_selBox = -1000 - ((int)m_positions.size() - 1);
+    }
+    else if (m_selBox <= -2000)
+    {
+        int i = -2000 - m_selBox;
+        if (i < 0 || i >= (int)m_sectors.size()) return;
+        SectorEntry s = m_sectors[i]; s.x += off; s.z += off;
+        m_sectors.push_back(s);
+        m_selBox = -2000 - ((int)m_sectors.size() - 1);
+    }
+    else return;   // spawn team1/2 e comandante: unici, non duplicabili
+
+    m_dirty = true;
     updateViewport();
 }
 
@@ -769,7 +859,8 @@ void MapEditor::updateViewport()
         const auto& t = m_targets[i];
         const float sc = 2.5f * ((t.scale > 0.0001f) ? t.scale : 1.0f);
         FreeCameraViewport::MapBoxDraw s;
-        s.x = t.x; s.y = sc * 0.5f; s.z = t.z; s.ry = t.ry;
+        // Base a `t.y` sopra il suolo (0 = a terra); +mezza altezza per centrare il box.
+        s.x = t.x; s.y = t.y + sc * 0.5f; s.z = t.z; s.ry = t.ry;
         s.sx = sc; s.sy = sc; s.sz = sc;
         s.r = 0.85f; s.g = 0.55f; s.b = 0.15f;
         s.selected = (m_selBox == -500 - i);
@@ -988,7 +1079,7 @@ void MapEditor::updateViewport()
              && (-500 - m_selBox) < (int)m_targets.size())
     {
         const auto& t = m_targets[-500 - m_selBox];
-        m_viewport.setGizmoTarget({t.x, 1.25f, t.z}, true);
+        m_viewport.setGizmoTarget({t.x, t.y + 1.25f, t.z}, true);
         m_viewport.setGizmoRotAxes(false, true, false);   // orientamento struttura
         m_viewport.setGizmoCanRotateScale(true, true);    // ruota → ry, scala → scale
     }
@@ -1060,7 +1151,10 @@ void MapEditor::draw()
 // ── drawToolbar ───────────────────────────────────────────────────────────────
 void MapEditor::drawToolbar()
 {
-    // Selettore mappa
+    // Selettore mappa. La CREAZIONE di una nuova mappa sta in coda a questa lista
+    // (voce "＋ Nuova mappa…" → popup di conferma), non come pulsante sciolto sulla
+    // toolbar: la barra era satura e tagliava comandi ([[ui-no-clipping-use-dropdowns]]).
+    bool openNewMapPopup = false;
     ImGui::SetNextItemWidth(140.0f);
     if (ImGui::BeginCombo("##mapsel", m_mapId.empty() ? "-- nessuna --" : m_mapId.c_str()))
     {
@@ -1071,9 +1165,13 @@ void MapEditor::drawToolbar()
                 loadMap(me.id);
             if (sel) ImGui::SetItemDefaultFocus();
         }
+        ImGui::Separator();
+        if (ImGui::Selectable("+ Nuova mappa..."))
+            openNewMapPopup = true;
         ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mappa corrente");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Mappa corrente (in coda: crea una mappa nuova)");
+    if (openNewMapPopup) ImGui::OpenPopup("Nuova mappa");
 
     ImGui::SameLine();
     if (m_dirty) ImGui::TextColored({1.0f,0.7f,0.2f,1.0f}, "*");
@@ -1088,10 +1186,28 @@ void MapEditor::drawToolbar()
     ImGui::SameLine();
     if (ImGui::Button("+ Box"))         addBox();
     ImGui::SameLine();
-    if (ImGui::Button("Duplica") && m_selBox >= 0) duplicateBox(m_selBox);
+    if (ImGui::Button("Duplica")) duplicateSelected();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Duplica l'elemento selezionato (box, posizione, settore,\n"
+                          "pericolo, bersaglio, post, percorso, veicolo) con TUTTI i\n"
+                          "suoi valori. Autora una volta, posane una serie.");
     ImGui::SameLine();
     if (ImGui::Button("Elimina") && m_selBox >= 0) {
         ImGui::OpenPopup("##del_confirm");
+    }
+
+    // ── Nome visualizzato (campo `name`, ciò che si vede in partita/sandbox) ─
+    if (!m_mapId.empty())
+    {
+        ImGui::SameLine(0, 16);
+        ImGui::TextUnformatted("Nome:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(130.0f);
+        if (ImGui::InputText("##mapname", m_mapDisplayName, sizeof(m_mapDisplayName)))
+            m_dirty = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Nome mostrato in partita e sandbox (campo 'name').\n"
+                              "Distinto dall'id/filename. Ricordati di Salvare.");
     }
 
     // ── Rinomina mappa (ADR-010) ─────────────────────────────────────────
@@ -1113,8 +1229,14 @@ void MapEditor::drawToolbar()
             {
                 std::string newId = renameBuf;
                 renameBuf[0] = '\0';
+                // Il rename cambia filename/id; sincronizza anche il nome
+                // MOSTRATO (campo `name`) col nuovo id, così partita e sandbox non
+                // continuano a far vedere quello vecchio (segnalato 2026-07-21).
+                editor::jsonsave::saveJsonRMW(
+                    getDataDir() + "/maps/" + newId + ".json",
+                    [&](nlohmann::json& j) { j["name"] = newId; return true; });
                 loadMaps();
-                loadMap(newId);
+                loadMap(newId);   // ricarica → m_mapDisplayName = nuovo name
             }
         }
         if (!renameErr.empty())
@@ -1147,31 +1269,19 @@ void MapEditor::drawToolbar()
     if (m_showNavmesh) { updateViewport(); } // aggiorna colori floor
 
     ImGui::SameLine(0, 16);
-    ImGui::TextDisabled("|");
-    ImGui::SameLine(0, 16);
-    // Modalità gizmo, PER TIPO di selezione. Prima Ruota/Scala erano abilitati
-    // solo sui box della geometria (`boxSel, boxSel`): su un bersaglio strategico
-    // i pulsanti restavano grigi e la modalità ricadeva su Sposta, quindi ruota e
-    // scala risultavano semplicemente assenti (segnalato dall'utente).
-    // Ogni tipo dichiara cosa sa fare, coerentemente con i gizmo gestiti in tick().
-    bool canRot = false, canSca = false;
-    if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
-    { canRot = true;  canSca = true; }                       // box: ry + dimensioni
-    else if (m_selBox <= -500 && m_selBox > -1000)
-    { canRot = true;  canSca = true; }                       // bersaglio: ry + scala
-    else if (m_selBox <= -400 && m_selBox > -500)
-    { canRot = true;  canSca = false; }                      // spawn veicolo: solo ry
-    else if (m_selBox <= -1000 && m_selBox > -2000)
-    { canRot = true;  canSca = false; }                      // posizione tattica: facing
-    else if (m_selBox <= -2000)
-    { canRot = false; canSca = true; }                       // settore: raggio
-    else if (m_selBox <= -10 && m_selBox > -100)
-    { canRot = false; canSca = true; }                       // command post: raggio
-    else if (m_selBox <= -200 && m_selBox > -300)
-    { canRot = false; canSca = true; }                       // danger zone: raggio
-    else if (m_selBox == kSelCommander)
-    { canRot = false; canSca = true; }                       // comandante: raggio leash
-    editor::ui::gizmoModeBar(m_viewport, canRot, canSca);
+    {
+        bool solid = m_viewport.showSolid();
+        if (ImGui::Checkbox("Solido", &solid)) m_viewport.setShowSolid(solid);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Facce piene oltre al wireframe: rende visibili le\n"
+                              "superfici (muri, piattaforme, cover). Off = solo linee.");
+    }
+
+    // NB: i pulsanti modalità gizmo (Sposta/Ruota/Scala) NON stanno più qui: sono
+    // l'overlay in alto a sinistra della viewport (FreeCameraViewport::drawGizmoOverlay),
+    // che appare quando selezioni un oggetto. Erano un duplicato che saturava la
+    // toolbar ([[ui-no-clipping-use-dropdowns]]). Le capacità ruota/scala per tipo di
+    // selezione le imposta updateViewport() via setGizmoCanRotateScale, ogni frame.
 
     // Popups
     if (ImGui::BeginPopup("##saved_ok")) {
@@ -1184,6 +1294,60 @@ void MapEditor::drawToolbar()
         if (ImGui::Button("Sì")) { deleteBox(m_selBox); ImGui::CloseCurrentPopup(); }
         ImGui::SameLine();
         if (ImGui::Button("No")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    // ── Nuova mappa (id = nome file, ADR-001) ─────────────────────────────
+    // Aperto dalla voce "＋ Nuova mappa…" in coda alla combo. Nominare un file
+    // NUOVO è l'eccezione legittima alla regola "dropdown-only" (Todo, ADR-010).
+    if (ImGui::BeginPopupModal("Nuova mappa", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char newMapId[64] = "";
+        static std::string newMapErr;
+        ImGui::TextUnformatted("Nome della nuova mappa (= nome file):");
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool entered = ImGui::InputText("##newmapid", newMapId, sizeof(newMapId),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        if (!newMapErr.empty())
+            ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", newMapErr.c_str());
+
+        auto tryCreate = [&]() -> bool {
+            if (newMapId[0] == '\0') { newMapErr = "nome vuoto"; return false; }
+            const std::string id = newMapId;
+            // id = filename stem: gli id mappa ammettono spazi ("Training Ground"),
+            // ma non i separatori di percorso/caratteri illegali (no traversal).
+            const bool badChar = id.find_first_of("/\\:*?\"<>|") != std::string::npos
+                                 || id.front() == '.' || id.back() == ' ';
+            const std::string path = getDataDir() + "/maps/" + id + ".json";
+            if (badChar)            { newMapErr = "nome non valido"; return false; }
+            if (fs::exists(path))   { newMapErr = "esiste gia'";     return false; }
+            // JSON minimo VALIDO e GIOCABILE: un pavimento (senza, niente navmesh →
+            // unità nel vuoto, ContentValidation lo rifiuta) e i due spawn. Muri,
+            // metadata, roster e comandante si autorano dopo.
+            editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+                j["name"]        = id;
+                j["spawn_team1"] = {0.0f, 0.86f,  8.0f};
+                j["spawn_team2"] = {0.0f, 0.86f, -8.0f};
+                json floor;
+                floor["type"]  = "floor";  floor["label"] = "Pavimento";
+                floor["x"]  = 0.0f;  floor["y"]  = -0.1f;  floor["z"]  = 0.0f;
+                floor["ry"] = 0.0f;
+                floor["sx"] = 50.0f; floor["sy"] = 0.4f;   floor["sz"] = 40.0f;
+                floor["r"]  = 0.40f; floor["g"]  = 0.36f;  floor["b"]  = 0.30f;
+                floor["collider"] = true;
+                j["geometry"] = json::array({floor});
+                return true;
+            });
+            loadMaps();
+            loadMap(id);            // passa subito alla mappa nuova
+            return true;
+        };
+
+        if ((ImGui::Button("Conferma", {120,0}) || entered) && tryCreate())
+        { newMapId[0] = '\0'; newMapErr.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (ImGui::Button("Annulla", {120,0}))
+        { newMapId[0] = '\0'; newMapErr.clear(); ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
 }
@@ -1251,8 +1415,9 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     else if (ImGui::SmallButton("+ Comandante (Droide Tattico)"))
     {
         m_commander.exists = true;
-        if (!m_classIds.empty()) m_commander.unit = m_classIds.front();
-        m_commander.x = m_spawnTeam2[0]; m_commander.z = m_spawnTeam2[2];
+        if (!m_commanderIds.empty()) m_commander.unit = m_commanderIds.front();
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        m_commander.x = fp.x; m_commander.z = fp.z;
         m_commander.leashRadius = 6.0f;
         m_selBox = kSelCommander;
         m_dirty = true; updateViewport();
@@ -1279,6 +1444,8 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     {
         PostEntry p;
         std::snprintf(p.label, sizeof(p.label), "Post %d", (int)m_posts.size() + 1);
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        p.x = fp.x; p.z = fp.z;
         m_posts.push_back(p);
         m_selBox = -10 - ((int)m_posts.size() - 1);
         m_dirty = true;
@@ -1318,6 +1485,8 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     {
         TargetEntry t;
         std::snprintf(t.label, sizeof(t.label), "Bersaglio %d", (int)m_targets.size() + 1);
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        t.x = fp.x; t.z = fp.z;
         m_targets.push_back(t);
         m_selBox = -500 - ((int)m_targets.size() - 1);
         m_dirty = true;
@@ -1353,7 +1522,9 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     ImGui::PopStyleColor();
     if (ImGui::SmallButton("+ Posizione"))
     {
-        m_positions.push_back({});
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        PositionEntry e; e.x = fp.x; e.z = fp.z;
+        m_positions.push_back(e);
         m_selBox = -1000 - ((int)m_positions.size() - 1);
         m_dirty = true; updateViewport();
     }
@@ -1377,7 +1548,9 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     ImGui::PopStyleColor();
     if (ImGui::SmallButton("+ Settore"))
     {
-        m_sectors.push_back({});
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        SectorEntry s; s.x = fp.x; s.z = fp.z;
+        m_sectors.push_back(s);
         m_selBox = -2000 - ((int)m_sectors.size() - 1);
         m_dirty = true; updateViewport();
     }
@@ -1401,7 +1574,9 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     ImGui::PopStyleColor();
     if (ImGui::SmallButton("+ Pericolo"))
     {
-        m_dangers.push_back({});
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        DangerEntry d; d.x = fp.x; d.z = fp.z;
+        m_dangers.push_back(d);
         m_selBox = -200 - ((int)m_dangers.size() - 1);
         m_dirty = true; updateViewport();
     }
@@ -1428,8 +1603,9 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     {
         RouteEntry r;
         std::snprintf(r.id, sizeof(r.id), "route_%d", (int)m_routes.size() + 1);
-        r.points.push_back({0.f, 0.5f, 0.f});
-        r.points.push_back({4.f, 0.5f, 0.f});
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        r.points.push_back({fp.x,        0.5f, fp.z});
+        r.points.push_back({fp.x + 4.0f, 0.5f, fp.z});
         m_routes.push_back(std::move(r));
         m_selBox = -300 - ((int)m_routes.size() - 1);
         m_selRoutePt = 0;
@@ -1459,6 +1635,8 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     {
         VehicleSpawnEntry v;
         if (!m_vehicleIds.empty()) v.vehicleId = m_vehicleIds[0];
+        const glm::vec3 fp = m_viewport.groundFocusPoint();
+        v.x = fp.x; v.z = fp.z;
         m_vehSpawns.push_back(std::move(v));
         m_selBox = -400 - ((int)m_vehSpawns.size() - 1);
         m_dirty = true; updateViewport();
@@ -1487,19 +1665,19 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         ImGui::Separator();
         bool changed = false;
 
-        // Classe dal registry (dropdown, mai testo libero — regola di progetto).
+        // CommanderDef dal registry (dropdown, mai testo libero — ADR-044).
         ImGui::SetNextItemWidth(sliderW);
-        if (ImGui::BeginCombo("Classe##cmd",
+        if (ImGui::BeginCombo("Tipo##cmd",
                               m_commander.unit.empty() ? "-- scegli --"
                                                        : m_commander.unit.c_str()))
         {
-            for (const auto& cid : m_classIds)
+            for (const auto& cid : m_commanderIds)
                 if (ImGui::Selectable(cid.c_str(), m_commander.unit == cid))
                 { m_commander.unit = cid; changed = true; }
             ImGui::EndCombo();
         }
-        ImGui::TextDisabled("Deve avere un'ability 'command' per dirigere i droidi\n"
-                            "(il gate di validazione lo verifica).");
+        ImGui::TextDisabled("Definizione da data/commanders/ (non e' piu' una classe,\n"
+                            "ADR-044). Non combatte: si difende soltanto.");
 
         ImGui::TextDisabled("Posizione (retrovie, al sicuro)");
         changed |= editor::ui::sliderRow("X##cmd", m_commander.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
@@ -1684,6 +1862,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         ImGui::TextDisabled("Posizione");
         changed |= editor::ui::sliderRow("X##tg", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Z##tg", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y (altezza)##tg", t.y, 0.f, 30.f, 0.1f, "%.2f m", 18.0f);
+        ImGui::TextDisabled("Altezza sopra il suolo: 0 = a terra, >0 = alzata (es. su\n"
+                            "una piattaforma). La struttura e' statica: resta dove la metti.");
         changed |= editor::ui::sliderRow("Rotazione##tg", t.ry, -180.f, 180.f, 1.f, "%.0f");
         changed |= editor::ui::sliderRow("Scala##tg", t.scale, 0.2f, 8.f, 0.05f, "%.2f");
 

@@ -32,8 +32,9 @@ private:
         bool  isCollider = true;
     };
 
-    std::string m_mapId;        // id mappa corrente
+    std::string m_mapId;        // id mappa corrente (= filename stem, ADR-001)
     std::string m_mapJsonPath;  // percorso file JSON
+    char m_mapDisplayName[64] = "";  // campo `name`: nome MOSTRATO in partita/sandbox
 
     // Command post (ADR-009): autorati qui, letti dal runtime via MapDef.
     struct PostEntry {
@@ -60,6 +61,7 @@ private:
 
     // Bersaglio strategico distruttibile (doc 25, DestroyTarget)
     struct TargetEntry { char label[64] = "Bersaglio"; float x=0, z=0; float hp=300.0f;
+                         float y=0.0f;                                   // altezza sopra il suolo (0 = a terra)
                          float ry=0.0f; int team=2; float scale=1.0f;    // autorabili
                          float halfX=0.0f, halfY=0.0f, halfZ=0.0f;       // 0 = dalla scala
                          // doc 34/36: 0 generico, 1 comunicazioni, 2 controllo
@@ -80,7 +82,7 @@ private:
     std::vector<VehicleSpawnEntry> m_vehSpawns;
     std::vector<TargetEntry>  m_targets;
     std::vector<std::string>       m_vehicleIds;   // dal registry (combo)
-    std::vector<std::string>       m_classIds;     // classi per il combo comandante (ADR-041)
+    std::vector<std::string>       m_commanderIds; // CommanderDef per il combo comandante (ADR-044)
 
     // Comandante strategico (ADR-024/041): uno per mappa. NON è nel roster —
     // vive nel campo `commander` del MapDef. `leashRadius` 0 = fermo sul posto.
@@ -111,6 +113,7 @@ private:
 
     void addBox();
     void duplicateBox(int idx);
+    void duplicateSelected();   // duplica QUALSIASI elemento selezionato (F4, doc 39)
     void deleteBox(int idx);
 
     void updateViewport();                    // rigenera geometria viewport

@@ -1,5 +1,26 @@
 # 05 — Current State
 
+## 2026-07-22 — Metadata↔AI: integrazione completata (audit doc 38 chiuso, ADR-045/046)
+Fotografia del **seam `mini::worldintel`** e di come l'AI (`AiSystem`) consuma i metadata di `MapDef`,
+dopo la chiusura dell'audit doc 38. Verificato contro il codice live; build 0/0, `--validate` 0/0.
+- **Route** (ADR-045): `advancePatrol` bidirezionale (`patrolReverse`, `patrolSeg` = indice del punto);
+  `joinNearestRoute` aggancia la route più vicina dal vertice più vicino; le route obbediscono al
+  comando (Advance/Retreat sovrascrivono la pattuglia per **tutti**, non solo per chi è senza route).
+  Telemetria `su_route`.
+- **Ruoli tattici, tutti e 5 consumati** (ADR-046): `cover`→copertura difensiva (`bestCoverToward`);
+  `vantage`→posizione di tiro (`bestFiringPosition`); `observation`→vista estesa locale (`aggroRange
+  ×1.5` entro 10 m); `defensive`/`chokepoint`→posizioni da tenere sotto `Hold` (`bestHoldPosition`).
+  Telemetria `obs_vista_estesa`, `hold_su_posizione`.
+- **Danger zone consumate** (ADR-046): `bestCoverToward`/`bestFiringPosition` sottraggono `dangerAt`
+  dal punteggio → a parità di protezione l'AI sceglie la copertura fuori dalla zona pericolosa.
+  `dangerAt` non è più una query morta.
+- **Grafo tattico**: `buildTacticalLinks` (al load) + `bestOverwatchForPosition` (overwatch verso un
+  punto che un compagno sta occupando). `bestFlankingPosition` per l'aggiramento.
+- **Codice morto rimosso**: `bestOverwatchFor` (variante vecchia non-Position) e `pickObjectiveSector`
+  (residuo comando v1). Restano solo note documentali su `height` (solo visivo) e filtri navmesh
+  per-ruolo (marcati ma non cablati).
+- **Harness**: `--map <id>` ora vale anche in `--sim`/sandbox (`SandboxMenu::selectMapById`, KI #77).
+
 ## 2026-07-11 → 07-14 — Ottimizzazione + telemetria + navigazione (ADR-015/016/017)
 Tre grandi sistemi aggiunti, tutti verificati contro il codice live, build zero-warning,
 docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
@@ -70,14 +91,24 @@ docs aggiornati per change (07_Changelog / 13_ADR / 08_KnownIssues):
   fermare le AI. Spawn condiviso fra i mode: `structures::spawnAll` (Conquest **e** Sandbox).
 - **Bilanciamento globale data-driven (2026-07-21, ADR-043):** rianimazione (6 parametri) e degrado
   comunicazioni (4) vivono in **`data/config/gameplay.json`**, caricato all'avvio
-  (`mini::gameplay()`, header-only condiviso runtime/editor). Tab **Gameplay** nel BalanceEditor.
-  Default = vecchie costanti; file assente → invariato. NB: il runtime legge la **`data/` sorgente**
-  del repo (la copia in build è fallback).
+  (`mini::gameplay()`, header-only condiviso runtime/editor). Default = vecchie costanti; file assente
+  → invariato. NB: il runtime legge la **`data/` sorgente** del repo (la copia in build è fallback).
+  Editor: tab **Gameplay** (squadra/rianimazione) e tab **Comando** (`COMMS_LOST_*` + CommanderDef).
+- **Editor "Comando" (2026-07-22):** tab nel BalanceEditor per autorare i **CommanderDef**
+  (dropdown corpo/arma/profilo AI dal registry, checkbox abilità, hp/velocità/tinta) e i parametri
+  globali del degrado comunicazioni. Le **strutture** (torri/bersagli) restano **per-mappa** nel Map
+  Editor (istanze piazzate, non definizioni globali).
 - **Comando nemico v2 (2026-07-21, ADR-042):** `World::enemyCommand` è una **lista di direttive**, non
   un intento singolo. Il Droide Tattico tiene i **3 fronti** più preziosi (settori + strutture), con
   stance **per-settore** dal bilancio locale (TIENI dove controlla ma è pressato, SPINGI altrove); i
   droidi si **distribuiscono** sui fronti (pesati dal bias) e seguono la stance del proprio. Unico
   override globale: **ripiegamento** se i droidi calano sotto metà. Fine del "sempre avanzata".
+- **Droide Tattico = CommanderDef, non una classe (2026-07-22, ADR-044):** vive in
+  `data/commanders/<id>.json`, fuori dal roster classi (non più spawnabile come truppa in sandbox).
+  Riusa un `base_entity` per il corpo + override (hp assoluti, arma di autodifesa, profilo AI, abilità,
+  tinta). `MapDef.commander.unit` referenzia il CommanderDef; MapEditor con dropdown da `commanders/`.
+  Fallback legacy (classe-comandante) durante la transizione. `resolveCommanderArchetype` delega il
+  corpo a `resolveUnitArchetype` (niente duplicazione).
 - **Droide Tattico con leash (2026-07-21, ADR-041 Fase 1):** il campo `commander` ha ora
   `leash_radius` — area circolare da cui il comandante non esce (0 = fermo, legacy). Con raggio > 0
   non è più `stationary`: si muove per difendersi ma **non insegue obiettivi/segnali** e un clamp

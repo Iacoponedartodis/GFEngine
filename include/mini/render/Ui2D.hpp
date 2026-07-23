@@ -45,7 +45,10 @@ public:
     [[nodiscard]] float textWidth(const char* str, float scale) const;
 
 private:
-    int m_w, m_h;
+    // `mutable`: `begin()` (const) li ri-sincronizza con il viewport GL reale ad
+    // ogni frame (fix fullscreen 2026-07-22, vedi Ui2D.cpp). Restano la dimensione
+    // di fallback finché begin() non è ancora stato chiamato.
+    mutable int m_w, m_h;
 };
 
 } // namespace mini

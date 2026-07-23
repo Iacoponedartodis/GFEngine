@@ -41,12 +41,14 @@ struct AiComponent
     float patrolBx = 0, patrolBz = 0;
     float patrolSpeed = 2.0f;
 
-    // Route autorata seguita da questa unità (ADR-028): indice in
-    // MapDef.patrolRoutes e segmento corrente. -1 = nessuna route → A/B legacy
-    // (avanti-indietro). Con una route, completato un segmento si passa al
-    // successivo (wrap) invece di invertire: la pattuglia PERCORRE il tracciato.
-    int patrolRoute = -1;
-    int patrolSeg   = 0;
+    // Route autorata seguita da questa unità (ADR-028, ampliato ADR-045). Indice
+    // in MapDef.patrolRoutes; `patrolSeg` è ora l'indice del PUNTO-obiettivo
+    // corrente (0..P-1), non del segmento. -1 = nessuna route → A/B legacy.
+    // Le route sono percorse BIDIREZIONALMENTE (si inverte agli estremi, niente
+    // salto-wrap) e si possono raccogliere dal punto più vicino / cambiare.
+    int  patrolRoute   = -1;
+    int  patrolSeg     = 0;
+    bool patrolReverse = false;   // ADR-045: verso di percorrenza della route
 
     // Sosta ai waypoint di pattuglia (secondi). > del capture_time dei
     // command post → l'AI resta nell'area abbastanza da catturarli.
@@ -114,6 +116,19 @@ struct AiComponent
     // 0 = nessun leash (le altre unità). Dentro il raggio si muove per difendersi;
     // oltre, viene ricondotto verso `leashX/Z`. Non insegue e non cerca obiettivi.
     float leashX = 0.0f, leashZ = 0.0f, leashRadius = 0.0f;
+    // Àncora di PRESIDIO (ADR-046): quando il comando ordina TIENI, il droide si
+    // ancora a una posizione difensiva/chokepoint e ci combatte DA lì senza
+    // inseguire (stesso clamp del leash, centro diverso). Dinamica: impostata/
+    // azzerata ogni volta che rivaluta la direttiva. 0 = non sta presidiando.
+    float holdX = 0.0f, holdZ = 0.0f, holdRadius = 0.0f;
+    // Segnale della torre di controllo IMPEGNATO (doc 36): il clone COMMITTA la
+    // scelta finché non la raggiunge o il segnale sparisce, invece di ri-sceglierla
+    // ogni tick (il filtro-saturazione volatile faceva oscillare i cloni avanti e
+    // indietro — segnalato dall'utente; i droidi non lo fanno perché le loro
+    // direttive sono stabili). [[control-tower-informs-not-orders]]
+    float allySigX = 0.0f, allySigZ = 0.0f;   // WAYPOINT impegnato (già raggiungibile)
+    bool  allySigValid = false;
+    float allySigTimer = 0.0f;                 // re-eval periodico: bounda il findPath
 
     float stuckTimer  = 0.0f;
     bool  stuckReported = false;   // telemetria: una WARN per episodio (ADR-016)

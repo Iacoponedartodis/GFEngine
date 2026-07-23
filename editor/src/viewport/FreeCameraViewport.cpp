@@ -132,7 +132,7 @@ FreeCameraViewport::FreeCameraViewport()
     m_camera->lookAt({0.0f, 0.0f, 0.0f});
     m_camera->setSpeed(m_camSpeed);
 
-    buildGrid(40.0f, 20);
+    buildGrid(120.0f, 60);   // 120 m, passo 2 m: copre anche mappe grandi (2026-07-21)
     SDL_Log("[Viewport] Grid vertici=%d", m_gridVertCount);
 
     resizeFBO(4, 4);
@@ -319,6 +319,18 @@ void FreeCameraViewport::renderScene()
 
     if (m_attachVertCount > 0)
         drawArray(m_attachData, m_attachVertCount, GL_TRIANGLES, vp);
+
+    // Facce piene PRIMA del wireframe: polygon offset spinge le facce leggermente
+    // "indietro" così gli spigoli restano nitidi sopra (niente z-fighting). Opaco,
+    // nessun blending → compat Intel intatta (ADR-003).
+    if (m_showSolid && m_mapBoxFillVertCount > 0)
+    {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, 1.0f);
+        drawArray(m_mapBoxFillData, m_mapBoxFillVertCount, GL_TRIANGLES, vp);
+        glPolygonOffset(0.0f, 0.0f);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
 
     glDepthFunc(GL_LEQUAL);
     drawArray(m_mapBoxData, m_mapBoxVertCount, GL_LINES, vp);
@@ -548,6 +560,25 @@ void FreeCameraViewport::panCamera(float rightDelta, float upDelta)
     m_camera->setPosition(pos);
 }
 
+glm::vec3 FreeCameraViewport::groundFocusPoint(float fallbackDist) const
+{
+    const glm::vec3 p = m_camera->getPosition();
+    const glm::vec3 f = m_camera->getForward();
+    // Camera che guarda verso il basso: interseca il piano del suolo (y=0).
+    if (f.y < -0.05f)
+    {
+        const float t = -p.y / f.y;
+        if (t > 0.5f && t < 300.0f)
+            return {p.x + f.x * t, 0.0f, p.z + f.z * t};
+    }
+    // Ripiego: davanti alla camera, sul piano orizzontale, a distanza fissa.
+    glm::vec3 fh = {f.x, 0.0f, f.z};
+    const float len = std::sqrt(fh.x * fh.x + fh.z * fh.z);
+    if (len > 1e-4f) { fh.x /= len; fh.z /= len; }
+    else             { fh = {0.0f, 0.0f, -1.0f}; }
+    return {p.x + fh.x * fallbackDist, 0.0f, p.z + fh.z * fallbackDist};
+}
+
 // ── Click selection ───────────────────────────────────────────────────────────
 std::string FreeCameraViewport::popClickedItem()
 {
@@ -726,11 +757,18 @@ void FreeCameraViewport::drawGizmoOverlay()
             if (active) ImGui::PopStyleColor();
             if (!enabled) ImGui::EndDisabled();
         };
+        // Raggruppo la barra così `IsItemHovered` (dopo EndGroup) copre l'intero
+        // rettangolo: se il click cade qui, `draw()` annulla la selezione a raggio
+        // sottostante — prima cliccare un pulsante cambiava modalità E selezionava
+        // l'oggetto dietro in prospettiva (click-through, segnalato dall'utente).
+        ImGui::BeginGroup();
         toolBtn("Sposta", GizmoMode::Translate, true);
         ImGui::SameLine();
         toolBtn("Ruota", GizmoMode::Rotate, m_gizmoCanRotate);
         ImGui::SameLine();
         toolBtn("Scala", GizmoMode::Scale, m_gizmoCanScale);
+        ImGui::EndGroup();
+        m_gizmoBarHovered = ImGui::IsItemHovered();
     }
 
     // ── Scorciatoie modalità (solo viewport hover, mouse libero) ─────────
@@ -1114,6 +1152,9 @@ void FreeCameraViewport::draw(bool showLoadBar)
     // `handleViewportClick` lo vede (m_gizmoActiveAxis >= 0) e NON seleziona un
     // oggetto dietro al gizmo (che rovinerebbe il trascinamento).
     drawGizmoOverlay();
+    // Se il click è caduto sulla barra modalità (Sposta/Ruota/Scala) dell'overlay,
+    // NON trattarlo come selezione a raggio: cambia solo la modalità del gizmo.
+    if (m_gizmoBarHovered) m_imgClicked = false;
     handleViewportClick();
     drawMarkerLabels();
 }
@@ -1331,9 +1372,20 @@ void FreeCameraViewport::setMapBoxes(const std::vector<MapBoxDraw>& boxes)
     m_mapBoxes = boxes;   // conservata per il ray-picking (popClickedMapBox)
     m_mapBoxData.clear();
     m_mapBoxData.reserve(boxes.size() * 24 * 6);
+    m_mapBoxFillData.clear();
+    m_mapBoxFillData.reserve(boxes.size() * 36 * 6);   // 6 facce × 2 tri × 3 vert
 
     auto pushEdge = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv) {
         m_mapBoxData.insert(m_mapBoxData.end(), {a.x,a.y,a.z,r,g,bv, b.x,b.y,b.z,r,g,bv});
+    };
+    // Faccia piena = 2 triangoli. `shade` fa una finta luce (alto più chiaro, sotto
+    // più scuro) così i volumi si leggono senza normali/illuminazione nello shader.
+    auto pushFace = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                        float r, float g, float bv, float shade) {
+        const float sr = r * shade, sg = g * shade, sb = bv * shade;
+        m_mapBoxFillData.insert(m_mapBoxFillData.end(), {
+            a.x,a.y,a.z,sr,sg,sb,  b.x,b.y,b.z,sr,sg,sb,  c.x,c.y,c.z,sr,sg,sb,
+            a.x,a.y,a.z,sr,sg,sb,  c.x,c.y,c.z,sr,sg,sb,  d.x,d.y,d.z,sr,sg,sb });
     };
 
     for (const auto& box : boxes)
@@ -1367,9 +1419,18 @@ void FreeCameraViewport::setMapBoxes(const std::vector<MapBoxDraw>& boxes)
             {0,4},{1,5},{2,6},{3,7}
         };
         for (auto& e : edges) pushEdge(c[e[0]], c[e[1]], r, g, bv);
+
+        // Facce piene ombreggiate (culling OFF nel pipeline → winding indifferente).
+        pushFace(c[3], c[2], c[6], c[7], r, g, bv, 1.00f);   // top    (+y) chiaro
+        pushFace(c[0], c[1], c[5], c[4], r, g, bv, 0.50f);   // bottom (-y) scuro
+        pushFace(c[0], c[1], c[2], c[3], r, g, bv, 0.82f);   // front  (-z)
+        pushFace(c[4], c[5], c[6], c[7], r, g, bv, 0.82f);   // back   (+z)
+        pushFace(c[0], c[4], c[7], c[3], r, g, bv, 0.65f);   // left   (-x)
+        pushFace(c[1], c[5], c[6], c[2], r, g, bv, 0.65f);   // right  (+x)
     }
 
     m_mapBoxVertCount = (int)(m_mapBoxData.size() / 6);
+    m_mapBoxFillVertCount = (int)(m_mapBoxFillData.size() / 6);
 }
 
 void FreeCameraViewport::clearMapBoxes()
@@ -1377,6 +1438,8 @@ void FreeCameraViewport::clearMapBoxes()
     m_mapBoxes.clear();
     m_mapBoxData.clear();
     m_mapBoxVertCount = 0;
+    m_mapBoxFillData.clear();
+    m_mapBoxFillVertCount = 0;
 }
 
 } // namespace editor

@@ -472,16 +472,40 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         }
         for (const auto& t : m.allyTypes)
             checkRosterUnit(t, true, f, "archetipo alleato");
-        // Comandante strategico (ADR-024, doc 32): opzionale, ma se c'è deve
-        // risolvere ed essere davvero un comandante (altrimenti non dirige nulla).
+        // Comandante strategico (ADR-024/044, doc 32): opzionale. Ora è una
+        // definizione PROPRIA (`data/commanders/`); si accetta ancora una classe
+        // legacy come fallback durante la transizione.
         if (!m.commander.unit.empty())
         {
-            checkRosterUnit(m.commander.unit, false, f, "comandante");
-            if (!classIsCommander(m.commander.unit))
-                add(d, L::Warn, "Content", f,
-                    "il comandante '" + m.commander.unit + "' non ha un'ability di tipo "
-                    "'command' → non dirigera' i droidi",
-                    "Assegna alla classe un'ability 'command' (es. Tactical Command).");
+            const CommanderDef* cdef = reg.getCommander(m.commander.unit);
+            if (cdef)
+            {
+                // Nuovo path: il corpo deve risolvere e serve un'ability 'command'.
+                if (reg.getEnemy(cdef->baseEntity) == nullptr
+                    && reg.getAlly(cdef->baseEntity) == nullptr)
+                    add(d, L::Error, "Content", f,
+                        "comandante '" + m.commander.unit + "': base_entity '"
+                        + cdef->baseEntity + "' non esiste",
+                        "Scegli un'entità-corpo valida (es. B1 Battle Droid).");
+                bool hasCmd = false;
+                for (const auto& abId : cdef->abilities)
+                { const AbilityDef* ab = reg.getAbility(abId);
+                  if (ab && ab->type == "command") { hasCmd = true; break; } }
+                if (!hasCmd)
+                    add(d, L::Warn, "Content", "commanders/" + m.commander.unit + ".json",
+                        "il comandante '" + m.commander.unit + "' non ha un'ability 'command' "
+                        "→ non dirigera' i droidi",
+                        "Aggiungi 'Tactical Command' fra le abilities del CommanderDef.");
+            }
+            else   // legacy: una classe con ability 'command' (transizione ADR-044)
+            {
+                checkRosterUnit(m.commander.unit, false, f, "comandante");
+                if (!classIsCommander(m.commander.unit))
+                    add(d, L::Warn, "Content", f,
+                        "il comandante '" + m.commander.unit + "' non è un CommanderDef "
+                        "né una classe con ability 'command' → non dirigera' i droidi",
+                        "Crea data/commanders/" + m.commander.unit + ".json (ADR-044).");
+            }
         }
         for (const auto& cp : m.commandPosts)
             if (cp.radius <= 0.0f)

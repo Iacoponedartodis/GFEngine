@@ -220,6 +220,48 @@ static ResolvedEnemyArchetype resolveUnitArchetype(const DefinitionRegistry* reg
     return out;
 }
 
+// Archetipo del COMANDANTE da un CommanderDef (ADR-044). Riusa il corpo del
+// `base_entity` (mesh/hitbox/proiettile via resolveUnitArchetype) e vi applica
+// gli override del comandante: hp ASSOLUTI, tinta, profilo AI, arma di
+// autodifesa, abilità (incluso il "command" → CommanderComponent). Non duplica
+// la risoluzione del corpo: la delega, poi sovrascrive.
+static ResolvedEnemyArchetype resolveCommanderArchetype(const DefinitionRegistry* registry,
+                                                        const CommanderDef& cd)
+{
+    ResolvedEnemyArchetype out = resolveUnitArchetype(registry, cd.baseEntity, cd.team);
+    out.enemyId    = cd.baseEntity;   // il corpo resta il riferimento (mesh/hitbox)
+    out.hp         = cd.hp;           // assoluti: è un obiettivo, non un moltiplicatore
+    out.meshScale *= cd.meshScale;
+    out.abilityIds = cd.abilities;    // "Tactical Command" (→ comando) + "Shield"
+    // Tinta sul colore del corpo.
+    float* col[3] = {&out.mr, &out.mg, &out.mb};
+    for (int i = 0; i < 3; ++i)
+    {
+        const float v = *col[i] * cd.colorMult[i];
+        *col[i] = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    }
+    if (registry)
+    {
+        // Profilo AI + velocità (patrolSpeed × speedMult) + arma di autodifesa,
+        // con i loro dipendenti (interval/range dal profilo, bullet stats dall'arma).
+        if (!cd.aiProfile.empty()) out.aiProfileId = cd.aiProfile;
+        if (const AiProfileDef* ai = registry->getAiProfile(out.aiProfileId))
+        { out.moveSpeed = ai->patrolSpeed * cd.speedMult;
+          out.interval = ai->shootInterval; out.range = ai->sightRange; }
+        else out.moveSpeed *= cd.speedMult;
+
+        if (!cd.selfDefenseWeapon.empty()) out.weaponId = cd.selfDefenseWeapon;
+        if (const WeaponDef* wpn = registry->getWeapon(out.weaponId))
+        { out.bulletSpeed = wpn->bulletSpeed; out.bulletDamage = wpn->damage;
+          out.bulletLifetime = wpn->bulletLifetime;
+          out.br = wpn->bulletColor[0]; out.bg = wpn->bulletColor[1]; out.bb = wpn->bulletColor[2]; }
+    }
+    std::cout << "[ConquestMode] Commander resolved: " << cd.id
+              << " body=" << cd.baseEntity << " weapon=" << out.weaponId
+              << " ai=" << out.aiProfileId << " hp=" << out.hp << "\n";
+    return out;
+}
+
 static std::vector<std::string> buildEnemySpawnList(const DefinitionRegistry* registry,
                                                     const std::string& mapId, int count)
 {
@@ -843,10 +885,24 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
             const float leash = md->commander.leashRadius;
             const bool  frozen = (leash <= 0.0f);
 
-            const ResolvedEnemyArchetype resolved = resolveUnitArchetype(registry, cmdrId, 2);
+            // ── Risoluzione: CommanderDef (ADR-044) o classe legacy (fallback) ──
+            // Il Droide Tattico è ora una definizione PROPRIA (data/commanders/),
+            // fuori dal roster delle classi. Se `commander.unit` è un CommanderDef
+            // si usa il nuovo path; se è ancora una classe (mappe non migrate) si
+            // ricade sul vecchio — transizione documentata (CLAUDE.md).
+            ResolvedEnemyArchetype resolved;
+            std::string bodyForWeapon = cmdrId;   // id da cui pescare l'attach arma
+            if (const CommanderDef* cdef = registry->getCommander(cmdrId))
+            {
+                resolved = resolveCommanderArchetype(registry, *cdef);
+                bodyForWeapon = cdef->baseEntity;   // l'attach segue il corpo
+            }
+            else
+                resolved = resolveUnitArchetype(registry, cmdrId, 2);   // legacy
+
             EnemyDef cmdrEff;
             auto wa = weaponattach::resolve(registry, m_meshCache,
-                                            effectiveUnit(registry, cmdrId, false, cmdrEff));
+                                            effectiveUnit(registry, bodyForWeapon, false, cmdrEff));
             mkUnitWithMesh(cx, cz, 2,
                    resolved.mr, resolved.mg, resolved.mb,
                    resolved.br, resolved.bg, resolved.bb,

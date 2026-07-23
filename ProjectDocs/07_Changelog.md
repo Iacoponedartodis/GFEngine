@@ -2,6 +2,370 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-23 (65) — Navmesh & AI: danger non-bloccante, raggiungibilità, recupero stuck (playtest)
+
+Analisi profonda richiesta dall'utente dopo il playtest (AI che ignorano ponti/zone elevate, cloni "in
+trappola", danger che bloccano). Cause radice trovate nel codice, non supposizioni.
+- **Danger = blocco del pathfinding (risolto)**: le danger zone vengono cotte nel **navmesh** come area
+  `kAreaDanger` con **costo 10×** (`kCostDanger`). Detour le aggirava quasi sempre → una danger sull'unica
+  via (scale centrali di Alpha) diventava un **muro**. Abbassato a **2×**: scoraggia, non blocca. La
+  penalità "non sostare in copertura nel pericolo" resta separata (`dangerAt`, ADR-046).
+- **AI mandate su target IRRAGGIUNGIBILI → in trappola (risolto)**: le query tattiche sceglievano per
+  importanza/protezione **senza controllare la raggiungibilità**; `requestMoveTarget` agganciava il
+  target al poligono più vicino (fino a 14m) → un vantage su un'ISOLA navmesh (scala ripida) o su un
+  passaggio eroso mandava l'unità contro un muro, e lo **stuck era solo LOGGATO, mai recuperato**. Fix:
+  (a) nuovo `NavManager::isReachable` (path Detour non-parziale che tocca il poligono destinazione); i
+  cloni usano un vantage **solo se raggiungibile**, altrimenti il centro-settore (a terra); (b) commitment
+  su un WAYPOINT (già raggiungibile) + timer di ri-valutazione (4s) → niente oscillazione e `isReachable`
+  a bassa frequenza (~1/4s per clone, non a ogni tick); (c) **recupero stuck**: un bot bloccato ora
+  ABBANDONA i target impegnati (segnale/manovra/àncora/route) e ri-valuta.
+- **Navmesh più fedele alla larghezza reale dell'AI**: voxel XZ **0.30 → 0.20** → erosione
+  `walkableRadius` esatta (0.40m = raggio agente) invece di 0.60m arrotondati. I passaggi larghi ~0.8-1.2m
+  (dove l'AI passa) non spariscono più. Il **climb (0.55m) era già = allo step-up fisico** dell'AI: scale
+  con gradini >0.55m sono non-percorribili anche fisicamente (authoring o `STEP_HEIGHT` globale).
+- **Sanitizer (CMake)**: tolgo `/RTC1` (default MSVC Debug, incompatibile con `/fsanitize=address`) quando
+  `GF_ENABLE_ASAN=ON`. Resta da installare il componente "C++ AddressSanitizer" dal VS Installer (i "file
+  mancanti" segnalati = clang_rt.asan non installato).
+- **Verificato**: build 0/0 (un warning C4189 preesistente in SandboxMenu, non da qui); navmesh più fine
+  costruisce senza fail; sistemi tutti sani (`fermi=0`, combattimento/comando/hold/route/osservazione);
+  gli stuck ora triggerano il recupero. **Effetto visivo (niente più danger-muro, niente più cloni in
+  trappola, uso dei passaggi stretti raggiungibili) da confermare in playtest.**
+
+## 2026-07-23 (64) — Torre di controllo: analisi + commitment, non ordini (ADR-040, doc 36)
+
+Rework su richiesta dell'utente dopo il playtest: alcuni cloni restavano indietro "avanti-indietro"
+mentre i droidi no. **Diagnosi (codice)**: `pickAllySignal` ricalcolava la scelta a OGNI tick con un
+filtro-saturazione volatile → nessun **commitment** → oscillazione; i droidi non oscillano perché
+`pickEnemyDirective` non ha saturazione (scelta stabile per bias fisso). L'utente ha inquadrato il ruolo
+giusto della torre: **informa/analizza, non ordina** ([[control-tower-informs-not-orders]]).
+- **Commitment del clone**: nuovi campi `allySig{X,Z,Valid}` in `AiComponent`. Il clone si **impegna** sul
+  segnale scelto e ci resta finché non lo raggiunge o il segnale sparisce (`allySignalExists`), invece di
+  ri-sceglierlo ogni tick. Fine oscillazione. (I droidi erano già stabili.)
+- **Analisi tattica più ricca**: il peso di un segnale-settore ora legge il campo — non solo importanza +
+  pressione, ma: **alleati in minoranza** (`enemies>allies` → peso ↑, rinforza), **in mano nemica**
+  (riprendere), **terreno di valore poco difeso** (importanza alta + pochi nemici → sfrutta). La torre
+  "dice cosa conta e perché", i cloni si distribuiscono da soli.
+- **Verificato**: build 0/0; `segnali_seguiti` alto e continuo, combattimento sano (contatti 257),
+  `fermi=0`, nessuna regressione. **Effetto visivo (niente più oscillazione, distribuzione tattica) da
+  confermare in playtest.**
+- **Resta**: gli ORDINI diretti (destinazioni imposte) verranno dal giocatore / chain of command, non
+  dalla torre; e la ruota-ordini in osservazione sandbox (richiesta utente, tracciata in 06_Todo).
+
+## 2026-07-23 (63) — Torre di controllo: avanzata coerente + posizioni vantaggiose (ADR-040, doc 36)
+
+Affronta il problema #3 del playtest utente: "alcuni cloni restano vicino allo spawn a fare avanti e
+indietro mentre gli altri ingaggiano". Diagnosi: `pickAllySignal` ritornava `false` quando **tutti** i
+segnali della torre erano saturi (`crowd ≥ ALLY_SIGNAL_CAPACITY=3`) → il clone ripiegava sulla pattuglia
+locale (idle vicino allo spawn).
+- **Fix A — nessun idle, avanzata coerente**: quando tutti i segnali sono saturi, il clone ora
+  **rinforza il fronte più vicino** (seconda ondata) invece di pattugliare. La distribuzione fra fronti
+  la garantisce già il passo pesato non-saturo; questo elimina l'idle. **Misurato**: `segnali_seguiti`
+  passa da spesso-0 a **600-3457**/finestra — i cloni avanzano verso i fronti in continuazione.
+- **Fix B — posizioni vantaggiose**: nuova query `worldintel::bestAdvantageInArea` (cover/vantage/
+  defensive/chokepoint per **importanza autorata** + protezione, vicina, fuori dal pericolo). Seguendo
+  un segnale, il clone punta ora la miglior posizione vantaggiosa del fronte — incluse le **elevate**
+  marcate ad alta importanza — invece del bare centro del settore. Realizza "individua i punti
+  vantaggiosi" (richiesta utente) e inizia a sfruttare le zone rialzate (parte di #2).
+- **Ambito**: applicato ai **cloni** (contesto #3). Estensione ai **droidi** (Advance) e la
+  raggiungibilità navmesh dei ponti (#2a) restano per quando affronteremo #2 esplicitamente.
+- **Verificato**: build 0/0; combattimento sano (contatti 296), `fermi=0`, torre attiva, nessuna
+  regressione. Effetto visivo (cloni sul buon terreno/elevato) da confermare in playtest.
+
+## 2026-07-23 (62) — Perf: indice spaziale collisioni/LOS + `snap` solo-team + build Release (ADR-015)
+
+Su segnalazione utente (lag già con ~25 AI sulla mappa più grande, "per via della mappa più grande e dei
+metadati").
+- **Fix — griglia dei collider**: `physics::hasLineOfSight` e `hasCollision` iteravano **tutte** le
+  entità del mondo (~200 su Training Ground: 175 box + unità) per ogni chiamata, con lookup su hash-map e
+  `computeWorldAABB` ricalcolata ogni volta. Ora una **griglia uniforme XZ** (celle 5 m), ricostruita
+  1×/tick, riduce le query a O(celle vicine) con AABB precalcolate. Snapshot dei componenti PER VALORE →
+  nessun puntatore pendente se un'entità muore a metà tick. File-static, single-thread; `(world,tick)`
+  distingue mondi diversi. **Verificato corretto**: i test esatti sono invariati (la griglia cambia solo
+  quali candidati testare, superset conservativo), `fermi=0`, tutti i sistemi funzionano. Build 0/0.
+- **Diagnosi (misurata, timer temporaneo)**: il tempo dell'update AI **non scala col numero di AI** (12
+  AI ≈ 1250 µs, 50 AI ≈ 1370 µs: **+10 % per 4× unità**). Scala col **numero totale di entità** (i box di
+  geometria): il pre-loop AI aveva ~10 passaggi che iteravano TUTTE le entità ogni frame.
+- **Fix 2 — `snap` solo team**: `snap` (la lista che tutti i passaggi AI scorrono) ora contiene solo le
+  entità con un `Team` (unità/strutture/player), **non** i ~175 box di geometria. Quei passaggi già
+  saltavano ciò che non ha team → **comportamento invariato**, ma toglie ~175 iterazioni × ~10 passaggi
+  per frame su Training Ground: è il costo che scalava con la DIMENSIONE della mappa. Verificato: tutti i
+  sistemi scattano identici (hold, overwatch, comando, route, osservazione), `fermi=0`.
+- **Build Release**: le misure erano in **Debug** (`build/windows-debug`, non ottimizzata); in Release il
+  costo crolla di 10-30×. Costruita e verificata `build/windows-release/Release/` — **l'utente conferma
+  lag "migliorato in maniera evidente"** giocando la Release. Il lag era in gran parte artefatto Debug.
+- **Resta per il futuro** (dichiarato dall'utente: più AI e mappe più complesse in arrivo): indice
+  spaziale anche per le query tattiche/`hasLineOfFire`, e profilazione degli altri sistemi (crowd,
+  rendering) quando il numero di AI crescerà oltre.
+
+## 2026-07-23 (61) — Overwatch: il segnale d'avanzata PERSISTE (ADR-032, F5 completa)
+
+Chiude l'ultimo gap di F5: `overwatch_avviati` sempre **0**. **Diagnosi** (contatori temporanei): il
+grafo `positionCovers` è ben popolato (1364 link su Training Ground), le avanzate avvengono (~19), ma il
+ramo overwatch non trovava MAI un'avanzata di un compagno vicina (`dbg_ow_adv=0`). **Causa**: il segnale
+d'avanzata viveva **un solo tick** (`m_advancesPrev.swap(m_advances)`), ma la manovra dura ~6 s e le
+valutazioni di chi copre sono sparse (ogni 3-6 s per unità) → non coincidevano quasi mai.
+- **Fix**: ogni `Advance` ha ora un **TTL** (~5 s) e persiste nel pool finché non scade, invece di
+  sparire dopo un tick. Le avanzate nuove entrano dopo il decadimento → visibili dal tick successivo (la
+  scelta di chi copre resta indipendente dall'ordine di iterazione, ma il segnale dura abbastanza).
+- **Misurato** (`--sim "Training Ground"` 6v6, 90 s): `overwatch_avviati` **4** (era 0) — chi non avanza
+  si sposta su una posizione che, per il grafo, copre il compagno in avanzata. Modesto ma reale (serve
+  compagno-in-avanzata + non-avanzante vicino + copritore entro 18 m). Build 0/0, contatori debug rimossi.
+- **F5 — tutti i sistemi scattano INSIEME** su Training Ground: overwatch 4, hold 543, osservazione 597,
+  route 54, manovre 19, combattimento (contatti 295), `fermi=0`. La mappa è ora il banco di prova voluto.
+
+## 2026-07-22 (60) — Presidio completo: il comando ordina TIENI e i droidi tengono la linea (ADR-042/046, F5)
+
+Affronta il gap "il comandante non emette mai Hold" (F5, doc 39). **Causa**: la stance Hold richiedeva
+una maggioranza di *unità* droidi nel settore (`controllingTeam==2 && allies>0`) — evento raro in 6v6, e
+comunque il Hold pesava meno degli Advance → sempre troncato dai top-3.
+- **Fix (AiSystem, directive building)**: un settore che ospita un **command post posseduto dai droidi**
+  ed è **minacciato** (cloni presenti) diventa un fronte da TENERE, non da attraversare. Il possesso del
+  post è una condizione **stabile** (dura finché non te lo riprendono), a differenza della maggioranza di
+  unità. Peso del Hold aumentato (+0.35) così difendere un obiettivo conteso compete coi fronti d'attacco.
+- **Fix droide-side (opzione A, scelta utente)**: un droide assegnato a un fronte TIENI si **àncora**
+  alla miglior posizione difensiva/chokepoint dell'area (`bestHoldPosition`) e ci **combatte da lì senza
+  inseguire** — forma una linea difensiva invece di caricare allo scoperto. Meccanismo: nuovo campo
+  àncora `holdX/Z/Radius` in `AiComponent` + clamp analogo al leash del comandante (rientra sulla
+  posizione se supera il raggio). Valutato a INIZIO tick (prima dei rami di combattimento): il TIENI
+  scatta durante la minaccia, quindi il ramo waypoint — raggiunto solo fuori dal combattimento — non
+  bastava. Attiva finalmente i ruoli `defensive`/`chokepoint` (ADR-046).
+- **Misurato** (`--sim "Training Ground"` 6v6, 110 s): `cmd_tieni` scatta (5/11 finestre, prima **0**);
+  **`hold_su_posizione` ora scatta** (318 e 225 quando il Hold è su un obiettivo d'angolo con chokepoint;
+  0 quando è su Alpha, che non ha posizioni difensive vicine — corretto). Combattimento sano (contatti
+  fino a 55), `fermi = 0` (l'àncora non blocca nessuno), Advance dominante (`cmd_avanzata` 2-3): nessuna
+  passività. Build 0/0.
+- **Nota mappa**: perché il presidio scatti anche sul settore centrale servono posizioni `defensive`/
+  `chokepoint` vicine ad Alpha — authoring dell'utente, non codice.
+
+## 2026-07-22 (59) — Training Ground: misura banco-di-prova + 7 danger zones (doc 39, fase F5)
+
+Primo passo del "salto di complessità" (F5). **Misura `--sim` (6v6)**: la mappa già **funziona** —
+comandante attivo a 3 fronti (Alpha/Bravo/Delta), combattimento, route/osservazione/manovre scattano.
+(Un primo allarme "sistemi a 0" era un falso: l'harness PowerShell non quotava lo spazio in "Training
+Ground" → sim su mappa sbagliata. Lezione in [[powershell-quote-args-with-spaces]] e già in KI #77.)
+- **Aggiunte 7 danger zones** su Training Ground (unico gap di contenuto: erano 0) per esercitare
+  cover-evita-pericolo (ADR-046): artiglieria sul centro Alpha, 2 corsie di fuoco N/S, 4 chokepoint
+  minati agli obiettivi d'angolo. Poste vicino al cover così la scelta della copertura le evita.
+  RMW: toccato solo `danger_zones`. Mappa valida (7 danger), sim funziona senza crash.
+- **Effetto AI da osservare a mano**: non esiste un contatore telemetria per "copertura che evita la
+  danger"; l'utente rivede/aggiusta le pose nell'editor (ora con rendering solido F3).
+- **Gap ancora aperti** (non contenuto): `overwatch` non scatta mai (posizioni che non si coprono),
+  `hold` mai (comandante sempre Advance). Vedi doc 39 F5.
+
+## 2026-07-22 (58) — Editor UX: duplicazione di qualsiasi metadato (doc 39, fase F4)
+
+Fase F4 di doc 39: "metadata senza attrito". Inserire i metadata era laborioso perché ogni nuovo
+elemento partiva dai default e andava ri-regolato campo per campo.
+- **"Duplica" generalizzato**: prima funzionava solo sui box. Ora `duplicateSelected()` duplica
+  **qualsiasi** elemento selezionato — posizione tattica (con ruolo/arco/gittata/protezione), settore,
+  danger, bersaglio, command post, percorso (tutti i punti), spawn veicolo — copiando **tutti** i campi
+  autorati, spostato di +2 in XZ per non sovrapporre, e seleziona la copia. Spawn e comandante (unici)
+  restano non duplicabili. Si autora una volta e si posa una serie.
+- **Default già sensati**: le nuove posizioni nascono cover/arco 120°/gittata 25 m; i pannelli hanno
+  tooltip esplicativi. Non serviva altro qui.
+- *Rimane possibile* (non fatto): un vero "pennello" click-per-posare in serie — la duplicazione ne è la
+  versione pragmatica. Da valutare dopo il collaudo.
+- **Verificato**: build 0/0; editor si avvia. **Da collaudare a mano**: Duplica su una posizione tattica
+  ne crea una gemella accanto con gli stessi valori.
+
+## 2026-07-22 (57) — Editor UX: superfici visibili (facce piene), non solo wireframe (doc 39, fase F3)
+
+Fase F3 di doc 39. La viewport disegnava i box a **sole linee** → volumi e coperture difficili da leggere
+("le superfici sono completamente invisibili", utente).
+- **Facce piene ombreggiate**: `setMapBoxes` costruisce ora, oltre al wireframe, le 6 facce di ogni box
+  (2 triangoli l'una) con una **finta luce** per-faccia (alto chiaro → sotto scuro) così i volumi si
+  leggono senza normali/illuminazione nello shader. Disegnate PRIMA del wireframe con `glPolygonOffset`
+  → gli spigoli restano nitidi sopra, niente z-fighting.
+- **Nessun rischio compat**: opaco, **nessun blending**, stesso shader e stesso path client-side-array /
+  OpenGL 3.3 Compatibility — ADR-003 rispettato (aggiunta di triangoli, non cambio di pipeline).
+- **Toggle "Solido"** nella toolbar (default ON): si torna al solo-wireframe con un clic.
+- **Verificato**: build 0/0; editor si avvia senza crash GL. **Da collaudare a mano** (visivo): le
+  superfici si vedono piene e i volumi si leggono; il toggle Solido/wireframe funziona.
+
+## 2026-07-22 (56) — Editor UX: alzare le strutture + creare davanti alla camera (doc 39, fase F2)
+
+Fase F2 di doc 39: "alzare e posizionare". Due frizioni concrete segnalate dall'utente.
+- **Strutture strategiche alzabili (Y)**: `StrategicTargetDef` ha ora un campo `y` = altezza sopra il
+  suolo (0 = a terra, retro-compatibile). Il game mode piazza la struttura a `groundHeightAt(x,z) + y`.
+  Cablato end-to-end: schema runtime + loader (`DefinitionRegistry`) + `structures::spawnAll` + editor
+  (struct `TargetEntry`, load/save RMW, gizmo Sposta su Y, slider "Y (altezza)", anteprima alla quota
+  giusta). **Effetto verificato** (`--sim`): torre con `y:5` autorato → Y mondo 5.10; torri senza `y` →
+  0.10 (invariate). Nuova telemetria: `y` nell'evento "strategic target spawned".
+- **Perché solo le strutture, non il comandante/veicoli**: comandante e veicoli sono unità con
+  **gravità** (`AI_GRAVITY`) — spawnate in aria cadrebbero. Alzare la loro Y sarebbe un dato senza
+  effetto ([[verify-effect-not-data]]); per metterli in alto si usa una piattaforma (la gravità li
+  appoggia sopra). Le strutture sono statiche → la Y è efficace. I settori sono aree 2D (XZ): niente Y.
+- **Creare davanti alla camera, non al centro** (F2b): nuovo `FreeCameraViewport::groundFocusPoint()`
+  (intersezione dello sguardo col suolo, ripiego a distanza fissa). Tutti i "+ Aggiungi" del Map Editor
+  (box, post, bersaglio, posizione, settore, pericolo, percorso, veicolo, comandante) creano l'oggetto
+  **dove stai guardando**, non da trascinare dal centro.
+- **Verificato**: build 0/0; `--validate` contenuto valido; editor si avvia. **Da collaudare a mano**:
+  gli oggetti nascono davanti alla camera; lo slider/gizmo Y alza le torri nel viewport.
+
+## 2026-07-22 (55) — Editor UX: igiene toolbar + click-through gizmo (doc 39, fase F1)
+
+Su feedback dell'utente: aggiungendo "Nuova mappa" (v54) la toolbar in alto è andata in overflow,
+tagliando fuori i pulsanti Sposta/Ruota/Scala. Apre la fase **F1 di doc 39 (Editor UX)**.
+- **Toolbar sfoltita**: rimossi i pulsanti modalità gizmo (Sposta/Ruota/Scala) dalla toolbar — erano un
+  **duplicato** dell'overlay che appare in alto a sinistra sulla viewport quando selezioni un oggetto.
+  Resta solo l'overlay. Le capacità ruota/scala per tipo le imposta già `updateViewport()` ogni frame.
+- **"Nuova mappa" spostata in coda al dropdown delle mappe**: voce "＋ Nuova mappa…" → **popup di
+  conferma** (nome + Conferma/Annulla), invece del pulsante+InputText sciolto sulla barra.
+- **Bug click-through risolto**: cliccando i pulsanti Sposta/Ruota/Scala dell'overlay si cambiava
+  modalità **e** si selezionava l'oggetto dietro in prospettiva. Ora la barra è un gruppo ImGui e, se il
+  click ci cade sopra, la selezione a raggio sottostante viene annullata (`m_gizmoBarHovered`).
+- **Principio registrato** ([[ui-no-clipping-use-dropdowns]]): non far tagliare comandi; raggruppare in
+  dropdown quando la barra è satura; l'ordine e il raggruppamento contano.
+- **Verificato**: build 0/0; editor si avvia senza crash. **Da collaudare a mano**: overflow risolto,
+  popup nuova-mappa, click sui pulsanti overlay che non seleziona più dietro.
+
+## 2026-07-22 (54) — Editor: creazione di nuove mappe
+
+Colma una lacuna segnalata dall'utente: dall'editor si potevano **solo modificare** le mappe esistenti,
+non crearne di nuove.
+- **Creazione nuova mappa** dal Map Editor (voce "＋ Nuova mappa…" in coda al dropdown delle mappe →
+  popup nome/conferma; vedi v55 per la collocazione finale). Crea `data/maps/<id>.json` con lo **schema
+  minimo valido e giocabile** — un box `floor` 50×40 (senza, niente navmesh: `ContentValidation` lo
+  rifiuterebbe e le unità cadrebbero nel vuoto) più i due spawn — poi passa alla mappa nuova. Geometria,
+  metadata, roster e comandante si autorano dopo.
+- **`InputText` legittimo**: nominare un file NUOVO è l'eccezione documentata alla regola "dropdown-only"
+  (come "+ Nuova entità" in EntityEditor). Guardia sull'id: no separatori di percorso/caratteri illegali,
+  no sovrascrittura di una mappa esistente.
+- **Verificato**: build 0/0; una mappa con questo schema minimo carica nel registry, passa `--validate`
+  (0 errori) e gira in `--sim` senza crash. **Da collaudare a mano**: il click nell'editor (ImGui).
+
+## 2026-07-22 (53) — Comportamento ai ruoli tattici + cover evita il pericolo (ADR-046, audit P3)
+
+Chiude l'ultimo blocco dell'audit doc 38: i metadata autorabili nell'editor tornano tutti letti
+dall'AI, e sparisce il codice morto.
+- **`observation` → vista estesa**: un'unità entro 10 m da un punto di osservazione vede più lontano
+  (`aggroRange ×1.5`) — chi presidia ingaggia prima. Telemetria `obs_vista_estesa`.
+- **`defensive`/`chokepoint` → posizioni da tenere**: nuova query `bestHoldPosition`; sotto comando
+  `Hold` le unità del fronte puntano la miglior posizione difensiva/di strozzatura dell'area (protezione
+  + importanza, fuori dalle danger zone) invece di un punto qualunque. Telemetria `hold_su_posizione`.
+- **La copertura evita il pericolo**: `bestCoverToward`/`bestFiringPosition` sottraggono `dangerAt` dal
+  punteggio → a parità di protezione si sceglie la copertura fuori zona di fuoco. `dangerAt` non è più
+  inerte (chiude B2).
+- **Pulizia**: rimossi `bestOverwatchFor` e `pickObjectiveSector` (codice morto, B3).
+- **Bug harness risolto (KI #77)**: `--map <id>` era ignorato in `--sim`/sandbox (vinceva il default
+  `m_mapSel=0`) — le misure `--sim` giravano su Training Ground invece che sulla mappa nominata. Ora il
+  flag vale ovunque. È il motivo per cui `obs_vista_estesa` risultava 0 prima del fix.
+- **Misurato** (`--sim --map firebase`, ora davvero firebase): `obs_vista_estesa` **333–1069**/finestra;
+  C3 sempre attivo; `hold_su_posizione` 0 in un 10v10 bilanciato (Hold raro — logica corretta, da vedere
+  in scenario di presidio). Build 0/0; `--validate` 0/0.
+
+## 2026-07-22 (52) — Route fluide e obbedienti al comando (ADR-045, audit P1+P2)
+
+I due attriti più grossi dell'audit (doc 38), affrontati insieme perché sono un unico ripensamento del
+ramo pattuglia.
+- **P1 — le route obbediscono al comando**: prima le unità con una route (~metà forza) ignoravano
+  comandante e torre (il ramo richiedeva `patrolRoute < 0`). Ora **Advance/Retreat valgono per tutti**;
+  Hold/nessun comando → pattuglia. Metà forza non è più sorda.
+- **P2 — route fluide**: percorse **bidirezionalmente** (`patrolReverse`, si inverte agli estremi
+  invece del salto-teletrasporto); **raccolte dal punto più vicino** (`joinNearestRoute`, non solo
+  dagli estremi); **cambiabili** (uscendo da Search l'unità si sgancia e riaggancia la più vicina).
+  `patrolSeg` è ora l'indice del punto-obiettivo, non del segmento.
+- **Misurato** (10v10): `su_route` **5-10** unità agganciate a una route lungo la partita (join/cambio
+  dinamici); il comando sovrascrive (a t=93 "Ripiegamento" → lasciano le route); `stuck` 9, nessuno
+  spike. Build 0/0; `--validate` 0/0. Nuova telemetria `su_route`.
+- **Restano** (audit P3): dare senso ai 3 ruoli decorativi + far evitare le danger alla scelta di
+  cover; poi la pulizia del codice morto.
+
+## 2026-07-22 (51) — Audit integrazione Metadata↔AI (analisi, doc 38)
+
+Su richiesta dell'utente ("far funzionare insieme i sistemi"), audit di cosa i metadata autorati
+producono davvero nel comportamento AI. Nessun codice cambiato — è la base per decidere cosa rifinire.
+Risultato completo in **38_AuditIntegrazioneMetadata.md**. In sintesi:
+- **Sano nel complesso**: la maggior parte dei metadata è consumata, nessun sistema si contraddice.
+- **Attriti (sistemi non insieme)**: le **route ignorano il comandante/torre** (~metà forza sorda al
+  comando); le route sono **rigide** (solo avanti, no join-da-qualsiasi-punto, no cambio); la scelta
+  di cover/tiro **non evita le danger zone**.
+- **Authoring sprecato**: **3 ruoli su 5** delle posizioni tattiche (`defensive`/`chokepoint`/
+  `observation` — 17 istanze autorate) non hanno alcun consumatore per-ruolo; `dangerAt` e
+  `bestOverwatchFor` sono query **morte**.
+- **Priorità proposte**: P1 route↔comando, P2 route fluide, P3 dare senso ai 3 ruoli + cover-evita-
+  danger; poi pulizia. Realizza il "far funzionare insieme" senza aggiungere sistemi.
+
+## 2026-07-22 (50) — Editor "Comando" (ADR-041 §4 completata)
+
+Chiude la parte del rework del comandante: la **casa d'authoring** per il comando. Tab **"Comando"**
+nel BalanceEditor.
+- **Editor del CommanderDef**: lista dei comandanti + edit di tutti i campi con **dropdown dal
+  registry** (corpo/`base_entity`, arma di autodifesa, profilo AI), **checkbox** per le abilità,
+  slider hp/velocità/scala, color picker per la tinta, fazione. Salva via RMW. Prima il CommanderDef
+  (creato da ADR-044) si modificava solo a mano nel JSON.
+- **Parametri `COMMS_LOST_*` spostati qui** dal tab Gameplay (come previsto da ADR-041 §4: "casa dei
+  COMMS_LOST_*"). Il tab Gameplay tiene squadra/rianimazione; il tab Comando tiene comandanti + degrado
+  comunicazioni.
+- **Strutture (torri/bersagli)**: restano **per-mappa** nel Map Editor (sono istanze piazzate, non def
+  globali) — il tab lo dichiara esplicitamente per non confondere.
+- Build 0/0; `--validate` 0/0. **Da verificare a mano**: aprire il tab Comando, modificare il Droide
+  Tattico (hp/arma/tinta), salvare e riavviare.
+
+## 2026-07-22 (49) — Il Droide Tattico esce dal sistema classi (ADR-044, ADR-041 Fase 2)
+
+La parte più architetturale del rework del comandante: **migrarlo fuori da `class`**. Una classe è una
+professione istanziabile (ADR-023); il comandante è un'unità unica a ruolo strategico che non combatte
+— non ci stava.
+- **Nuovo tipo `CommanderDef`** (`data/commanders/tactical_droid.json`): `base_entity` per il corpo +
+  override del comandante (hp assoluti, arma di autodifesa, profilo AI, abilità, tinta, scala).
+  Loader + accessor nel registry.
+- **Riuso, niente duplicazione**: `resolveCommanderArchetype` delega a `resolveUnitArchetype(base_entity)`
+  per il corpo e sovrascrive gli override — la risoluzione arma/proiettile resta l'unica esistente.
+- **Authoring**: `MapDef.commander.unit` → CommanderDef; dropdown del MapEditor da `data/commanders/`.
+  **Fallback** (transizione): una classe-comandante legacy è ancora accettata da spawn e validazione.
+- **Validazione estesa**: base_entity valido + ability "command" sul CommanderDef; o classe legacy.
+- **Classe rimossa**: migrate firebase e Training Ground a `tactical_droid`, tolto
+  `data/classes/Tactical Droid.json` → non compare più nel roster (né spawnabile come truppa in sandbox).
+- **Verificato end-to-end**: comandante spawnato dal CommanderDef, **dirige** (`cmd_fronti` 3), resta nel
+  **leash** (`cmd_deriva_m` 1.0), e continua **dopo la rimozione della classe**. Build 0/0; `--validate`
+  0/0.
+- **Restano** (raffinamenti, non bloccanti): ruolo comando implicito nel tipo (oggi via ability, rischio
+  zero); entità-a-sé con corpo proprio; editor "Strutture & Comando" dedicato.
+
+## 2026-07-22 (48) — Diagnosi corrette: mouse fullscreen e rename (le prime erano sbagliate)
+
+Analisi d'integrità richiesta dall'utente dopo che due fix del giro (47) non avevano funzionato. Le
+**diagnosi originali erano errate**; ecco le cause vere.
+- **Mouse "sfasato" in fullscreen — CAUSA VERA**: non era la modalità mouse relativa (la camera usa
+  delta relativi, indipendenti dalla risoluzione — non era mai rotta). Era la **UI 2D**: `Ui2D::begin`
+  faceva `glOrtho(0, m_w, m_h)` con `m_w/m_h` **fissi alla creazione** (es. 1280×720), mentre il
+  viewport GL è il drawable reale (1920×1080 in fullscreen). L'UI si stirava a schermo (sembrava ok),
+  ma il **mouse arriva in pixel reali** → click/hover sfasati del rapporto di scala. Colpiva TUTTE le
+  UI cursore (respawn map, pausa, menu sandbox, pre-partita). **Fix in un punto solo**: `Ui2D::begin`
+  ora sincronizza `m_w/m_h` dal **viewport GL reale** (`glGetIntegerv(GL_VIEWPORT)`) → coordinate UI
+  == pixel finestra == coordinate mouse. Sistema tutte e 6 le istanze Ui2D insieme.
+- **Rename mappa — la sync era corretta ma non l'avevo esercitata**: il file era stato rinominato la
+  sera prima (con l'editor pre-fix), quindi il campo `name` era rimasto "Outpost". Ma per non
+  dipendere dal timing del rename ho aggiunto un **campo "Nome" nella toolbar del MapEditor**: edita
+  direttamente `name` (ciò che partita/sandbox mostrano), salvato con la mappa via RMW. Più il rename
+  che sincronizza `name` col nuovo id, più il fix diretto del file già rinominato (`Training Ground`).
+- **Analisi d'integrità**: nessun altro consumatore usa dimensioni finestra stantie (`getWidth/Height`
+  solo su Texture, non-UI); tutti i mouse-coord vengono da eventi SDL in pixel finestra, coerenti con
+  la UI ora viewport-based; nessun raycast mondo da posizione mouse. `m_width/m_height` di Window
+  restano non aggiornati al resize ma è benigno (la UI 2D usa il viewport, il 3D il drawable).
+- Build 0/0; `--validate` 0/0. **Da verificare a mano**: mouse in fullscreen ora allineato, e il
+  campo Nome del MapEditor.
+
+## 2026-07-22 (47) — Quattro fix segnalati dall'utente (crash salva-gameplay + tre difetti)
+
+- **CRASH del "Salva gameplay" (grave, ADR-043)**: chiamavo `.items()` su un json **temporaneo**
+  (`gameplayBalanceToJson(m_gameplay).items()`) dentro un range-for. È il footgun noto di nlohmann: il
+  temporaneo muore prima del loop, il proxy resta appeso → **use-after-free**. Corretto iterando su una
+  **variabile** (`const json patch = ...; for (it = patch.begin()...)`). Difetto tutto mio, introdotto
+  nel turno precedente.
+- **Rename mappa non cambiava il nome in partita/sandbox**: il rename cambia il **filename/id** ma
+  partita e sandbox mostrano `MapDef.name` (campo interno separato, fallback id). Ora il rename
+  **sincronizza `name` col nuovo id** via RMW.
+- **Griglia del MapEditor troppo piccola** per mappe grandi: `buildGrid(40 m)` → **120 m** (passo 2 m
+  invariato). Copre mappe ben oltre firebase (50×40).
+- **Mouse "sfasato" in fullscreen** (gioco): il toggle fullscreen ridimensiona la finestra a livello
+  SDL e destabilizza la **modalità mouse relativa** → aim sballato. `toggleFullscreen` ora, se il mouse
+  era catturato, **spegne e riaccende la modalità relativa** e svuota il delta accumulato. *(Fix di
+  logica: non verificabile headless — richiede smoke manuale del toggle in partita.)*
+- Build 0/0; `--validate` 0/0; il balance si ricarica pulito (rimosso anche un BOM residuo nel JSON
+  sorgente dai miei test PowerShell).
+
 ## 2026-07-21 (46) — Bilanciamento globale autorabile: `gameplay.json` + tab Gameplay (ADR-043)
 
 Inizio della fase authoring chiesta dall'utente ("rendere tutto il più autorabile possibile"), dal

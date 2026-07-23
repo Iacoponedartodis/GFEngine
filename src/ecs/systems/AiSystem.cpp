@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <iostream>
 #include <vector>
 
@@ -37,6 +38,8 @@ struct TacticalStats
     int structureEngage = 0;   // strutture ingaggiate di iniziativa (doc 35)
     int allySignalFollow = 0;  // cloni che seguono un segnale della torre (doc 36)
     int overwatchStarted = 0;  // manovre di copertura esplicite via grafo (ADR-032)
+    int holdPosOccupied = 0;   // Hold su posizione difensiva/chokepoint (ADR-046)
+    int obsSightBoost   = 0;   // vista estesa da punto d'osservazione (ADR-046)
     void reset() { *this = TacticalStats{}; }
 };
 static TacticalStats g_tac;
@@ -193,17 +196,54 @@ static void advancePatrol(AiComponent& ai, const MapDef* map)
     if (map && ai.patrolRoute >= 0 && ai.patrolRoute < (int)map->patrolRoutes.size())
     {
         const auto& pts = map->patrolRoutes[ai.patrolRoute].points;
-        const int segCount = (int)pts.size() - 1;
-        if (segCount > 0)
+        const int P = (int)pts.size();
+        if (P >= 2)
         {
-            ai.patrolSeg = (ai.patrolSeg + 1) % segCount;
-            ai.patrolAx = pts[ai.patrolSeg][0];     ai.patrolAz = pts[ai.patrolSeg][2];
-            ai.patrolBx = pts[ai.patrolSeg + 1][0]; ai.patrolBz = pts[ai.patrolSeg + 1][2];
-            ai.goingToB = true;   // sempre "verso B": B è la fine del nuovo segmento
+            // `patrolSeg` = indice del PUNTO-obiettivo. Avanza nel verso corrente e
+            // INVERTE agli estremi (ADR-045): niente più salto-teletrasporto dal
+            // fondo all'inizio; la pattuglia percorre il tracciato avanti e indietro.
+            int step = ai.patrolReverse ? -1 : 1;
+            int next = ai.patrolSeg + step;
+            if (next >= P)       { ai.patrolReverse = true;  next = P - 2; }
+            else if (next < 0)   { ai.patrolReverse = false; next = 1; }
+            if (next < 0) next = 0;   // route a 1 solo punto (degenerata)
+            ai.patrolSeg = next;
+            ai.patrolBx = pts[next][0]; ai.patrolBz = pts[next][2];
+            ai.goingToB = true;   // per le route il bersaglio è sempre B = pts[seg]
             return;
         }
     }
     ai.goingToB = !ai.goingToB;   // legacy: avanti-indietro sul singolo segmento
+}
+
+// Raccoglie la route più vicina dal PUNTO più vicino (ADR-045): l'unità non è
+// più incatenata a una route/segmento pre-assegnati — quando (ri)entra in
+// pattuglia prende il tracciato più comodo e vi si aggancia dove capita, non
+// solo dagli estremi. Rende le route una RETE condivisa e fluida.
+static void joinNearestRoute(AiComponent& ai, const MapDef* map, float x, float z)
+{
+    if (!map || map->patrolRoutes.empty()) return;
+    int   bestRoute = -1, bestPt = 0;
+    float bestD2 = 1e18f;
+    for (size_t r = 0; r < map->patrolRoutes.size(); ++r)
+    {
+        const auto& pts = map->patrolRoutes[r].points;
+        for (size_t p = 0; p < pts.size(); ++p)
+        {
+            const float dx = pts[p][0] - x, dz = pts[p][2] - z;
+            const float d2 = dx * dx + dz * dz;
+            if (d2 < bestD2) { bestD2 = d2; bestRoute = (int)r; bestPt = (int)p; }
+        }
+    }
+    if (bestRoute < 0) return;
+    ai.patrolRoute = bestRoute;
+    ai.patrolSeg   = bestPt;   // parte dal punto più vicino
+    const auto& pts = map->patrolRoutes[bestRoute].points;
+    ai.patrolBx = pts[bestPt][0]; ai.patrolBz = pts[bestPt][2];
+    ai.goingToB = true;
+    // Verso: se sono nella seconda metà del tracciato, conviene tornare indietro
+    // (così non si esce subito dal bordo). Sceglie il verso con più strada davanti.
+    ai.patrolReverse = (bestPt > (int)pts.size() / 2);
 }
 
 // Command post più vicino a (x,z) NON posseduto da `team`: l'obiettivo naturale
@@ -281,50 +321,6 @@ static void updateSectorStates(World& world, const std::vector<EntityId>& snap)
     }
 }
 
-// Settore-OBIETTIVO per il comandante (ADR-034): il più prezioso fra quelli non
-// saldamente in mano ai droidi. Vale importanza + quanto è conteso: una zona
-// importante e disputata conta più di una periferica e vuota.
-static bool pickObjectiveSector(const World& world, float& outX, float& outZ,
-                                float& outRadius, std::string& outLabel)
-{
-    const MapDef* map = world.activeMap;
-
-    float bestVal = -1e30f; bool found = false;
-    if (map)
-    for (size_t s = 0; s < map->sectors.size(); ++s)
-    {
-        const auto& sec = map->sectors[s];
-        const World::SectorState st = (s < world.sectorStates.size())
-                                    ? world.sectorStates[s] : World::SectorState{};
-        // Già saldamente nostra e non contesa → non è un obiettivo.
-        if (st.controllingTeam == 2 && st.pressure < 0.2f) continue;
-        const float val = sec.importance * (1.0f + st.pressure)
-                        + (st.controllingTeam == 1 ? 0.3f : 0.0f);   // toglierla al nemico vale
-        if (val > bestVal)
-        { bestVal = val; outX = sec.x; outZ = sec.z; outRadius = sec.radius;
-          outLabel = sec.label; found = true; }
-    }
-
-    // ── Le STRUTTURE nemiche sono obiettivi (doc 35) ─────────────────────
-    // Entrano in concorrenza con i settori, pesate dalla priorità AUTORATA. Il
-    // comandante indica DOVE concentrarsi; sono poi le singole AI a decidere
-    // percorso, copertura e quando sparare (correzione utente: il comando non
-    // deve diventare un cervello unico al posto delle AI).
-    for (const auto& stx : world.strategicTargets)
-    {
-        if (stx.entity == 0 || stx.team == 2) continue;   // il comando v1 è dei droidi
-        if (!world.isValidEntity(stx.entity)) continue;
-        // Scala coerente coi settori: la priorità autorata è il peso, con un
-        // premio alla torre di comunicazione (è un moltiplicatore di TUTTA la
-        // fazione avversaria, non un edificio qualsiasi — doc 34).
-        const float val = stx.priority * (stx.isComms ? 1.6f : 1.0f);
-        if (val > bestVal)
-        { bestVal = val; outX = stx.x; outZ = stx.z; outRadius = 8.0f;
-          outLabel = stx.label; found = true; }
-    }
-    return found;
-}
-
 // ── Torre di controllo dei cloni (doc 36, ADR-040) ───────────────────────────
 // Pubblica una LISTA di posti che contano. Non sceglie per nessuno: non esiste
 // un "obiettivo dei cloni", esistono segnali che ogni clone valuta per conto suo.
@@ -352,8 +348,19 @@ static void updateAllyIntel(World& world)
             if (st.controllingTeam == 1 && st.pressure < 0.2f) continue;
             World::AllyIntel::Signal sig;
             sig.x = sec.x; sig.z = sec.z; sig.radius = sec.radius;
-            sig.weight = sec.importance * (1.0f + st.pressure)
-                       + (st.controllingTeam == 2 ? 0.3f : 0.0f);
+            // ── ANALISI tattica del settore (info, non ordine, doc 36) ──────
+            // La torre non dice "andate lì": PESA quanto un settore conta, con
+            // criteri leggibili — così i cloni si distribuiscono da soli dove
+            // serve. [[control-tower-informs-not-orders]]
+            float w = sec.importance;                 // valore intrinseco del settore
+            w += st.pressure * 0.6f;                   // conteso: c'è battaglia
+            if (st.enemies > st.allies)                // alleati in MINORANZA → rinforza
+                w += (float)(st.enemies - st.allies) * 0.4f;
+            if (st.controllingTeam == 2) w += 0.3f;    // in mano nemica → riprenderlo
+            // Opportunità: terreno di VALORE poco difeso → sfruttarlo.
+            if (sec.importance > 0.5f && st.enemies <= 1 && st.controllingTeam != 1)
+                w += 0.4f;
+            sig.weight = w;
             sig.label = sec.label;
             world.allyIntel.signals.push_back(sig);
         }
@@ -424,13 +431,33 @@ static bool pickAllySignal(const World& world, float bias,
             total += (s.weight > 0.01f ? s.weight : 0.01f);
     if (total <= 0.0f) return false;   // tutto già coperto → pattuglia normale
 
-    float roll = bias * total;
-    for (const auto& s : sigs)
+    if (total > 0.0f)
     {
-        if (s.crowd >= config::ALLY_SIGNAL_CAPACITY) continue;
-        roll -= (s.weight > 0.01f ? s.weight : 0.01f);
-        if (roll <= 0.0f)
-        { outX = s.x; outZ = s.z; outRadius = s.radius; return true; }
+        float roll = bias * total;
+        for (const auto& s : sigs)
+        {
+            if (s.crowd >= config::ALLY_SIGNAL_CAPACITY) continue;
+            roll -= (s.weight > 0.01f ? s.weight : 0.01f);
+            if (roll <= 0.0f)
+            { outX = s.x; outZ = s.z; outRadius = s.radius; return true; }
+        }
+    }
+
+    // 3) Tutti i segnali SATURI: invece di ripiegare sulla pattuglia locale (idle
+    //    avanti-indietro vicino allo spawn mentre gli altri combattono — segnalato
+    //    dall'utente), RINFORZA il fronte più vicino. Così TUTTI i cloni avanzano
+    //    in modo coerente; la distribuzione fra fronti la garantisce già il passo 2,
+    //    questo è la "seconda ondata" che converge sul fronte più prossimo.
+    {
+        float best2 = 1e18f; const World::AllyIntel::Signal* nearest = nullptr;
+        for (const auto& s : sigs)
+        {
+            const float dx = s.x - fromX, dz = s.z - fromZ;
+            const float d2 = dx * dx + dz * dz;
+            if (d2 < best2) { best2 = d2; nearest = &s; }
+        }
+        if (nearest)
+        { outX = nearest->x; outZ = nearest->z; outRadius = nearest->radius; return true; }
     }
     return false;
 }
@@ -511,7 +538,18 @@ static void pickSearchPoint(AiComponent& ai, float x, float z, const MapDef* map
 void AiSystem::update(World& world, float dt)
 {
     ZoneScoped;   // ADR-015: AI update loop
-    const std::vector<EntityId> snap = world.getEntities();
+    // `snap` = solo le entità con un Team (unità, strutture, player) — NON i box di
+    // geometria. Tutti i passaggi AI qui sotto filtrano già a team/AI (saltano ciò
+    // che non ha team), quindi escludere la geometria a monte è a comportamento
+    // INVARIATO, ma toglie ~175 iterazioni × ~10 passaggi/frame su Training Ground:
+    // era il costo che scala con la DIMENSIONE della mappa, non col numero di AI
+    // (misurato: 12→50 AI = +10%; il grosso è la geometria). Perf, ADR-015.
+    std::vector<EntityId> snap;
+    {
+        const auto& all = world.getEntities();
+        snap.reserve(all.size());
+        for (EntityId e : all) if (world.getTeam(e)) snap.push_back(e);
+    }
     const std::uint64_t tick = world.getTickCount();   // time-slicing (Fase 4)
     m_time += dt;   // cadenza delle decisioni di comando ed età dei contatti (doc 34)
 
@@ -617,15 +655,38 @@ void AiSystem::update(World& world, float dt)
                 const auto& sec = map->sectors[s];
                 const World::SectorState st = (s < world.sectorStates.size())
                                             ? world.sectorStates[s] : World::SectorState{};
-                // Saldamente droidi e tranquillo → non è un fronte da presidiare.
-                if (st.controllingTeam == 2 && st.pressure < 0.2f && st.allies == 0) continue;
+                // Il settore ospita un command post che i droidi POSSIEDONO? Un
+                // obiettivo catturato è terreno da TENERE, non solo da attraversare.
+                // È la condizione STABILE che al Hold mancava: prima chiedeva una
+                // maggioranza di UNITÀ droidi nel settore (evento raro in 6v6), così
+                // il presidio non scattava mai (misura F5, doc 39). Il possesso del
+                // post no — dura finché non te lo riprendono. (ADR-046: attiva
+                // finalmente bestHoldPosition sui ruoli defensive/chokepoint.)
+                bool ownsPost = false;
+                for (const auto& pstt : world.commandPostStates)
+                {
+                    if (pstt.owner != 2) continue;
+                    for (const auto& cp : map->commandPosts)
+                        if (cp.label == pstt.label)
+                        {
+                            const float dx = cp.x - sec.x, dz = cp.z - sec.z;
+                            if (dx*dx + dz*dz <= sec.radius * sec.radius) ownsPost = true;
+                            break;
+                        }
+                    if (ownsPost) break;
+                }
+                const bool weHold     = (st.controllingTeam == 2) || ownsPost; // teniamo il terreno
+                const bool threatened = (st.allies > 0);                       // cloni che contendono
+                // Nostro e tranquillo → nessun fronte. Altrimenti: TIENI ciò che è
+                // nostro ed è minacciato; SPINGI sul resto (conteso o nemico).
+                if (weHold && !threatened) continue;
                 EC::Directive d;
                 d.x = sec.x; d.z = sec.z; d.radius = sec.radius; d.label = sec.label;
-                // TIENI ciò che controlli ma è minacciato; SPINGI sul resto.
-                d.stance = (st.controllingTeam == 2 && st.allies > 0)
-                         ? EC::Hold : EC::Advance;
+                const bool holdIt = weHold && threatened;
+                d.stance = holdIt ? EC::Hold : EC::Advance;
                 d.weight = sec.importance * (1.0f + st.pressure)
-                         + (st.controllingTeam == 1 ? 0.3f : 0.0f);
+                         + (st.controllingTeam == 1 ? 0.3f : 0.0f)   // attaccare terreno nemico
+                         + (holdIt ? 0.35f : 0.0f);                   // difendere un obiettivo conteso conta
                 dirs.push_back(d);
             }
             // Le strutture nemiche sono fronti d'attacco (priorità autorata).
@@ -712,12 +773,13 @@ void AiSystem::update(World& world, float dt)
     // Rende osservabile da telemetria il sintomo "AI ferme".
     if (world.getTickCount() % 600 == 1)
     {
-        int nAi = 0, patrol = 0, alert = 0, hunt = 0, search = 0, stat = 0;
+        int nAi = 0, patrol = 0, alert = 0, hunt = 0, search = 0, stat = 0, onRoute = 0;
         for (EntityId e : snap)
             if (const auto* a = world.getAi(e))
             {
                 ++nAi;
                 if (a->stationary) ++stat;
+                if (a->patrolRoute >= 0) ++onRoute;   // ADR-045: route fluide
                 switch (a->state)
                 {
                 case AiState::Patrol: ++patrol; break;
@@ -774,6 +836,7 @@ void AiSystem::update(World& world, float dt)
              {"fermi", stat},       {"in_manovra", inRepo},
              {"sq_follow", ordFollow}, {"sq_altri_ordini", ordAltri},
              {"sq_senza_ordine", ordNessuno},
+             {"su_route", onRoute},   // ADR-045: unità agganciate a una route
              {"cmd_fronti", (int)world.enemyCommand.directives.size()},
              {"cmd_avanzata", dirAdv}, {"cmd_tieni", dirHold}, {"cmd_ripiega", dirRet},
              {"cmd_obiettivo", cmdTop},
@@ -805,6 +868,8 @@ void AiSystem::update(World& world, float dt)
              {"manovra_valutata",    g_tac.repoEval},
              {"manovra_bloccata_da_altri", g_tac.repoBlockedBusy},
              {"overwatch_avviati", g_tac.overwatchStarted},
+             {"hold_su_posizione", g_tac.holdPosOccupied},   // ADR-046
+             {"obs_vista_estesa",  g_tac.obsSightBoost},      // ADR-046
              {"fianco_trovato",      g_tac.repoFlankHit},
              {"fianco_assente",      g_tac.repoFlankMiss},
              {"tiro_trovato",        g_tac.repoFiringHit},
@@ -907,9 +972,17 @@ void AiSystem::update(World& world, float dt)
         }
     }
 
-    // Overwatch esplicito (ADR-032): le avanzate di QUESTO tick si leggono al
-    // prossimo, così la scelta di chi copre non dipende dall'ordine di iterazione.
-    m_advancesPrev.swap(m_advances);
+    // Overwatch esplicito (ADR-032): le avanzate si leggono dal pool `m_advancesPrev`,
+    // dove PERSISTONO per il loro TTL (~durata manovra) invece di sparire dopo un
+    // tick. Le NUOVE (di questo tick, in m_advances) entrano DOPO il decadimento →
+    // visibili dal prossimo tick: la scelta di chi copre resta indipendente
+    // dall'ordine di iterazione, ma il segnale dura abbastanza da essere colto.
+    for (auto& a : m_advancesPrev) a.ttl -= dt;
+    m_advancesPrev.erase(
+        std::remove_if(m_advancesPrev.begin(), m_advancesPrev.end(),
+                       [](const Advance& a) { return a.ttl <= 0.0f; }),
+        m_advancesPrev.end());
+    for (const auto& a : m_advances) m_advancesPrev.push_back(a);
     m_advances.clear();
 
     // ── Seconda passata: aggiorna ogni AI ────────────────────────────
@@ -943,6 +1016,28 @@ void AiSystem::update(World& world, float dt)
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
         const glm::vec3 ePos = {et->x, et->y, et->z};
+
+        // ── Presidio (ADR-046, opzione A) — valutato PRIMA dei rami di combattimento
+        // Se il comando ordina TIENI su un fronte a cui questo droide è assegnato,
+        // lo si àncora alla miglior posizione difensiva/chokepoint dell'area: ci
+        // COMBATTE da lì senza inseguire (clamp più sotto). Va fatto qui, non nel
+        // ramo waypoint (raggiunto solo fuori dal combattimento): il TIENI scatta
+        // proprio DURANTE la minaccia, quindi prima `hold_su_posizione` restava 0.
+        // Escluso il comandante (leash proprio) e i fermi. Rivalutato ogni tick →
+        // Advance/Retreat rilasciano l'àncora.
+        ai->holdRadius = 0.0f;
+        if (myTeam == 2 && !ai->stationary && ai->leashRadius <= 0.0f
+            && world.enemyCommand.active && world.activeMap)
+        {
+            const auto* hd = pickEnemyDirective(world, ai->bias);
+            if (hd && hd->stance == World::EnemyCommand::Hold)
+                if (const TacticalPositionDef* h = worldintel::bestHoldPosition(
+                        *world.activeMap, et->x, et->z, hd->x, hd->z, hd->radius))
+                {
+                    ai->holdX = h->x; ai->holdZ = h->z; ai->holdRadius = 8.0f;
+                    ++g_tac.holdPosOccupied;
+                }
+        }
 
         // Contatto condiviso LOCALMENTE: adotta solo il più vicino entro il
         // raggio. Chi combatte a ovest non trascina chi presidia a est.
@@ -988,7 +1083,16 @@ void AiSystem::update(World& world, float dt)
             // qui: aggro ~ dimensione mappa).
             constexpr int K = config::AI_MAX_LOS_CHECKS;
             int   kIdx[K]; float kD2[K]; int kn = 0;
-            const float aggro2 = ai->aggroRange * ai->aggroRange;
+            // Punto d'OSSERVAZIONE (ADR-046): un'unità nella ZONA di un punto
+            // d'osservazione autorato avvista da PIÙ LONTANO — è la funzione del
+            // ruolo (early-warning), prima decorativo. +50% di aggro entro 10 m
+            // (la sua area d'influenza, non il singolo punto).
+            float aggro = ai->aggroRange;
+            if (world.activeMap
+                && worldintel::nearestPositionByRole(*world.activeMap,
+                                                     et->x, et->z, "observation", 10.0f))
+                { aggro *= 1.5f; ++g_tac.obsSightBoost; }
+            const float aggro2 = aggro * aggro;
             for (size_t i = 0; i < targets.size(); ++i)
             {
                 if (targets[i] == e) continue;
@@ -1177,6 +1281,15 @@ void AiSystem::update(World& world, float dt)
             telemetry::event(telemetry::Level::Warn, "AI", "stuck",
                 {{"bot_id", e}, {"state", aiStateName(ai->state)},
                  {"pos", {et->x, et->y, et->z}}, {"stuck_time", ai->stuckTimer}});
+            // RECUPERO (2026-07-23): un bot bloccato quasi sempre insegue un target
+            // IRRAGGIUNGIBILE (posizione su un'isola navmesh o passaggio eroso) e ci
+            // resta contro un muro — prima ci si limitava a loggare. Ora ABBANDONA
+            // ogni target impegnato → ri-valuta invece di restare inchiodato. Sana
+            // anche l'interazione col commitment del segnale torre.
+            ai->allySigValid     = false;   // molla il waypoint torre impegnato
+            ai->repositionActive = false;   // molla la manovra
+            ai->holdRadius       = 0.0f;    // molla l'àncora di presidio
+            ai->patrolRoute      = -1;      // ricambia route (ADR-045)
         }
 
         // ── Movimento ────────────────────────────────────────────────
@@ -1381,7 +1494,7 @@ void AiSystem::update(World& world, float dt)
                                     // (ADR-032): l'indice della posizione tattica.
                                     const int di = (int)(dest - world.activeMap->tacticalPositions.data());
                                     if (di >= 0 && di < (int)world.activeMap->tacticalPositions.size())
-                                        m_advances.push_back({di, myT, dest->x, dest->z});
+                                        m_advances.push_back({di, myT, dest->x, dest->z, 5.0f});
                                 }
                                 else ++g_tac.repoTooClose;
                             }
@@ -1477,6 +1590,11 @@ void AiSystem::update(World& world, float dt)
                     ai->searchTimer  = 0.0f;
                     ai->hasLastKnown = false;
                     ai->state        = AiState::Patrol;
+                    // Persa la pista, l'unità è altrove: si sgancia dalla route e
+                    // ne raccoglierà la più vicina rientrando in pattuglia — è così
+                    // che CAMBIA route liberamente invece di tornare alla sua di
+                    // partenza (ADR-045).
+                    ai->patrolRoute  = -1;
                 }
                 moveDX = ai->searchX - et->x;
                 moveDZ = ai->searchZ - et->z;
@@ -1500,15 +1618,15 @@ void AiSystem::update(World& world, float dt)
                                   || (world.allyIntel.active && team->teamId == 1)
                                   || targets.empty()))   // ultimo bersaglio: doc 35
             {
-                // Pattuglia (prima del contatto). Il Droide Tattico non detta le
-                // destinazioni: dà un INTENTO (ADR-024 v2) e ogni droide decide da
-                // sé il COME — quale percorso, dove coprirsi, quando ingaggiare.
-                //  · Hold    → presidia: pattuglia la sua route / la sua area.
-                //  · Advance → la forza di MANOVRA (senza route) spinge sull'obiettivo
-                //              identificato; chi è su una route continua a presidiare.
-                //  · Retreat → ripiega verso lo spawn separatista.
-                // Ai waypoint SOSTA per patrolDwell secondi: è ciò che permette di
-                // catturare i command post (presenza continuativa).
+                // Pattuglia (prima del contatto). Il comando dà un INTENTO, non una
+                // destinazione per ognuno; ogni unità decide il COME. **Novità
+                // ADR-045**: l'intento vale anche per chi è su una route.
+                //  · Advance → TUTTI spingono sull'obiettivo del proprio fronte.
+                //  · Retreat → TUTTI ripiegano.
+                //  · Hold / nessun comando → si pattuglia, con route FLUIDE:
+                //    raccolte dal punto più vicino, bidirezionali, cambiabili.
+                // Ai waypoint SOSTA per patrolDwell secondi: presenza continuativa
+                // che cattura i command post.
                 const bool cmdActive = world.enemyCommand.active && team->teamId == 2;
                 // Un membro in FOLLOW sta scortando il leader: non deve mettersi a
                 // pattugliare la mappa, o il guinzaglio lo richiama e ne esce un
@@ -1536,81 +1654,132 @@ void AiSystem::update(World& world, float dt)
                     wz = sq->targetZ + std::sin(ang) * rad;
                     haveTarget = true;
                 }
-                else if (cmdActive && ai->patrolRoute < 0)
+                else
                 {
-                    // ── Fronte assegnato dal Droide Tattico (doc 32 v2) ──────
-                    // Il droide sceglie UNO dei fronti (pesato dal bias): la forza
-                    // si distribuisce su più settori invece di convergere tutta su
-                    // uno. Poi segue la STANCE di quel fronte, ma decide da sé il
-                    // COME — quale post, quale percorso, quando ingaggiare.
-                    const auto* d = pickEnemyDirective(world, ai->bias);
-                    if (d)
+                    // ── Intento del COMANDO: sovrascrive la pattuglia (ADR-045) ──
+                    // Prima le unità su route ignoravano comandante e torre: metà
+                    // forza sorda al comando, su un binario fisso. Ora Advance e
+                    // Retreat valgono per TUTTI (route o no); Hold — o nessun
+                    // comando — lascia pattugliare (route FLUIDA, più sotto).
+                    if (cmdActive)   // droidi: direttiva del Droide Tattico (doc 32)
                     {
-                        if (d->stance == World::EnemyCommand::Retreat && world.activeMap)
+                        const auto* d = pickEnemyDirective(world, ai->bias);
+                        if (d && d->stance == World::EnemyCommand::Retreat && world.activeMap)
                         {
                             wx = world.activeMap->spawnTeam2[0];
                             wz = world.activeMap->spawnTeam2[2];
                             haveTarget = true;
                         }
-                        else   // Advance o Hold: verso un post del settore, poi lo presidia
+                        else if (d && d->stance == World::EnemyCommand::Advance)
                         {
+                            // Verso un post del settore-fronte; se non ce n'è, un
+                            // punto sull'anello (diverso per bias → non si ammassano).
                             haveTarget = nearestCapturablePost(world, et->x, et->z, 2,
                                                                wx, wz, d->x, d->z, d->radius);
-                            if (!haveTarget && d->stance == World::EnemyCommand::Advance)
+                            if (!haveTarget)
                                 haveTarget = nearestCapturablePost(world, et->x, et->z, 2, wx, wz);
                             if (!haveTarget)
                             {
-                                // Nessun post nel settore: TIENI la zona — un punto
-                                // sull'anello, diverso per droide (bias), così
-                                // presidiano l'area invece di ammassarsi al centro.
                                 const float ang = ai->bias * 6.2831853f;
                                 wx = d->x + std::cos(ang) * d->radius * 0.6f;
                                 wz = d->z + std::sin(ang) * d->radius * 0.6f;
                                 haveTarget = true;
                             }
                         }
-                    }
-                }
-                else if (team->teamId == 1 && world.allyIntel.active
-                         && ai->patrolRoute < 0)
-                {
-                    // ── Torre di controllo (doc 36, ADR-040) ─────────────────
-                    // Il clone NON riceve un ordine: consulta i segnali e ne
-                    // sceglie uno lui, decorrelato dal proprio bias. Poi decide
-                    // da sé il punto dentro quell'area — il post catturabile più
-                    // vicino, o un punto sull'anello se non ce n'è. Due cloni con
-                    // la stessa informazione finiscono in posti diversi: è questa
-                    // la differenza dai droidi, che convergono tutti sull'intento
-                    // del comandante.
-                    float sx = 0.0f, sz = 0.0f, srad = 8.0f;
-                    if (pickAllySignal(world, ai->bias, et->x, et->z, sx, sz, srad))
-                    {
-                        haveTarget = nearestCapturablePost(world, et->x, et->z, 1,
-                                                           wx, wz, sx, sz, srad);
-                        if (!haveTarget)
+                        else if (d && d->stance == World::EnemyCommand::Hold
+                                 && ai->holdRadius > 0.0f)
                         {
-                            const float ang = ai->bias * 6.2831853f;
-                            wx = sx + std::cos(ang) * srad * 0.6f;
-                            wz = sz + std::sin(ang) * srad * 0.6f;
-                            haveTarget = true;
+                            // Àncora di presidio già scelta a inizio tick (ADR-046,
+                            // opzione A): il waypoint È la posizione difensiva. Il
+                            // clamp ci tiene il droide, che combatte DA lì senza
+                            // inseguire. Àncora 0 (nessuna posizione) → pattuglia.
+                            wx = ai->holdX; wz = ai->holdZ; haveTarget = true;
                         }
-                        ++g_tac.allySignalFollow;
+                        // Hold senza posizione / nessuna direttiva → pattuglia.
                     }
-                }
-                if (!haveTarget && !escorting && targets.empty())
-                {
-                    // Nessuna unità nemica in campo: dirigiti verso l'ULTIMO
-                    // bersaglio rimasto — la struttura nemica — per finirla, poi
-                    // (distrutta) i segnali spariscono e si ripattuglia. Vale per
-                    // entrambe le fazioni e NON scatta a metà partita: richiede
-                    // zero unità nemiche (comportamento atteso dall'utente).
-                    haveTarget = nearestEnemyStructure(world, team->teamId,
-                                                       et->x, et->z, wx, wz);
-                }
-                if (!haveTarget)   // Hold, o unità di presidio: la sua pattuglia
-                {
-                    wx = ai->goingToB ? ai->patrolBx : ai->patrolAx;
-                    wz = ai->goingToB ? ai->patrolBz : ai->patrolAz;
+                    else if (team->teamId == 1 && world.allyIntel.active)   // cloni: torre (doc 36)
+                    {
+                        // La torre SEGNALA (non ordina): il clone sceglie un segnale
+                        // decorrelato dal bias e vi si muove. Ora vale anche per i
+                        // cloni su route (prima li ignoravano). Se tutti i segnali
+                        // sono saturi, `pickAllySignal` fallisce → pattuglia.
+                        // COMMITMENT su un WAYPOINT già scelto e verificato
+                        // raggiungibile: ci si va senza ricalcolare, finché non lo si
+                        // raggiunge o scade il timer di ri-valutazione. Toglie
+                        // l'oscillazione avanti-indietro E bounda il findPath di
+                        // raggiungibilità (~1 ogni 4 s per clone, non a ogni tick).
+                        ai->allySigTimer -= dt;
+                        const float rdx = et->x - ai->allySigX, rdz = et->z - ai->allySigZ;
+                        const bool reached = ai->allySigValid && (rdx*rdx + rdz*rdz < 3.0f*3.0f);
+                        if (ai->allySigValid && !reached && ai->allySigTimer > 0.0f)
+                        {
+                            wx = ai->allySigX; wz = ai->allySigZ; haveTarget = true;
+                            ++g_tac.allySignalFollow;
+                        }
+                        else
+                        {
+                            float sx = 0.0f, sz = 0.0f, srad = 8.0f;
+                            if (pickAllySignal(world, ai->bias, et->x, et->z, sx, sz, srad))
+                            {
+                                // Default: centro del settore (a terra → raggiungibile).
+                                float tx = sx, tz = sz;
+                                // Miglior terreno del fronte (vantage/cover/defensive per
+                                // importanza, incluse le ELEVATE) — ma SOLO se davvero
+                                // RAGGIUNGIBILE: niente isole (scale troppo ripide) o
+                                // passaggi erosi dove il clone finirebbe in trappola
+                                // contro un muro (screenshot utente 2026-07-23).
+                                const TacticalPositionDef* adv = world.activeMap
+                                    ? worldintel::bestAdvantageInArea(*world.activeMap,
+                                                                      et->x, et->z, sx, sz, srad)
+                                    : nullptr;
+                                if (adv && (!world.nav || !world.nav->crowdReady()
+                                            || world.nav->isReachable({et->x, et->y, et->z},
+                                                                      {adv->x, adv->y, adv->z})))
+                                { tx = adv->x; tz = adv->z; }
+                                else
+                                {
+                                    float px, pz;   // niente vantage raggiungibile → il post del fronte
+                                    if (nearestCapturablePost(world, et->x, et->z, 1, px, pz, sx, sz, srad))
+                                    { tx = px; tz = pz; }
+                                }
+                                ai->allySigX = tx; ai->allySigZ = tz;
+                                ai->allySigValid = true; ai->allySigTimer = 4.0f;
+                                wx = tx; wz = tz; haveTarget = true;
+                                ++g_tac.allySignalFollow;
+                            }
+                            else ai->allySigValid = false;
+                        }
+                    }
+
+                    // Ultimo bersaglio: nessuna unità nemica → finisci la struttura.
+                    if (!haveTarget && targets.empty())
+                        haveTarget = nearestEnemyStructure(world, team->teamId,
+                                                           et->x, et->z, wx, wz);
+
+                    // ── Pattuglia: route FLUIDA (ADR-045) ────────────────────
+                    // Chi non ha una route se ne aggancia una: la PIÙ VICINA, dal
+                    // PUNTO più vicino (non solo dagli estremi). Le route diventano
+                    // una rete condivisa. Il bersaglio è il punto-obiettivo corrente
+                    // (`patrolSeg`), percorso bidirezionalmente da advancePatrol.
+                    if (!haveTarget)
+                    {
+                        if (ai->patrolRoute < 0)
+                            joinNearestRoute(*ai, world.activeMap, et->x, et->z);
+                        if (ai->patrolRoute >= 0 && world.activeMap
+                            && ai->patrolRoute < (int)world.activeMap->patrolRoutes.size())
+                        {
+                            const auto& pts = world.activeMap->patrolRoutes[ai->patrolRoute].points;
+                            int si = ai->patrolSeg;
+                            if (si < 0 || si >= (int)pts.size()) si = 0;
+                            wx = pts[si][0]; wz = pts[si][2];
+                        }
+                        else   // nessuna route autorata: A/B legacy (avanti-indietro)
+                        {
+                            wx = ai->goingToB ? ai->patrolBx : ai->patrolAx;
+                            wz = ai->goingToB ? ai->patrolBz : ai->patrolAz;
+                        }
+                        haveTarget = true;
+                    }
                 }
                 moveDX = wx - et->x; moveDZ = wz - et->z;
 
@@ -1725,6 +1894,22 @@ void AiSystem::update(World& world, float dt)
                 const float d = std::sqrt(d2);
                 moveDX = -hx / d; moveDZ = -hz / d;   // torna verso casa
                 moveDist  = d - ai->leashRadius;
+                moveSpeed = (moveSpeed > 0.0f) ? moveSpeed : ai->seekSpeed;
+            }
+        }
+        // ── Àncora di PRESIDIO (ADR-046, opzione A) ──────────────────────
+        // Stesso clamp del leash ma con centro dinamico (la posizione difensiva):
+        // il droide in TIENI combatte/si copre entro il raggio ma non insegue oltre.
+        // Esclusiva col leash del comandante (holdRadius resta 0 per il comandante).
+        else if (ai->holdRadius > 0.0f)
+        {
+            const float hx = et->x - ai->holdX, hz = et->z - ai->holdZ;
+            const float d2 = hx * hx + hz * hz;
+            if (d2 > ai->holdRadius * ai->holdRadius)
+            {
+                const float d = std::sqrt(d2);
+                moveDX = -hx / d; moveDZ = -hz / d;   // rientra sulla posizione
+                moveDist  = d - ai->holdRadius;
                 moveSpeed = (moveSpeed > 0.0f) ? moveSpeed : ai->seekSpeed;
             }
         }

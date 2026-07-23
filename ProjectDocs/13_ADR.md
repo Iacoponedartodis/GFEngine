@@ -2076,9 +2076,12 @@ Sposta/Scala, selezione dal viewport, save RMW. **Misurato** (leash 6 su firebas
 comandante dalla casa resta **0 → 5.5 → 6.0**, mai oltre il raggio — si muove per difendersi ma non
 esce. Build 0/0; `--validate` 0/0. **Chiude anche l'item audit "UI del commander nel MapEditor".**
 
-**Fasi successive (ancora Proposed, non iniziate):** migrazione fuori da `class` (§Decision 1);
-unificazione "nodo strategico" nell'authoring (§3); editor dedicato "Strutture & Comando" con i
-parametri `COMMS_LOST_*` (§4). E, separata, la **stance v2 multi-settore** (doc 32 Direzione v2).
+**Fasi successive:** **✅ migrazione fuori da `class` FATTA (ADR-044, 2026-07-22)**; **✅ stance v2
+multi-settore FATTA (ADR-042)**; **✅ editor "Comando" FATTO (2026-07-22, changelog 50)** — tab nel
+BalanceEditor che autora i CommanderDef (dropdown corpo/arma/AI, abilità, hp/tinta) e i parametri
+`COMMS_LOST_*` (§4). Le strutture restano per-mappa nel Map Editor (sono istanze, non def globali).
+**Resta**: il ruolo comando implicito nel tipo (raffinamento) e il **grado intermedio**
+([[command-rank-system]]). Con questo il rework del Droide Tattico è sostanzialmente completo.
 
 ---
 
@@ -2181,3 +2184,171 @@ deterministico**: `squad_max_revives = 0` nel JSON sorgente → log `max_revives
 `member downed/revived` in 110 s di sim (chi cade muore); ripristinato 1 → baseline identica
 (8 downed / 5 revived / 3 bled out, tutti a `revives_used: 1`). **Manca smoke manuale**: il tab
 Gameplay nell'editor (slider → salva → riavvia partita → effetto).
+
+---
+
+## ADR-044 — Il Droide Tattico è un CommanderDef, non una classe (Accepted, 2026-07-22)
+
+> Realizza la **Fase 2 di ADR-041**: la migrazione del comandante fuori dal sistema classi. Chiude la
+> parte più architetturale del rework del Droide Tattico.
+
+### Context
+Il Droide Tattico viveva in `data/classes/Tactical Droid.json`. Ma una **classe è una professione
+istanziabile su più corpi** (ADR-023): Trooper, Heavy, Sniper. Il comandante non è nulla di ciò — è
+un'**unità UNICA a ruolo strategico** (uno per mappa), che **non combatte** (si difende soltanto),
+sta al sicuro, dà ordini, e ucciderla ha una conseguenza (come una torre). Forzarlo in `class` aveva
+tre effetti concreti: (a) compariva nel roster delle classi giocabili (la sandbox spawna tutte le
+classi → il comandante come truppa); (b) l'authoring era in mezzo alle professioni; (c) il suo essere
+comandante dipendeva da un'ability "command" su una classe, non dal suo tipo.
+
+### Decision
+1. **Nuovo tipo `CommanderDef`** (`data/commanders/<id>.json`): `name`, `base_entity` (il CORPO da cui
+   prende mesh/hitbox/proiettile), `self_defense_weapon`, `ai_profile`, `abilities`, `hp` **assoluti**,
+   `speed_mult`, `mesh_scale`, `color_mult`, `team`. Loader + accessor nel registry, come le altre
+   definizioni.
+2. **Riuso del corpo, niente duplicazione**: `resolveCommanderArchetype` delega a
+   `resolveUnitArchetype(base_entity)` per il corpo e vi sovrascrive gli override del comandante. La
+   risoluzione di arma/proiettile/profilo resta l'unica esistente.
+3. **`MapDef.commander.unit` referenzia un CommanderDef**; editor con dropdown da `data/commanders/`.
+4. **Fallback documentato (transizione, CLAUDE.md)**: se `commander.unit` è ancora una classe
+   con ability "command", lo spawn e la validazione la accettano. Rimosso `data/classes/Tactical
+   Droid.json` una volta migrate le due mappe (firebase, Training Ground) → il fallback resta per
+   sicurezza ma non è più esercitato.
+5. **Validazione** (ADR-018): il gate accetta un CommanderDef (base_entity valido + ability "command")
+   o una classe-comandante legacy; altrimenti errore/warning con rimedio.
+
+### Out of Scope
+- **Ruolo comando IMPLICITO** (senza ability "command"): per ora il CommanderComponent arriva ancora
+  dall'ability, come nel modello classe — comportamento identico, rischio zero. Renderlo implicito nel
+  tipo è un raffinamento successivo (richiede lo spawn che ritorna l'EntityId).
+- **Entità-a-sé completa** (corpo proprio invece del `base_entity` B1): il CommanderDef riusa un corpo
+  esistente; un modello dedicato è futuro (dipende dal tooling mesh dell'utente).
+- **Editor "Strutture & Comando" dedicato** (ADR-041 §4): il comandante si autora nel MapEditor
+  (pannello già esistente); i parametri globali `COMMS_LOST_*` vivono per ora nel tab Gameplay (ADR-043).
+
+### Consequences
+- **Positivo**: il comandante esce dal roster delle classi (non più spawnabile come truppa in
+  sandbox); l'authoring è coerente col suo ruolo; il tipo è espandibile con parametri commander-specifici
+  senza toccare il sistema classi. La macchina del corpo non è duplicata.
+- **Costo/rischio**: un nuovo tipo di definizione + loader + gate + un path di spawn. Contenuto dal
+  fallback e dal riuso di `resolveUnitArchetype`.
+
+### Status
+**Accepted — in force (2026-07-22).** Build 0/0; `--validate` 0/0. **Verificato end-to-end**: il
+comandante spawna da `data/commanders/tactical_droid.json` (registry: "Commander: tactical_droid"),
+**dirige** (`cmd_fronti` 3), resta nel **leash** (`cmd_deriva_m` 1.0 ≤ raggio 2), e continua a farlo
+**dopo la rimozione della classe** dal roster. firebase e Training Ground migrate. **Manca smoke
+manuale**: autorare/cambiare il comandante dal MapEditor (dropdown da commanders/).
+
+---
+
+## ADR-045 — Route fluide e obbedienti al comando (Accepted, 2026-07-22)
+
+> Realizza P1+P2 dell'audit doc 38: le due frizioni più grosse fra route e resto dei sistemi. È
+> consolidamento (far lavorare insieme pezzi esistenti), non un sistema nuovo.
+
+### Context
+Due problemi verificati (doc 38 C1/C2):
+1. **Le route ignoravano il comando**: il ramo che leggeva il comandante/torre richiedeva
+   `patrolRoute < 0`, quindi **metà** della forza (quella con una route autorata) era **sorda** alle
+   direttive — su un binario fisso mentre il resto manovrava.
+2. **Le route erano rigide** (osservazione dell'utente): `advancePatrol` faceva `(seg+1) % segCount`,
+   solo in avanti, ciclico con un salto-teletrasporto dal fondo all'inizio; l'unità non poteva
+   raccogliere una route dal punto più vicino, percorrerla al contrario, né cambiarla.
+
+### Decision
+1. **Il comando SOVRASCRIVE la pattuglia (P1)**: `Advance`/`Retreat` valgono ora per **tutti**, route
+   o no. `Hold` (o nessun comando) → si pattuglia. Sblocca la metà della forza prima sorda. Vale per
+   i droidi (direttiva del comandante) e per i cloni (segnali della torre, che ora raggiungono anche
+   i cloni su route).
+2. **Route bidirezionali (P2)**: `advancePatrol` percorre il tracciato avanti **e indietro**
+   (`patrolReverse`), invertendo agli estremi — niente più salto-wrap. `patrolSeg` è ora l'indice del
+   PUNTO-obiettivo, non del segmento.
+3. **Raccolta dal punto più vicino (P2)**: `joinNearestRoute` aggancia la route più vicina dal punto
+   più vicino (non solo dagli estremi). Le route diventano una **rete condivisa**.
+4. **Cambio route (P2)**: uscendo da Search verso Patrol l'unità si sgancia (`patrolRoute = -1`) e
+   rientrando raccoglie la route più vicina — così cambia tracciato invece di tornare al suo di
+   partenza.
+
+### Out of Scope
+- **Punti di join intermedi con proiezione sul segmento** (agganciarsi esattamente al punto più
+  vicino SU un segmento, non al vertice): qui ci si aggancia al vertice più vicino, sufficiente.
+- **`purpose` delle route** (pattuglia vs assalto vs ripiego): resta futuro (doc 33).
+- P3 dell'audit (ruoli decorativi, cover-evita-danger): prossimo giro.
+
+### Consequences
+- **Positivo**: metà forza non è più sorda al comando; le route sono percorse in modo naturale e
+  condiviso; la varietà aumenta (versi e agganci diversi). Le route e il comando ora sono **un solo
+  sistema** invece di due mondi.
+- **Costo/rischio**: restructure di un ramo centrale (pattuglia). Contenuto: la logica di comando è la
+  stessa di prima, solo senza il gate `patrolRoute < 0`; la route è la stessa, con verso + join.
+
+### Status
+**Accepted — in force (2026-07-22).** Build 0/0; `--validate` 0/0. **Misurato** (`--sim` 10v10):
+`su_route` **5-10** unità agganciate a una route lungo tutta la partita (raccolta/cambio dinamici);
+il comando sovrascrive (a t=93 s stance "Ripiegamento" → le unità lasciano le route); `cmd_fronti` 3,
+obiettivo che varia; `stuck` 9 (varianza normale, nessuno spike dal restructure). **Da verificare in
+partita**: che le route si vedano percorrere avanti e indietro e che i droidi su route rispondano
+davvero all'avanzata (leggibile: durante Advance le unità puntano l'obiettivo invece del tracciato).
+
+## ADR-046 — Ai ruoli tattici il loro comportamento; la copertura evita il pericolo (Accepted, 2026-07-22)
+
+> Realizza P3 dell'audit doc 38: dà significato ai tre ruoli tattici finora decorativi, chiude
+> l'ultimo dato inerte (`dangerAt`) e rimuove il codice morto residuo. È consolidamento, non un
+> sistema nuovo — nessun nuovo schema, solo query e rami che leggono metadata già autorabili.
+
+### Context
+Tre attriti verificati (doc 38 B1/B2/B3):
+1. **Tre ruoli decorativi (B1)**: `defensive`, `chokepoint`, `observation` si autoravano nell'editor e
+   si disegnavano nel viewport, ma **nessun ramo dell'AI li leggeva**. Cover e vantage avevano
+   comportamento; questi tre no — metadata a costo zero di manutenzione ma senza effetto.
+2. **`dangerAt` inerte (B2)**: la query esisteva ed era testata, ma **nessuno la consumava**. Le danger
+   zone si disegnavano ma non spostavano una sola decisione: l'AI poteva scegliere una copertura in
+   piena zona di fuoco/mine.
+3. **Codice morto (B3)**: `bestOverwatchFor` (variante vecchia non-Position, superata da
+   `bestOverwatchForPosition`) e `pickObjectiveSector` (residuo del comando v1, superato da ADR-042)
+   erano non referenziati — rumore che genera warning e confonde chi legge.
+
+### Decision
+1. **`observation` → vista estesa**: un'unità entro 10 m da una posizione `observation` vede più
+   lontano (`aggroRange × 1.5`). Il punto di osservazione diventa un **moltiplicatore di sensori
+   locale** — chi lo presidia ingaggia prima. Telemetria `obs_vista_estesa`.
+2. **`defensive`/`chokepoint` → posizioni da tenere**: nuova query `bestHoldPosition(map, x, z, area…)`
+   e nuovo ramo: quando il comandante emette `Hold` su un settore, le unità di quel fronte puntano la
+   miglior posizione difensiva/di strozzatura dentro l'area (protezione + importanza, vicina, **fuori
+   dalle danger zone**) invece di fermarsi su un punto qualunque. I due ruoli ora **significano**
+   "presidiami". Telemetria `hold_su_posizione`.
+3. **La copertura evita il pericolo (chiude B2)**: `bestCoverToward` e `bestFiringPosition` sottraggono
+   ora `dangerAt(map, c.x, c.z)` dal punteggio. A parità di protezione l'AI preferisce la copertura
+   **fuori** dalla zona pericolosa. Sempre attivo, non solo sotto comando. `dangerAt` non è più inerte.
+4. **Pulizia (B3)**: rimossi `bestOverwatchFor` (da .cpp e .hpp) e `pickObjectiveSector`.
+
+### Out of Scope
+- **Pesare `dangerLevel` per tipo** (fuoco vs mine vs artiglieria): oggi è uno scalare unico, basta.
+- **`observation` che alimenta l'intel di squadra/comando** (vedo un nemico → lo segnalo al fronte):
+  qui la vista estesa è solo locale a chi presidia. Estensione naturale futura (doc 33).
+- **`chokepoint` che genera comportamento di imbottigliamento attivo** (attirare il nemico dentro):
+  qui è solo una posizione da tenere. Resta futuro.
+
+### Consequences
+- **Positivo**: i cinque ruoli tattici hanno ora tutti un comportamento; le danger zone spostano
+  davvero le decisioni; `dangerAt` è vivo; meno codice morto. I metadata autorabili nell'editor e la
+  loro lettura dall'Ani sono di nuovo allineati (nessun campo "che non fa niente").
+- **Costo/rischio**: minimo — tre query pure e tre rami di lettura, nessun cambio di schema né di save.
+  Il ramo `Hold` scatta solo quando il comandante tiene un settore, quindi in un 10v10 bilanciato si
+  osserva di rado (vedi Status).
+
+### Status
+**Accepted — in force (2026-07-22).** Build 0/0; `--validate` 0/0. **Misurato** (`--sim --map
+firebase`, che ha 3 punti `observation` e ruoli difensivi): `obs_vista_estesa` **333–1069** per
+finestra — la vista estesa scatta in continuazione per chi passa vicino ai punti di osservazione. C3
+(cover-evita-danger) è sempre attivo e verificato per build. `hold_su_posizione` era **0** in questa
+partita perché il comandante emetteva `Hold` di rado.
+**Aggiornamento 2026-07-22 (changelog 60)**: il `Hold` è stato reso più frequente e coerente (scatta
+sugli obiettivi catturati e minacciati) e, soprattutto, il ramo droide è stato reso efficace anche
+DURANTE il combattimento (opzione A): un droide in TIENI si àncora alla posizione difensiva/chokepoint
+(`holdX/Z/Radius` + clamp) e ci combatte da lì senza inseguire. **`hold_su_posizione` ora scatta**
+(318/225 su Training Ground quando il Hold è su un obiettivo con chokepoint) — i ruoli `defensive`/
+`chokepoint` sono finalmente attivi. Combattimento sano, `fermi=0`, nessuna passività.
+**Nota harness**: le misure `--sim` con id mappa contenente spazi vanno quotate ([[powershell-quote-args-with-spaces]],
+KI #77): una prima misura su "Training Ground" girava su un'altra mappa per via dello spazio non quotato.

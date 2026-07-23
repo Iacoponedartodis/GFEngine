@@ -46,6 +46,11 @@ public:
     };
     void setMapBoxes(const std::vector<MapBoxDraw>& boxes);
     void clearMapBoxes();
+    // Facce piene ombreggiate oltre al wireframe: rende le SUPERFICI visibili
+    // (muri/piattaforme/cover non più solo linee). Opaco + spigoli sopra: nessun
+    // blending → zero rischio compat Intel (ADR-003).
+    void setShowSolid(bool s) { m_showSolid = s; }
+    bool showSolid() const    { return m_showSolid; }
 
     // Selezione dal viewport (ray-picking, doc: "selezione oggetti dalle
     // viewport"): se dall'ultima chiamata è stato cliccato un box con pickId
@@ -106,6 +111,12 @@ public:
     // ── Camera pan ───────────────────────────────────────────────────────
     void panCamera(float rightDelta, float upDelta);
 
+    // Punto sul suolo (y=0) davanti alla camera: dove creare i NUOVI oggetti,
+    // invece che sempre al centro mappa. Se la camera non guarda in basso,
+    // ripiega a distanza fissa davanti a sé. Così un oggetto nasce già dove
+    // stai guardando, non da trascinare dal centro (richiesta utente).
+    glm::vec3 groundFocusPoint(float fallbackDist = 12.0f) const;
+
     // ── Click selection ──────────────────────────────────────────────────
     std::string popClickedItem(); // nome dell'ultimo item cliccato (bone o marker)
 
@@ -126,6 +137,8 @@ private:
     std::vector<float> m_attachData;    int m_attachVertCount  = 0;
     std::vector<float> m_boxData;       int m_boxVertCount     = 0;
     std::vector<float> m_mapBoxData;    int m_mapBoxVertCount  = 0;
+    std::vector<float> m_mapBoxFillData; int m_mapBoxFillVertCount = 0; // facce piene
+    bool m_showSolid = true;   // default: superfici visibili (richiesta utente)
 
     void buildGrid(float size, int div);
     void drawArray(const std::vector<float>& data, int count,
@@ -205,6 +218,7 @@ private:
     std::vector<MapBoxDraw> m_mapBoxes;
     int  m_clickedBoxId  = MapBoxDraw::kNoPick;
     bool m_hasClickedBox = false;
+    bool m_gizmoBarHovered = false;  // click sui pulsanti modalità → non selezionare dietro
 
     void drawGizmoOverlay();
     void drawMarkerLabels();   // etichette testo dei marker (attach point ecc.)

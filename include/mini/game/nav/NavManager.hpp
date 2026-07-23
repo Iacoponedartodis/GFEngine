@@ -56,6 +56,11 @@ public:
     bool findPath(const glm::vec3& start, const glm::vec3& end,
                   std::vector<glm::vec3>& out) const;
 
+    // `end` è DAVVERO raggiungibile da `start`? (path Detour non-parziale che tocca
+    // il poligono destinazione). L'AI la usa per non mandare unità su isole/passaggi
+    // erosi dove finirebbero in trappola. Chiamata a bassa frequenza (al commit).
+    [[nodiscard]] bool isReachable(const glm::vec3& start, const glm::vec3& end) const;
+
     // ── Crowd (Phase B): steering + avoidance + pathfinding per agente ────
     [[nodiscard]] bool crowdReady() const { return m_crowd != nullptr; }
     // Incrementato a ogni build(): il CrowdSystem lo usa per resettare la sua

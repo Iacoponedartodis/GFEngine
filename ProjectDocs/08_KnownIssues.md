@@ -1,5 +1,64 @@
 # 08 — Known Issues
 
+## 77. `--map <id>` ignorato in `--sim`/sandbox (MEDIUM) — RISOLTO 2026-07-22
+- **Trovato durante la verifica di ADR-046**: il contatore `obs_vista_estesa` restava 0 anche lanciando
+  `--sim --map firebase`. Il debug ha rivelato che il runtime caricava **14 posizioni tattiche
+  (Training Ground)**, non le 60 di firebase — cioè `--map firebase` **non aveva effetto** sul sim.
+- **Causa**: nel path `startSimulation` (Application.cpp), `currentSettings.mapId =
+  sbMenu.selectedMapId()` sovrascriveva il valore già impostato da `--map`. `SandboxMenu` parte con
+  `m_mapSel = 0` (default), quindi il sim girava sempre sulla mappa d'**indice 0** dell'elenco
+  (Training Ground), arbitraria e non quella richiesta.
+- **Fix**: nuovo `SandboxMenu::selectMapById(id)`; dopo `sbMenu.setMaps(...)`, se `--map` è stato
+  passato si sincronizza la selezione del menu sandbox con quell'id. Ora il flag vale sia in partita sia
+  in sim/sandbox.
+- **Impatto retroattivo**: le misure `--sim` fatte PRIMA di questo fix (ADR-045 e prima) giravano su
+  Training Ground, non sulla mappa nominata nel flag. Restano valide come misure (Training Ground è una
+  mappa reale, con route e comando) ma **non sulla mappa che il comando indicava**. Da qui in avanti il
+  flag è affidabile.
+- **Lezione**: un default silenzioso (`m_mapSel = 0`) che vince su un input esplicito è peggio di un
+  errore — la misura sembra valida ma è su un altro soggetto. Coerente con la memoria
+  [[verify-effect-not-data]]: verificare CHE mappa è viva, non solo che il flag è stato letto.
+
+## 74. `.items()` su json temporaneo → crash del salva-gameplay (HIGH) — RISOLTO 2026-07-22
+- **Segnalato dall'utente**: il pulsante "Salva gameplay" (tab nuovo, ADR-043) faceva **crashare
+  l'editor**.
+- **Causa**: `for (auto& [k,v] : gameplayBalanceToJson(m_gameplay).items())` — `.items()` chiamato su
+  un json **temporaneo**. È il footgun documentato di nlohmann: il proxy di `.items()` referenzia il
+  json, ma il temporaneo viene distrutto dopo l'inizializzazione del range → **use-after-free**.
+- **Fix**: iterare su una **variabile** nominata (`const json patch = ...; for (it=patch.begin()...)`).
+- **Regola**: mai `.items()`/`.at()` su un valore json restituito per valore da una funzione. Vale
+  ovunque nell'editor.
+
+## 75. Mouse "sfasato" in fullscreen (MEDIUM) — RISOLTO 2026-07-22 (2° tentativo, causa vera)
+- **Segnalato dall'utente**: a schermo intero il mouse "funziona malissimo, come se fosse
+  completamente sfasato". In finestra è a posto. Il primo fix (ri-applicare la modalità mouse
+  relativa) **NON ha funzionato** — perché la diagnosi era sbagliata.
+- **CAUSA VERA (diagnosi corretta)**: **non** è la camera (usa delta relativi, indipendenti dalla
+  risoluzione — mai rotta). È la **UI 2D**: `Ui2D::begin` faceva `glOrtho(0, m_w, m_h)` con `m_w/m_h`
+  **fissi alla creazione** (1280×720), mentre il viewport GL è il drawable reale (1920×1080 in
+  fullscreen). L'UI si stirava a schermo (sembrava ok), ma il **mouse arriva in pixel reali** → le UI
+  cursore (respawn map, pausa, menu sandbox, pre-partita) erano sfasate del rapporto di scala.
+- **Fix**: `Ui2D::begin` sincronizza `m_w/m_h` dal viewport GL reale (`glGetIntegerv(GL_VIEWPORT)`).
+  Un punto solo, sistema tutte e 6 le istanze Ui2D. Coordinate UI == pixel finestra == mouse.
+- **Lezione**: la diagnosi "sfasato = modalità relativa" era plausibile ma non verificata. La camera
+  FPS in fullscreen non era mai rotta; il sintomo veniva dalle UI a cursore. Verificare QUALE mouse
+  (relativo vs assoluto/UI) prima di scegliere la causa. Da confermare a mano.
+
+## 75b. (primo tentativo, superato) Mouse fullscreen = modalità relativa — DIAGNOSI SBAGLIATA 2026-07-22
+- Il re-assert della modalità relativa in `toggleFullscreen` è rimasto (difensivo, innocuo) ma NON
+  era la causa. Vedi #75.
+
+## 76. Rename mappa non aggiornava il nome mostrato (LOW) — RISOLTO 2026-07-22 (2 giri)
+- **Segnalato dall'utente**: rinominando una mappa, partita e sandbox mostravano ancora il nome
+  vecchio; dopo il 1° fix, ancora "outpost" (rinominata in "Training Ground").
+- **Causa**: il rename cambia il **filename/id** (ADR-001), ma partita/sandbox mostrano `MapDef.name`,
+  un campo interno separato (fallback id). Il 1° fix (sync `name` al rename) era **corretto** ma la
+  mappa era stata rinominata la sera prima con l'editor pre-fix → `name` era rimasto "Outpost".
+- **Fix definitivo** (non dipende dal timing del rename): **campo "Nome" nella toolbar del MapEditor**
+  che edita `name` direttamente (salvato con la mappa via RMW); più la sync al rename; più il fix
+  diretto del file già rinominato. `saveMap` ora scrive sempre `name` (vuoto → id), così non resta
+  mai un residuo vecchio.
+
 ## Audit codice completo 2026-07-10 (issue #19-#27)
 
 ## 19. Ogni build cancella i preset partita dell'utente (HIGH) — RISOLTO 2026-07-10

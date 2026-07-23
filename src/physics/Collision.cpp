@@ -2,6 +2,9 @@
 #include "mini/ecs/World.hpp"
 
 #include <cmath>
+#include <vector>
+#include <algorithm>
+#include <cstdint>
 
 namespace mini::physics
 {
@@ -96,6 +99,103 @@ static bool obbIntersectsRotatedCollider(const glm::vec3& pos, const glm::vec3& 
     return true;
 }
 
+// ── Indice spaziale dei collider (ADR-015: ottimizzazione) ─────────────────────
+// hasCollision/hasLineOfSight passavano da O(TUTTE le entità) per chiamata: su una
+// mappa grande (Training Ground: 175 box + unità) il costo del sensing/movimento
+// scalava con la geometria (lag già con ~25 AI, segnalato dall'utente). La griglia
+// uniforme sul piano XZ riduce a O(celle vicine) e precalcola le AABB mondo una
+// volta per tick. Snapshot PER VALORE dei componenti → nessun puntatore pendente
+// se un'entità viene distrutta a metà tick. File-static: il sim è single-thread;
+// (world, tick) distingue mondi diversi (gioco/editor) e ricostruisce a ogni tick.
+namespace {
+
+struct GridItem { EntityId id; AABB aabb; TransformComponent t; ColliderComponent c; };
+
+struct ColliderGrid
+{
+    static constexpr float kCell = 5.0f;
+    float minX = 0.0f, minZ = 0.0f;
+    int   nx = 0, nz = 0;
+    std::vector<GridItem>          items;
+    std::vector<std::vector<int>>  cells;
+    std::vector<std::uint32_t>     stamp;     // dedup: un item testato una volta per query
+    std::uint32_t                  qid = 0;
+
+    int cxi(float x) const { int i = (int)((x - minX) / kCell); return i < 0 ? 0 : (i >= nx ? nx - 1 : i); }
+    int czi(float z) const { int i = (int)((z - minZ) / kCell); return i < 0 ? 0 : (i >= nz ? nz - 1 : i); }
+
+    void rebuild(World& world)
+    {
+        items.clear();
+        float mnx = 1e30f, mnz = 1e30f, mxx = -1e30f, mxz = -1e30f;
+        for (EntityId id : world.getEntities())
+        {
+            const auto* col = world.getCollider(id);
+            const auto* tr  = world.getTransform(id);
+            if (!col || !tr) continue;
+            const AABB b = computeWorldAABB(*tr, *col);
+            items.push_back({id, b, *tr, *col});
+            if (b.min.x < mnx) mnx = b.min.x;  if (b.min.z < mnz) mnz = b.min.z;
+            if (b.max.x > mxx) mxx = b.max.x;  if (b.max.z > mxz) mxz = b.max.z;
+        }
+        stamp.assign(items.size(), 0);
+        qid = 0;
+        cells.clear();
+        if (items.empty()) { nx = nz = 0; return; }
+        minX = mnx; minZ = mnz;
+        nx = (int)((mxx - mnx) / kCell) + 1;  if (nx < 1) nx = 1;
+        nz = (int)((mxz - mnz) / kCell) + 1;  if (nz < 1) nz = 1;
+        cells.assign((size_t)nx * nz, {});
+        for (int i = 0; i < (int)items.size(); ++i)
+        {
+            const AABB& b = items[i].aabb;
+            const int x0 = cxi(b.min.x), x1 = cxi(b.max.x);
+            const int z0 = czi(b.min.z), z1 = czi(b.max.z);
+            for (int z = z0; z <= z1; ++z)
+                for (int x = x0; x <= x1; ++x)
+                    cells[(size_t)z * nx + x].push_back(i);
+        }
+    }
+
+    // Itera i candidati le cui celle coprono l'inviluppo [mn,mx] (XZ). `fn` ritorna
+    // true per fermarsi (collisione trovata). Ritorna true se `fn` ha fermato.
+    template <class F>
+    bool forRange(const glm::vec3& mn, const glm::vec3& mx, F&& fn)
+    {
+        if (items.empty()) return false;
+        ++qid;
+        const int x0 = cxi(mn.x), x1 = cxi(mx.x);
+        const int z0 = czi(mn.z), z1 = czi(mx.z);
+        for (int z = z0; z <= z1; ++z)
+            for (int x = x0; x <= x1; ++x)
+                for (int i : cells[(size_t)z * nx + x])
+                {
+                    if (stamp[(size_t)i] == qid) continue;
+                    stamp[(size_t)i] = qid;
+                    if (fn(items[(size_t)i])) return true;
+                }
+        return false;
+    }
+};
+
+ColliderGrid       g_grid;
+const World*       g_gridWorld = nullptr;
+std::uint64_t      g_gridTick  = ~0ull;
+
+ColliderGrid& ensureGrid(World& world)
+{
+    const std::uint64_t t = world.getTickCount();
+    if (g_gridWorld != &world || g_gridTick != t)
+    {
+        g_gridWorld = &world;
+        g_gridTick  = t;
+        g_grid.rebuild(world);
+    }
+    return g_grid;
+}
+
+} // namespace
+
 bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
                   EntityId excludeId, float queryYawRad)
 {
@@ -111,38 +211,30 @@ bool hasCollision(const glm::vec3& pos, const glm::vec3& half, World& world,
     const glm::vec3 pn = pos - qhalf;
     const glm::vec3 px = pos + qhalf;
 
-    for (EntityId id : world.getEntities())
+    // Candidati dalla sola area vicina (indice spaziale) invece di tutte le entità.
+    return ensureGrid(world).forRange(pn, px, [&](const GridItem& it) -> bool
     {
-        if (id == excludeId) continue;   // es. veicolo che muove sé stesso
-        const auto* col = world.getCollider(id);
-        const auto* t   = world.getTransform(id);
-        if (!col || !t) continue;
+        if (it.id == excludeId) return false;   // es. veicolo che muove sé stesso
 
-        // Broad test sempre sull'AABB avvolgente (conservativo, veloce)
-        const AABB b = computeWorldAABB(*t, *col);
+        // Broad test sull'AABB avvolgente (precalcolata: conservativo, veloce)
+        const AABB& b = it.aabb;
         if (pn.x >= b.max.x || px.x <= b.min.x ||
             pn.y >= b.max.y || px.y <= b.min.y ||
             pn.z >= b.max.z || px.z <= b.min.z)
-            continue;
+            return false;
 
         // Query ruotato (veicolo): test OBB-vs-OBB esatto, salta il fast path.
         if (queryYawRad != 0.0f)
-        {
-            if (obbIntersectsRotatedCollider(pos, half, queryYawRad, *t, *col))
-                return true;
-            continue;
-        }
+            return obbIntersectsRotatedCollider(pos, half, queryYawRad, it.t, it.c);
 
         // Collider non ruotato: il broad test è già esatto
-        const float ryMod = std::fmod(std::abs(t->ry), 180.0f);
+        const float ryMod = std::fmod(std::abs(it.t.ry), 180.0f);
         if (ryMod < 0.01f || std::abs(ryMod - 90.0f) < 0.01f
             || std::abs(ryMod - 180.0f) < 0.01f)
             return true;
 
-        if (boxIntersectsRotatedCollider(pos, half, *t, *col))
-            return true;
-    }
-    return false;
+        return boxIntersectsRotatedCollider(pos, half, it.t, it.c);
+    });
 }
 
 // ── Slide semplice ───────────────────────────────────────────────────────
@@ -272,49 +364,52 @@ bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
 {
     const glm::vec3 dir = to - from;
 
-    for (EntityId id : world.getEntities())
+    // Solo i collider vicini al segmento (inviluppo XZ del raggio) via indice.
+    const glm::vec3 segMin{std::min(from.x, to.x), 0.0f, std::min(from.z, to.z)};
+    const glm::vec3 segMax{std::max(from.x, to.x), 0.0f, std::max(from.z, to.z)};
+
+    // forRange ritorna true se un candidato BLOCCA → la vista è libera se NON blocca.
+    const bool blocked = ensureGrid(world).forRange(segMin, segMax,
+        [&](const GridItem& it) -> bool
     {
-        if (id == ignore) continue;   // il bersaglio non si occlude da sé (doc 35)
-        const auto* col = world.getCollider(id);
-        const auto* t   = world.getTransform(id);
-        if (!col || !t) continue;
+        if (it.id == ignore) return false;   // il bersaglio non si occlude da sé (doc 35)
+        const auto& t   = it.t;
+        const auto& col = it.c;
 
         // Collider ruotato: porta il segmento nello spazio LOCALE del box
         // (rotazione inversa attorno al centro) e testa contro l'AABB
         // locale — test esatto, coerente coi proiettili/hitbox (KI #23).
-        const float ryMod = std::fmod(std::abs(t->ry), 180.0f);
+        const float ryMod = std::fmod(std::abs(t.ry), 180.0f);
         const bool rotated = !(ryMod < 0.01f || std::abs(ryMod - 180.0f) < 0.01f);
 
         glm::vec3 o = from, d = dir;
         glm::vec3 bMin, bMax;
         if (rotated)
         {
-            const float ry = t->ry * PI / 180.0f;
+            const float ry = t.ry * PI / 180.0f;
             const float co = std::cos(ry), si = std::sin(ry);
             // Inversa della rotazione glm attorno a Y (w = R * l):
             // l.x = co*w.x - si*w.z ; l.z = si*w.x + co*w.z
-            const float wx = from.x - t->x, wz = from.z - t->z;
-            o = { co * wx - si * wz, from.y - t->y, si * wx + co * wz };
+            const float wx = from.x - t.x, wz = from.z - t.z;
+            o = { co * wx - si * wz, from.y - t.y, si * wx + co * wz };
             d = { co * dir.x - si * dir.z, dir.y, si * dir.x + co * dir.z };
-            bMin = {-col->hx, -col->hy, -col->hz};
-            bMax = { col->hx,  col->hy,  col->hz};
+            bMin = {-col.hx, -col.hy, -col.hz};
+            bMax = { col.hx,  col.hy,  col.hz};
         }
         else
         {
-            const AABB b = computeWorldAABB(*t, *col);
-            bMin = b.min; bMax = b.max;
+            bMin = it.aabb.min; bMax = it.aabb.max;   // AABB già precalcolata
         }
 
         // Ignora se l'origine è dentro il box (AI a contatto col muro)
         if (o.x > bMin.x && o.x < bMax.x &&
             o.y > bMin.y && o.y < bMax.y &&
             o.z > bMin.z && o.z < bMax.z)
-            continue;
-
-        if (rayBlockedByAABB(o, d, bMin, bMax))
             return false;
-    }
-    return true;
+
+        return rayBlockedByAABB(o, d, bMin, bMax);
+    });
+    return !blocked;
 }
 
 } // namespace mini::physics

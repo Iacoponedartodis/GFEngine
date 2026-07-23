@@ -39,6 +39,7 @@ private:
     void drawPlayerDefTab();
     void drawAbilitiesTab();
     void drawGameplayTab();
+    void drawCommandoTab();   // ADR-041 §4 / ADR-044: CommanderDef + rete comunicazione
 
     // ── Salvataggio ──────────────────────────────────────────────────
     void saveWeapon   (const mini::WeaponDef&     w);
@@ -47,6 +48,8 @@ private:
     void savePlayerDef(const mini::PlayerDef&     p);
     void saveAbility  (const mini::AbilityDef&    a);
     void saveGameplay ();
+    void saveCommander(const mini::CommanderDef& c);
+    std::string m_selCommander;
 
     void reload();
 };

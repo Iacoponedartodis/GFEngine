@@ -36,7 +36,7 @@
     ],
     "commander": {
         "leash_radius": 2.0,
-        "unit": "Tactical Droid",
+        "unit": "tactical_droid",
         "x": -7.519498467445374e-05,
         "z": -16.36383628845215
     },

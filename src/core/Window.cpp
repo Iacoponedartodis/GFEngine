@@ -98,6 +98,20 @@ void Window::toggleFullscreen()
         SDL_SetWindowSize(m_window, m_width, m_height);
         SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
+
+    // Il cambio fullscreen ridimensiona la finestra a livello SDL e questo
+    // DESTABILIZZA la modalità mouse relativa: l'aim diventava "sfasato" (delta
+    // relativo calcolato su una geometria di grab ormai vecchia — segnalato
+    // 2026-07-21). Se eravamo in cattura, la spegniamo e riaccendiamo per
+    // forzare SDL a ri-agganciare al nuovo stato, poi svuotiamo il delta
+    // accumulato per non prendere uno spike al primo frame.
+    if (m_mouseCaptured)
+    {
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+        SDL_PumpEvents();
+        SDL_GetRelativeMouseState(nullptr, nullptr);
+    }
 }
 
 bool Window::isFullscreen() const { return m_fullscreen; }

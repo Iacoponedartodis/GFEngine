@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstdio>
+#include <algorithm>   // std::find / std::remove (abilita' del comandante)
 #include <cstring>
 #include <string>
 
@@ -704,8 +705,12 @@ void BalanceEditor::saveGameplay()
 {
     const std::string path = getSourceDataDir() + "config/gameplay.json";
     editor::jsonsave::saveJsonRMW(path, [&](json& j) {
-        for (auto& [k, v] : mini::gameplayBalanceToJson(m_gameplay).items())
-            j[k] = v;
+        // NB: `.items()` va chiamato su una VARIABILE, mai su un temporaneo —
+        // il json temporaneo morirebbe prima del loop e il proxy resterebbe
+        // appeso (use-after-free → crash dell'editor, segnalato 2026-07-21).
+        const json patch = mini::gameplayBalanceToJson(m_gameplay);
+        for (auto it = patch.begin(); it != patch.end(); ++it)
+            j[it.key()] = it.value();
         return true;
     });
     std::cout << "[Balance] Gameplay salvato: " << path << "\n";
@@ -739,24 +744,131 @@ void BalanceEditor::drawGameplayTab()
                             "chi cade muore. Si azzera col respawn.");
     }
 
-    ImGui::Separator();
-    ImGui::TextColored({0.55f,0.75f,0.95f,1.0f}, "Rete di comunicazione: degrado senza torre (doc 34)");
-    ImGui::TextDisabled("Quanto peggiora una fazione che ha PERSO la sua torre.\n"
-                        "Nessun valore blocca nulla: la regola e' RALLENTARE.");
-    ch |= editor::ui::sliderRow("Raggio contatti (x)",  g.commsLostRangeMult, 0.1f, 1.f, 0.05f, "x%.2f", 150.0f);
-    ch |= editor::ui::sliderRow("Ritardo avviso (s)",   g.commsLostShareDelay, 0.f, 10.f, 0.1f, "%.1f s", 150.0f);
-    ImGui::TextDisabled("L'avvistamento arriva ai compagni in ritardo: si accorre\n"
-                        "dove il nemico ERA.");
-    ch |= editor::ui::sliderRow("Cadenza ordini (x)",   g.commsLostOrderMult, 1.f, 6.f, 0.1f, "x%.1f", 150.0f);
-    ch |= editor::ui::sliderRow("Ritardo rinforzi (x)", g.commsLostReinforceMult, 1.f, 4.f, 0.05f, "x%.2f", 150.0f);
-
     if (ch) m_dirty = true;
+    ImGui::TextDisabled("(Il degrado delle comunicazioni senza torre e' nel tab \"Comando\".)");
 
     ImGui::Separator();
     if (ImGui::Button("Salva gameplay")) { saveGameplay(); m_dirty = false; }
     ImGui::SameLine();
     if (ImGui::Button("Ripristina default"))
     { m_gameplay = mini::GameplayBalance{}; m_dirty = true; }
+    if (m_dirty) { ImGui::SameLine(); ImGui::TextColored({1.f,0.8f,0.3f,1.f}, "modifiche non salvate"); }
+}
+
+// ── Comando & Strutture (ADR-041 §4 / ADR-044) ───────────────────────────
+// Casa d'authoring del COMANDANTE (CommanderDef, dopo la migrazione fuori dalle
+// classi) e dei parametri GLOBALI della rete di comunicazione (doc 34). Le
+// strutture (torri, bersagli) sono PER-MAPPA → si autorano nel Map Editor.
+void BalanceEditor::saveCommander(const mini::CommanderDef& c)
+{
+    const std::string path = getSourceDataDir() + "commanders/" + c.id + ".json";
+    editor::jsonsave::saveJsonRMW(path, [&](json& j) {
+        j.erase("id");   // id = nome file (ADR-001)
+        j["name"]                = c.name;
+        j["base_entity"]         = c.baseEntity;
+        j["self_defense_weapon"] = c.selfDefenseWeapon;
+        j["ai_profile"]          = c.aiProfile;
+        j["abilities"]           = c.abilities;
+        j["hp"]                  = c.hp;
+        j["speed_mult"]          = c.speedMult;
+        j["mesh_scale"]          = c.meshScale;
+        j["color_mult"]          = { c.colorMult[0], c.colorMult[1], c.colorMult[2] };
+        j["team"]                = c.team;
+        return true;
+    });
+    std::cout << "[Balance] Commander salvato: " << path << "\n";
+}
+
+void BalanceEditor::drawCommandoTab()
+{
+    // Combo generico su una mappa di definizioni del registry (mai testo libero).
+    auto refCombo = [](const char* label, std::string& value, const auto& defs)
+    {
+        bool ch = false;
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::BeginCombo(label, value.empty() ? "-- scegli --" : value.c_str()))
+        {
+            for (const auto& kv : defs)
+                if (ImGui::Selectable(kv.first.c_str(), kv.first == value))
+                { value = kv.first; ch = true; }
+            ImGui::EndCombo();
+        }
+        return ch;
+    };
+
+    ImGui::TextColored({0.75f,0.45f,0.95f,1.0f}, "Comandanti (CommanderDef, ADR-044)");
+    ImGui::TextDisabled("Unita' di comando: NON combattono, dirigono i droidi. Non sono\n"
+                        "classi. Le strutture (torri/bersagli) si autorano nel Map Editor.");
+    ImGui::Separator();
+
+    const auto& cmds = m_registry.commanders();
+    ImGui::BeginChild("##cmdlist", ImVec2(170, 200),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    for (auto& [id, c] : cmds)
+        if (ImGui::Selectable(id.c_str(), id == m_selCommander)) m_selCommander = id;
+    ImGui::EndChild();
+    ImGui::SameLine();
+
+    ImGui::BeginChild("##cmdedit", ImVec2(0, 200), false);
+    static mini::CommanderDef edit;
+    static std::string editId;
+    auto it = cmds.find(m_selCommander);
+    if (it == cmds.end())
+        ImGui::TextDisabled("Seleziona un comandante a sinistra.");
+    else
+    {
+        if (editId != m_selCommander) { edit = it->second; editId = m_selCommander; }
+        char nameBuf[64];
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", edit.name.c_str());
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::InputText("Nome", nameBuf, sizeof(nameBuf))) edit.name = nameBuf;
+        refCombo("Corpo (base_entity)", edit.baseEntity, m_registry.enemies());
+        refCombo("Arma autodifesa",     edit.selfDefenseWeapon, m_registry.weapons());
+        refCombo("Profilo AI",          edit.aiProfile, m_registry.aiProfiles());
+
+        ImGui::TextDisabled("Abilita' (una deve essere di tipo 'command'):");
+        for (const auto& [aid, ab] : m_registry.abilities())
+        {
+            bool on = std::find(edit.abilities.begin(), edit.abilities.end(), aid)
+                    != edit.abilities.end();
+            if (ImGui::Checkbox(aid.c_str(), &on))
+            {
+                if (on) edit.abilities.push_back(aid);
+                else edit.abilities.erase(std::remove(edit.abilities.begin(),
+                                          edit.abilities.end(), aid), edit.abilities.end());
+            }
+        }
+
+        editor::ui::dragRow("HP",         edit.hp,        1.0f, 10.0f, 2000.0f, "%.0f");
+        editor::ui::dragRow("Velocita' x", edit.speedMult, 0.01f, 0.1f, 2.0f, "%.2f");
+        editor::ui::dragRow("Scala mesh", edit.meshScale, 0.01f, 0.2f, 4.0f, "%.2f");
+        ImGui::ColorEdit3("Tinta corpo", edit.colorMult.data());
+        int teamIdx = (edit.team == 1) ? 0 : 1;
+        static const char* kT[] = {"Repubblica (1)", "Separatisti (2)"};
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::Combo("Fazione##cmd", &teamIdx, kT, 2)) edit.team = (teamIdx == 0) ? 1 : 2;
+
+        ImGui::Separator();
+        if (ImGui::Button("Salva comandante", {150,0})) saveCommander(edit);
+        ImGui::SameLine();
+        if (ImGui::Button("Ripristina##cmd", {110,0})) edit = it->second;
+    }
+    ImGui::EndChild();
+
+    // ── Rete di comunicazione (COMMS_LOST_*, doc 34) ─────────────────────
+    ImGui::Separator();
+    ImGui::TextColored({0.55f,0.75f,0.95f,1.0f}, "Rete di comunicazione: degrado senza torre (doc 34)");
+    ImGui::TextDisabled("Quanto peggiora una fazione che ha PERSO la sua torre di\n"
+                        "comunicazione. Nessun valore blocca nulla: la regola e' RALLENTARE.");
+    auto& g = m_gameplay;
+    bool ch = false;
+    ch |= editor::ui::sliderRow("Raggio contatti (x)",  g.commsLostRangeMult, 0.1f, 1.f, 0.05f, "x%.2f", 150.0f);
+    ch |= editor::ui::sliderRow("Ritardo avviso (s)",   g.commsLostShareDelay, 0.f, 10.f, 0.1f, "%.1f s", 150.0f);
+    ImGui::TextDisabled("L'avvistamento arriva ai compagni in ritardo: si accorre dove il nemico ERA.");
+    ch |= editor::ui::sliderRow("Cadenza ordini (x)",   g.commsLostOrderMult, 1.f, 6.f, 0.1f, "x%.1f", 150.0f);
+    ch |= editor::ui::sliderRow("Ritardo rinforzi (x)", g.commsLostReinforceMult, 1.f, 4.f, 0.05f, "x%.2f", 150.0f);
+    if (ch) m_dirty = true;
+    if (ImGui::Button("Salva comunicazioni")) { saveGameplay(); m_dirty = false; }
     if (m_dirty) { ImGui::SameLine(); ImGui::TextColored({1.f,0.8f,0.3f,1.f}, "modifiche non salvate"); }
 }
 
@@ -771,6 +883,7 @@ void BalanceEditor::draw()
         if (ImGui::BeginTabItem("Mappe"))       { drawMapsTab();       ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Personaggio")) { drawPlayerDefTab();  ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Abilita'"))    { drawAbilitiesTab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Comando"))     { drawCommandoTab();   ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Gameplay"))    { drawGameplayTab();   ImGui::EndTabItem(); }
         // Veicoli: modulo dedicato "Vehicle Editor" (19_Vehicles)
         ImGui::EndTabBar();

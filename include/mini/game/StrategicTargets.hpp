@@ -30,7 +30,9 @@ inline void spawnAll(World& world, const MapDef* map,
 
     for (const auto& t : map->strategicTargets)
     {
-        const float gy = mapquery::groundHeightAt(map, t.x, t.z);
+        // `y` autorato = altezza SOPRA il suolo (0 = a terra, retro-compatibile).
+        // Una struttura statica resta dove la si mette (un'unità cadrebbe).
+        const float gy = mapquery::groundHeightAt(map, t.x, t.z) + t.y;
         EntityId e = world.createEntity();
 
         Mesh* useMesh = boxMesh;   // box di fallback
@@ -77,7 +79,8 @@ inline void spawnAll(World& world, const MapDef* map,
         }
         telemetry::event(telemetry::Level::Info, "Objective", "strategic target spawned",
                          {{"label", t.label}, {"hp", t.hp}, {"team", t.team},
-                          {"role", t.role}, {"x", t.x}, {"z", t.z}});
+                          {"role", t.role}, {"x", t.x}, {"z", t.z},
+                          {"y", gy}});   // altezza mondo effettiva (suolo + y autorato)
     }
 }
 

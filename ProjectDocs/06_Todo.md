@@ -1,5 +1,40 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ▶ PLAYTEST utente 2026-07-23 (3 problemi su Training Ground)
+- **#1 Performance** → vedi sezione sotto (✅ per ora).
+- **#3 Cloni idle vicino allo spawn / torre di controllo** → **✅ (changelog 63)**: `pickAllySignal` non
+  ripiega più su idle quando i segnali sono saturi (rinforza il fronte più vicino → avanzata coerente,
+  `segnali_seguiti` da 0 a 600-3457); nuova `bestAdvantageInArea` fa puntare ai cloni le posizioni
+  vantaggiose (incl. elevate ad alta importanza) invece del centro. Da confermare in playtest.
+- **▶ #2 Ponti/zone rialzate + danger-blocco + trappole (playtest 2026-07-23)** — DIAGNOSI PROFONDA e fix
+  (changelog 65): danger costo navmesh 10×→2× (non più muro); `NavManager::isReachable` + i cloni usano
+  vantage solo se raggiungibili + commitment su waypoint + recupero stuck (niente più trappole); voxel
+  navmesh 0.30→0.20 (passaggi stretti raggiungibili). **RESTA**: (2b) cablare `bestAdvantageInArea` +
+  reachability anche nei **droidi** (Advance); e authoring dell'utente — scale con gradini ≤0.55m (sopra,
+  non le sale né fisicamente né nel navmesh) e passaggi ≥~0.8m. **Da riconfermare in playtest.**
+- **▶ Sanitizer**: `/RTC1` tolto quando ASan ON (changelog 65). Utente: installare "C++ AddressSanitizer"
+  dal Visual Studio Installer, poi configurare con `-DGF_ENABLE_ASAN=ON`.
+- **Cleanup minore**: warning C4189 preesistente in SandboxMenu.cpp (`PH` non usato in handleMouse).
+- **✅ #3-bis Cloni indietro / rework torre (changelog 64)**: commitment del clone (`allySig*`, resta sul
+  segnale finché non lo raggiunge/sparisce → fine oscillazione) + analisi tattica più ricca del settore
+  (minoranza→rinforza, valore poco difeso→sfrutta). Torre = info/analisi, non ordini
+  ([[control-tower-informs-not-orders]]). Verificato build; effetto visivo da confermare in playtest.
+- **▶ Futuro richiesto dall'utente (2026-07-23)**: (a) usare **ruota ordini + ordini rapidi** anche in
+  OSSERVAZIONE della sim sandbox (per testare le reazioni AI); (b) mappa tattica + controllo obiettivi/
+  priorità + **chain of command** ([[command-rank-system]]) — grande blocco futuro.
+
+## ▶ PERFORMANCE (playtest utente 2026-07-23): lag con ~25 AI su Training Ground
+- **✅ Indice spaziale collisioni/LOS (changelog 62)**: `hasLineOfSight`/`hasCollision` da O(tutte le
+  entità) a O(celle vicine). Corretto, verificato.
+- **Diagnosi**: il costo AI scala col **numero di entità-geometria** (175 box), non con le AI (12→50 AI:
+  +10%). ~10 passaggi pre-loop iterano tutte le entità. E le misure erano in **Debug** (non ottimizzata).
+- **✅ `snap` solo-team (changelog 62)**: i passaggi AI iterano solo entità con `Team` (no box di
+  geometria). Comportamento invariato, verificato. Taglia il costo che scala con la dimensione mappa.
+- **✅ Build Release costruita/verificata + confermata dall'utente**: "lag migliorato in maniera
+  evidente" giocando la Release. Debug è 10-30× più lenta. **Capitolo perf chiuso per ora.**
+- **▶ Futuro (l'utente prevede più AI e mappe più complesse)**: indice spaziale anche per le query
+  tattiche/`hasLineOfFire`; profilare crowd/rendering quando le AI crescono oltre.
+
 ## ⇒ DIREZIONE ATTIVA (2026-07-19): Milestone "Vertical Slice v1" → poi consolidamento
 Deciso dopo studio completo di Vision/GDD/Bridge/CurrentState: **31_ConsolidationMilestone.md**.
 Siamo sul confine Fase 1 → Fase 2: i sistemi tattici (25+26) sono costruiti ma l'esperienza non è
@@ -33,6 +68,40 @@ Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici i
 - **✅ Fase 3a FATTA (ADR-028)**: le pattuglie seguono la **route intera** (`patrolRoute/patrolSeg` +
   `advancePatrol`), segmento di partenza sfalsato, respawn conservano la route. Superato il limite
   2-waypoint: le route autorate diventano percorsi veri. Build/validate/sim OK.
+- **✅ Route FLUIDE + obbedienti al comando (ADR-045, 2026-07-22)** — audit doc 38 P1+P2: le unità su
+  route rispondono ad Advance/Retreat (prima sorde); route bidirezionali, raccolta dal punto più
+  vicino, cambio route.
+- **✅ Ruoli tattici + cover-evita-danger (ADR-046, 2026-07-22)** — audit doc 38 P3: `observation` →
+  vista estesa; `defensive`/`chokepoint` → posizioni da tenere sotto `Hold` (`bestHoldPosition`);
+  `bestCoverToward`/`bestFiringPosition` evitano le danger (`dangerAt` non più morta); rimossi
+  `bestOverwatchFor` e `pickObjectiveSector`. **Audit doc 38 chiuso** (restano solo P5 overwatch
+  marginale + note documentali B5/B6). Bug harness `--map` ignorato in `--sim` corretto (KI #77).
+- **✅ Editor: creazione nuove mappe (2026-07-22)** — voce "＋ Nuova mappa…" in coda al dropdown mappe →
+  popup nome/conferma; crea `data/maps/<id>.json` con schema minimo valido (floor + spawn) e ci passa.
+  Build-verified (carica, valida, gira in sim).
+- **▶ EDITOR UX & ACCESSIBILITÀ (doc 39, richiesta utente 2026-07-22)** — [[editor-accessibility-priority]].
+  Prerequisito al salto di complessità: rendere il Map Editor uno strumento con cui si costruisce davvero.
+  - **✅ F1 igiene UI (changelog 55)**: toolbar sfoltita (via i gizmo duplicati), "Nuova mappa" nel
+    dropdown, fix click-through overlay. Da collaudare a mano.
+  - **✅ F2 alzare/posizionare (changelog 56)**: campo `y` per le strutture strategiche (torri) —
+    efficace perché statiche, verificato; comandante/veicoli restano a terra (gravità → una Y in aria
+    cadrebbe) e i settori sono 2D. Creazione oggetti **davanti alla camera** (`groundFocusPoint`) invece
+    che al centro, su tutti i "+ Aggiungi". Da collaudare a mano.
+  - **✅ F3 superfici (changelog 57)**: facce piene ombreggiate sui box + toggle "Solido" (ADR-003
+    rispettato: opaco, stesso pipeline). Aree 2D restano contorni (servirebbe blending). Da collaudare.
+  - **✅ F4 metadata senza attrito (changelog 58)**: "Duplica" generalizzato a ogni metadato (copia tutti
+    i campi). Default già sensati. Pennello click-per-posare resta futuro.
+  - **▶ F5 Training Ground banco di prova** — IL SALTO DI COMPLESSITÀ. Editor pronto (F1-F4). **Misura
+    2026-07-22 (6v6, mappa caricata correttamente)**: la mappa **funziona** — comandante attivo a 3
+    fronti (Alpha/Bravo/Delta), combattimento, route/osservazione/manovre scattano. Gap reali rimasti:
+    (a) ~~0 danger zones~~ → **✅ aggiunte 7** (artiglieria centro + 2 corsie + 4 chokepoint minati) per
+    esercitare cover-evita-pericolo; l'utente rivede/aggiusta le pose nell'editor; (b) `overwatch` → **✅
+    RISOLTO (changelog 61)**: il segnale d'avanzata viveva 1 tick mentre la manovra dura ~6s → TTL sul
+    segnale, ora scatta; (c) `hold` → **✅ RISOLTO (changelog 60)**: comando TIENI sugli obiettivi
+    catturati + droidi ancorati a posizione difensiva (opzione A). **F5: obiettivo raggiunto** — tutti i
+    sistemi scattano insieme (overwatch 4, hold 543, osservazione 597, route 54, manovre 19, contatti
+    295, fermi 0). Resta authoring incrementale + rifinitura del feel. Attenzione harness: id mappa con
+    spazi vanno quotati ([[powershell-quote-args-with-spaces]]).
 - **DIREZIONE CONFERMATA (utente 2026-07-20)**: continuare a **migliorare i metadata** il più
   possibile, e **poi** rendere più intelligenti sia le **AI normali** sia quella del **Droide
   Tattico** — nel senso di *usare meglio le informazioni che hanno, analizzare meglio la situazione
@@ -112,9 +181,12 @@ Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici i
      clamp nel raggio). Chiude anche la UI di piazzamento del comandante.
      **✅ Stance v2 FATTA 2026-07-21 (ADR-042)**: `enemyCommand` = lista di direttive, 3 fronti con
      stance per-settore, droidi distribuiti, ripiegamento globale — fine del "sempre avanzata".
-     **Restano**: migrazione fuori da `class`, editor dedicato "Strutture & Comando" (casa dei
-     `COMMS_LOST_*`), e il **grado intermedio** ([[command-rank-system]]) che interpreterà le
-     direttive per il micro del suo gruppo. Ciclo dedicato.
+     **✅ Fase 2 FATTA 2026-07-22 (ADR-044)**: migrato fuori da `class` → `CommanderDef`.
+     **✅ Editor "Comando" FATTO 2026-07-22 (changelog 50)**: tab BalanceEditor che autora i
+     CommanderDef + i `COMMS_LOST_*`. **Rework del Droide Tattico sostanzialmente COMPLETO.**
+     **Restano** (non bloccanti): ruolo comando implicito nel tipo (raffinamento); entità-a-sé con
+     corpo proprio (dipende dal tooling mesh); e il **grado intermedio** ([[command-rank-system]]) che
+     interpreterà le direttive per il micro del gruppo — sistema a sé, futuro.
   5. ~~**`Hunt` che scade**~~ → **✅ FATTO 2026-07-21** (KI #68 chiuso): 20 s → Search → Patrol.
 - **▶ Altri candidati** (da scegliere dopo il playtest): (a) il **comandante** che usa
   `sectorStates` per una stance per-settore invece che globale; (b) **coppie di overwatch esplicite**

@@ -35,9 +35,11 @@ const TacticalPositionDef* bestCoverToward(const MapDef& map,
         const float fr = c.facingDeg * (kPI / 180.0f);
         const float fx = std::sin(fr), fz = std::cos(fr);
         if (fx * ex + fz * ez <= 0.15f) continue;   // copre nella direzione sbagliata
-        // Punteggio (ADR-026): premia la PROTEZIONE, penalizza la distanza. Con
-        // protezione uniforme (0.5 ovunque) vince la più vicina — retrocompatibile.
-        const float score = c.protection - 0.5f * (d2 / maxDist2);
+        // Punteggio (ADR-026): premia la PROTEZIONE, penalizza la distanza, e
+        // (ADR-046/C3) EVITA le danger zone: una copertura dentro un'area
+        // pericolosa autorata non è un buon riparo. Fa parlare cover ↔ danger.
+        const float score = c.protection - 0.5f * (d2 / maxDist2)
+                          - dangerAt(map, c.x, c.z);
         if (score > bestScore) { bestScore = score; best = &c; }
     }
     return best;
@@ -203,17 +205,6 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
     return best;
 }
 
-const TacticalPositionDef* bestOverwatchFor(const MapDef& map,
-                                            float fromX, float fromZ,
-                                            float advanceX, float advanceZ,
-                                            float maxDist)
-{
-    // "Da dove posso coprire un compagno che avanza LÌ": una posizione di tiro
-    // raggiungibile che batte il punto d'avanzata. Riusa la stessa regola della
-    // scelta di tiro, col bersaglio = punto verso cui il compagno si muove.
-    return bestFiringPosition(map, fromX, fromZ, advanceX, advanceZ, maxDist);
-}
-
 const TacticalPositionDef* bestOverwatchForPosition(const MapDef& map,
                                                     float fromX, float fromZ,
                                                     int coveredIdx, float maxDist,
@@ -284,8 +275,11 @@ const TacticalPositionDef* bestFiringPosition(const MapDef& map,
         if (!hasLineOfFire(map, p.x, p.y + 1.2f, p.z, targetX, p.y + 1.2f, targetZ))
             continue;
 
-        // Premia la protezione, penalizza la distanza da percorrere.
-        const float score = p.protection - 0.5f * (myD2 / maxDist2);
+        // Premia la protezione, penalizza la distanza, ed EVITA le danger zone
+        // (ADR-046/C3): non si sceglie una posizione di tiro dentro un'area
+        // pericolosa autorata.
+        const float score = p.protection - 0.5f * (myD2 / maxDist2)
+                          - dangerAt(map, p.x, p.z);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
     return best;
@@ -300,6 +294,59 @@ bool nearCommandPost(const MapDef& map, float x, float z, float slack)
         if (dx * dx + dz * dz <= r * r) return true;
     }
     return false;
+}
+
+const TacticalPositionDef* bestHoldPosition(const MapDef& map, float x, float z,
+                                            float areaX, float areaZ, float areaRadius)
+{
+    float bestScore = -1e30f;
+    const TacticalPositionDef* best = nullptr;
+    const float ar2 = areaRadius * areaRadius;
+    for (const auto& p : map.tacticalPositions)
+    {
+        // I due ruoli "da presidiare": una posizione difensiva o un chokepoint.
+        if (p.role != "defensive" && p.role != "chokepoint") continue;
+        // Se è indicata un'area (settore-obiettivo), la posizione deve starci dentro.
+        if (areaRadius > 0.0f)
+        {
+            const float ax = p.x - areaX, az = p.z - areaZ;
+            if (ax * ax + az * az > ar2) continue;
+        }
+        const float dx = p.x - x, dz = p.z - z;
+        const float d2 = dx * dx + dz * dz;
+        // Protetta + importante, vicina, e fuori dal pericolo (ADR-046/C3).
+        const float score = p.protection + p.importance
+                          - std::sqrt(d2) * 0.05f - dangerAt(map, p.x, p.z);
+        if (score > bestScore) { bestScore = score; best = &p; }
+    }
+    return best;
+}
+
+const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float z,
+                                               float areaX, float areaZ, float areaRadius)
+{
+    float bestScore = -1e30f;
+    const TacticalPositionDef* best = nullptr;
+    const float ar2 = areaRadius * areaRadius;
+    for (const auto& p : map.tacticalPositions)
+    {
+        // Qualunque ruolo da combattimento (posarsi lì e sparare/tenere).
+        if (p.role != "cover" && p.role != "vantage"
+            && p.role != "defensive" && p.role != "chokepoint") continue;
+        if (areaRadius > 0.0f)
+        {
+            const float ax = p.x - areaX, az = p.z - areaZ;
+            if (ax * ax + az * az > ar2) continue;
+        }
+        const float dx = p.x - x, dz = p.z - z;
+        const float d2 = dx * dx + dz * dz;
+        // IMPORTANZA pesata (l'autore marca il buon terreno, anche elevato, con
+        // importanza alta) + protezione, vicina, fuori dal pericolo (ADR-046/C3).
+        const float score = p.importance * 1.5f + p.protection
+                          - std::sqrt(d2) * 0.05f - dangerAt(map, p.x, p.z);
+        if (score > bestScore) { bestScore = score; best = &p; }
+    }
+    return best;
 }
 
 const TacticalPositionDef* nearestPositionByRole(const MapDef& map, float x, float z,

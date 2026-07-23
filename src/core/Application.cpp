@@ -354,6 +354,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         std::vector<std::pair<std::string, std::string>> sbMaps;
         for (const auto& me : mList) sbMaps.push_back({me.id, me.name});
         sbMenu.setMaps(sbMaps);
+        // --map <id> deve valere ANCHE in sandbox/--sim: senza, `startSimulation`
+        // prendeva `sbMenu.selectedMapId()` (indice 0, arbitrario) ignorando il
+        // flag → le misure headless giravano su una mappa diversa da quella chiesta.
+        if (!requestedMapId.empty()) sbMenu.selectMapById(requestedMapId);
     }
     preMatchMenu.setWeaponList(wList);
     preMatchMenu.setAbilityList(aList);

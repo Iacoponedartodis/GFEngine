@@ -23,7 +23,12 @@ namespace mini
 // Detour ci path INTORNO (fix del comportamento "AI stuck").
 namespace
 {
-constexpr float kCellSize    = 0.30f;   // voxel XZ (m)
+// Voxel XZ. A 0.30m l'erosione `walkableRadius` arrotonda a ceil(0.40/0.30)=2 celle
+// = 0.60m, cioè 0.20m PIÙ del raggio agente (0.40): passaggi larghi ~0.8-1.2m — dove
+// l'AI ci passerebbe — venivano erosi via e ignorati (feedback utente 2026-07-23).
+// A 0.20m l'erosione è esatta (ceil(0.40/0.20)=2 celle = 0.40m) → il navmesh include
+// i passaggi che l'AI può davvero percorrere. Costo: ~2× voxel, ma il build è one-time.
+constexpr float kCellSize    = 0.20f;   // voxel XZ (m)
 constexpr float kCellHeight  = 0.10f;   // voxel Y (m): fine → superficie navmesh
                                         // vicina al pavimento reale (piedi a terra)
 constexpr float kAgentHeight = 1.80f;   // altezza agente (m)
@@ -38,7 +43,12 @@ constexpr float kAgentSlope  = 45.0f;   // pendenza max walkable (gradi)
 constexpr unsigned char kAreaGround = 0;
 constexpr unsigned char kAreaDanger = 1;
 constexpr unsigned char kAreaCover  = 2;
-constexpr float         kCostDanger = 10.0f;   // costo di traversata delle danger zone
+// Costo di traversata delle danger zone nel pathfinding. Deve SCORAGGIARE, non
+// BLOCCARE: a 10× una danger sull'unica via (es. scale centrali di Alpha) forzava
+// deviazioni enormi → l'AI la trattava come un muro (segnalato dall'utente 2026-07-23).
+// A 2× le AI preferiscono la via sicura ma attraversano se è la più breve. La
+// penalità sul "sostare in copertura nel pericolo" resta separata (dangerAt, ADR-046).
+constexpr float         kCostDanger = 2.0f;
 } // namespace
 
 NavManager::~NavManager() { clear(); }
@@ -311,6 +321,32 @@ bool NavManager::findPath(const glm::vec3& start, const glm::vec3& end,
     for (int i = 0; i < nstraight; ++i)
         out.push_back({straight[i*3], straight[i*3+1], straight[i*3+2]});
     return nstraight > 0;
+}
+
+// Il punto `end` è DAVVERO raggiungibile da `start` sul navmesh? Serve all'AI per
+// non mandare le unità verso posizioni su ISOLE (scale troppo ripide) o passaggi
+// erosi via: prima ci finivano contro e restavano in trappola (feedback utente
+// 2026-07-23). Un path Detour PARZIALE (o che non tocca il poligono destinazione)
+// = irraggiungibile. Chiamata a bassa frequenza (solo al (ri)commit del segnale).
+bool NavManager::isReachable(const glm::vec3& start, const glm::vec3& end) const
+{
+    if (!m_query) return true;   // nessun navmesh (fallback aiMove): non filtrare
+    dtQueryFilter filter;
+    filter.setAreaCost(kAreaDanger, kCostDanger);
+    const float ext[3] = {2.0f, 4.0f, 2.0f};
+    const float s[3] = {start.x, start.y, start.z};
+    const float e[3] = {end.x,   end.y,   end.z};
+    dtPolyRef sRef = 0, eRef = 0;
+    float sPt[3], ePt[3];
+    m_query->findNearestPoly(s, ext, &filter, &sRef, sPt);
+    m_query->findNearestPoly(e, ext, &filter, &eRef, ePt);
+    if (!sRef || !eRef) return false;   // uno dei due non è sul navmesh
+    dtPolyRef path[256];
+    int npath = 0;
+    const dtStatus stq = m_query->findPath(sRef, eRef, sPt, ePt, &filter, path, &npath, 256);
+    if (dtStatusFailed(stq) || npath == 0) return false;
+    if (stq & DT_PARTIAL_RESULT) return false;      // path parziale → oltre un gap/isola
+    return path[npath - 1] == eRef;                 // arriva al poligono destinazione
 }
 
 // ── Crowd (Phase B) ──────────────────────────────────────────────────────────

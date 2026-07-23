@@ -54,13 +54,6 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
                                                 float threatX, float threatZ,
                                                 float maxDist);
 
-// Posizione di tiro raggiungibile che COPRE il punto verso cui un compagno sta
-// avanzando (ADR-032): il dato che abilita il bounding overwatch. nullptr se nessuna.
-const TacticalPositionDef* bestOverwatchFor(const MapDef& map,
-                                            float fromX, float fromZ,
-                                            float advanceX, float advanceZ,
-                                            float maxDist);
-
 // Bounding overwatch che USA IL GRAFO (ADR-032): fra le posizioni che, per il grafo
 // `positionCovers`, coprono la posizione tattica `coveredIdx` verso cui un compagno
 // sta avanzando, la migliore raggiungibile entro maxDist (vicina, protetta, poco
@@ -92,6 +85,22 @@ bool nearCommandPost(const MapDef& map, float x, float z, float slack);
 
 // Posizione tattica più vicina (entro maxDist, XZ) col ruolo dato (ADR-030).
 // role vuoto = qualunque ruolo. nullptr se nessuna.
+// Miglior posizione da TENERE (ADR-046): fra le `defensive`/`chokepoint` dentro
+// l'area (settore che il comandante vuole presidiare), la migliore per
+// protezione + importanza, vicina e fuori dalle danger zone. Dà comportamento ai
+// due ruoli che prima erano decorativi. nullptr se nessuna qualifica.
+const TacticalPositionDef* bestHoldPosition(const MapDef& map, float x, float z,
+                                            float areaX, float areaZ, float areaRadius);
+
+// Miglior posizione VANTAGGIOSA in un'area (doc 36): fra cover/vantage/defensive/
+// chokepoint dentro l'area, la migliore per IMPORTANZA autorata + protezione,
+// vicina e fuori dal pericolo. Serve a far OCCUPARE proattivamente il buon terreno
+// (anche elevato, marcato con importanza alta) quando un'unità avanza su un fronte,
+// invece di stare al centro del settore. Distinta da bestFiringPosition (che serve
+// un bersaglio) e da bestHoldPosition (solo difensive/chokepoint). nullptr se nessuna.
+const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float z,
+                                               float areaX, float areaZ, float areaRadius);
+
 const TacticalPositionDef* nearestPositionByRole(const MapDef& map, float x, float z,
                                                  const char* role, float maxDist);
 
