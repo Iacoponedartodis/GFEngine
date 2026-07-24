@@ -58,7 +58,21 @@ void Ui2D::text(float x, float y, float scale, const char* str,
                 float r, float g, float b) const
 {
     static char buf[131072];
-    int quads = stb_easy_font_print(0, 0, const_cast<char*>(str), nullptr, buf, sizeof(buf));
+    // stb_easy_font gestisce SOLO ASCII 32-126 (+ '\n'): internamente indicizza
+    // stb_easy_font_charinfo[*text-32] con *text di tipo `char` SIGNED, quindi un
+    // byte fuori range — tipicamente i byte >127 dei caratteri accentati UTF-8 del
+    // testo italiano (à, è, °, …) → indice NEGATIVO → lettura fuori dai limiti
+    // (global-buffer-overflow trovato con AddressSanitizer). Si igienizza la stringa
+    // a ASCII stampabile prima di passarla (i non-ASCII diventano '?').
+    static char clean[8192];
+    size_t n = 0;
+    for (const char* p = str; *p && n + 1 < sizeof(clean); ++p)
+    {
+        const unsigned char c = (unsigned char)*p;
+        clean[n++] = (c == '\n' || (c >= 32 && c <= 126)) ? (char)c : '?';
+    }
+    clean[n] = '\0';
+    int quads = stb_easy_font_print(0, 0, clean, nullptr, buf, sizeof(buf));
     glPushMatrix();
     glTranslatef(x, y, 0.0f);
     glScalef(scale, scale, 1.0f);

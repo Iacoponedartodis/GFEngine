@@ -3,8 +3,17 @@
         "Combat Roll"
     ],
     "ai_profile": "Clone Trooper",
+    "base_entity": "Clone Trooper",
+    "color_mult": [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "damage_mult": 1.0,
+    "hp_mult": 1.0,
     "name": "Clone Trooper",
     "primary_weapon": "DC-15A",
     "role": "assault",
-    "secondary_weapon": "DC-17 Blaster Pistol"
+    "secondary_weapon": "DC-17 Blaster Pistol",
+    "speed_mult": 1.0
 }

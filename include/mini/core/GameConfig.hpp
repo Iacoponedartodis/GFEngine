@@ -33,6 +33,11 @@ constexpr float AI_HALF_Y     = 0.50f;
 constexpr float AI_HALF_Z     = 0.40f;
 constexpr float AI_GRAVITY    = -14.0f;
 constexpr float AI_STUCK_TIME =   1.2f;   // secondi prima di anti-stuck
+// Altezza (dal SUOLO) della LOS di combattimento: l'unità "si sporge"/mira a questa
+// quota, non al centro del corpo (~0.5 m). Scavalca la cover bassa (peek-over) →
+// un'unità in copertura/rialzata acquisisce e ingaggia; un muro più alto resta
+// bloccante. Coerente col peek della selezione posizioni (KI #79, ADR-031/032).
+constexpr float COMBAT_EYE_HEIGHT = 1.2f;
 
 // Raggio entro cui un contatto avvistato viene condiviso coi compagni (m).
 // Prima l'avvistamento era propagato a TUTTO l'esercito: bastava che uno vedesse

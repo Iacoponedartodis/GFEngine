@@ -198,9 +198,12 @@ quindi i compagni e i caduti non erano mirabili).
 Tasto `CommandWheel` (default **B**, rimappabile) TENUTO → la camera si congela, il mouse sceglie il
 settore, al rilascio l'ordine va a tutta la squadra. Quattro settori sulle diagonali:
 - **Regroup** (basso-sx): raduna sul leader (MoveTo sulla posizione del giocatore).
-- **Hold** (basso-dx): ognuno tiene la PROPRIA posizione (HoldPosition per-membro, non un punto
-  condiviso).
-- **Advance** (alto-dx): avanza ~15 m nella direzione di mira.
+- **Hold** (basso-dx): `HoldPosition` — ognuno tiene la PROPRIA posizione (ingaggia comunque). NB: il rework
+  "controllo d'area distribuito" (changelog 72) è stato **REVERTATO** (changelog 77): scavalcava l'AI autonoma.
+  Il futuro Hold sarà un **bias** (bassa aggressività + ancora l'area), non un override. Vedi [[orders-design-vision]].
+- **Advance** (alto-dx): `MoveTo` verso la direzione di mira. NB: il rework "avanzata a balzi continua"
+  (changelog 74) è stato **REVERTATO** (changelog 77). Il futuro Advance sarà un **bias** (spinta aggro/fronte
+  in direzione), lasciando all'AI autonoma la scelta delle posizioni. Vedi [[orders-design-vision]].
 - **Segui / Liberi** (alto-sx, ADR-037): impartisce `Follow`, oppure **revoca** se la squadra sta già
   seguendo. L'etichetta cambia di conseguenza.
 HUD radiale col settore puntato evidenziato. Il **mirino diventa verde** su un compagno (feedback per

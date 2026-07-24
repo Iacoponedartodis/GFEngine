@@ -86,6 +86,10 @@ struct AiComponent
     float repositionTimer  = 0.0f;
     bool  repositionActive = false;
     float repositionX = 0.0f, repositionZ = 0.0f;
+    // Appena ENTRATO in Alert (nuovo ingaggio): fa scattare UNA valutazione
+    // proattiva della copertura (cerca subito una posizione di tiro coperta invece
+    // di sparare allo scoperto e aspettare la rivalutazione a timer). Poi si azzera.
+    bool  justEngaged = false;
 
     // Roll attivo (abilità "roll", 16 est.): scatto in corso
     float rollTimer = 0.0f;

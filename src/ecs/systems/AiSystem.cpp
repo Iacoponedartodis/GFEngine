@@ -22,6 +22,12 @@ namespace mini
 
 static constexpr float PI = 3.14159265f;
 
+// Offset dell'origine LOS sopra il TRANSFORM (centro corpo, a ground+AI_HALF_Y):
+// porta la linea di vista/tiro a COMBAT_EYE_HEIGHT dal suolo (peek-over cover),
+// non a 0.5 m dove qualsiasi copertura la bloccava → KI #79 (non sparavano da
+// cover/rialzato). Vale come origine E come mira sui bersagli-unità (eye-to-eye).
+static constexpr float kEyeUp = config::COMBAT_EYE_HEIGHT - config::AI_HALF_Y;
+
 // ── Osservabilità delle DECISIONI tattiche ───────────────────────────────
 // Finora si misuravano solo crash e stuck: nulla diceva se le AI stessero
 // davvero *usando* i metadata o se le query tornassero sempre a vuoto — e senza
@@ -942,6 +948,7 @@ void AiSystem::update(World& world, float dt)
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
         const glm::vec3 ePos = {et->x, et->y, et->z};
+        const glm::vec3 eyePos = {et->x, et->y + kEyeUp, et->z};   // LOS ad altezza peek (KI #79)
 
         int losChecks = 0;
         for (size_t i = 0; i < targets.size(); ++i)
@@ -951,7 +958,10 @@ void AiSystem::update(World& world, float dt)
             float d2 = (tp.x-ePos.x)*(tp.x-ePos.x)+(tp.y-ePos.y)*(tp.y-ePos.y)+(tp.z-ePos.z)*(tp.z-ePos.z);
             if (d2 >= ai->aggroRange * ai->aggroRange) continue;
             if (++losChecks > config::AI_MAX_LOS_CHECKS) break;   // Fase 4b: bounda la LOS
-            if (!physics::hasLineOfSight(ePos, tp, world)) continue;
+            // Origine ad altezza occhi (scavalca la PROPRIA cover); bersaglio al CORPO
+            // (`tp`, il transform ~0.5 m): un nemico in cover resta protetto, e il
+            // colpo non passa sopra la sua testa (KI #79).
+            if (!physics::hasLineOfSight(eyePos, tp, world)) continue;
 
             // Contatto: chi l'ha visto lo segnala coi propri compagni VICINI.
             // Età 0 = appena avvistato; quando diventa utilizzabile lo decide la
@@ -1016,6 +1026,7 @@ void AiSystem::update(World& world, float dt)
         const auto& targets = (myTeam == 1) ? team2Tgts : team1Tgts;
         const auto& tgtPos  = (myTeam == 1) ? team2Pos  : team1Pos;
         const glm::vec3 ePos = {et->x, et->y, et->z};
+        const glm::vec3 eyePos = {et->x, et->y + kEyeUp, et->z};   // LOS ad altezza peek (KI #79)
 
         // ── Presidio (ADR-046, opzione A) — valutato PRIMA dei rami di combattimento
         // Se il comando ordina TIENI su un fronte a cui questo droide è assegnato,
@@ -1108,8 +1119,9 @@ void AiSystem::update(World& world, float dt)
             }
             nearest = 0;
             for (int j = 0; j < kn; ++j)
-                if (physics::hasLineOfSight(ePos, tgtPos[kIdx[j]], world,
-                                            targets[kIdx[j]]))
+                // Origine occhi, bersaglio al CORPO (`tgtPos`, transform ~0.5 m): KI #79.
+                if (physics::hasLineOfSight(eyePos, tgtPos[kIdx[j]],
+                                            world, targets[kIdx[j]]))
                 { nearest = targets[kIdx[j]]; break; }
 
             // ── Ingaggio delle STRUTTURE (doc 35) ────────────────────────
@@ -1147,7 +1159,8 @@ void AiSystem::update(World& world, float dt)
                     const auto* scol = world.getCollider(stx.entity);
                     const float aimY = stt->y + (scol ? scol->hy * 0.5f : 1.0f);
                     // `stx.entity` da ignorare: è il bersaglio, non un ostacolo.
-                    if (!physics::hasLineOfSight(ePos, {stt->x, aimY, stt->z},
+                    // Origine ad altezza occhi (KI #79); la struttura si mira al corpo.
+                    if (!physics::hasLineOfSight(eyePos, {stt->x, aimY, stt->z},
                                                  world, stx.entity)) continue;
                     bestD2 = d2; nearest = stx.entity;
                 }
@@ -1174,8 +1187,10 @@ void AiSystem::update(World& world, float dt)
                     if (ft && fh && fh->current > 0.0f)
                     {
                         const auto* fcol = world.getCollider(sqf->targetEntity);
+                        // Origine occhi (KI #79); mira al CORPO: struttura = collider,
+                        // unità = transform (~0.5 m). Non oltre la testa del bersaglio.
                         const float aimY = ft->y + (fcol ? fcol->hy * 0.5f : 0.0f);
-                        if (physics::hasLineOfSight(ePos, {ft->x, aimY, ft->z},
+                        if (physics::hasLineOfSight(eyePos, {ft->x, aimY, ft->z},
                                                     world, sqf->targetEntity))
                             nearest = sqf->targetEntity;
                     }
@@ -1206,6 +1221,14 @@ void AiSystem::update(World& world, float dt)
                 // colpo e l'ingaggio moriva prima di iniziare.
                 ai->evading     = false;
                 ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax) + ai->reactionTime;
+                // Ingaggio APPENA iniziato: cerca SUBITO una posizione di tiro
+                // coperta invece di restare allo scoperto fino alla prossima
+                // valutazione a timer (3-6s). Riusa il sistema di riposizionamento
+                // ADR-035 (nessun sistema nuovo): timer a 0 = valuta questo tick,
+                // `justEngaged` = quella valutazione è deterministica, non a
+                // probabilità. Segnalato dall'utente: "sparano allo scoperto".
+                ai->repositionTimer = 0.0f;
+                ai->justEngaged     = true;
             }
             ai->state = AiState::Alert;
             ai->alertTimer = 3.0f;
@@ -1454,6 +1477,14 @@ void AiSystem::update(World& world, float dt)
                         ++g_tac.repoEval;
                         ai->repositionTimer = 3.0f + ai->bias * 3.0f;   // riprova più tardi
                         bool advanced = false;
+                        // Valutazione proattiva d'INGAGGIO (una tantum): appena
+                        // ingaggiato, cerca una posizione di tiro coperta a
+                        // prescindere dalla probabilità `coverPreference`, invece di
+                        // restare allo scoperto. Si consuma qui (una volta per
+                        // ingaggio). Il flanking resta a probabilità (è un'altra
+                        // tattica, non "mettersi al riparo").
+                        const bool engageSeek = ai->justEngaged;
+                        ai->justEngaged = false;
 
                         // ── AVANZATA ─────────────────────────────────────
                         // Solo se non si stanno già muovendo in troppi: parte del
@@ -1470,8 +1501,9 @@ void AiSystem::update(World& world, float dt)
                                     et->x, et->z, 20.0f);
                                 if (dest) ++g_tac.repoFlankHit; else ++g_tac.repoFlankMiss;
                             }
-                            // Altrimenti una posizione da cui sparare restando coperto.
-                            if (!dest && aiRand01() < ai->coverPreference)
+                            // Una posizione da cui sparare restando coperto: SEMPRE
+                            // all'ingaggio, altrimenti a probabilità (personalità).
+                            if (!dest && (engageSeek || aiRand01() < ai->coverPreference))
                             {
                                 dest = worldintel::bestFiringPosition(
                                     *world.activeMap, et->x, et->z, tt->x, tt->z, 16.0f);
@@ -1672,18 +1704,43 @@ void AiSystem::update(World& world, float dt)
                         }
                         else if (d && d->stance == World::EnemyCommand::Advance)
                         {
-                            // Verso un post del settore-fronte; se non ce n'è, un
-                            // punto sull'anello (diverso per bias → non si ammassano).
-                            haveTarget = nearestCapturablePost(world, et->x, et->z, 2,
-                                                               wx, wz, d->x, d->z, d->radius);
-                            if (!haveTarget)
-                                haveTarget = nearestCapturablePost(world, et->x, et->z, 2, wx, wz);
-                            if (!haveTarget)
+                            // #2b: come i cloni — commitment su un waypoint RAGGIUNGIBILE
+                            // + timer, così i droidi occupano il buon terreno del fronte
+                            // (vantage/cover, anche ELEVATO) senza oscillare né finire su
+                            // isole irraggiungibili. (Riusa i campi allySig*: un'unità è di
+                            // una sola fazione, quindi non c'è conflitto col ramo clone.)
+                            ai->allySigTimer -= dt;
+                            const float rdx = et->x - ai->allySigX, rdz = et->z - ai->allySigZ;
+                            const bool reached = ai->allySigValid && (rdx*rdx + rdz*rdz < 3.0f*3.0f);
+                            if (ai->allySigValid && !reached && ai->allySigTimer > 0.0f)
+                            { wx = ai->allySigX; wz = ai->allySigZ; haveTarget = true; }
+                            else
                             {
-                                const float ang = ai->bias * 6.2831853f;
-                                wx = d->x + std::cos(ang) * d->radius * 0.6f;
-                                wz = d->z + std::sin(ang) * d->radius * 0.6f;
-                                haveTarget = true;
+                                // Obiettivo del fronte: un post da catturare, o un punto
+                                // sull'anello (diverso per bias → non si ammassano).
+                                float tx = 0.0f, tz = 0.0f;
+                                bool got = nearestCapturablePost(world, et->x, et->z, 2,
+                                                                 tx, tz, d->x, d->z, d->radius);
+                                if (!got) got = nearestCapturablePost(world, et->x, et->z, 2, tx, tz);
+                                if (!got)
+                                {
+                                    const float ang = ai->bias * 6.2831853f;
+                                    tx = d->x + std::cos(ang) * d->radius * 0.6f;
+                                    tz = d->z + std::sin(ang) * d->radius * 0.6f;
+                                }
+                                // Miglior terreno vantaggioso del fronte, SE raggiungibile:
+                                // lo si occupa (superiorità di fuoco) invece del bare centro.
+                                const TacticalPositionDef* adv = world.activeMap
+                                    ? worldintel::bestAdvantageInArea(*world.activeMap,
+                                                                      et->x, et->z, d->x, d->z, d->radius)
+                                    : nullptr;
+                                if (adv && (!world.nav || !world.nav->crowdReady()
+                                            || world.nav->isReachable({et->x, et->y, et->z},
+                                                                      {adv->x, adv->y, adv->z})))
+                                { tx = adv->x; tz = adv->z; }
+                                ai->allySigX = tx; ai->allySigZ = tz;
+                                ai->allySigValid = true; ai->allySigTimer = 12.0f;
+                                wx = tx; wz = tz; haveTarget = true;
                             }
                         }
                         else if (d && d->stance == World::EnemyCommand::Hold
@@ -1743,7 +1800,12 @@ void AiSystem::update(World& world, float dt)
                                     { tx = px; tz = pz; }
                                 }
                                 ai->allySigX = tx; ai->allySigZ = tz;
-                                ai->allySigValid = true; ai->allySigTimer = 4.0f;
+                                // Ri-valuta solo DOPO essere arrivato (o dopo un timeout
+                                // generoso di sicurezza): un timer corto scattava a metà
+                                // di una salita e faceva tornare indietro il clone
+                                // (segnalato dall'utente). Lo stuck-recovery copre il caso
+                                // "non arriva mai", quindi qui il timeout può essere lungo.
+                                ai->allySigValid = true; ai->allySigTimer = 12.0f;
                                 wx = tx; wz = tz; haveTarget = true;
                                 ++g_tac.allySignalFollow;
                             }
@@ -2017,10 +2079,14 @@ void AiSystem::update(World& world, float dt)
         // sé stesso (doc 35): senza `ignore` una struttura colpibile era
         // ingaggiabile ma mai colpibile.
         const auto* tcol = world.getCollider(nearest);
+        // Mira al CORPO del bersaglio: struttura = collider; unità = transform
+        // (~0.5 m), così il colpo non passa sopra la testa.
         const float aimY = tt->y + (tcol ? tcol->hy * 0.5f : 0.0f);
-        if (!physics::hasLineOfSight({et->x, et->y, et->z},
-                                     {tt->x, aimY, tt->z}, world, nearest)) continue;
-        float dx = tt->x-et->x, dy = aimY-et->y, dz = tt->z-et->z;
+        // Origine del tiro = OCCHI (KI #79): coerente con l'acquisizione E con lo
+        // spawn/traiettoria del proiettile sotto → l'unità spara SOPRA la propria
+        // cover verso il corpo del nemico, invece di piantare il colpo nel muro davanti.
+        if (!physics::hasLineOfSight(eyePos, {tt->x, aimY, tt->z}, world, nearest)) continue;
+        float dx = tt->x-eyePos.x, dy = aimY-eyePos.y, dz = tt->z-eyePos.z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;
 
@@ -2046,7 +2112,8 @@ void AiSystem::update(World& world, float dt)
 
         float inv = ai->bulletSpeed / len;
         EntityId b = world.createEntity();
-        world.addTransform(b, TransformComponent{.x=et->x,.y=et->y,.z=et->z,.sx=0.10f,.sy=0.10f,.sz=0.10f});
+        // Spawn del proiettile ad altezza occhi (coerente con LOS e traiettoria, KI #79).
+        world.addTransform(b, TransformComponent{.x=eyePos.x,.y=eyePos.y,.z=eyePos.z,.sx=0.10f,.sy=0.10f,.sz=0.10f});
         world.addVelocity(b, {dx*inv, dy*inv, dz*inv});
         world.addTeam(b, {myTeam});
         world.addBullet(b, {ai->bulletDamage, ai->bulletLifetime, myTeam});

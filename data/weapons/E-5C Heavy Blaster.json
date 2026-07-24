@@ -1,15 +1,5 @@
 {
-    "hand_scale": 0.001500000013038516,
-    "hand_rot": [
-        0.0,
-        90.0,
-        0.0
-    ],
-    "hand_offset": [
-        0.0,
-        0.0,
-        0.0
-    ],
+    "ads_fov": 35.0,
     "attach_points": {
         "muzzle": [
             -0.2611593008041382,
@@ -27,14 +17,25 @@
         1.0,
         0.0
     ],
-    "bullet_lifetime": 3.0,
+    "bullet_lifetime": 10.0,
     "bullet_scale": 0.11999999731779099,
-    "bullet_speed": 70.0,
+    "bullet_speed": 200.0,
     "cooldown_rate": 0.30000001192092896,
     "damage": 35.0,
-    "effective_range": 18.0,
+    "effective_range": 40.0,
     "faction": "separatist",
     "fire_rate": 4.0,
+    "hand_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "hand_rot": [
+        0.0,
+        90.0,
+        0.0
+    ],
+    "hand_scale": 0.001500000013038516,
     "heat_per_shot": 0.30000001192092896,
     "mesh": "assets/models/weapons/e5c_heavy_blaster_rifle_-_star_wars.glb",
     "mesh_rot_x": 0.0,
@@ -44,9 +45,9 @@
     "name": "E-5C Heavy Blaster",
     "overheat_penalty": 2.75,
     "projectile_mesh": "",
-    "spread_ads": 0.0024999999441206455,
-    "spread_base": 0.009999999776482582,
-    "spread_jump": 0.07000000029802322,
-    "spread_move": 0.02500000037252903,
-    "spread_sprint": 0.05000000074505806
+    "spread_ads": 0.0020000000949949026,
+    "spread_base": 0.003000000026077032,
+    "spread_jump": 0.02500000037252903,
+    "spread_move": 0.006500000134110451,
+    "spread_sprint": 0.014999999664723873
 }

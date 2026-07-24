@@ -1,7 +1,7 @@
 {
-    "accuracy": 0.4309999942779541,
-    "aggression": 0.7289999723434448,
-    "cover_preference": 0.546999990940094,
+    "accuracy": 0.41999998688697815,
+    "aggression": 0.7400000095367432,
+    "cover_preference": 0.5400000214576721,
     "flank_chance": 0.20000000298023224,
     "fov_deg": 110.0,
     "hearing_range": 12.0,
@@ -13,9 +13,9 @@
     "peek_duration_min": 0.6000000238418579,
     "reaction_time": 0.4000000059604645,
     "reposition_chance": 0.30000001192092896,
-    "retreat_hp_threshold": 0.19900000095367432,
+    "retreat_hp_threshold": 0.20000000298023224,
     "role": "infantry",
     "seek_speed": 4.0,
     "shoot_interval": 2.5,
-    "sight_range": 25.0
+    "sight_range": 45.0
 }

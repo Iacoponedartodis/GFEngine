@@ -35,6 +35,17 @@ in meno di un minuto, senza riavviare il processo e senza leggere file di log es
    sandbox — i messaggi sono gli stessi della telemetria, in forma leggibile.
 3. **Volo osservatore** — camera libera (WASD + SPAZIO/CTRL, velocità alta) sganciata
    dal PlayerController; il giocatore diventa team neutro (le AI lo ignorano).
+4. **Osservatore-comandante (2026-07-23)** — mentre si osserva un sim, la **ruota
+   comandi (B)** e gli **ordini rapidi (G)** comandano la squadra alleata (team 1).
+   Riusa l'intera pipeline ordini (ADR-020, doc 26): `formAlliedSquad` elegge già la
+   prima AI alleata come leader in sim, gli ordini passano da `world.squadOrder` e
+   `AiSystem` li esegue. L'**ancora** dell'ordine non è più il giocatore (parcheggiato
+   fuori campo) ma il **punto mirato a terra** (`crosshairGround`: raggio camera →
+   suolo del MapDef). Ruota: Regroup→RADUNA QUI, Advance→avanza oltre il punto, Hold
+   invariato, 4° settore→LIBERI (no "segui" su una camera in volo). Ordini rapidi
+   invariati nella semantica (nemico→FocusFire, compagno→CoveringFire/Revive, punto→
+   MoveTo/TakeCover). Serve a **osservare come reagisce l'AI a un ordine** — feedback
+   loop per il tuning tattico, non un vero controllo di gioco.
 
 ## Out of Scope (per ora)
 - Selezione abilità/gadget/equipaggiamento del giocatore: il runtime non ha ancora

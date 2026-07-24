@@ -1,20 +1,20 @@
 {
-    "ai_profile": "Clone Trooper",
-    "name": "Heavy Clone Trooper",
-    "primary_weapon": "Z-6 Rotary Blaster",
-    "role": "support",
-    "secondary_weapon": "T-21 Heavy Blaster",
-    "base_entity": "Clone Trooper",
     "abilities": [
         "Shield",
         "Combat Roll"
     ],
-    "hp_mult": 1.0,
-    "speed_mult": 1.0,
-    "damage_mult": 1.0,
+    "ai_profile": "Heavy Clone Trooper",
+    "base_entity": "Clone Trooper",
     "color_mult": [
         1.0,
-        0.82,
-        0.62
-    ]
+        0.8199999928474426,
+        0.6200000047683716
+    ],
+    "damage_mult": 1.0,
+    "hp_mult": 1.0,
+    "name": "Heavy Clone Trooper",
+    "primary_weapon": "Z-6 Rotary Blaster",
+    "role": "support",
+    "secondary_weapon": "T-21 Heavy Blaster",
+    "speed_mult": 1.0
 }

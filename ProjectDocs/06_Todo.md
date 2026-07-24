@@ -1,5 +1,19 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ▶ USO SENSATO DI COVER/METADATA (playtest 2026-07-23)
+- **✅ Fix 1 — cerca copertura all'ingaggio (changelog 67)**: entrando in Alert, valutazione proattiva di
+  `bestFiringPosition` (riusa ADR-035, non un sistema nuovo). Misurato: uso posizioni di tiro su, `fermi=0`.
+- **✅ Fix 2 — arco morbido + importanza (changelog 68)**: arco = preferenza (non esclusione) + importanza
+  nel punteggio → posizioni di tiro trovate 92%, manovre triplicate. LOS-y accurata provata e scartata
+  (riduceva l'uso — rivela che molte elevate non hanno tiro pulito a terra; tenuta permissiva).
+- **✅ Fix 3 — modello copertura "peek" (changelog 69)**: la LOS di tiro si sporge (1.5m avanti) invece
+  di partire dal centro dietro la cover → la propria copertura non blocca più il tiro. `tiro_trovato` 100%.
+  Intuizione utente: "una cover blocca parte della visuale, sennò non ripara". Grafo overwatch non toccato.
+- **▶ Ancora aperto (playtest dirà)**: le AI restano un po' meccaniche; possibile prossimo giro —
+  reachability anche sul target di riposizionamento in combattimento (ora `bestFiringPosition` non la
+  controlla); e i **droidi** che restano fermi/scoperti (estendere il "cerca-copertura-all'ingaggio" — è
+  già di entrambe le fazioni, ma verificare).
+
 ## ▶ PLAYTEST utente 2026-07-23 (3 problemi su Training Ground)
 - **#1 Performance** → vedi sezione sotto (✅ per ora).
 - **#3 Cloni idle vicino allo spawn / torre di controllo** → **✅ (changelog 63)**: `pickAllySignal` non
@@ -12,16 +26,32 @@
   navmesh 0.30→0.20 (passaggi stretti raggiungibili). **RESTA**: (2b) cablare `bestAdvantageInArea` +
   reachability anche nei **droidi** (Advance); e authoring dell'utente — scale con gradini ≤0.55m (sopra,
   non le sale né fisicamente né nel navmesh) e passaggi ≥~0.8m. **Da riconfermare in playtest.**
-- **▶ Sanitizer**: `/RTC1` tolto quando ASan ON (changelog 65). Utente: installare "C++ AddressSanitizer"
-  dal Visual Studio Installer, poi configurare con `-DGF_ENABLE_ASAN=ON`.
+- **▶ Sanitizer**: `/RTC1` tolto quando ASan ON (fatto). MA la build usa **VS 2022 Community (14.44)** e
+  il componente ASan è in un'ALTRA installazione VS → link error thunk lib. Utente: installare "C++
+  AddressSanitizer" **nella VS 2022 Community** (VS Installer → Modifica → Componenti individuali). Poi
+  `-DGF_ENABLE_ASAN=ON` builda; a runtime DLL `clang_rt.asan_dynamic-x86_64.dll` sul PATH.
 - **Cleanup minore**: warning C4189 preesistente in SandboxMenu.cpp (`PH` non usato in handleMouse).
 - **✅ #3-bis Cloni indietro / rework torre (changelog 64)**: commitment del clone (`allySig*`, resta sul
   segnale finché non lo raggiunge/sparisce → fine oscillazione) + analisi tattica più ricca del settore
   (minoranza→rinforza, valore poco difeso→sfrutta). Torre = info/analisi, non ordini
   ([[control-tower-informs-not-orders]]). Verificato build; effetto visivo da confermare in playtest.
-- **▶ Futuro richiesto dall'utente (2026-07-23)**: (a) usare **ruota ordini + ordini rapidi** anche in
-  OSSERVAZIONE della sim sandbox (per testare le reazioni AI); (b) mappa tattica + controllo obiettivi/
-  priorità + **chain of command** ([[command-rank-system]]) — grande blocco futuro.
+- **▶ Futuro richiesto dall'utente (2026-07-23)**: (a) ~~usare **ruota ordini + ordini rapidi** anche in
+  OSSERVAZIONE della sim sandbox~~ **FATTO 2026-07-23 (changelog 70)**: osservatore-comandante, riuso
+  della pipeline ordini (ADR-020) con ancora = punto mirato a terra (`crosshairGround`); build-verified,
+  smoke test manuale da fare. (b) mappa tattica + controllo obiettivi/priorità + **chain of command**
+  ([[command-rank-system]]) — grande blocco futuro.
+- **▶ Rework ordini più tattici (2026-07-23/24, [[orders-design-vision]])**
+  - ⛔ **Primo tentativo REVERTATO (changelog 77)**: Hold custom (72), Advance continuo (73/74), reposition-gate
+    (76) → scavalcavano l'AI autonoma con una LOS/tattica parallela e la disconnettevano dai bersagli (Advance
+    senza bersaglio 81% del tempo). Base tornata stabile. **TENUTI**: LOS occhi (75), ruota sandbox (70).
+  - ✅ **Provato**: il tiro dell'AI funziona anche da cover/ponte (29/31). Il "non sparano" era **posizionamento**
+    (stavano su posizioni senza bersaglio), non tiro (KI #79).
+  - **▶ NUOVO APPROCCIO (concordato)**: gli ordini come **bias leggero sull'AI autonoma** (che già bounda e
+    sceglie firing position che affacciano i nemici), NON override. Advance = spinta aggro/fronte in direzione;
+    Hold = abbassa aggressività + ancora l'area (leash); Follow = segue il leader; Retreat = ripiega; Regroup =
+    zona priorità. Lasciare a `enterHunt`/reposition la scelta delle posizioni. Vedi KI #80b.
+  - Futuro: ordini rapidi solo alla piccola squadra del player + ordini a singoli membri
+    (`SquadOrderRequest.directedMember`).
 
 ## ▶ PERFORMANCE (playtest utente 2026-07-23): lag con ~25 AI su Training Ground
 - **✅ Indice spaziale collisioni/LOS (changelog 62)**: `hasLineOfSight`/`hasCollision` da O(tutte le

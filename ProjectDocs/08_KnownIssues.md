@@ -1,5 +1,71 @@
 # 08 — Known Issues
 
+## 80b. Ordini custom (Hold/Advance/reposition) REVERTATI — ripensare come bias sull'AI autonoma — 2026-07-24
+- Il Hold/Advance custom e il reposition-gate (changelog 72/74/76) sono stati **revertati** (changelog 77):
+  scavalcavano l'AI autonoma che già bounda/ingaggia bene, disconnettendo le unità dai bersagli. Base tornata
+  stabile (autonoma + LOS #75 + ruota #70).
+- **Prossimo approccio ordini**: NON override. Gli ordini devono **influenzare** l'AI autonoma (che già fa
+  bounding overwatch): es. Advance = spingere il fronte/aggro delle unità verso una direzione; Hold = ridurre
+  l'aggressività e ancorare l'area; Follow = seguire il leader. Lasciare che siano `enterHunt`/reposition a
+  scegliere le posizioni (che affacciano i nemici), non una LOS parallela in SquadSystem.
+- Aperto anche: enemy-aware nella scelta posizione (KI #79), e valutare se l'AI autonoma stessa "tiene" di più
+  le posizioni produttive (il churn osservato) SENZA scollegarsi dai bersagli.
+
+## 80. "Feel" degli ordini + residui da rifinire dopo il set completo (LOW/tuning) — SUPERSEDED 2026-07-24 (vedi 80b)
+- **Churn / "non tengono le cover, si muovono libere"** — CAUSA TROVATA E ATTACCATA (changelog 76): il
+  reposition (ADR-035) era a timer, non a "posizione esaurita", e ignorava gli ordini; il (75) l'aveva
+  amplificato. Fix: `wantMove = justEngaged || !canEngageHere` (tieni se hai LOS sul nemico da qui) + reposition
+  soppresso sotto Hold/Advance. Calo churn moderato in telemetria; **conferma visiva utente in sospeso**.
+- Residui da rifinire (dopo il set completo di ordini):
+  - **Feeling avanzata cover-in-cover** ancora da valutare visivamente col fix (76). Se debole: allungare la
+    sosta produttiva o `kAdvanceStep`/soglie.
+  - **Alcuni cloni restano indietro**: verificare se persiste col (76) (che li fa tenere le posizioni); se sì,
+    telemetria di stuck (nav/leash).
+  - Detection molto alta (contatti ~40-55) col (75): se causa ancora nervosismo, moderare il raggio.
+- **Decisione (utente)**: completare prima TUTTI gli ordini (Retreat/Regroup/Follow), poi un giro unico di
+  rifinitura/tuning. Vedi [[orders-design-vision]].
+
+## 79. "Le AI non sparano da cover/rialzato" → in realtà è POSIZIONAMENTO, non tiro (HIGH) — CHIARITO 2026-07-24
+- **Diagnosi strumentata (changelog 77)**: il tiro FUNZIONA. Sul ponte (y>3) le AI sparano 29/31 quando pronte;
+  con ordine Advance 97/99. Il problema NON era "non sanno sparare dalle cover".
+- **Vero problema**: le unità (specie sotto il mio Advance custom) stavano su posizioni **senza bersaglio
+  ingaggiabile** (in Alert solo il 19% del tempo con Advance) → ferme e mute perché non c'è nulla da sparare da
+  lì. È **selezione della posizione scollegata da dove sono i nemici**.
+- **Fix TENUTO (changelog 75)**: LOS d'ingaggio origine=occhi (`COMBAT_EYE_HEIGHT` 1.2 m) / bersaglio=corpo —
+  fa sparare dalle cover quando c'è un bersaglio (provato dai dati). Resta valido.
+- **Aperto → confluisce nel rework ordini**: far sì che le unità (autonome e ordinate) prendano posizioni che
+  AFFACCIANO davvero i nemici del momento (enemy-aware). Vedi KI #80 e [[orders-design-vision]].
+- **Sintomo** (ricorrente, più playtest): unità che occupano cover — specie **rialzate/ponte** — poi **non
+  sparano** ai nemici. Mina Hold, Advance e l'AI autonoma: occupare una posizione è inutile se non si ingaggia.
+- **Causa** (diagnosi contro il codice): la LOS d'INGAGGIO ([AiSystem.cpp:1111](../src/ecs/systems/AiSystem.cpp#L1111),
+  e il sensing a 954) parte dal punto GREZZO dell'unità (`ePos = {et->x, et->y, et->z}`, centro ~0.9 m) verso il
+  bersaglio, e `physics::hasLineOfSight` è un raggio netto **senza altezza-occhi né peek**. Il **peek** (changelog
+  69) è solo nella SELEZIONE (`worldintel::bestFiringPosition`), NON nell'ingaggio → l'unità sceglie una posizione
+  "da cui col peek si spara", poi la LOS reale dal suo punto è **bloccata dalla sua stessa cover/parapetto** →
+  non acquisisce il bersaglio → non spara. Stesso difetto nel mio Advance (`hasLineOfFire` dal punto fermo dice
+  "niente bersaglio qui" → salta via invece di combattere).
+- **Fix candidato** (delicato, impatto ampio su TUTTO il combattimento): dare all'ingaggio lo stesso principio del
+  peek — es. **alzare l'origine della LOS a un'altezza-occhi/peek-over** (scavalca la cover bassa, un muro alto
+  resta bloccante) e/o mirare al corpo del bersaglio (non ai piedi). ATTENZIONE: un peek ingenuo (offset
+  orizzontale fisso) rischia di far "sparare attraverso" un muro adiacente — già notato per la selezione. Da
+  fare con verifica misurata (`tiro_trovato/assente`, e che non spuntino colpi attraverso i muri).
+- **Perché prima degli altri ordini**: è la **radice comune** dietro "non sparano" e parte di "restano indietro".
+  Costruirci sopra Retreat/Regroup/Follow moltiplicherebbe il sintomo e complicherebbe la diagnosi.
+
+## 78. Global-buffer-overflow nel testo UI coi caratteri accentati (MEDIUM) — RISOLTO 2026-07-23
+- **Trovato da AddressSanitizer** (prima simulazione ASan, changelog 66): `global-buffer-overflow` in
+  `stb_easy_font_print` (stb_easy_font.h:213) da `Ui2D::text` (Ui2D.cpp:61).
+- **Causa**: stb_easy_font gestisce solo ASCII 32-126 e indicizza `stb_easy_font_charinfo[*text-32]` con
+  `*text` di tipo **`char` SIGNED**. Un byte >127 — tipico dei **caratteri accentati UTF-8** del testo
+  italiano della UI (à, è, °, …) — diventa NEGATIVO → indice negativo → lettura fuori dai limiti
+  dell'array globale. UB: in Debug ASan aborta; in Release è silenzioso (glifo sbagliato, raramente
+  crash). Presente da sempre, mai notato perché "innocuo" in release.
+- **Fix**: `Ui2D::text` igienizza la stringa a ASCII stampabile (i byte non-ASCII → '?') prima di
+  passarla a stb. La UI mostra '?' al posto degli accenti — accettabile (stb non li disegna comunque);
+  per gli accenti veri servirebbe un font atlas (futuro).
+- **Lezione**: primo giro di sanitizer = primo bug trovato. Il resto del codice AI/nav è risultato pulito
+  (60s di sim ASan senza altri errori). Vale la pena rigirare ASan dopo modifiche grosse ([[verify-effect-not-data]]).
+
 ## 77. `--map <id>` ignorato in `--sim`/sandbox (MEDIUM) — RISOLTO 2026-07-22
 - **Trovato durante la verifica di ADR-046**: il contatore `obs_vista_estesa` restava 0 anche lanciando
   `--sim --map firebase`. Il debug ha rivelato che il runtime caricava **14 posizioni tattiche

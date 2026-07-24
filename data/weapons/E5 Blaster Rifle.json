@@ -1,15 +1,5 @@
 {
-    "hand_scale": 1.2000000476837158,
-    "hand_rot": [
-        0.0,
-        90.0,
-        0.0
-    ],
-    "hand_offset": [
-        0.0,
-        0.0,
-        0.0
-    ],
+    "ads_fov": 35.0,
     "attach_points": {
         "muzzle": [
             -0.26420196890830994,
@@ -27,14 +17,25 @@
         1.0,
         0.02941155433654785
     ],
-    "bullet_lifetime": 3.0,
+    "bullet_lifetime": 10.0,
     "bullet_scale": 0.07999999821186066,
-    "bullet_speed": 70.0,
+    "bullet_speed": 200.0,
     "cooldown_rate": 0.30000001192092896,
     "damage": 22.5,
-    "effective_range": 18.0,
+    "effective_range": 45.0,
     "faction": "separatist",
     "fire_rate": 7.5,
+    "hand_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "hand_rot": [
+        0.0,
+        90.0,
+        0.0
+    ],
+    "hand_scale": 1.2000000476837158,
     "heat_per_shot": 0.2750000059604645,
     "mesh": "assets/models/weapons/e-5_blaster_rifle.glb",
     "mesh_rot_x": 0.0,
@@ -44,9 +45,9 @@
     "name": "E5 Blaster Rifle",
     "overheat_penalty": 1.75,
     "projectile_mesh": "",
-    "spread_ads": 0.0024999999441206455,
-    "spread_base": 0.009999999776482582,
-    "spread_jump": 0.07000000029802322,
-    "spread_move": 0.02500000037252903,
-    "spread_sprint": 0.05000000074505806
+    "spread_ads": 0.0010000000474974513,
+    "spread_base": 0.0024999999441206455,
+    "spread_jump": 0.012000000104308128,
+    "spread_move": 0.004000000189989805,
+    "spread_sprint": 0.007499999832361937
 }

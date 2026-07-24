@@ -1,7 +1,7 @@
 {
-    "comms_lost_order_mult": 2.0,
-    "comms_lost_range_mult": 1.0,
-    "comms_lost_reinforce_mult": 1.0,
+    "comms_lost_order_mult": 2.5,
+    "comms_lost_range_mult": 0.75,
+    "comms_lost_reinforce_mult": 1.350000023841858,
     "comms_lost_share_delay": 0.5,
     "squad_bleedout_time": 10.0,
     "squad_down_lethal_hit_frac": 0.20000000298023224,

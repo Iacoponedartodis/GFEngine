@@ -17,5 +17,5 @@
     "role": "infantry",
     "seek_speed": 4.0,
     "shoot_interval": 2.5,
-    "sight_range": 18.0
+    "sight_range": 50.0
 }

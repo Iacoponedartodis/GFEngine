@@ -129,6 +129,13 @@ function(gf_apply_sanitizers target)
     endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+        # Le librerie di terze parti (vcpkg: cpptrace, ...) sono compilate SENZA le
+        # annotazioni-contenitori ASan della STL; senza questi define si ha
+        # LNK2038 'annotate_vector'/'annotate_string' mismatch. Disattivarle sui
+        # NOSTRI target li fa combaciare (si perde solo il container-overflow ASan,
+        # non il resto). È il workaround MSVC standard per ASan + lib prebuilt.
+        target_compile_definitions(${target} PRIVATE
+            _DISABLE_VECTOR_ANNOTATION _DISABLE_STRING_ANNOTATION)
         # /INCREMENTAL è incompatibile con ASan
         target_link_options(${target} PRIVATE /INCREMENTAL:NO)
     else()

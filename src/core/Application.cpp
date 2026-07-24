@@ -18,6 +18,7 @@
 #include "mini/ecs/systems/CrowdSystem.hpp"
 #include "mini/game/game_modes/IGameMode.hpp"
 #include "mini/game/CommandPosts.hpp"
+#include "mini/game/MapQuery.hpp"          // mirino→suolo per l'osservatore-comandante (sandbox)
 #include "mini/game/MatchSettings.hpp"
 #include "mini/game/PlayerController.hpp"
 #include "mini/game/Weapon.hpp"
@@ -1443,14 +1444,39 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 hud.setRespawnMap({});
         }
 
+        // Punto a terra sotto il mirino (osservatore-comandante, sandbox): marcia
+        // il raggio della camera finché scende sotto il suolo calpestabile del
+        // MapDef. In partita vera l'ancora dell'ordine resta il giocatore-leader;
+        // in osservazione l'osservatore "punta" un punto del campo. Ritorna false
+        // se il mirino guarda il cielo (nessun suolo lungo il raggio).
+        auto crosshairGround = [&](glm::vec3& out) -> bool
+        {
+            const glm::vec3 ro = cam.getPosition();
+            const glm::vec3 rd = cam.getForward();
+            if (rd.y > -0.03f) return false;   // guarda in alto/orizzonte: nessun punto
+            const MapDef* md = world.activeMap;
+            for (float t = 1.0f; t < 400.0f; t += 0.5f)
+            {
+                const glm::vec3 p = ro + rd * t;
+                const float g = mapquery::groundHeightAt(md, p.x, p.z);
+                if (p.y <= g) { out = { p.x, g, p.z }; return true; }
+            }
+            return false;
+        };
+
         // ── Ruota di comando (doc 26, livello 2) ─────────────────────
         //    Tenuto il tasto: la camera si CONGELA e il movimento del mouse
         //    sceglie il settore (Regroup/Hold/Advance); al rilascio si impartisce
         //    l'ordine di squadra. Un ordine che non ferma l'azione è il requisito
         //    del doc — qui l'azione si mette in pausa solo mentre si sceglie.
+        //    In OSSERVAZIONE sandbox la stessa ruota comanda la squadra alleata
+        //    (osservatore-comandante): stessa mailbox `world.squadOrder`, ma il
+        //    riferimento è il punto mirato a terra, non il giocatore parcheggiato.
         {
             const bool wheelWasOpen = wheelOpen;
-            const bool canWheel = state == GameState::Playing && !observerFly
+            // Vale in partita (giocatore-leader) e in OSSERVAZIONE sandbox
+            // (observerFly, sim in corso): stessa mailbox, ancora diversa.
+            const bool canWheel = state == GameState::Playing
                                 && !sbMenuOpen && drivenVehicle == 0
                                 && window.isMouseCaptured();
             wheelOpen = canWheel && input.isDown(Action::CommandWheel);
@@ -1495,33 +1521,61 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             {
                 // Rilascio con un settore scelto → ordine di squadra.
                 SquadOrderRequest req; req.pending = true;
-                const auto* pt = world.getTransform(player.entity);
-                const glm::vec3 pp = pt ? glm::vec3{pt->x, pt->y, pt->z} : cam.getPosition();
-                if (wheelSel == 0)        // REGROUP: raduna sul leader (giocatore)
-                { req.order = OrderType::MoveTo; req.targetX = pp.x; req.targetZ = pp.z; }
+                // Ancora dell'ordine: il giocatore-leader in partita; il punto
+                // mirato a terra (mirino→suolo) in osservazione sandbox.
+                glm::vec3 anchor{0.0f};
+                bool haveAnchor = true;
+                if (observerFly) haveAnchor = crosshairGround(anchor);
+                else
+                {
+                    const auto* pt = world.getTransform(player.entity);
+                    anchor = pt ? glm::vec3{pt->x, pt->y, pt->z} : cam.getPosition();
+                }
+
+                const char* toastMsg = nullptr;
+                // Gli ordini di MOVIMENTO (Regroup/Advance) hanno bisogno di un
+                // punto: senza ancora (osservatore che guarda il cielo) si
+                // impartiscono solo Hold e Liberi, che non ne richiedono.
+                if (wheelSel == 0 && haveAnchor)        // REGROUP: raduna sull'ancora
+                {
+                    req.order = OrderType::MoveTo;
+                    req.targetX = anchor.x; req.targetZ = anchor.z;
+                    toastMsg = observerFly ? "Squadra: RADUNA QUI" : "Squadra: REGROUP";
+                }
                 else if (wheelSel == 1)   // HOLD: ognuno tiene la propria posizione
-                { req.order = OrderType::HoldPosition; }
-                else if (wheelSel == 2)   // ADVANCE: avanza nella direzione di mira
+                { req.order = OrderType::HoldPosition; toastMsg = "Squadra: HOLD"; }
+                else if (wheelSel == 2 && haveAnchor)   // ADVANCE: avanza dalla mira
                 {
                     glm::vec3 fwd = cam.getForward(); fwd.y = 0.0f;
                     const float fl = glm::length(fwd);
                     fwd = (fl > 0.001f) ? fwd / fl : glm::vec3{0,0,1};
+                    // In osservatore l'ancora è già il punto mirato: si spinge
+                    // poco oltre (8m). In partita si avanza 15m dal giocatore.
+                    const float push = observerFly ? 8.0f : 15.0f;
+                    // ADVANCE (ruota, doc 26): avanza verso la direzione di mira.
                     req.order = OrderType::MoveTo;
-                    req.targetX = pp.x + fwd.x * 15.0f;
-                    req.targetZ = pp.z + fwd.z * 15.0f;
+                    req.targetX = anchor.x + fwd.x * push;
+                    req.targetZ = anchor.z + fwd.z * push;
+                    toastMsg = "Squadra: ADVANCE";
                 }
-                else                      // SEGUI ⇄ LIBERI (ADR-037)
+                else if (wheelSel == 3)   // SEGUI ⇄ LIBERI (ADR-037)
                 {
-                    req.order        = wheelFollowActive ? OrderType::None
-                                                         : OrderType::Follow;
-                    req.targetEntity = player.entity;
+                    // In osservatore seguire una camera in volo non ha senso →
+                    // il 4° settore revoca sempre gli ordini (LIBERI).
+                    if (observerFly)
+                    { req.order = OrderType::None; req.targetEntity = 0; toastMsg = "Squadra: LIBERI"; }
+                    else
+                    {
+                        req.order        = wheelFollowActive ? OrderType::None
+                                                             : OrderType::Follow;
+                        req.targetEntity = player.entity;
+                        toastMsg = wheelFollowActive ? "Squadra: LIBERI" : "Squadra: SEGUI";
+                    }
                 }
-                world.squadOrder = req;
-                hud.toast(wheelSel==0 ? "Squadra: REGROUP"
-                        : wheelSel==1 ? "Squadra: HOLD"
-                        : wheelSel==2 ? "Squadra: ADVANCE"
-                        : wheelFollowActive ? "Squadra: LIBERI"
-                                            : "Squadra: SEGUI");
+                else   // settore di movimento senza ancora (mira al cielo)
+                { req.pending = false; hud.toast("Mira un punto a terra per l'ordine"); }
+
+                if (req.pending) { world.squadOrder = req; if (toastMsg) hud.toast(toastMsg); }
                 wheelSel = -1;
             }
             hud.setCommandWheel(wheelOpen, wheelSel, wheelFollowActive);
@@ -1540,13 +1594,18 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             if (observerFly)
             {
                 // Volo libero osservatore (17_SandboxTools): camera sganciata
-                // dal PlayerController, WASD + SPAZIO/CTRL, velocità alta.
-                const Uint8* kb = SDL_GetKeyboardState(nullptr);
-                cam.setSpeed(14.0f);
-                cam.processKeyboard(kb[SDL_SCANCODE_W] != 0, kb[SDL_SCANCODE_S] != 0,
-                                    kb[SDL_SCANCODE_A] != 0, kb[SDL_SCANCODE_D] != 0,
-                                    kb[SDL_SCANCODE_SPACE] != 0,
-                                    kb[SDL_SCANCODE_LCTRL] != 0, elapsed);
+                // dal PlayerController, WASD + SPAZIO/CTRL, velocità alta. Con la
+                // ruota aperta la camera si congela (il mouse sceglie il settore):
+                // anche il volo va fermato, altrimenti il punto mirato scivola.
+                if (!wheelOpen)
+                {
+                    const Uint8* kb = SDL_GetKeyboardState(nullptr);
+                    cam.setSpeed(14.0f);
+                    cam.processKeyboard(kb[SDL_SCANCODE_W] != 0, kb[SDL_SCANCODE_S] != 0,
+                                        kb[SDL_SCANCODE_A] != 0, kb[SDL_SCANCODE_D] != 0,
+                                        kb[SDL_SCANCODE_SPACE] != 0,
+                                        kb[SDL_SCANCODE_LCTRL] != 0, elapsed);
+                }
             }
             else if (drivenVehicle != 0)
             {
@@ -1675,8 +1734,10 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             //    il requisito di design). Il contesto lo decide il mirino:
             //    nemico → FocusFire; cover point vicino → TakeCover; else MoveTo.
             //    L'intenzione va in una MAILBOX sul World: `ecs/` non conosce
-            //    l'input (ADR-002/doc 10). ────────────────────────────────────
-            if (!observerFly && !sbMenuOpen && drivenVehicle == 0
+            //    l'input (ADR-002/doc 10). Vale anche in OSSERVAZIONE sandbox:
+            //    il mirino è quello della camera-osservatore (aimEntity/aimAlly
+            //    sono già risolti sopra), il punto a terra via crosshairGround.
+            if (!sbMenuOpen && drivenVehicle == 0
                 && window.isMouseCaptured() && input.isPressed(Action::SquadOrder))
             {
                 SquadOrderRequest req;
@@ -1732,17 +1793,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
                 else
                 {
-                    // Punto mirato a terra: interseca il raggio col piano
-                    // orizzontale dei piedi del giocatore (il terreno su cui la
-                    // squadra cammina), non con y=0 — il pavimento non è a 0.
-                    const glm::vec3 ro = cam.getPosition();
-                    const glm::vec3 rd = cam.getForward();
-                    const auto* ptr = world.getTransform(player.entity);
-                    const float planeY = ptr ? (ptr->y - config::PLAYER_HALF_Y) : 0.0f;
-                    if (rd.y < -0.05f)   // deve puntare verso il basso
+                    // Punto mirato a terra. In partita: interseca il raggio col
+                    // piano dei piedi del giocatore (il terreno su cui la squadra
+                    // cammina), non con y=0 — il pavimento non è a 0. In osservatore
+                    // il giocatore è parcheggiato fuori campo → si marcia il raggio
+                    // sul suolo reale del MapDef (crosshairGround).
+                    glm::vec3 gp{0.0f};
+                    bool haveGp;
+                    if (observerFly)
+                        haveGp = crosshairGround(gp);
+                    else
                     {
-                        const float t = (planeY - ro.y) / rd.y;
-                        const glm::vec3 gp = ro + rd * t;
+                        const glm::vec3 ro = cam.getPosition();
+                        const glm::vec3 rd = cam.getForward();
+                        const auto* ptr = world.getTransform(player.entity);
+                        const float planeY = ptr ? (ptr->y - config::PLAYER_HALF_Y) : 0.0f;
+                        haveGp = (rd.y < -0.05f);   // deve puntare verso il basso
+                        if (haveGp) gp = ro + rd * ((planeY - ro.y) / rd.y);
+                    }
+                    if (haveGp)
+                    {
                         req.targetX = gp.x; req.targetZ = gp.z;
 
                         // Cover point REALE del MapDef entro 4m dal punto mirato
@@ -1781,10 +1851,24 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     && req.order != OrderType::Revive
                     && req.order != OrderType::CoveringFire)
                 {
-                    const auto* ptr = world.getTransform(player.entity);
+                    // Origine del path: la posizione da cui la squadra parte. In
+                    // partita è il giocatore-leader; in osservatore è una vera unità
+                    // alleata (il player è parcheggiato fuori campo → path fasullo).
+                    glm::vec3 from = cam.getPosition();
+                    if (observerFly)
+                    {
+                        from = { req.targetX, 0.0f, req.targetZ };   // fallback: bersaglio stesso
+                        for (EntityId e : world.getEntities())
+                        {
+                            const auto* tm = world.getTeam(e);
+                            if (!tm || tm->teamId != 1 || !world.getAi(e)) continue;
+                            const auto* t = world.getTransform(e);
+                            if (t) { from = { t->x, t->y, t->z }; break; }
+                        }
+                    }
+                    else if (const auto* ptr = world.getTransform(player.entity))
+                        from = { ptr->x, ptr->y, ptr->z };
                     std::vector<glm::vec3> path;
-                    const glm::vec3 from = ptr ? glm::vec3{ptr->x, ptr->y, ptr->z}
-                                               : cam.getPosition();
                     const bool ok = nav.findPath(from, {req.targetX, from.y, req.targetZ}, path)
                         && !path.empty()
                         && glm::length(glm::vec2{path.back().x - req.targetX,

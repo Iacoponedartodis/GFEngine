@@ -102,7 +102,7 @@ SandboxMenu::Result SandboxMenu::handleKey(int sc)
 SandboxMenu::Result SandboxMenu::handleMouse(float mx, float my, bool clicked)
 {
     const float W = (float)m_ui.width(), H = (float)m_ui.height();
-    const float PX = W * 0.5f - 260.0f, PY = 70.0f, PW = 520.0f, PH = H - 170.0f;
+    const float PX = W * 0.5f - 260.0f, PY = 70.0f, PW = 520.0f;   // PH non serve al mouse
 
     // Tab pagine (ARMI / SIMULAZIONE) — solo su click
     for (int i = 0; i < 2; ++i)

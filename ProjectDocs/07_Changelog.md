@@ -2,6 +2,257 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-24 (77) — REVERT del Hold/Advance/reposition custom: gli ordini scavalcavano l'AI che già funziona
+
+Diagnosi strumentata (contatori DIAG temporanei in `--sim`, poi rimossi) che ha chiuso il ciclo fix-su-fix:
+- **Le AI SPARANO da cover/rialzato**: sul ponte (y>3) 29/31 quando pronte; per unità con ordine Advance 97/99.
+  Il tiro NON è mai stato il problema.
+- **MA le unità con ordine ADVANCE erano SENZA bersaglio l'81% del tempo** (in Alert solo 19%): il mio Advance
+  custom le piazzava/teneva a posizioni scelte con una LOS/gittata (`hasLineOfFire` MapDef, 28 m) **scollegata**
+  da come l'AI acquisisce davvero (`hasLineOfSight` sui collider + `aggroRange`). E #76 **spegneva il reposition
+  autonomo** sotto ordine — ma quel reposition **è già il bounding overwatch che funziona**. In breve: avevo
+  riscritto peggio un sistema che già funzionava, e i fix su fix aggravavano (rischio stabilità segnalato).
+- **Decisione utente: REVERT del custom, TIENI LOS + ruota.** Rimossi: `OrderType::Advance` + Advance continuo
+  (73/74), distribuzione Hold per valore di controllo (72), `worldintel::controlPositionsInArea`/`ControlPos`,
+  gate reposition "a esaurimento"/soppressione sotto ordine (76), tutta la strumentazione DIAG. `HoldPosition`
+  torna al comportamento base (ognuno tiene la propria posizione); la ruota Advance torna a `MoveTo`.
+- **TENUTI**: LOS d'ingaggio ad altezza occhi (75) — i dati provano che fa sparare dalle cover — e la ruota
+  comandi in osservazione sandbox (70).
+- **Direzione futura** (concordata): gli ordini vanno ripensati come **bias leggero sull'AI autonoma** (che già
+  bounda/ingaggia bene), non come override che la scavalca. Vedi [[orders-design-vision]], KI #79/#80.
+- **Build-verified** (Debug + Release, 0 errori). Base tornata stabile.
+
+## 2026-07-24 (76) — Le AI TENGONO la posizione invece di fare churn: reposition "a esaurimento", non a timer (KI #80)
+
+Feedback dopo il (75): *"non usano le cover, si muovono tutte libere, invece di prendere una posizione, usarla
+per eliminare i nemici e passare alla successiva".* **Diagnosi** (sul codice): il riposizionamento (ADR-035) si
+attivava a **timer** (3-6s), non a "posizione esaurita", e **ignorava gli ordini di squadra**. Il (75) ha
+raddoppiato il rilevamento (contatti ~20→~40) → unità quasi sempre in Alert → reposition di continuo = **churn**;
+e l'Advance/Hold veniva scavalcato dal reposition autonomo.
+- **Fix (AiSystem, valutazione reposition)**: `wantMove = justEngaged || !canEngageHere`. `canEngageHere` = ho
+  LINEA DI VISTA sul bersaglio dalla posizione attuale (dall'occhio, come l'ingaggio). AVANZATA **e** OVERWATCH
+  ora richiedono `wantMove` → l'unità si sposta solo al **primo ingaggio** (per coprirsi) o quando la posizione è
+  **esaurita** (nemico non più battibile da lì); altrimenti **TIENE e spara**. È il "prendi una posizione, usala,
+  poi passa alla prossima" chiesto dall'utente.
+- **Ordini**: sotto `HoldPosition`/`Advance` (`positionOrder`) il reposition autonomo è **soppresso** — la
+  posizione la decide l'ORDINE (distribuzione Hold / bounding Advance), non la manovra → fine del conflitto/churn.
+- **Misurato** (`--sim` 45s): `manovre_avviate` 6-9 (era 8-15) con `manovra_valutata` 13-17 → ~metà delle
+  valutazioni ora è "tieni"; `contatti` 33-55, `fermi`=0, **2 downed** (ancora letale), `stuck` 3, 0 crash.
+- **Onestà**: il calo del churn è MODERATO in telemetria; il "feeling" (tengono davvero le cover, poi balzano)
+  è una **conferma visiva** dell'utente. Se serve più stabilità: allungare la sosta produttiva o moderare il
+  raggio di rilevamento sono le leve successive.
+- **Build-verified** (Debug + Release).
+
+## 2026-07-24 (75) — Le AI SPARANO da cover/rialzato: LOS d'ingaggio ad altezza occhi (KI #79, radice comune)
+
+Fix della radice comune dietro "occupano le cover ma non sparano" (specie sul ponte/posizioni rialzate) — mina
+Hold, Advance e l'AI autonoma insieme. **Causa**: la LOS di rilevamento/acquisizione/sparo (`AiSystem`) partiva
+dal punto GREZZO dell'unità (centro corpo, ground+`AI_HALF_Y`=0.5 m), sotto qualsiasi cover → la propria
+copertura/parapetto la bloccava. Il peek (changelog 69) era solo nella SELEZIONE posizioni, non nell'ingaggio.
+- **Modello**: **origine = OCCHI** (`COMBAT_EYE_HEIGHT`=1.2 m dal suolo — l'unità si sporge/scavalca la propria
+  cover; un muro più alto resta bloccante), **bersaglio = CORPO** (transform ~0.5 m → il colpo non passa sopra la
+  testa, e un nemico DENTRO la sua cover resta protetto perché la LOS è bassa vicino a lui).
+- **Coerenza end-to-end** (`AiSystem`): sensing, acquisizione, LOS di sparo, **spawn E traiettoria del proiettile**
+  ora tutti dall'occhio verso il corpo → l'unità spara SOPRA la propria cover, non pianta il colpo nel muro davanti.
+  Struttura ancora mirata al collider (corpo). Nuova costante `config::COMBAT_EYE_HEIGHT`.
+- **Coerenza `SquadSystem`**: il "posso ingaggiare da qui" e `nextAdvanceFiringPos` dell'Advance usano le stesse
+  quote (origine occhi, nemico corpo).
+- **Misurato** (`--sim` Training Ground, 45s, corretto): `contatti_vivi` 37-40, `fermi`=0, `tiro_trovato` 5-10 /
+  `tiro_assente` 0-2, **3 "member downed"** (combattimento LETALE: i colpi colpiscono), `stuck`=3, 0 crash. Tasso
+  eliminazioni moderato → nessun sintomo di "tiro attraverso i muri".
+- **Nota di percorso**: un primo tentativo alzava anche il BERSAGLIO a 1.2 m → i colpi passavano sopra la testa
+  (hitbox ~1 m); corretto a origine-occhi/bersaglio-corpo prima della misura buona.
+- **Build-verified** (Debug + Release). Conferma VISIVA all'utente: i cloni sul ponte sparano ai nemici sotto, e
+  nessun colpo attraversa muri pieni.
+
+## 2026-07-23 (74) — ADVANCE: avanzata a balzi CONTINUA (bounding overwatch) — rework dopo playtest
+
+Feedback sul (73): *"avanzano di un tot ad ogni comando, devo ridarlo; alcuni cloni restano indietro
+incagliati sulle cover"*. Chiarita l'intenzione: ADVANCE deve essere **autonomo e continuo** — ognuno prende
+una posizione con **linea di tiro sul nemico**, combatte, e appena non ha più bersagli da lì **salta da solo
+alla successiva più avanti**. Ripensato da balzo one-shot a comportamento continuo nel ciclo di vita.
+- **`SquadComponent`**: nuovi `advGoalX/Z` (direzione comandata, ripiego quando non c'è nemico visibile).
+- **`SquadSystem` ciclo di vita `case Advance`** (per-membro, throttlato dall'ARRIVO per non ripianificare a
+  ogni tick): se sto viaggiando non cambio meta; arrivato, se ho un nemico ingaggiabile (gittata +
+  `worldintel::hasLineOfFire`) **resto e combatto**; altrimenti **balzo** alla prossima posizione di tiro.
+- **`nextAdvanceFiringPos`**: fra le posizioni entro un balzo che (a) avanzano verso il nemico, (b) hanno
+  LINEA DI TIRO su di lui, (c) non sono già presidiate da un compagno (`occupiedByOther`, anti-ammasso), la
+  migliore per protezione + avvicinamento. **Scartata se irraggiungibile dal navmesh** (`nav->isReachable`) →
+  attacca la causa dell'"incaglio su cover" (posizioni non raggiungibili). Niente posizione utile → passo
+  dritto verso il nemico (avanza comunque, non si blocca).
+- **`nearestEnemy`** guida il balzo verso il nemico più vicino; ri-emettere Advance non serve più (è continuo).
+- Rimossi `distributeAdvance` + costanti del balzo one-shot; leash `AiSystem` di Advance resta 2 m.
+- **Nota**: la SCELTA fra i nemici è "il più vicino" (non ancora vincolata alla direzione comandata) — possibile
+  refinement se avanzano verso un nemico alle spalle. Il refinement enemy-aware del valore di controllo resta
+  differito per HOLD/Retreat/Regroup ([[orders-design-vision]]).
+- **Build-verified** (Debug + Release, 0 errori). Smoke test: ADVANCE una volta sola → la squadra avanza a
+  balzi da posizione di tiro a posizione di tiro verso il nemico, combattendo, senza restare indietro.
+
+## 2026-07-23 (73) — Ordini Stadio 2: ADVANCE tattico (avanza occupando le posizioni di controllo)
+
+Secondo comando della ruota reso tattico, **riusando i mattoni dell'HOLD** (changelog 72) come promesso:
+la distribuzione su posizioni di controllo è ora un primitivo condiviso e ADVANCE cambia solo *dove* mette
+l'area.
+- **Nuovo `OrderType::Advance`** (prima la ruota Advance era un `MoveTo` grezzo a un punto). La ruota (settore
+  alto-dx, tasto B) lo emette col target come DIREZIONE d'avanzata (mira/camera).
+- **`SquadSystem::distributeAdvance`**: baricentro squadra → direzione verso il target → area **un balzo avanti**
+  (`kAdvanceBound` 15 m, raggio 14 m) → `worldintel::controlPositionsInArea` + `assignDistinct` (gli stessi di
+  HOLD). I membri avanzano su posizioni di controllo DISTINTE verso il nemico, non in linea retta a un punto.
+  Ri-emesso = balzo successivo (bounding). Fallback senza candidato: il punto comandato (avanza comunque).
+- **Refactor**: estratti `collectSquadMembers` + `distributeOverArea` condivisi (HOLD e ADVANCE ora sono
+  wrapper sottili). Lifecycle: Advance è PERSISTENTE (occupa il terreno avanzato e combatte da lì, come Hold);
+  leash `AiSystem` 2 m come Hold; `isImplemented` aggiornato.
+- **Limite noto (uguale a HOLD)**: il valore di controllo non pesa ancora *dove sono i nemici* oltre alla
+  direzione d'avanzata — refinement trasversale differito ([[orders-design-vision]]), da applicare a tutti i
+  comandi dopo averli messi tutti (decisione utente: "non incagliarci qua").
+- **Build-verified** (Debug + Release, 0 errori). Smoke test: ADVANCE in osservazione → la squadra avanza
+  distribuendosi sulle posizioni di controllo verso il punto mirato, poi combatte da lì; ri-emetti per il balzo dopo.
+
+## 2026-07-23 (72) — HOLD = CONTROLLO D'AREA distribuito (rework dello Stadio 1 dopo playtest)
+
+Feedback utente sul (71): i cloni *correvano solo alla zona di difesa più vicina, non usavano le cover, e
+si ammassavano*. Chiarita l'intenzione: **HOLD non è "difendi" ma "controlla l'area in cui ti trovi"** →
+qualsiasi posizione strategica (non solo defensive), scelta per la miglior CAPACITÀ DI CONTROLLO, e i
+membri devono DISTRIBUIRSI, non accalcarsi. È la base riusabile per tutti gli ordini.
+- **Nuova query pura** `worldintel::controlPositionsInArea` (ADR-025/032/033): tutte le posizioni entro
+  l'area, ognuna col **valore di controllo** = importanza autorata ×2 + **dominio** (quante posizioni batte,
+  via il grafo `positionCovers`, clampato) + protezione − **esposizione** (`positionExposure`) − pericolo.
+  Ordinate per controllo. Ranking sui metadata, riusabile da ogni ordine.
+- **Distribuzione di squadra** (`SquadSystem::assignDistinct`, primitivo riusabile): ogni membro prende una
+  posizione DISTINTA pesando controllo + prossimità e con **penalità di ammassamento** (spread 6 m) → si
+  spargono sulle migliori posizioni invece di impilarsi; se una è presa, il successivo va altrove.
+  `distributeHold` fa da colla: baricentro della squadra, raggio adattivo alla dispersione, poi assegna.
+- **Modulare**: ranking in `worldintel` (puro MapDef), assegnazione in `SquadSystem` (coordinamento squadra).
+  Advance/Retreat/Regroup riuseranno `controlPositionsInArea` + `assignDistinct` cambiando solo l'AREA.
+- **Supera** l'approccio difensiva-sola del (71) (`bestHoldPosition` + fallback cover, rimosso dal path HOLD).
+- **Build-verified** (Debug + Release, 0 errori). Smoke test: HOLD → i cloni si distribuiscono sulle
+  posizioni che controllano meglio l'area (cover/vantage/defensive/…), senza ammassarsi, e difendono da lì.
+
+## 2026-07-23 (71) — Ordini più tattici, Stadio 1: HOLD occupa la difensiva vicina (non "congelati sul posto")
+
+Prima tappa del rework ordini ([[orders-design-vision]]): la ruota deve dare **posture tattiche** che usano i
+metadata, non ordini geometrici. Oggi il `SquadSystem` traduceva HOLD come *"ognuno tiene la posizione
+CORRENTE"* (`sq->targetX/Z = tr->x/z`) → le unità si congelavano allo scoperto invece di ripararsi.
+- **Fix** (`SquadSystem`, emissione ordine): HOLD ora risolve per ogni membro la **migliore posizione
+  difensiva vicina** via `worldintel::bestHoldPosition` (defensive/chokepoint, ADR-046, entro 14 m, pesata
+  protezione+importanza−distanza−pericolo). Fallback: `nearestPositionByRole("cover")` se non c'è difensiva
+  vicina (la spec include "cover, defense eccetera"); ultimo fallback la posizione corrente → **mai peggio di
+  prima**. Poi l'AI difende da lì (il combattimento resta suo: ingaggia da coperto; il guinzaglio HoldPosition
+  di 2 m in `AiSystem` la tiene sulla posizione).
+- **Modulare, non fuso**: la traduzione postura→destinazione passa dal seam `worldintel` — lo **stesso
+  "cervello" tattico** che l'AI autonoma già usa. Ordini e autonomia condividono l'intelligenza sui metadata,
+  non due implementazioni parallele.
+- **Limite noto (Stadio 1)**: la scelta è per-membro senza prenotazione → due membri molto vicini possono
+  puntare la stessa posizione (la separazione del crowd evita l'impilamento; una riserva arriverà con gli
+  stadi successivi). Prossimi stadi: Advance (bounding cover→vantage), Retreat (nuovo ordine), Regroup (zona
+  a priorità massima), Follow tattico.
+- **Build-verified** (Debug + Release, 0 errori). Smoke test manuale: in osservazione, HOLD sulla ruota →
+  i cloni raggiungono le posizioni difensive vicine e difendono.
+
+## 2026-07-23 (70) — Ruota comandi + ordini rapidi disponibili in OSSERVAZIONE sandbox (osservatore-comandante)
+
+Richiesta utente: *poter usare la ruota dei comandi e gli ordini rapidi anche mentre si guarda una
+simulazione in sandbox, per vedere dall'esterno come reagiscono le AI.* Implementato **riusando l'intera
+pipeline ordini esistente** (ADR-020, doc 26) — modulare, non fuso: cambiati solo il *gate* dell'input e
+l'*ancora* dell'ordine.
+- **Scoperta chiave**: `SquadSystem::formAlliedSquad` gestiva GIÀ la modalità sim (se il player è team 0 /
+  parcheggiato, il leader diventa la prima AI alleata e tutta la squadra team-1 entra in `kAlliedSquadId`).
+  Quindi squadra + mailbox `world.squadOrder` + consumo in `AiSystem` (override di `moveDX/DZ` verso
+  `sq->targetX/Z`, riga ~1901; FocusFire nel targeting) **funzionavano già in sim**: mancava solo l'input.
+- **Sblocco input** (`Application.cpp`): la ruota (tasto **B**) e l'ordine rapido (tasto **G**) non sono più
+  bloccati da `!observerFly`. Nessun conflitto con i controlli osservatore (WASD/Spazio/Ctrl/mouse).
+- **Ancora osservatore-comandante**: nuova lambda `crosshairGround` che marcia il raggio della camera fino al
+  suolo calpestabile del `MapDef` (`mapquery::groundHeightAt`). In partita l'ancora resta il giocatore-leader;
+  in osservazione è il **punto mirato a terra**. Ruota: Regroup→*RADUNA QUI* (MoveTo sul punto), Hold invariato,
+  Advance→*avanza 8 m oltre il punto mirato*, 4° settore→*LIBERI* (seguire una camera in volo non ha senso).
+  Ordine rapido: nemico inquadrato→FocusFire, compagno→CoveringFire/Revive, punto a terra→MoveTo/TakeCover
+  (cover-point reale entro 4 m). Pre-check di raggiungibilità: origine = prima unità alleata reale, non il
+  player parcheggiato. Il volo osservatore si congela mentre la ruota è aperta (come la camera).
+- **HUD**: nessuna modifica necessaria — crosshair, visual della ruota e pannello "SQUADRA (N) ORDINE dist"
+  giravano già in `state==Playing` (che vale anche in osservazione); prima `wheelOpen` restava solo sempre falso.
+- **Build-verified** (`GFEngine.exe`, 0 errori). **Smoke test manuale** da fare dall'autore: avviare un sim,
+  tenere **B** e rilasciare su un settore / premere **G** mirando; verificare che la squadra alleata reagisca
+  (RADUNA/ADVANCE/HOLD/FocusFire) e che il pannello squadra rifletta l'ordine.
+
+## 2026-07-23 (69) — Modello copertura: la LOS di tiro "si sporge" (peek), non parte dal centro (playtest)
+
+Intuizione dell'utente: *una copertura BLOCCA per definizione parte della visuale dal suo centro
+(altrimenti non ripara), ma l'unità si SPORGE per sparare* — quindi testare la LOS di tiro dal centro
+della posizione la scartava sempre, anche se il posto ha ottime linee di tiro (studiate dall'autore).
+- **Fix**: in `bestFiringPosition`/`bestFlankingPosition` la LOS parte ora da un punto di **PEEK** — avanti
+  di `kPeek` (1.5 m) verso il bersaglio — non dal centro dietro la cover. Così la **propria** copertura
+  (dietro il peek) non blocca il tiro, ma un muro/edificio **davanti** (fra unità e bersaglio) sì.
+  Un solo punto, entrambe le query; è la query layer che diventa più "intelligente" sui metadata.
+- **Misurato** (`--sim`): `tiro_trovato` **48 / tiro_assente 0** (100%, era 92%), fianco 26/0 (100%),
+  `manovre_avviate` 60, combattimento sano (260), `fermi=0`, stuck 2. Le AI usano ora le cover/vantage
+  che prima venivano scartate perché "bloccate" dalla loro stessa copertura.
+- **Nota**: rischio teorico di "sparare oltre un muro vicino" (il peek salta i primi 1.5 m) — trascurabile
+  perché il bersaglio deve comunque essere in arco+gittata e l'autore non piazza una posizione di tiro
+  dietro un muro che la affaccia. Il grafo overwatch (`buildTacticalLinks`, LOS centro-a-centro) NON è
+  toccato: possibile rifinitura futura con lo stesso principio.
+
+## 2026-07-23 (68) — Selezione posizioni di tiro: arco morbido + importanza (ADR-031/032, playtest)
+
+Fix (2 di 2): "le AI non sfruttano le posizioni elevate/vantage, usano poco i metadata". **Causa**:
+`bestFiringPosition`/`bestFlankingPosition` **ESCLUDEVANO** una posizione se il bersaglio era fuori
+dall'arco di fuoco AUTORATO (`facingDeg ± fireArcDeg/2`) — ma un'unità in copertura **si gira** per mirare,
+quindi l'arco autorato è più severo della realtà; e le due query **non pesavano l'importanza**, quindi le
+vantage elevate ad alta importanza non erano preferite.
+- **Arco come PREFERENZA, non esclusione**: la posizione non è più scartata se fuori arco; l'orientamento
+  diventa un termine di punteggio (`arcPref`: pieno dentro l'arco, sfuma fuori). La LOS resta un requisito
+  duro → non si spara comunque attraverso la propria cover.
+- **Importanza nel punteggio** di `bestFiringPosition`: `+ importance*0.5` → il buon terreno autorato
+  (anche elevato) conta ora anche in combattimento, non solo in avvicinamento.
+- **Misurato** (`--sim`): `tiro_trovato` **49** / `tiro_assente` 4 (92%, era 63% con la LOS accurata /
+  90% prima), `fianco_trovato` 23 / 0 (100%), `manovre_avviate` **65** (col fix 1 ~35, di base ~19-25 →
+  triplicato). Combattimento sano (255), `fermi=0`. Le AI si spostano molto più spesso su cover/vantage.
+- **Scartato (con nota)**: avevo provato la LOS di tiro con la y REALE del bersaglio (linea in discesa
+  corretta) → più accurata MA rendeva valide MENO posizioni (rivela che molte elevate non hanno davvero
+  tiro pulito verso i bersagli a terra, bloccate dal bordo del ponte) → CONTRO l'obiettivo "usa più
+  coperture". Tenuta la LOS permissiva (`p.y+1.2` per entrambi gli estremi). Se in futuro si vuole
+  precisione, va accompagnata da authoring/geometria coerente.
+
+## 2026-07-23 (67) — L'AI cerca copertura APPENA ingaggia (ADR-035, playtest)
+
+Fix (1 di 2) al problema "le AI stanno allo scoperto a spararsi, usano poco cover/vantage" (playtest
+utente). **Causa**: il riposizionamento in copertura (ADR-035) partiva solo ogni 3-6 s, a probabilità
+(`coverPreference`) → spesso l'unità restava dov'era ingaggiata (allo scoperto).
+- **Fix (integrato, non fuso)**: quando un'unità ENTRA in Alert (nuovo ingaggio), fa **una** valutazione
+  proattiva: cerca subito una posizione di tiro coperta (`bestFiringPosition`) invece di aspettare il
+  timer. Realizzato riusando il sistema di riposizionamento esistente (nuovo flag `justEngaged` +
+  `repositionTimer=0` all'ingresso in Alert; la valutazione d'ingaggio bypassa la probabilità, il flanking
+  resta a personalità). Nessun sistema nuovo, nessuna query nuova — solo un trigger in più. Modulare.
+- **Misurato** (`--sim`): `manovra_valutata` 81 (era ~38), `tiro_trovato` **46** / `tiro_assente` 5 (90%
+  trova copertura valida), `manovre_avviate` 35 (era ~19-25). Combattimento sano (contatti 273),
+  `fermi=0`, nessuna regressione. **Effetto visivo (unità che si mettono al riparo appena ingaggiano) da
+  confermare in playtest.**
+- **Resta il fix (2)**: l'arco di fuoco autorato è più severo della realtà (un'unità si GIRA per mirare) →
+  posizioni con facing "sbagliato" non vengono usate. È il motivo per cui elevate/laterali sono ignorate
+  se orientate male. Prossimo giro, separato.
+
+## 2026-07-23 (66) — #2b: anche i droidi usano le posizioni vantaggiose (+ cleanup, sanitizer)
+
+Estende ai **droidi** ciò che i cloni avevano già (changelog 65): il ramo Advance del comandante ora, per
+ogni fronte, occupa la miglior posizione vantaggiosa (`bestAdvantageInArea`: vantage/cover per importanza,
+anche ELEVATE) **se raggiungibile** (`isReachable`), con **commitment su waypoint + timer 12s** — così i
+droidi sfruttano il buon terreno (ponti/zone rialzate) senza oscillare né finire su isole. Riusa i campi
+`allySig*` (un'unità è di una sola fazione → nessun conflitto col ramo clone).
+- **Misurato** (`--sim`): nessuna regressione — combattimento sano (contatti 327), comando multi-fronte
+  (25 fronti, 18 avanzate), hold/route/segnali attivi, `fermi=0`, stuck auto-recuperati. Build 0/0.
+- **Cleanup**: risolto il warning C4189 preesistente in `SandboxMenu::handleMouse` (`PH` non usato).
+- **Sanitizer (CMake) — ora funziona**: componente installato nella VS 2022; superato il thunk lib,
+  emergeva `LNK2038 'annotate_vector' mismatch` (lib vcpkg prebuilt senza annotazioni ASan della STL) →
+  aggiunti `_DISABLE_VECTOR_ANNOTATION`/`_DISABLE_STRING_ANNOTATION` sui nostri target quando ASan è ON.
+- **BUG trovato da ASan e RISOLTO (global-buffer-overflow)**: `Ui2D::text` passava le stringhe grezze a
+  `stb_easy_font_print`, che indicizza `stb_easy_font_charinfo[*text-32]` con `*text` di tipo `char`
+  SIGNED → i byte >127 dei **caratteri accentati UTF-8** del testo italiano (à, è, °, …) davano indice
+  NEGATIVO → lettura fuori dai limiti (UB silenzioso in release: glifo sbagliato o crash). Fix: si
+  igienizza la stringa a ASCII stampabile (non-ASCII → '?') prima di passarla a stb. **Va anche in
+  Release** (bug reale del gioco, non solo di test). Vedi KI.
+- **Validazione ASan**: dopo il fix, `--sim` gira l'intero AI/nav/combattimento per 60 s **senza un solo
+  errore ASan** → tutto il codice toccato di recente (griglia collisioni, `isReachable`, commitment,
+  danger, navmesh, #2b) è pulito in memoria.
+
 ## 2026-07-23 (65) — Navmesh & AI: danger non-bloccante, raggiungibilità, recupero stuck (playtest)
 
 Analisi profonda richiesta dall'utente dopo il playtest (AI che ignorano ponti/zone elevate, cloni "in
@@ -16,16 +267,23 @@ trappola", danger che bloccano). Cause radice trovate nel codice, non supposizio
   passaggio eroso mandava l'unità contro un muro, e lo **stuck era solo LOGGATO, mai recuperato**. Fix:
   (a) nuovo `NavManager::isReachable` (path Detour non-parziale che tocca il poligono destinazione); i
   cloni usano un vantage **solo se raggiungibile**, altrimenti il centro-settore (a terra); (b) commitment
-  su un WAYPOINT (già raggiungibile) + timer di ri-valutazione (4s) → niente oscillazione e `isReachable`
-  a bassa frequenza (~1/4s per clone, non a ogni tick); (c) **recupero stuck**: un bot bloccato ora
-  ABBANDONA i target impegnati (segnale/manovra/àncora/route) e ri-valuta.
+  su un WAYPOINT (già raggiungibile) + timer di ri-valutazione → niente oscillazione e `isReachable`
+  a bassa frequenza (non a ogni tick); (c) **recupero stuck**: un bot bloccato ora ABBANDONA i target
+  impegnati (segnale/manovra/àncora/route) e ri-valuta. **Follow-up playtest**: il timer di ri-valutazione
+  4s→**12s** perché a 4s scattava a metà di una salita e faceva tornare indietro il clone (l'utente:
+  "salgono le scale e a metà tornano"); ora arriva prima di ri-valutare (lo stuck-recovery copre il "non
+  arriva mai").
 - **Navmesh più fedele alla larghezza reale dell'AI**: voxel XZ **0.30 → 0.20** → erosione
   `walkableRadius` esatta (0.40m = raggio agente) invece di 0.60m arrotondati. I passaggi larghi ~0.8-1.2m
   (dove l'AI passa) non spariscono più. Il **climb (0.55m) era già = allo step-up fisico** dell'AI: scale
   con gradini >0.55m sono non-percorribili anche fisicamente (authoring o `STEP_HEIGHT` globale).
-- **Sanitizer (CMake)**: tolgo `/RTC1` (default MSVC Debug, incompatibile con `/fsanitize=address`) quando
-  `GF_ENABLE_ASAN=ON`. Resta da installare il componente "C++ AddressSanitizer" dal VS Installer (i "file
-  mancanti" segnalati = clang_rt.asan non installato).
+- **Sanitizer**: due blocchi. (1) `/RTC1` (default MSVC Debug, incompatibile con `/fsanitize=address`) —
+  **tolto** quando `GF_ENABLE_ASAN=ON`; il configure ora passa. (2) **Mismatch di installazioni VS**: la
+  build usa **VS 2022 Community (MSVC 14.44)**, ma il componente ASan è installato in un'ALTRA
+  installazione ("18"/MSVC 14.51). Nella VS 2022 mancano i lib ASan → link error `LNK1104: cannot open
+  clang_rt.asan_dynamic_runtime_thunk-x86_64.lib`. **Azione utente**: installare "C++ AddressSanitizer"
+  nell'installazione **VS 2022 Community** (VS Installer → Modifica → Componenti individuali). Dopo,
+  `-DGF_ENABLE_ASAN=ON` builda; a runtime la DLL `clang_rt.asan_dynamic-x86_64.dll` va sul PATH.
 - **Verificato**: build 0/0 (un warning C4189 preesistente in SandboxMenu, non da qui); navmesh più fine
   costruisce senza fail; sistemi tutti sani (`fermi=0`, combattimento/comando/hold/route/osservazione);
   gli stuck ora triggerano il recupero. **Effetto visivo (niente più danger-muro, niente più cloni in

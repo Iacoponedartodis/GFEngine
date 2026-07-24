@@ -2,6 +2,7 @@
 #include "mini/game/data/Definitions.hpp"
 
 #include <cmath>
+#include <algorithm>
 
 namespace mini
 {
@@ -10,6 +11,10 @@ namespace worldintel
 namespace
 {
 constexpr float kPI = 3.14159265358979323846f;
+// Distanza di "peek" per la LOS di tiro: l'unità si sporge di ~1.5 m dalla cover
+// verso il bersaglio prima di sparare, così la PROPRIA copertura non blocca il tiro
+// (una cover ripara proprio perché blocca la visuale dal suo centro).
+constexpr float kPeek = 1.5f;
 }
 
 const TacticalPositionDef* bestCoverToward(const MapDef& map,
@@ -182,10 +187,16 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
         const float tLen = std::sqrt(tx * tx + tz * tz);
         if (tLen > p.fireRange || tLen < 0.01f) continue;
         tx /= tLen; tz /= tLen;
+        // Arco come PREFERENZA, non esclusione (l'unità si gira per mirare).
         const float fr = p.facingDeg * (kPI / 180.0f);
         const float fx = std::sin(fr), fz = std::cos(fr);
-        if (fx * tx + fz * tz < std::cos((p.fireArcDeg * 0.5f) * (kPI / 180.0f))) continue;
-        if (!hasLineOfFire(map, p.x, p.y + 1.2f, p.z, targetX, p.y + 1.2f, targetZ)) continue;
+        const float cosHalf = std::cos((p.fireArcDeg * 0.5f) * (kPI / 180.0f));
+        const float aim = fx * tx + fz * tz;
+        const float arcPref = (aim >= cosHalf) ? 1.0f
+                            : std::max(0.0f, (aim + 1.0f) / (cosHalf + 1.0f));
+        // Peek: LOS dal punto avanti verso il bersaglio (la propria cover non blocca).
+        if (!hasLineOfFire(map, p.x + tx * kPeek, p.y + 1.2f, p.z + tz * kPeek,
+                                targetX, p.y + 1.2f, targetZ)) continue;
 
         // Angolo di FIANCO: direzione bersaglio→posizione contro bersaglio→minaccia.
         // dot = 1 → stessa direzione (frontale, nessun aggiramento); -1 → alle spalle.
@@ -198,6 +209,7 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
 
         const float score = flankBonus * 1.5f          // aggirare è lo scopo
                           + p.protection * 0.6f
+                          + arcPref * 0.4f              // orientamento (preferenza, non esclusione)
                           + (1.0f - exposure) * 0.6f   // preferisci il coperto
                           - 0.4f * (myD2 / maxDist2);  // ma non attraversare la mappa
         if (score > bestScore) { bestScore = score; best = &p; }
@@ -264,21 +276,35 @@ const TacticalPositionDef* bestFiringPosition(const MapDef& map,
         if (tLen > p.fireRange || tLen < 0.01f) continue;
         tx /= tLen; tz /= tLen;
 
-        // ...ed è DENTRO il settore di tiro (arco centrato sul fronte)?
+        // Orientamento verso il bersaglio. Prima una posizione FUORI dall'arco
+        // autorato veniva ESCLUSA; ma un'unità in copertura si GIRA per mirare,
+        // quindi ora l'arco è una PREFERENZA: chi è già orientato espone meno e vale
+        // di più, ma le altre (vantage elevate/laterali orientate "male") restano
+        // usabili. La LOS impedisce comunque di sparare attraverso la propria cover.
         const float fr = p.facingDeg * (kPI / 180.0f);
         const float fx = std::sin(fr), fz = std::cos(fr);
         const float cosHalf = std::cos((p.fireArcDeg * 0.5f) * (kPI / 180.0f));
-        if (fx * tx + fz * tz < cosHalf) continue;     // fuori settore
+        const float aim = fx * tx + fz * tz;           // 1 frontale … -1 alle spalle
+        const float arcPref = (aim >= cosHalf) ? 1.0f  // dentro l'arco: pieno
+                            : std::max(0.0f, (aim + 1.0f) / (cosHalf + 1.0f));
 
-        // Linea di tiro davvero libera (ADR-032): toglie il limite geometrico di
-        // ADR-031 — non si "batte" più un bersaglio attraverso un muro.
-        if (!hasLineOfFire(map, p.x, p.y + 1.2f, p.z, targetX, p.y + 1.2f, targetZ))
+        // Linea di tiro: parte da un punto di PEEK, avanti verso il bersaglio, non
+        // dal centro dietro la copertura. Una cover BLOCCA per definizione parte
+        // della visuale dal suo centro (altrimenti non ripara): l'unità si SPORGE
+        // per sparare. Testare dal centro la scarterebbe sempre (segnalato
+        // dall'utente). Così la PROPRIA cover (dietro il peek) non blocca, ma un
+        // muro/edificio DAVANTI (fra te e il bersaglio) sì.
+        const float peekX = p.x + tx * kPeek, peekZ = p.z + tz * kPeek;
+        if (!hasLineOfFire(map, peekX, p.y + 1.2f, peekZ, targetX, p.y + 1.2f, targetZ))
             continue;
 
-        // Premia la protezione, penalizza la distanza, ed EVITA le danger zone
-        // (ADR-046/C3): non si sceglie una posizione di tiro dentro un'area
-        // pericolosa autorata.
-        const float score = p.protection - 0.5f * (myD2 / maxDist2)
+        // Protezione + orientamento (preferenza) + IMPORTANZA autorata (l'autore
+        // marca il buon terreno, anche elevato → ora conta anche in combattimento) −
+        // distanza − pericolo (ADR-046/C3).
+        const float score = p.protection
+                          + arcPref * 0.5f
+                          + p.importance * 0.5f
+                          - 0.5f * (myD2 / maxDist2)
                           - dangerAt(map, p.x, p.z);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
