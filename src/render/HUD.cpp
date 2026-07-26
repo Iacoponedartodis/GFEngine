@@ -338,30 +338,28 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
             m_ui.rect(cx+gap,     cy-thick, arm, thick*2, cr, cg, cb);
 
             // ── Ruota di comando (doc 26, livello 2) ─────────────────────
-            // 4 settori sulle diagonali attorno al mirino: Regroup (basso-sx),
-            // Hold (basso-dx), Advance (alto-dx), Segui/Liberi (alto-sx, ADR-037).
-            // Il settore puntato dal mouse è evidenziato; si impartisce al
-            // rilascio del tasto. Ordine = indice: 0/1/2/3.
+            // 6 settori a spaziatura uniforme attorno al mirino, dall'alto in senso
+            // orario: ADVANCE, HOLD, FOLLOW, REGROUP, RETREAT, FREE. Gli stessi angoli
+            // dell'Application (selezione). Il settore puntato è evidenziato; si
+            // impartisce al rilascio. FREE libera dagli ordini (ADR-037).
             if (m_wheelOpen)
             {
                 m_ui.rect(0, 0, W, H, 0.0f, 0.0f, 0.0f, 0.35f);   // vela di fondo
-                const char* wlabels[4] = { "REGROUP", "HOLD", "ADVANCE",
-                                           m_wheelFollowActive ? "LIBERI" : "SEGUI" };
-                const float R = 120.0f, bw = 108.0f, bh = 40.0f;
-                // Posizioni dei 4 settori (x,y del centro box)
-                const float px[4] = { cx - R,       cx + R,
-                                      cx + R,       cx - R       };
-                const float py[4] = { cy + R*0.55f, cy + R*0.55f,
-                                      cy - R*0.55f, cy - R*0.55f };
-                for (int i = 0; i < 4; ++i)
+                constexpr int N = 6;
+                const char* wlabels[N] = { "ADVANCE", "HOLD", "FOLLOW", "REGROUP", "RETREAT", "FREE" };
+                const float R = 128.0f, bw = 104.0f, bh = 38.0f;
+                for (int i = 0; i < N; ++i)
                 {
-                    const bool on = (m_wheelSel == i);
-                    const float bx = px[i] - bw*0.5f, by = py[i] - bh*0.5f;
+                    const float a   = -1.5707963f + i * (6.2831853f / N);
+                    const float pxi = cx + std::cos(a) * R;
+                    const float pyi = cy + std::sin(a) * R;
+                    const bool  on  = (m_wheelSel == i);
+                    const float bx = pxi - bw*0.5f, by = pyi - bh*0.5f;
                     if (on) m_ui.rect(bx, by, bw, bh, 0.18f, 0.42f, 0.20f, 0.95f);
                     else    m_ui.rect(bx, by, bw, bh, 0.08f, 0.10f, 0.14f, 0.85f);
                     m_ui.border(bx, by, bw, bh, on ? 0.4f : 0.5f,
                                                 on ? 0.95f : 0.5f, on ? 0.4f : 0.55f);
-                    m_ui.textCentered(px[i], py[i] - 6.0f, 1.7f, wlabels[i],
+                    m_ui.textCentered(pxi, pyi - 6.0f, 1.7f, wlabels[i],
                                       on ? 0.85f : 0.7f, on ? 1.0f : 0.7f, on ? 0.85f : 0.72f);
                 }
                 m_ui.textCentered(cx, cy + R + 34.0f, 1.4f,

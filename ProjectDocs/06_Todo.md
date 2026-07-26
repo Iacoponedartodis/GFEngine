@@ -50,6 +50,40 @@
     sceglie firing position che affacciano i nemici), NON override. Advance = spinta aggro/fronte in direzione;
     Hold = abbassa aggressività + ancora l'area (leash); Follow = segue il leader; Retreat = ripiega; Regroup =
     zona priorità. Lasciare a `enterHunt`/reposition la scelta delle posizioni. Vedi KI #80b.
+  - **▶ Ripresa 2026-07-26 (base ormai solida) — una postura alla volta, bias non override:**
+    - ✅ **HOLD (changelog 89)**: l'ordine dà il CENTRO dell'area; ogni membro sceglie da sé la miglior posizione
+      (`bestAdvantageInArea`, anti-ammasso via bias) e la presidia (clamp `holdRadius`), combattendo da lì.
+      Riusa il presidio droidi. Build-verified; **smoke test visivo da fare** (non testabile in `--sim`: niente player).
+    - ✅ **ADVANCE (changelog 90)**: `OrderType::Advance` + helper `advanceWaypoint` (firing position verso il
+      nemico nell'area + commitment + sbalzo), riusa la macchina dei droidi senza toccarla. Guinzaglio largo
+      all'area (no caccia infinita), persiste come postura. Build-verified; **smoke test visivo da fare**.
+    - ✅ **Ruota a 5 settori + FREE dedicato (changelog 90)**: ADVANCE/HOLD/FOLLOW/REGROUP/FREE (prima 4, Liberi
+      era solo toggle di Follow). FREE libera sempre dagli ordini (richiesta utente).
+    - ⚠️ **89-91 erano APPROSSIMAZIONI** (playtest utente: Retreat andava avanti, Hold si ammassava, ecc.).
+    - ✅ **MOTORE UNIFICATO occupancy-aware (changelog 92)**: `worldintel::bestFreePosition` (posizione libera a
+      priorità max, tutti i ruoli utili incl. observation, filtro direzione) + `selectOrderWaypoint` (commitment
+      + reachability) + occupancy `m_claimedPositions`. Hold difende la miglior posizione libera; Advance salta
+      verso il nemico; Retreat salta LONTANO dal nemico (bug "andavano avanti" risolto); Follow cover-to-cover
+      attorno al leader; Regroup sul settore conteso a peso max. Build-verified; **smoke test visivo da fare**.
+    - ✅ **Fix post-playtest (changelog 93)**: Retreat ora arretra ANCHE in combattimento (attiva `retreating`);
+      niente più cloni fermi (fallback del selettore corretto per postura).
+    - ✅ **TORRE-HUB (changelog 93, scelta utente "dati + occupancy centralizzata")**: la torre (`updateAllyTactical`,
+      0.33 s) pre-calcola per posizione se BATTE un nemico (LOS) + score; `bestOrderPosition` sceglie la posizione
+      libera a score max con **occupancy centrale** (`World::allyTac`), per ordini E cloni autonomi → meno calcolo
+      per-clone, posizioni che sparano, no ammasso. Ramo autonomo sim-verificato (canFire 43-122/167, no regressione).
+      Ordini del player da validare **visivamente**.
+    - Se il visivo conferma, il rework ordini è completo per questa fase. Futuro: ordini rapidi per-membro;
+      coordinamento più ricco dalla torre (ruoli, bounding coordinato).
+- **▶ DEBITO TECNICO (audit 2026-07-27, changelog 94)** — sistemati #1/#2/#3/#5/#10; rimandati:
+  - **#7 `AiSystem.cpp` = 2578 righe (MONOLITE)**: sensing, combattimento, reposition, comandante, torre,
+    ordini, tower-hub, leash, muzzle tutto in un file e in una `update()` enorme. Regge ma è il punto più a
+    rischio per modifiche future. Candidato a split (`AiCombat`/`AiOrders`/`AiCommandLayer`). **Refactor grande,
+    da valutare a parte** (comportamento invariato, verificabile con `--sim` prima/dopo).
+  - **#4** la retry di reachability marca `allyTac.claimed` le posizioni irraggiungibili per l'intero tick →
+    saltate anche da compagni che le raggiungerebbero (impatto basso: le isole sono irraggiungibili per tutti).
+  - **#6** quadro tattico torre stale ≤`TAC_PICTURE_PERIOD` (0.33 s): un clone può puntare una posizione verso
+    un nemico appena morto (impatto minimo).
+  - **#11** Regroup è no-op se nessun settore è conteso (early game senza contatto) → il membro resta fermo.
   - Futuro: ordini rapidi solo alla piccola squadra del player + ordini a singoli membri
     (`SquadOrderRequest.directedMember`).
 
@@ -142,13 +176,20 @@ Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici i
   - **✅ Coerenza peso comandante↔torre (changelog 85)**: il comandante ora pesa le direttive come la torre
     (`importanza + pressione×2 + minoranza + opportunità`), non più `importanza×(1+pressione)`. I due lati si
     comportano allo stesso modo. Smoke test visivo Release da fare.
-  - **▶ Ripiego PER-FRONTE (rimandato, precondizione nota)**: richiede **assegnazione spaziale** delle direttive
-    — oggi ogni droide sceglie una direttiva via `pickEnemyDirective(bias)`, pesata per weight e **non per
-    posizione**, e `Retreat` va sempre a `spawnTeam2`. Senza "chi è sul settore che collassa ripiega" un ripiego
-    per-fronte fa ripiegare droidi sbagliati (incoerente). Prima l'assegnazione spaziale, poi il ripiego locale.
-  - **▶ Candidato grande (da decidere)**: layer condiviso `worldintel::scoreSectors` con raggruppamento in
-    **fronti/corsie** usato da torre E comandante → coerenza per costruzione + **copertura strutturale** delle
-    corsie (oggi i top-3/segnali possono ammassarsi in una sola corsia). [[world-tactical-intelligence]].
+  - **✅ Assegnazione SPAZIALE delle direttive (changelog 86)**: `pickEnemyDirective(bias, x, z)` modula il peso
+    per la prossimità (`COMMAND_PROXIMITY_HALFDIST`) → i droidi servono il fronte per dove sono, la distribuzione
+    resta (bias + weight). Era la precondizione del ripiego per-fronte.
+  - **✅ Ripiego PER-FRONTE (changelog 86)**: il comandante marca un fronte che collassa (cloni ≥ droidi+2, terreno
+    nemico) come Retreat; i droidi vicini cadono sul settore controllato più vicino (`retreatPointForTeam2`). A 6v6
+    è una **valvola di sicurezza** (il collasso +2 non si verifica in gioco normale — i droidi spesso dominano);
+    percorso collaudato forzando la soglia. Smoke test visivo Release consigliato.
+  - **✅ Copertura strutturale delle CORSIE (changelog 87)**: primitiva condivisa `worldintel::lateralCoord`
+    (proiezione laterale sull'asse d'attacco) + selezione lane-diverse nel comandante (prima una corsia diversa
+    ciascuna, poi riempi per peso). Torre non toccata (segnala già tutti i settori). Misurato: top-3 sempre in
+    3 corsie distinte. Smoke test visivo Release consigliato.
+  - **✅ DRY analisi settori (changelog 88)**: `sectorTacticalWeight(sec, st, myTeam)` unico, chiamato da torre
+    (`,1`) e comandante (`,2` + bonus stance). Comportamento identico (verificato per costruzione); i due lati non
+    possono più divergere. Revisione droide tattico + torre **COMPLETA** per questa fase.
 - **▶ PRIORITÀ RIVISTA (utente 2026-07-20): completare i METADATA, poi l'AI.** Si mette in pausa il
   miglioramento dell'intelligenza AI e si finisce il percorso metadata "con il massimo della cura".
   Piano in **doc 33 §5-bis**. Ordine scelto dall'utente: **unificare prima**, così M1/M3/M4 si

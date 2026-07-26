@@ -26,7 +26,9 @@ enum class OrderType : unsigned char
     FocusFire,     // B: concentra il fuoco su un bersaglio designato
     Revive,        // C: va a rianimare un compagno a terra
     CoveringFire,  // C: un alleato DIRETTO tiene la posizione e fa fuoco di supporto
-    Regroup        // B2: ruota di comando (non ancora eseguito)
+    Regroup,       // B2: ruota di comando (non ancora eseguito)
+    Advance,       // B2: avanza di posizione di tiro in posizione di tiro verso il nemico
+    Retreat        // B2: ripiega alla zona sicura più vicina (settore nostro / spawn)
 };
 
 // Un ordine non sparisce mai in silenzio: o si completa, o fallisce CON CAUSA (doc 26).
@@ -45,6 +47,8 @@ inline const char* orderName(OrderType t)
         case OrderType::Revive:       return "Revive";
         case OrderType::CoveringFire: return "CoveringFire";
         case OrderType::Regroup:      return "Regroup";
+        case OrderType::Advance:      return "Advance";
+        case OrderType::Retreat:      return "Retreat";
         default:                      return "None";
     }
 }

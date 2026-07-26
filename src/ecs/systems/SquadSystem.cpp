@@ -29,7 +29,10 @@ bool isImplemented(OrderType t)
     return t == OrderType::Follow || t == OrderType::HoldPosition
         || t == OrderType::MoveTo || t == OrderType::TakeCover
         || t == OrderType::FocusFire || t == OrderType::Revive        // Phase C
-        || t == OrderType::CoveringFire;
+        || t == OrderType::CoveringFire
+        || t == OrderType::Advance    // avanzata tattica (ruota, bias sull'AI autonoma)
+        || t == OrderType::Retreat    // ripiego alla zona sicura (ruota)
+        || t == OrderType::Regroup;   // raduno sul settore conteso a peso max (ruota)
 }
 
 // C'è qualcuno che sta DELIBERATAMENTE rianimando questo caduto?
@@ -165,10 +168,18 @@ void SquadSystem::update(World& world, float dt)
         {
             sq->order         = req.order;
             sq->targetEntity  = req.targetEntity;
-            // HOLD (ruota comandi): ognuno tiene la PROPRIA posizione, non un
-            // punto condiviso — altrimenti convergerebbero tutti sullo stesso.
+            // HOLD (ruota comandi): sq->target è il CENTRO dell'AREA da tenere. La
+            // distribuzione NON convergente la fa l'AI (bestAdvantageInArea + bias-spread,
+            // AiSystem): ogni membro prende una posizione diversa nell'area. Centro = il
+            // punto designato dalla ruota se fornito, altrimenti la posizione del membro
+            // (tieni l'area dove sei). [[orders-design-vision]]
             if (req.order == OrderType::HoldPosition)
-            { sq->targetX = tr->x; sq->targetZ = tr->z; }
+            {
+                if (req.targetX != 0.0f || req.targetZ != 0.0f)
+                { sq->targetX = req.targetX; sq->targetZ = req.targetZ; }
+                else
+                { sq->targetX = tr->x; sq->targetZ = tr->z; }
+            }
             else
             { sq->targetX = req.targetX; sq->targetZ = req.targetZ; }
             sq->state         = OrderState::Active;

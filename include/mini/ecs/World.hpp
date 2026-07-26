@@ -265,6 +265,25 @@ public:
     };
     AllyIntel allyIntel;
 
+    // ── Quadro tattico dei cloni, pre-calcolato dalla TORRE (Fase torre-hub) ──
+    // La torre fa il lavoro pesante UNA volta per tutti: per ogni posizione tattica,
+    // se BATTE un nemico ORA (LOS verificata) e con che valore. I cloni (ordini +
+    // autonomi) LEGGONO questi dati invece di ricalcolare la LOS ciascuno → "AI
+    // semplici in mondo intelligente" ([[world-tactical-intelligence]]). `claimed` è
+    // l'occupancy CENTRALE (azzerata ogni tick da AiSystem): la squadra si distribuisce
+    // sulle migliori posizioni libere invece di ammassarsi. Tutti i vettori sono
+    // PARALLELI a activeMap->tacticalPositions. `active` (torre viva) governa solo i
+    // dati di FUOCO: senza torre i cloni ricadono sul calcolo locale
+    // ([[structures-degrade-not-block]]); l'occupancy resta comunque disponibile.
+    struct AllyTactical
+    {
+        bool active = false;                 // torre di controllo team-1 viva → dati di fuoco freschi
+        std::vector<char>    canFire;        // 1 = LOS a un nemico corrente (calcolata dalla torre)
+        std::vector<float>   score;          // valore posizione: importanza+protezione (+bonus se batte)
+        std::vector<std::uint8_t> claimed;   // occupancy per-tick (una posizione = un clone)
+    };
+    AllyTactical allyTac;
+
     // ── Statistiche di missione (doc 25, GDD 9.6) ────────────────────────
     //    Accumulate DURANTE la missione da chi conosce il fatto — nessuno le
     //    ricostruisce a posteriori: gli eventi (una morte, una kill) esistono

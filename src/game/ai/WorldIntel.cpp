@@ -17,6 +17,20 @@ constexpr float kPI = 3.14159265358979323846f;
 constexpr float kPeek = 1.5f;
 }
 
+float lateralCoord(const MapDef& map, float x, float z)
+{
+    // Asse d'attacco = spawnTeam1 → spawnTeam2; la corsia è la posizione lungo la
+    // PERPENDICOLARE, con origine a metà fra i due spawn.
+    const float ax = map.spawnTeam1[0] - map.spawnTeam2[0];
+    const float az = map.spawnTeam1[2] - map.spawnTeam2[2];
+    const float alen = std::sqrt(ax * ax + az * az);
+    if (alen < 0.001f) return x;                       // spawn coincidenti → fallback X
+    const float px = -az / alen, pz = ax / alen;        // perpendicolare normalizzata
+    const float cx = (map.spawnTeam1[0] + map.spawnTeam2[0]) * 0.5f;
+    const float cz = (map.spawnTeam1[2] + map.spawnTeam2[2]) * 0.5f;
+    return (x - cx) * px + (z - cz) * pz;
+}
+
 const TacticalPositionDef* bestCoverToward(const MapDef& map,
                                            float x, float z,
                                            float towardX, float towardZ,
@@ -360,9 +374,8 @@ const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float
     const float ar2 = areaRadius * areaRadius;
     for (const auto& p : map.tacticalPositions)
     {
-        // Qualunque ruolo da combattimento (posarsi lì e sparare/tenere).
-        if (p.role != "cover" && p.role != "vantage"
-            && p.role != "defensive" && p.role != "chokepoint") continue;
+        // Qualunque ruolo da tenere/coprire (incl. observation): set condiviso.
+        if (!isTacticalHoldRole(p.role)) continue;
         if (areaRadius > 0.0f)
         {
             const float ax = p.x - areaX, az = p.z - areaZ;

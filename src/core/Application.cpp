@@ -1502,15 +1502,16 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 if (mag > 24.0f)   // dead zone: un micromovimento non seleziona
                 {
                     const float ang = std::atan2(wheelDirY, wheelDirX);
-                    // Centri sulle 4 diagonali (Y schermo verso il basso):
-                    // Regroup basso-sx, Hold basso-dx, Advance alto-dx,
-                    // Segui/Liberi alto-sx.
-                    const float c[4] = { 2.356f, 0.785f, -0.785f, -2.356f };
+                    // 6 settori a spaziatura uniforme, dall'ALTO in senso orario
+                    // (Y schermo verso il basso): 0 ADVANCE, 1 HOLD, 2 FOLLOW,
+                    // 3 REGROUP, 4 RETREAT, 5 FREE. La geometria HUD usa gli stessi angoli.
+                    const int N = 6;
                     int best = 0; float bestD = 1e9f;
-                    for (int i = 0; i < 4; ++i)
+                    for (int i = 0; i < N; ++i)
                     {
-                        const float dd = std::fabs(std::atan2(std::sin(ang-c[i]),
-                                                              std::cos(ang-c[i])));
+                        const float ci = -1.5707963f + i * (6.2831853f / N);
+                        const float dd = std::fabs(std::atan2(std::sin(ang - ci),
+                                                              std::cos(ang - ci)));
                         if (dd < bestD) { bestD = dd; best = i; }
                     }
                     wheelSel = best;
@@ -1533,47 +1534,54 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 }
 
                 const char* toastMsg = nullptr;
-                // Gli ordini di MOVIMENTO (Regroup/Advance) hanno bisogno di un
-                // punto: senza ancora (osservatore che guarda il cielo) si
-                // impartiscono solo Hold e Liberi, che non ne richiedono.
-                if (wheelSel == 0 && haveAnchor)        // REGROUP: raduna sull'ancora
-                {
-                    req.order = OrderType::MoveTo;
-                    req.targetX = anchor.x; req.targetZ = anchor.z;
-                    toastMsg = observerFly ? "Squadra: RADUNA QUI" : "Squadra: REGROUP";
-                }
-                else if (wheelSel == 1)   // HOLD: ognuno tiene la propria posizione
-                { req.order = OrderType::HoldPosition; toastMsg = "Squadra: HOLD"; }
-                else if (wheelSel == 2 && haveAnchor)   // ADVANCE: avanza dalla mira
+                // Gli ordini che designano un'AREA (Advance/Hold/Regroup) hanno bisogno
+                // di un punto: senza ancora (osservatore che guarda il cielo) falliscono
+                // con avviso. Follow e Free non ne richiedono.
+                if (wheelSel == 0 && haveAnchor)        // ADVANCE: avanza dalla mira
                 {
                     glm::vec3 fwd = cam.getForward(); fwd.y = 0.0f;
                     const float fl = glm::length(fwd);
                     fwd = (fl > 0.001f) ? fwd / fl : glm::vec3{0,0,1};
-                    // In osservatore l'ancora è già il punto mirato: si spinge
-                    // poco oltre (8m). In partita si avanza 15m dal giocatore.
+                    // In osservatore l'ancora è già il punto mirato: si spinge poco
+                    // oltre (8m). In partita si avanza 15m dal giocatore.
                     const float push = observerFly ? 8.0f : 15.0f;
-                    // ADVANCE (ruota, doc 26): avanza verso la direzione di mira.
-                    req.order = OrderType::MoveTo;
+                    // ADVANCE vero (non più MoveTo secco): l'AI avanza di posizione di
+                    // tiro in posizione di tiro verso il nemico nell'area (selectOrderWaypoint).
+                    req.order = OrderType::Advance;
                     req.targetX = anchor.x + fwd.x * push;
                     req.targetZ = anchor.z + fwd.z * push;
                     toastMsg = "Squadra: ADVANCE";
                 }
-                else if (wheelSel == 3)   // SEGUI ⇄ LIBERI (ADR-037)
+                else if (wheelSel == 1)   // HOLD: tieni l'AREA designata (centro = ancora)
                 {
-                    // In osservatore seguire una camera in volo non ha senso →
-                    // il 4° settore revoca sempre gli ordini (LIBERI).
-                    if (observerFly)
-                    { req.order = OrderType::None; req.targetEntity = 0; toastMsg = "Squadra: LIBERI"; }
-                    else
-                    {
-                        req.order        = wheelFollowActive ? OrderType::None
-                                                             : OrderType::Follow;
-                        req.targetEntity = player.entity;
-                        toastMsg = wheelFollowActive ? "Squadra: LIBERI" : "Squadra: SEGUI";
-                    }
+                    req.order = OrderType::HoldPosition;
+                    // Centro dell'area da tenere: il punto mirato (osservatore) o la
+                    // posizione del giocatore (partita). Senza ancora (mira al cielo)
+                    // resta il fallback "ognuno dove si trova" (SquadSystem).
+                    if (haveAnchor) { req.targetX = anchor.x; req.targetZ = anchor.z; }
+                    toastMsg = "Squadra: HOLD";
                 }
-                else   // settore di movimento senza ancora (mira al cielo)
-                { req.pending = false; hud.toast("Mira un punto a terra per l'ordine"); }
+                else if (wheelSel == 2 && !observerFly)   // FOLLOW (seguire una camera non ha senso)
+                {
+                    req.order        = OrderType::Follow;
+                    req.targetEntity = player.entity;
+                    toastMsg = "Squadra: SEGUI";
+                }
+                else if (wheelSel == 3)   // REGROUP: raduno sul settore conteso a peso max
+                {
+                    // Non serve un'ancora: il punto di raduno è DINAMICO (il settore più
+                    // conteso in quel momento), scelto dall'AI (selectOrderWaypoint).
+                    req.order = OrderType::Regroup;
+                    toastMsg = "Squadra: REGROUP";
+                }
+                else if (wheelSel == 4)   // RETREAT: ripiega alla zona sicura (no ancora)
+                { req.order = OrderType::Retreat; toastMsg = "Squadra: RIPIEGA"; }
+                else if (wheelSel == 5)   // FREE: libera dagli ordini (ADR-037) — sempre
+                { req.order = OrderType::None; req.targetEntity = 0; toastMsg = "Squadra: LIBERI"; }
+                else   // Advance/Regroup senza ancora, o Follow in osservatore
+                { req.pending = false;
+                  hud.toast(wheelSel == 2 ? "In osservatore la squadra non segue"
+                                          : "Mira un punto a terra per l'ordine"); }
 
                 if (req.pending) { world.squadOrder = req; if (toastMsg) hud.toast(toastMsg); }
                 wheelSel = -1;

@@ -45,6 +45,12 @@ private:
     // valutazione di chi copre (sparsa) non coincidono quasi mai (ADR-032).
     struct Advance { int coveredIdx; int team; float x, z; float ttl; };
     std::vector<Advance> m_advances, m_advancesPrev;
+
+    // Cadenza del QUADRO TATTICO della torre (Fase torre-hub): la torre ricalcola la
+    // LOS posizioni↔nemici a intervalli (non ogni tick — è pesante e non serve fresca
+    // al frame). L'occupancy delle posizioni vive invece in `World::allyTac.claimed`
+    // (centrale, azzerata ogni tick), condivisa da ordini e cloni autonomi.
+    float m_allyTacTimer = 0.0f;
 };
 
 } // namespace mini

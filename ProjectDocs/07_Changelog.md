@@ -2,6 +2,221 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-27 (94) — Audit post-torre-hub: fix occupancy + coerenza ruoli + costanti autorabili
+
+Esame profondo richiesto dall'utente dopo il blocco ordini/torre-hub. Findings prioritizzati (report completo
+in conversazione); sistemati i chiari a basso rischio, in ordine:
+- **#1+#2 Occupancy dei cloni AUTONOMI (correttezza)**: durante il commitment il clone autonomo riusava la sua
+  posizione senza ri-rivendicarla in `allyTac.claimed` → un compagno poteva prenderla → ammasso residuo (il
+  tower-hub risolveva l'occupancy solo per gli ordini). Ora il ramo autonomo salva l'indice in `ai->allySigIdx`
+  e lo RI-RIVENDICA a ogni tick di commitment. Occupancy ora completa per ordini E autonomi.
+- **#3 Coerenza ruoli (integrazione/fragilità)**: il filtro "ruolo utile" era duplicato in 3 punti con set
+  DIVERSI (`bestAdvantageInArea` dimenticava `observation`). Unificato in `worldintel::isTacticalHoldRole`
+  (cover/vantage/defensive/chokepoint/observation). Ora droidi e tower-hub vedono le stesse posizioni;
+  `bestAdvantageInArea` include finalmente le `observation`. `bestHoldPosition` resta a parte di proposito
+  (solo defensive/chokepoint = presidio difensivo droidi).
+- **#5 Costanti di feel → GameConfig (autorabilità)**: portate a leve regolabili le costanti prima inline:
+  `ORDER_COMMIT_TIME`/`ORDER_COMMIT_FALLBACK`/`REGROUP_COMMIT_TIME`/`ALLYSIG_COMMIT_TIME` (impegno su una
+  posizione, il "commitment threshold" che l'utente voleva tarare), `ORDER_ENEMY_SCAN`, `TAC_PICTURE_PERIOD`,
+  `TAC_FIRE_BONUS`, `POSITION_DEFAULT_FIRE_RANGE`.
+- **#10** commento stale (`advanceWaypoint` → `selectOrderWaypoint`) corretto.
+- **Build-verified** (Debug + Release), sanity `--sim` senza regressione/stuck.
+- **Rimandati (per decisione)**: #4 (la retry di reachability marca claimed le irraggiungibili per tutto il
+  tick — impatto basso), #6 (quadro torre stale ≤0.33 s), **#7 (AiSystem.cpp = 2578 righe, MONOLITE**: candidato
+  a split `AiCombat`/`AiOrders`/`AiCommandLayer` — refactor grande, da valutare a parte), #11 (Regroup no-op se
+  nessun settore conteso). #8/#9 già noti (band-aid muzzle attende pose; tower-hub solo lato cloni).
+
+## 2026-07-27 (93) — Rifinitura ordini: fix combattimento + TORRE-HUB (la torre pre-calcola i dati tattici)
+
+Playtest del (92): Retreat tendeva ad andare AVANTI, alcuni cloni restavano fermi indietro, alcuni sparavano
+meno. Due fix + una scelta architetturale (concordata con l'utente).
+- **Fix Retreat in combattimento**: il movimento in Alert è guidato dalla logica d'ingaggio (che CHIUDE verso il
+  nemico), non dal waypoint dell'ordine → l'ordine "indietreggia" era ignorato. Ora `OrderType::Retreat` attiva
+  lo stesso disimpegno del flag `retreating` (arretra dal bersaglio con fuoco di copertura) anche a piena salute.
+- **Fix "fermi indietro"**: nel selettore, se non trovava una posizione libera "più avanti" il fallback era la
+  posizione DEL MEMBRO stesso (`areaX=px` per Advance) → restava fermo. Ora il fallback è una destinazione
+  sensata per postura (Advance→verso il nemico, Follow→leader, Retreat→retro, Hold→centro area).
+- **TORRE-HUB (Fase concordata, "dati + occupancy centralizzata")** — la torre fa il lavoro pesante UNA volta,
+  i cloni ragionano meno ([[world-tactical-intelligence]]):
+  - **`updateAllyTactical`** (torre, cadenza 0.33 s): per ogni posizione tattica utile calcola se BATTE un
+    nemico ORA (LOS verificata) e un `score` (importanza+protezione−pericolo, **+bonus se batte**). Dati in
+    `World::allyTac` (paralleli a `tacticalPositions`). Attivo solo con torre di controllo team-1 VIVA →
+    altrimenti i cloni ricadono sul punteggio locale ([[structures-degrade-not-block]]).
+  - **`bestOrderPosition`** (AiSystem): sceglie la posizione LIBERA a score massimo (tower-aware), con
+    **occupancy CENTRALE** (`allyTac.claimed`, azzerata ogni tick, condivisa da ordini e cloni autonomi) e
+    filtro di direzione. Rimpiazza la LOS per-clone sia negli ordini (`selectOrderWaypoint`) sia nel ramo
+    autonomo dei cloni (torre). Fix "sparano meno": ora scelgono posizioni da cui SPARANO davvero, non cieche.
+  - Rimossa `worldintel::bestFreePosition` (la selezione ha bisogno di World/nav/allyTac → sta in AiSystem;
+    worldintel resta puro su MapDef). Occupancy spostata da `m_claimedPositions` (AiSystem) a `World::allyTac`.
+- **Misurato** (`--sim`, DIAG poi rimosso): la torre calcola `canFire` 43-122 su 167 posizioni (dinamico coi
+  nemici che si muovono); combattimento attivo (206), 0 crash, 0 stuck → il ramo AUTONOMO dei cloni (sim-testabile)
+  usa il tower-hub senza regressione. **Build-verified** (Debug + Release). Gli ORDINI del player restano da
+  validare **visivamente** (non sim-testabili): Retreat che arretra, nessuno fermo, Hold/Advance su posizioni che
+  sparano, distribuzione senza ammasso.
+
+## 2026-07-27 (92) — Ordini del player: MOTORE UNIFICATO occupancy-aware (correzione dopo playtest utente)
+
+Il playtest degli ordini (89-91) ha mostrato che erano APPROSSIMAZIONI, non fedeli alla visione: Retreat andava
+addirittura AVANTI (mandava al "settore controllato più vicino", che può essere in prima linea); Hold cercava
+solo posizioni di difesa e si ammassava (spread solo via bias, non occupancy vera); Advance/Follow poco fedeli.
+Riscritti attorno a **un unico motore** ([[orders-design-vision]]):
+- **`worldintel::bestFreePosition`** (nuova primitiva): fra i ruoli utili (cover/vantage/defensive/chokepoint/
+  **observation** — prima observation era escluso) dentro l'area, la posizione LIBERA a **priorità massima**
+  (importanza+protezione), con **occupancy vera** (salta gli indici in `claimed`) e filtro di **direzione**
+  (`dirToThreat` +1 avanti / -1 indietro / 0 qualunque). "Scegli la posizione libera migliore; se occupata,
+  un'altra" — esattamente lo spec utente.
+- **`selectOrderWaypoint`** (AiSystem): motore per-membro con **commitment** (non ri-sceglie ogni tick) +
+  reachability, che imposta il waypoint per postura:
+  - **Hold** → miglior posizione libera nell'area, poi la DIFENDE (clamp di presidio).
+  - **Advance** → posizioni più VICINE al nemico (a sbalzi verso il fronte designato).
+  - **Retreat** → posizioni più LONTANE dal nemico (indietreggia; combatte fronteggiandolo). Corretto il bug
+    "andavano avanti".
+  - **Follow** → coperture vicino al leader verso il nemico (di cover in cover, non più formazione fissa);
+    tiene il leash come sicurezza per non restare indietro.
+  - **Regroup** → settore CONTESO a **peso massimo** in quel momento (`sectorTacticalWeight`), non più il punto
+    mirato.
+- **Occupancy** in AiSystem (`m_claimedPositions`, azzerato ogni tick; indice rivendicato in `ai.allySigIdx`):
+  la squadra si DISTRIBUISCE sulle migliori posizioni libere invece di ammassarsi. Il ramo waypoint alleato e il
+  leash sono stati unificati (le posture usano il waypoint/clamp; solo MoveTo/TakeCover/CoveringFire/Follow usano
+  il leash — Follow come sola sicurezza). Rimosso `advanceWaypoint` (superato).
+- **Nessun override**: mira/fuoco/reposition restano autonomi; l'ordine dà solo intento+posizione. File:
+  WorldIntel(.hpp/.cpp), GameConfig (ORDER_BOUND_STEP, FOLLOW_COVER_RADIUS), AiComponent (allySigIdx), AiSystem
+  (.hpp m_claimedPositions; selectOrderWaypoint + selezione + ramo waypoint + leash), SquadSystem (Regroup
+  implementato), Application (Regroup senza ancora).
+- **Build-verified** (Debug + Release); sanity `--sim` per NESSUNA regressione autonoma (droidi/torre non toccati).
+  **Non testabile in `--sim`** (ordini del player) → **smoke test visivo** necessario, per postura.
+
+## 2026-07-26 (91) — Ordine RETREAT del player + ruota a 6 settori
+
+Terzo ordine del rework (dopo Hold 89, Advance 90). **Retreat** (nuovo nella visione): "indietreggiano alla
+zona sicura più vicina". Stessa filosofia bias-non-override.
+- **`OrderType::Retreat`**: il membro ripiega alla **zona sicura più vicina** — un settore controllato dalla
+  PROPRIA fazione, altrimenti lo spawn. Riusa `retreatPointForTeam` (generalizzato da `retreatPointForTeam2` al
+  parametro `team`; il chiamante droidi ora passa `2` → nessun cambio di comportamento lato droidi). Il
+  combattimento resta autonomo mentre ripiega (spara cadendo indietro). Precede la torre; escluso dal leash di
+  squadra (usa il waypoint della zona sicura, non un target). Persiste come postura.
+- **Ruota a 6 settori**: ADVANCE, HOLD, FOLLOW, REGROUP, **RETREAT**, FREE (era 5). RETREAT non richiede ancora
+  (la zona sicura si calcola dalle posizioni). Angoli condivisi Application/HUD.
+- **Build-verified** (Debug + Release); sanity `--sim` per NESSUNA regressione (droidi/ripiego per-fronte usano
+  lo stesso helper generalizzato). **Non testabile in `--sim`** (ordine del player) → **smoke test visivo**:
+  dare RETREAT e verificare che la squadra ripieghi alla zona tenuta più vicina continuando a sparare.
+- Restano da rifinire: **Regroup** (oggi MoveTo sull'ancora → settore a peso max) e **Follow** (formazione →
+  cover-to-cover). Con questi il rework ordini-ruota è completo per questa fase.
+
+## 2026-07-26 (90) — Ordine ADVANCE del player (avanzata tattica) + ruota a 5 settori con FREE dedicato
+
+Secondo ordine del rework (dopo Hold, 89), stessa filosofia bias-non-override. Prima ADVANCE era `MoveTo`
+sul punto mirato → "vai lì e poi combatti", one-shot. La visione ([[orders-design-vision]]) lo vuole "avanzano
+di posizione tattica in posizione tattica con visuale sul nemico, alla successiva quando non c'è più nulla da
+colpire". Ora è un ORDINE VERO che riusa la macchina dei droidi:
+- **`OrderType::Advance`** (nuovo) + helper condiviso **`advanceWaypoint`** (AiSystem): occupa una posizione di
+  TIRO verso il nemico più vicino all'area designata (LOS verificata da `bestFiringPosition`, anche elevata),
+  con COMMITMENT (timer, no oscillazione); sbalza alla successiva quando la raggiunge/scade. Senza nemico noto
+  → miglior terreno dell'area. È la stessa logica del ramo Advance dei droidi MENO la cattura-post (roba loro) →
+  il ramo droidi resta intatto (nessuna regressione sul lato appena validato). Il player Advance PRECEDE la
+  torre nel ramo waypoint; combattimento/mira/reposition restano autonomi.
+- **Guinzaglio LARGO** all'area (`ADVANCE_AREA_RADIUS`+6): non trattiene l'avanzata (le firing position stanno
+  nel raggio), rientra solo se il combattimento porta oltre l'area → niente caccia all'infinito. Advance
+  PERSISTE come postura (SquadSystem: `default` non lo spegne), non è un MoveTo che si chiude all'arrivo.
+- **Ruota a 5 settori** (generalizzata a N radiale, prima 4 fisse sulle diagonali): ADVANCE, HOLD, FOLLOW,
+  REGROUP, **FREE**. FREE è ora un settore DEDICATO che libera SEMPRE dagli ordini (prima "Liberi" era solo il
+  toggle di Follow → non potevi liberarli se erano in Hold/Advance/Regroup — richiesta utente). Stessi angoli
+  fra Application (selezione) e HUD (disegno). Follow non ha più senso in osservatore (avvisa).
+- Nuova costante `ADVANCE_AREA_RADIUS`. File: SquadComponent (enum+orderName), SquadSystem (isImplemented;
+  persiste in `default`), AiSystem (advanceWaypoint + ramo waypoint + leash), Application (ruota), Hud (ruota).
+- **Build-verified** (Debug + Release); sanity `--sim` per NESSUNA regressione autonoma. **Ordini del player NON
+  testabili in `--sim`** (niente giocatore/ruota) → Advance e la ruota-a-5 richiedono **smoke test visivo**
+  (osservatore/partita): la squadra avanza di posizione di tiro in posizione di tiro, e FREE li libera da qualsiasi
+  ordine. Prossimi: Retreat (6° settore), Regroup su settore a peso max, Follow cover-to-cover.
+
+## 2026-07-26 (89) — Ordine HOLD del player rifatto BENE: controlla l'area (bias, non override)
+
+Ripresa del rework ordini (dopo il revert changelog 77), ora che l'AI autonoma è solida. Primo ordine, il
+FONDAMENTALE: **Hold**. Prima era `HoldPosition` sulla posizione CORRENTE del membro, leash 2 → "congelati
+dove siete". La visione ([[orders-design-vision]]) lo vuole "controllano l'AREA distribuendosi sulle migliori
+posizioni, non ammassati". Rifatto come **bias leggero sull'AI autonoma**, MAI override (la lezione del 77):
+- **L'ordine dà l'area, l'AI sceglie il posto**: `sq->target` è ora il CENTRO dell'area (punto mirato in
+  osservatore / posizione del giocatore in partita); ogni membro sceglie da sé la miglior posizione lì dentro
+  (`worldintel::bestAdvantageInArea`, QUALSIASI ruolo) e la presidia. Il combattimento resta autonomo.
+- **Anti-ammasso via bias**: punto di ricerca RUOTATO per membro (`bias`) → membri diversi puntano zone diverse
+  dell'area → si distribuiscono invece di convergere sulla stessa posizione. Stesso principio decorrelato del
+  droide/torre.
+- **Riuso del pattern presidio droidi** (ADR-046): `ai->holdX/Z` + clamp `holdRadius` (HOLD_ANCHOR_RADIUS 4 m)
+  tiene il membro sulla posizione scelta mentre combatte. Hold PRECEDE la torre nel ramo waypoint (l'ordine
+  diretto vince sul segnale) ed è escluso dal leash di squadra (lo gestisce il clamp di presidio) → nessun
+  doppio vincolo. Nessuna LOS/tattica parallela in SquadSystem.
+- Nuove costanti `HOLD_AREA_RADIUS`/`HOLD_ANCHOR_RADIUS`. File toccati: GameConfig, AiSystem (presidio +
+  waypoint + leash), SquadSystem (centro area), Application (ruota passa il centro).
+- **Build-verified** (Debug + Release); sanity `--sim` per verificare NESSUNA regressione di droidi/cloni
+  autonomi (il codice presidio/waypoint è condiviso). **Gli ordini del player NON sono testabili in `--sim`**
+  (niente giocatore/ruota) → l'effetto del Hold richiede **smoke test visivo** (osservatore sandbox o partita):
+  la squadra deve occupare posizioni diverse nell'area e combattere da lì, non congelarsi.
+- Prossimi ordini (stessa filosofia, uno alla volta): Advance (sbalzi su firing position), Retreat (zona sicura),
+  Regroup (settore a peso max), Follow (cover-to-cover).
+
+## 2026-07-26 (88) — DRY: analisi settori CONDIVISA da torre e comandante (`sectorTacticalWeight`)
+
+Chiusura della revisione droide tattico + torre: le due analisi dei settori erano **due implementazioni della
+stessa idea** e già derivate a mano due volte (la 85 fu proprio un riallineamento dopo che erano divergute).
+Ora sono **una sola funzione**, così non possono più divergere per costruzione.
+- **`sectorTacticalWeight(sec, st, myTeam)`** (statico in AiSystem.cpp, dove vivono ENTRAMBE le funzioni):
+  `importanza + pressione×2 + minoranza(foe>mine)×0.8 + possesso-nemico 0.6 + opportunità 0.4`, parametrizzato
+  sulla fazione (`mine`/`foe` derivati da `myTeam`; allies=team1, enemies=team2). La torre chiama
+  `(…, 1)`; il comandante `(…, 2)` + il bonus di stance `hold conteso 0.5` (specifico del comandante, resta fuori).
+- **Comportamento IDENTICO** (termine per termine, verificato per costruzione): la torre e il comandante
+  producono gli stessi pesi di prima — è un refactor di pulizia, non un cambio di comportamento. Un futuro
+  ritocco della formula ora vale automaticamente per entrambi i lati.
+- **Perché non in worldintel**: quel layer deve restare puro su MapDef (niente `World::SectorState`); e le due
+  funzioni sono nello stesso file → un helper statico è il posto pulito, senza nuovo accoppiamento.
+- **Build-verified** (Debug + Release), sanity sim senza crash. Chiude il "candidato residuo" della 87.
+
+## 2026-07-26 (87) — Copertura strutturale delle CORSIE nella scelta dei fronti del comandante
+
+Terzo passo della revisione droide tattico + torre. Chiuso il gap "distribuzione emergente e sperata" notato
+nella 85/86: il comandante troncava ai **3 pesi più alti**, che potevano cadere tutti nella **stessa corsia**
+lasciandone una scoperta. Ora la copertura è **strutturale**.
+- **Primitiva condivisa `worldintel::lateralCoord`**: proiezione di (x,z) sull'asse PERPENDICOLARE alla
+  direzione d'attacco (spawnTeam1→spawnTeam2). Due punti con `lat` vicina = stessa corsia, a prescindere dalla
+  profondità (fondamentale: due settori della stessa corsia a profondità diverse sono ~24 m distanti in
+  euclidea ma stessa corsia). Pura geometria della mappa, nel layer condiviso → usabile anche dalla torre.
+- **Selezione lane-diverse nel comandante**: ordina per peso, poi 1) prende fronti in CORSIE diverse
+  (|Δlat| ≥ `COMMAND_LANE_SEP`=16 m), 2) riempie gli slot rimasti coi pesi più alti. Cap 3 invariato
+  (distribuzione validata). Su mappa a 3 corsie contese → un fronte per corsia; se una corsia sola è calda →
+  concentrazione lì (fallback). La **torre NON è toccata**: segnala già tutti i settori (copertura implicita
+  lato cloni), quindi zero rischio di regressione sul lato appena validato.
+- **Misurato** (`--sim` Release, DIAG temporaneo poi rimosso): i top-3 scelti cadono sempre in tre corsie
+  distinte — es. `Separatist Spawn(lat 0)` + `Charlie(lat 24)` + `Alpha L(lat -24)` (centro/destra/sinistra).
+  Lo spawn separatista compare come fronte-centro solo quando i cloni lo attaccano (→ Hold difensivo, corretto).
+  Combattimento attivo, nessun crash.
+- **Build-verified** (Debug + Release). Nuova costante `COMMAND_LANE_SEP` in GameConfig. Smoke test visivo
+  Release consigliato (i droidi coprono tutte e 3 le corsie contese). [[world-tactical-intelligence]]
+- Nota DRY: la primitiva delle corsie ora è condivisa; l'estrazione completa di uno `scoreSectors` unico
+  (torre + comandante) resta un refactor a parte, a bassa urgenza (i pesi sono già allineati, 85).
+
+## 2026-07-26 (86) — Assegnazione SPAZIALE delle direttive + ripiego PER-FRONTE (droide tattico)
+
+Secondo passo della revisione droide tattico + torre. Sbloccata la precondizione notata nella 85.
+- **Assegnazione spaziale (`pickEnemyDirective`)**: prima ogni droide sceglieva il fronte con una roulette
+  pesata per weight e **indicizzata dal solo bias** — agnostica alla posizione (il bias fissava il fronte
+  ovunque il droide fosse). Ora il peso strategico è modulato dalla **prossimità** del fronte al droide:
+  `eff = weight × 1/(1 + dist/COMMAND_PROXIMITY_HALFDIST)` (HALFDIST=30 m, gentile → un fronte molto più caldo
+  lontano vince ancora, e la decorrelazione da bias resta → distribuzione preservata). Effetto: i droidi
+  servono il fronte rilevante **per dove si trovano**, e una direttiva di ripiego viene raccolta dai droidi
+  **vicini** a quel fronte. Nuova costante `COMMAND_PROXIMITY_HALFDIST` in GameConfig.
+- **Ripiego PER-FRONTE**: il comandante marca un settore che **collassa** (droidi presenti ma cloni ≥ droidi+2,
+  su terreno in mano nemica, non nostro da tenere) con stance **Retreat** e peso modesto (`importanza+pressione`,
+  senza i boost minoranza/opportunità: si lascia, non si rinforza). La soglia +2 separa "collassa → abbandona"
+  da "poco sotto → rinforza" (il termine minoranza), evitando il conflitto. Il consumo del Retreat (globale o
+  per-fronte) ora cade sul **settore controllato più vicino** (`retreatPointForTeam2`), non fino allo spawn.
+- **Misurato** (`--sim` Release, DIAG temporaneo poi rimosso): a 6v6 su Training Ground gli sbilanci locali
+  restano ±1 (spesso i **droidi dominano**: Delta-Echo 4v1, Alpha 4v2) → il collasso +2 **non si verifica in
+  gioco normale**: il ripiego per-fronte è una **valvola di sicurezza** per rout veri/battaglie più grandi, non
+  un comportamento quotidiano (corretto: non l'ho forzato abbassando la soglia, renderebbe i droidi timidi).
+  **Percorso collaudato forzando la soglia**: emit + esecuzione OK, i droidi cadono su un settore controllato
+  `(-24,-24)` (non lo spawn), combattimento ancora attivo (206 eventi), nessun crash, yo-yo trascurabile.
+- **Build-verified** (Debug + Release); sim finale (soglia reale): 224 eventi combat, respawn regolari, nessun
+  crash/assert. Smoke test visivo Release consigliato. [[world-tactical-intelligence]] [[droide-tattico-concept]]
+
 ## 2026-07-26 (85) — Droide tattico: peso delle direttive coerente con la torre (contesa + minoranza + opportunità)
 
 Prima tappa della revisione **droide tattico + torre**. Trovata un'asimmetria: la torre (cloni) era già

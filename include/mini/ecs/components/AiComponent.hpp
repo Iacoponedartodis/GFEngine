@@ -133,6 +133,10 @@ struct AiComponent
     float allySigX = 0.0f, allySigZ = 0.0f;   // WAYPOINT impegnato (già raggiungibile)
     bool  allySigValid = false;
     float allySigTimer = 0.0f;                 // re-eval periodico: bounda il findPath
+    // Indice della POSIZIONE tattica rivendicata (ordini del player, occupancy): il
+    // membro tiene "prenotata" quella posizione finché ci è impegnato, così i compagni
+    // ne scelgono un'altra (niente ammasso). -1 = nessuna (es. Regroup/segnale torre).
+    int   allySigIdx = -1;
 
     float stuckTimer  = 0.0f;
     bool  stuckReported = false;   // telemetria: una WARN per episodio (ADR-016)

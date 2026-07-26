@@ -75,6 +75,43 @@ constexpr float AI_HUNT_TIMEOUT_DEFAULT = 20.0f;  // s
 // serve sia al realismo (un ordine non cambia 60 volte al secondo) sia come leva
 // su cui la rete di comunicazione può agire.
 constexpr float COMMAND_DECISION_PERIOD   = 3.0f;  // s, con comunicazioni intatte
+// Assegnazione SPAZIALE delle direttive (doc 32): un droide sceglie il fronte
+// pesando il valore strategico per la PROSSIMITÀ, così serve il fronte rilevante
+// per dove si trova invece di attraversare la mappa per uno poco più prezioso.
+// prox = 1/(1 + dist/HALFDIST): a HALFDIST metri il peso effettivo si dimezza.
+// Volutamente GENERoso (30 m ~ una corsia): un fronte molto più caldo lontano
+// vince ancora → la prossimità è un bias locale, non un guinzaglio.
+constexpr float COMMAND_PROXIMITY_HALFDIST = 30.0f;  // m
+// Copertura dei FRONTI (doc 32): scegliendo i top-N fronti, il comandante prende
+// prima settori in CORSIE diverse (distanza LATERALE ≥ questo valore) e solo dopo
+// riempie coi pesi più alti rimasti — così le direttive non si ammassano in una
+// corsia lasciandone una scoperta. ~ separazione laterale tipica fra corsie.
+constexpr float COMMAND_LANE_SEP           = 16.0f;  // m (laterale)
+// Ordine HOLD del player (ADR-020): l'ordine dà il CENTRO dell'area; ogni membro
+// sceglie da sé la miglior posizione entro HOLD_AREA_RADIUS e la presidia entro
+// HOLD_ANCHOR_RADIUS (combatte da lì senza inseguire). Così "tiene l'area
+// distribuendosi", non "congelato sul posto". [[orders-design-vision]]
+constexpr float HOLD_AREA_RADIUS           = 12.0f;  // m — raggio dell'area da tenere
+constexpr float HOLD_ANCHOR_RADIUS         = 4.0f;   // m — quanto un membro vaga dal suo posto
+// Ordine ADVANCE del player: raggio dell'area verso cui avanzare. Le firing position
+// (verso il nemico) si cercano entro questo raggio dall'area designata → i membri
+// avanzano di posizione tattica in posizione tattica restando sul fronte scelto.
+constexpr float ADVANCE_AREA_RADIUS        = 14.0f;  // m
+// Ordini a SBALZI (Advance/Retreat): raggio entro cui il membro cerca la prossima
+// posizione libera nella direzione della postura (un "salto" per volta, non la mappa).
+constexpr float ORDER_BOUND_STEP           = 18.0f;  // m
+// Follow: raggio attorno al player entro cui i membri prendono posizioni di copertura.
+constexpr float FOLLOW_COVER_RADIUS        = 12.0f;  // m
+// ── Leve di TARATURA di ordini + quadro tattico della torre (audit #5) ──
+// Erano magic number inline; qui diventano leve regolabili del feel.
+constexpr float ORDER_COMMIT_TIME     = 10.0f;  // s — impegno su una posizione prima di ri-scegliere
+constexpr float ORDER_COMMIT_FALLBACK = 6.0f;   // s — impegno quando non trova una posizione libera
+constexpr float REGROUP_COMMIT_TIME   = 4.0f;   // s — ri-valuta il settore di raduno
+constexpr float ALLYSIG_COMMIT_TIME   = 12.0f;  // s — impegno del clone autonomo sul segnale torre
+constexpr float ORDER_ENEMY_SCAN      = 35.0f;  // m — raggio per trovare il nemico di riferimento (postura)
+constexpr float TAC_PICTURE_PERIOD    = 0.33f;  // s — cadenza ricalcolo LOS della torre (torre-hub)
+constexpr float TAC_FIRE_BONUS        = 2.0f;   // score in più se la posizione BATTE un nemico ORA
+constexpr float POSITION_DEFAULT_FIRE_RANGE = 25.0f;  // m — gittata di una posizione senza fireRange autorato
 // Per quanto un contatto resta utilizzabile DOPO essere arrivato. Con la torre
 // viva (ritardo 0) la finestra utile è 0..FRESH secondi, cioè in pratica gli
 // avvistamenti correnti: il comportamento nominale resta quello di prima, quando

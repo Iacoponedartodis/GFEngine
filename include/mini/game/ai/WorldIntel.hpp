@@ -1,5 +1,8 @@
 #pragma once
 
+#include <vector>
+#include <string>
+
 // ── World Intelligence Layer (doc 33, ADR-025) ──────────────────────────────
 // Il seam UNICO con cui AI/squadre interrogano la conoscenza tattica della mappa.
 // SOLO dati + query pure su MapDef: nessuna logica AI qui (decoupling, doc 15).
@@ -14,6 +17,17 @@ struct TacticalPositionDef;
 
 namespace worldintel
 {
+
+// Ruoli tattici "da TENERE/COPRIRE" una zona (cover/vantage/defensive/chokepoint/
+// observation): posizioni utili a presidiare e sparare. UNICA definizione condivisa —
+// prima il filtro era duplicato in 3 punti con set DIVERSI (observation dimenticata in
+// bestAdvantageInArea) → incoerenza fra droidi e tower-hub. bestHoldPosition resta a
+// parte di proposito (solo defensive/chokepoint: presidio difensivo dei droidi).
+inline bool isTacticalHoldRole(const std::string& role)
+{
+    return role == "cover" || role == "vantage" || role == "defensive"
+        || role == "chokepoint" || role == "observation";
+}
 
 // Miglior posizione che RIPARA (protection > 0) entro maxDist il cui fronte
 // guarda verso (towardX, towardZ). "Miglior" = punteggio che pesa `protection`
@@ -105,6 +119,13 @@ const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float
 
 const TacticalPositionDef* nearestPositionByRole(const MapDef& map, float x, float z,
                                                  const char* role, float maxDist);
+
+// Coordinata LATERALE di (x,z): proiezione sull'asse PERPENDICOLARE alla direzione
+// d'attacco (spawnTeam1→spawnTeam2). Due punti con lat vicina sono nella STESSA
+// corsia/fronte, a prescindere dalla profondità lungo l'asse; |Δlat| grande = corsie
+// diverse. Primitiva condivisa per la copertura dei fronti (comandante e, in futuro,
+// torre). Fallback su X se gli spawn coincidono. Pura: solo geometria della mappa.
+float lateralCoord(const MapDef& map, float x, float z);
 
 } // namespace worldintel
 } // namespace mini
