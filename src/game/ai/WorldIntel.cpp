@@ -156,7 +156,7 @@ void buildTacticalLinks(MapDef& map)
 
 const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
                                                 float fromX, float fromZ,
-                                                float targetX, float targetZ,
+                                                float targetX, float targetY, float targetZ,
                                                 float threatX, float threatZ,
                                                 float maxDist)
 {
@@ -194,9 +194,10 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
         const float aim = fx * tx + fz * tz;
         const float arcPref = (aim >= cosHalf) ? 1.0f
                             : std::max(0.0f, (aim + 1.0f) / (cosHalf + 1.0f));
-        // Peek: LOS dal punto avanti verso il bersaglio (la propria cover non blocca).
+        // Peek: LOS dal punto avanti verso il bersaglio alla sua quota REALE (targetY),
+        // non un piano orizzontale (KI #82) → tiri in salita/discesa valutati bene.
         if (!hasLineOfFire(map, p.x + tx * kPeek, p.y + 1.2f, p.z + tz * kPeek,
-                                targetX, p.y + 1.2f, targetZ)) continue;
+                                targetX, targetY + 1.0f, targetZ)) continue;
 
         // Angolo di FIANCO: direzione bersaglio→posizione contro bersaglio→minaccia.
         // dot = 1 → stessa direzione (frontale, nessun aggiramento); -1 → alle spalle.
@@ -254,7 +255,7 @@ const TacticalPositionDef* bestOverwatchForPosition(const MapDef& map,
 
 const TacticalPositionDef* bestFiringPosition(const MapDef& map,
                                               float x, float z,
-                                              float targetX, float targetZ,
+                                              float targetX, float targetY, float targetZ,
                                               float maxDist)
 {
     if (map.tacticalPositions.empty()) return nullptr;
@@ -294,8 +295,11 @@ const TacticalPositionDef* bestFiringPosition(const MapDef& map,
         // per sparare. Testare dal centro la scarterebbe sempre (segnalato
         // dall'utente). Così la PROPRIA cover (dietro il peek) non blocca, ma un
         // muro/edificio DAVANTI (fra te e il bersaglio) sì.
+        // Origine: occhio del tiratore SULLA posizione (p.y + 1.2). Bersaglio: la sua
+        // quota REALE (targetY + ~1 m corpo) → valuta il tiro in salita/discesa, non
+        // un piano orizzontale (KI #82: era il motivo per cui non si sparava dall'alto).
         const float peekX = p.x + tx * kPeek, peekZ = p.z + tz * kPeek;
-        if (!hasLineOfFire(map, peekX, p.y + 1.2f, peekZ, targetX, p.y + 1.2f, targetZ))
+        if (!hasLineOfFire(map, peekX, p.y + 1.2f, peekZ, targetX, targetY + 1.0f, targetZ))
             continue;
 
         // Protezione + orientamento (preferenza) + IMPORTANZA autorata (l'autore

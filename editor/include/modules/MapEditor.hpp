@@ -92,6 +92,9 @@ private:
     int                       m_selRoutePt = 0;   // punto attivo della route sel.
     std::array<float,3>       m_spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3>       m_spawnTeam2 = {0.f, 0.86f, -8.f};
+    // Punti di spawn AGGIUNTIVI per fazione (multi-spawn): le AI si distribuiscono
+    // su questi + lo spawn principale. Selezione: team1 = -3000-i, team2 = -3100-i.
+    std::vector<std::array<float,3>> m_spawnPoints1, m_spawnPoints2;
 
     // Selezione: >=0 box; -2/-3 spawn T1/T2; -10..-99 command post (-10-i);
     // -100..-199 cover point (-100-i); -200..-299 danger zone (-200-i);

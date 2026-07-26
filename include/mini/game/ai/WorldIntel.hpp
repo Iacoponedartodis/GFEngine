@@ -50,7 +50,7 @@ void buildTacticalLinks(MapDef& map);
 // come tracciato da autorare. nullptr se nessuna qualifica.
 const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
                                                 float fromX, float fromZ,
-                                                float targetX, float targetZ,
+                                                float targetX, float targetY, float targetZ,
                                                 float threatX, float threatZ,
                                                 float maxDist);
 
@@ -71,10 +71,12 @@ const TacticalPositionDef* bestOverwatchForPosition(const MapDef& map,
 // `facingDeg`. Punteggio: premia la protezione, penalizza la distanza da chi cerca.
 // È la domanda OFFENSIVA ("da dove lo colpisco restando coperto"), distinta da
 // bestCoverToward che è quella DIFENSIVA ("dove mi riparo"). nullptr se nessuna.
-// NB: filtro geometrico — non verifica ostacoli fra posizione e bersaglio (M4).
+// `targetY` = quota REALE del bersaglio: la LOS è controllata verso quella quota
+// (non a quella della posizione), così valuta correttamente i tiri in salita/discesa
+// (verticalità) invece di un piano orizzontale. Verifica la LOS di tiro (peek).
 const TacticalPositionDef* bestFiringPosition(const MapDef& map,
                                               float x, float z,
-                                              float targetX, float targetZ,
+                                              float targetX, float targetY, float targetZ,
                                               float maxDist);
 
 // (x,z) è dentro/vicino a un command post? `slack` allarga il raggio del post.

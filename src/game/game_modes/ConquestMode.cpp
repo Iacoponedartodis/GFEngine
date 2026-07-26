@@ -762,10 +762,13 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     // Base spawn: dal MapDef se disponibile, altrimenti default.
     float enemyBaseX = 0.0f, enemyBaseZ = -SPAWN_Z;
     float allyBaseX  = 0.0f, allyBaseZ  =  SPAWN_Z;
+    std::vector<std::array<float,3>> allyPts, enemyPts;   // multi-spawn (vuoti = base singola)
     if (const MapDef* md = registry ? registry->getMap(m_mapId) : nullptr)
     {
         enemyBaseX = md->spawnTeam2[0]; enemyBaseZ = md->spawnTeam2[2];
         allyBaseX  = md->spawnTeam1[0]; allyBaseZ  = md->spawnTeam1[2];
+        allyPts  = md->spawnPointsTeam1;
+        enemyPts = md->spawnPointsTeam2;
     }
 
     // Genera N posizioni in file davanti allo spawn, avanzando verso il
@@ -773,12 +776,14 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     // mappa (prima le file finivano DENTRO le barricate davanti agli spawn).
     // Patrol: dallo spawn verso il command post assegnato (round-robin) —
     // così l'AI marcia sugli obiettivi invece di fare avanti-indietro.
-    auto genPositions = [this](float baseX, float baseZ, float dirZ, int count)
+    auto genPositions = [this](float baseX, float baseZ, float dirZ, int count,
+                               const std::vector<std::array<float,3>>& points)
     {
         std::vector<UnitPos> out;
         const int   perRow = 5;
         const float dx = 3.5f, dz = 3.0f;
         const int   nPosts = m_map ? (int)m_map->commandPosts.size() : 0;
+        const int   nPts   = (int)points.size();   // multi-spawn: 0 = base singola
 
         // Patrol route autorate (18_AiMapConsumption + ADR-028): a ogni unità si
         // assegna una ROUTE INTERA (round-robin) e un segmento di PARTENZA diverso,
@@ -789,9 +794,13 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
 
         for (int i = 0; i < count; ++i)
         {
-            int row = i / perRow, col = i % perRow;
-            float x = baseX + (col - (perRow - 1) * 0.5f) * dx;
-            float z = baseZ + dirZ * (3.0f + row * dz);
+            // Multi-spawn: distribuisci le unità sui punti (round-robin); il grid
+            // locale usa l'indice DENTRO il punto (i/nPts). Vuoti = base singola.
+            float bx = baseX, bz = baseZ; int local = i;
+            if (nPts > 0) { const auto& pt = points[i % nPts]; bx = pt[0]; bz = pt[2]; local = i / nPts; }
+            int row = local / perRow, col = local % perRow;
+            float x = bx + (col - (perRow - 1) * 0.5f) * dx;
+            float z = bz + dirZ * (3.0f + row * dz);
 
             // Fuori dagli ostacoli (muri/barricate/casse), avanzando in campo
             mapquery::findFreeSpot(m_map, x, z, 0.0f, dirZ, 0.45f, 0.5f, 0.45f);
@@ -837,7 +846,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         return out;
     };
 
-    std::vector<UnitPos> enemyPos = genPositions(enemyBaseX, enemyBaseZ, +1.0f, nEnemies);
+    std::vector<UnitPos> enemyPos = genPositions(enemyBaseX, enemyBaseZ, +1.0f, nEnemies, enemyPts);
 
     // ── Spawn nemici dai JSON realmente selezionati ──────────────────────
     for (int i = 0; i < nEnemies; ++i)
@@ -938,7 +947,7 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
     // ── Spawn alleati AI (data-driven) ───────────────────────────────────────
     int nAllies = std::min(team1AiCount, config::MAX_AI_PER_TEAM);
     if (allyIds.empty()) nAllies = 0; // nessun alleato registrato: niente spawn ciechi
-    std::vector<UnitPos> allyPos = genPositions(allyBaseX, allyBaseZ, -1.0f, nAllies);
+    std::vector<UnitPos> allyPos = genPositions(allyBaseX, allyBaseZ, -1.0f, nAllies, allyPts);
     for (int i = 0; i < nAllies; ++i)
     {
         const auto& p = allyPos[i];

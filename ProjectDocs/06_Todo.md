@@ -137,6 +137,18 @@ Piano a fasi in **33_WorldTacticalIntelligence.md** — filosofia "AI semplici i
   Tattico** — nel senso di *usare meglio le informazioni che hanno, analizzare meglio la situazione
   e prendere decisioni più coerenti e tattiche*. Vincolo permanente: il comandante dà **intento**
   (obiettivi + advance/hold/retreat), **i droidi decidono il come** ([[droide-tattico-concept]]).
+- **▶ REVISIONE Droide Tattico + Torre (2026-07-26, in corso)** — su base ormai solida (importanza reale,
+  distribuzione-per-contesa, verticalità, multi-spawn).
+  - **✅ Coerenza peso comandante↔torre (changelog 85)**: il comandante ora pesa le direttive come la torre
+    (`importanza + pressione×2 + minoranza + opportunità`), non più `importanza×(1+pressione)`. I due lati si
+    comportano allo stesso modo. Smoke test visivo Release da fare.
+  - **▶ Ripiego PER-FRONTE (rimandato, precondizione nota)**: richiede **assegnazione spaziale** delle direttive
+    — oggi ogni droide sceglie una direttiva via `pickEnemyDirective(bias)`, pesata per weight e **non per
+    posizione**, e `Retreat` va sempre a `spawnTeam2`. Senza "chi è sul settore che collassa ripiega" un ripiego
+    per-fronte fa ripiegare droidi sbagliati (incoerente). Prima l'assegnazione spaziale, poi il ripiego locale.
+  - **▶ Candidato grande (da decidere)**: layer condiviso `worldintel::scoreSectors` con raggruppamento in
+    **fronti/corsie** usato da torre E comandante → coerenza per costruzione + **copertura strutturale** delle
+    corsie (oggi i top-3/segnali possono ammassarsi in una sola corsia). [[world-tactical-intelligence]].
 - **▶ PRIORITÀ RIVISTA (utente 2026-07-20): completare i METADATA, poi l'AI.** Si mette in pausa il
   miglioramento dell'intelligenza AI e si finisce il percorso metadata "con il massimo della cura".
   Piano in **doc 33 §5-bis**. Ordine scelto dall'utente: **unificare prima**, così M1/M3/M4 si

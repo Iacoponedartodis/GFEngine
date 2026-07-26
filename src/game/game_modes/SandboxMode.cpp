@@ -126,9 +126,27 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
         }
     };
 
+    // Multi-spawn: distribuisce n unità sui punti (se presenti), altrimenti tutte sul
+    // punto base (retrocompat). I primi n%m punti prendono un'unità in più.
+    auto spawnDistributed = [&](int n, const std::vector<std::array<float,3>>& points,
+                                float baseX, float baseZ, float dirZ,
+                                const std::vector<std::string>& ids, int team)
+    {
+        if (points.empty()) { gridSpawn(n, baseX, baseZ, dirZ, ids, team); return; }
+        const int m = (int)points.size();
+        for (int p = 0; p < m; ++p)
+        {
+            const int cnt = n / m + (p < n % m ? 1 : 0);
+            if (cnt > 0) gridSpawn(cnt, points[p][0], points[p][2], dirZ, ids, team);
+        }
+    };
+    const std::vector<std::array<float,3>> noPts;
+    const auto& spawnPts1 = map ? map->spawnPointsTeam1 : noPts;
+    const auto& spawnPts2 = map ? map->spawnPointsTeam2 : noPts;
+
     const int nEnemies = enemyIds.empty() ? 0
                        : std::max(enemyCount, (int)enemyIds.size());
-    gridSpawn(nEnemies, p2x, p2z, (p1z > p2z ? 1.0f : -1.0f), enemyIds, 2);
+    spawnDistributed(nEnemies, spawnPts2, p2x, p2z, (p1z > p2z ? 1.0f : -1.0f), enemyIds, 2);
 
     // ── Manichini alleati vicino allo spawn team1 (verso il centro) ───────
     std::vector<std::string> allyIds;
@@ -147,7 +165,7 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
     const int nAllies = allyIds.empty() ? 0
                       : std::max(allyCount, (int)allyIds.size());
-    gridSpawn(nAllies, p1x, p1z, dirZ, allyIds, 1);
+    spawnDistributed(nAllies, spawnPts1, p1x, p1z, dirZ, allyIds, 1);
 }
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)

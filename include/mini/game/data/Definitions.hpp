@@ -340,7 +340,9 @@ struct TacticalPositionDef
     float height     = 1.0f;      // altezza della copertura (peek-over vs peek-around)
     float protection = 0.5f;      // quanto ripara (0..1); 0 = non ripara affatto
     bool  canShoot   = true;      // si può fare fuoco da qui (vs solo nascondersi)
-    float importance = 0.5f;      // priorità tattica (0..1)
+    float importance = 0.5f;      // PESO tattico relativo (≥0, senza tetto; più alto = più
+                                  // importante). NON [0,1]: l'autore lo grada per creare peso
+                                  // (KI #81). I consumatori lo usano linearmente.
     float radius     = 4.0f;      // area d'influenza (defensive/chokepoint)
 
     // ── Settore di tiro (ADR-031) ─────────────────────────────────────────
@@ -364,7 +366,8 @@ struct SectorDef
     std::string label = "Settore";
     float x = 0, z = 0;
     float radius     = 12.0f;   // area d'influenza (XZ)
-    float importance = 0.5f;    // 0..1, quanto vale strategicamente
+    float importance = 0.5f;    // PESO strategico relativo (≥0, senza tetto; più alto = più
+                                // conteso/prioritario). NON [0,1] (KI #81): l'autore lo grada.
 };
 
 // Percorso di pattuglia con nome (riusabile da più squadre in futuro).
@@ -434,6 +437,10 @@ struct MapDef
     // (BalanceEditor lo salvava, nessun loader lo rileggeva): rimosso 2026-07-16.
     std::array<float,3> spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3> spawnTeam2 = {0.f, 0.86f, -8.f};
+    // Punti di spawn AGGIUNTIVI per fazione (multi-spawn): se non vuoti, le unità AI
+    // si distribuiscono su questi punti → migliore distribuzione iniziale sulla mappa
+    // (es. un gruppo per corsia). Vuoti = spawn singolo su spawnTeamN (retrocompat).
+    std::vector<std::array<float,3>> spawnPointsTeam1, spawnPointsTeam2;
     int maxTickets = 10;
     int enemyCount = 6;
     int allyCount  = 1;

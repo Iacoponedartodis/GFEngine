@@ -316,6 +316,16 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             m.spawnTeam1 = {(*j)["spawn_team1"][0],(*j)["spawn_team1"][1],(*j)["spawn_team1"][2]};
         if ((*j).contains("spawn_team2") && (*j)["spawn_team2"].size() >= 3)
             m.spawnTeam2 = {(*j)["spawn_team2"][0],(*j)["spawn_team2"][1],(*j)["spawn_team2"][2]};
+        // Multi-spawn (opzionale): array di punti [x,y,z] per distribuire le unità AI.
+        for (const char* key : {"spawn_points_team1", "spawn_points_team2"})
+        {
+            if (!(*j).contains(key) || !(*j)[key].is_array()) continue;
+            auto& out = (std::string(key).back() == '1') ? m.spawnPointsTeam1
+                                                          : m.spawnPointsTeam2;
+            for (auto& pt : (*j)[key])
+                if (pt.is_array() && pt.size() >= 3)
+                    out.push_back({(float)pt[0], (float)pt[1], (float)pt[2]});
+        }
         m.enemyTypes   = getStrArray(*j, "enemy_types");
         m.allyTypes    = getStrArray(*j, "ally_types");
         if ((*j).contains("geometry") && (*j)["geometry"].is_array())
@@ -397,6 +407,11 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         // convertite continuano a funzionare senza toccarle. L'editor, salvando,
         // scrive la chiave nuova e cancella le legacy.
         auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+        // importance NON è [0,1] ma un PESO tattico relativo (≥0, senza tetto): più
+        // alto = più importante. L'autore lo grada (es. 0.5–6) per creare peso
+        // tattico; i consumatori lo usano linearmente. Prima un clamp01 lo schiacciava
+        // a 1.0 azzerando la gradazione (KI #81). Solo floor a 0 (no valori negativi).
+        auto nonneg = [](float v) { return v < 0.0f ? 0.0f : v; };
         auto readPos = [&](const nlohmann::json& p, const char* roleKey,
                            const char* defRole) {
             TacticalPositionDef t;
@@ -409,7 +424,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             t.height     = getf(p, "height", 1.0f);
             t.protection = clamp01(getf(p, "protection", 0.5f));
             t.canShoot   = p.contains("can_shoot") ? (bool)p["can_shoot"] : true;
-            t.importance = clamp01(getf(p, "importance", 0.5f));
+            t.importance = nonneg(getf(p, "importance", 0.5f));   // peso tattico, non [0,1] (KI #81)
             t.radius     = getf(p, "radius", 4.0f);
             // Settore di tiro (ADR-031): default ampio → le posizioni già
             // autorate restano utilizzabili senza ri-autorarle.
@@ -492,7 +507,8 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         // un refuso DENTRO un box di geometry passa tuttora liscio. Vedi 08 KI #40.
         noteUnknownKeys(*j, "maps/" + m.id + ".json",
             {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
-             "spawn_team1","spawn_team2","enemy_types","ally_types","geometry",
+             "spawn_team1","spawn_team2","spawn_points_team1","spawn_points_team2",
+             "enemy_types","ally_types","geometry",
              "command_posts","strategic_targets","cover_points","patrol_routes",
              "danger_zones","vehicle_spawns","tactical_positions","tactical_points",
              "sectors","commander","description"}, m_unknownKeys);
@@ -509,7 +525,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                 sec.z          = getf(s, "z", 0.0f);
                 sec.radius     = getf(s, "radius", 12.0f);
                 if (sec.radius < 1.0f) sec.radius = 1.0f;
-                sec.importance = clamp01(getf(s, "importance", 0.5f));
+                sec.importance = nonneg(getf(s, "importance", 0.5f));   // peso tattico, non [0,1] (KI #81)
                 m.sectors.push_back(sec);
             }
         }

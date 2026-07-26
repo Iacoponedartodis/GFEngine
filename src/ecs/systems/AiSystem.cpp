@@ -4,6 +4,7 @@
 #include "mini/core/Telemetry.hpp"
 #include "mini/game/data/Definitions.hpp"   // MapDef (18_AiMapConsumption)
 #include "mini/game/ai/WorldIntel.hpp"       // World Intelligence query layer (ADR-025)
+#include "mini/game/MapQuery.hpp"            // groundHeightAt (quota bersaglio per la LOS verticale)
 #include "mini/game/nav/NavManager.hpp"      // crowd/pathfinding (ADR-017 Phase B)
 #include "mini/core/GameConfig.hpp"
 #include "mini/physics/Collision.hpp"
@@ -138,9 +139,13 @@ static void enterHunt(AiComponent& ai, const TransformComponent& et, const World
     //    gittata). È questo che trasforma la copertura da nascondiglio in posizione
     //    d'attacco: l'AI si sposta lì PER COLPIRE, restando riparata.
     if (world.activeMap && ai.coverPreference > 0.001f)
+    {
+        // Quota del bersaglio (ultimo contatto, a terra): suolo alla sua XZ + corpo.
+        const float ty = mapquery::groundHeightAt(world.activeMap, tx, tz) + 0.5f;
         if (const TacticalPositionDef* c = worldintel::bestFiringPosition(
-                *world.activeMap, et.x, et.z, tx, tz, 18.0f))
+                *world.activeMap, et.x, et.z, tx, ty, tz, 18.0f))
             opts[n++] = {ai.coverPreference * (0.5f + c->protection), c->x, c->z, 2};
+    }
     // 4) Punto dominante autorato vicino al bersaglio (Tactical Points, ADR-027).
     if (world.activeMap)
         if (const TacticalPositionDef* t = worldintel::nearestPositionByRole(
@@ -358,11 +363,16 @@ static void updateAllyIntel(World& world)
             // La torre non dice "andate lì": PESA quanto un settore conta, con
             // criteri leggibili — così i cloni si distribuiscono da soli dove
             // serve. [[control-tower-informs-not-orders]]
-            float w = sec.importance;                 // valore intrinseco del settore
-            w += st.pressure * 0.6f;                   // conteso: c'è battaglia
-            if (st.enemies > st.allies)                // alleati in MINORANZA → rinforza
-                w += (float)(st.enemies - st.allies) * 0.4f;
-            if (st.controllingTeam == 2) w += 0.3f;    // in mano nemica → riprenderlo
+            // L'importanza è il VALORE DI BASE (statico); la CONTESA è il richiamo
+            // VIVO — dove si combatte le forze devono affluire (2026-07-25, lever #1):
+            // pesata forte, così i cloni seguono il fronte reale (che si spalma col
+            // nemico distribuito) invece di seguire solo pesi statici → i fronti
+            // laterali non vengono più ignorati quando lì c'è battaglia.
+            float w = sec.importance;                 // valore intrinseco (baseline)
+            w += st.pressure * 2.0f;                    // CONTESO: c'è battaglia → forte richiamo
+            if (st.enemies > st.allies)                // alleati in MINORANZA → rinforza (urgente)
+                w += (float)(st.enemies - st.allies) * 0.8f;
+            if (st.controllingTeam == 2) w += 0.6f;    // in mano nemica → riprenderlo
             // Opportunità: terreno di VALORE poco difeso → sfruttarlo.
             if (sec.importance > 0.5f && st.enemies <= 1 && st.controllingTeam != 1)
                 w += 0.4f;
@@ -404,6 +414,31 @@ static void updateAllyIntel(World& world)
                 if (dx * dx + dz * dz < sig.radius * sig.radius) { ++sig.crowd; break; }
             }
         }
+}
+
+// Nemico vivo più vicino a (x,z) entro maxDist, di team diverso da myTeam. Serve al
+// positioning ENEMY-AWARE (KI #82): scegliere una posizione di TIRO che batte un
+// nemico noto, non un punto cieco scelto per sola importanza. I contatti sono di
+// fatto condivisi (una squadra sa dove sono i nemici), quindi si usa la posizione
+// reale del nemico più vicino all'area — anche se QUESTA unità non lo vede ancora.
+static bool nearestEnemyNear(const World& world, int myTeam, float x, float z,
+                             float maxDist, float& ox, float& oy, float& oz)
+{
+    float best2 = maxDist * maxDist; bool found = false;
+    for (EntityId o : world.getEntities())
+    {
+        const auto* tm = world.getTeam(o);
+        if (!tm || tm->teamId == 0 || tm->teamId == myTeam) continue;
+        if (world.getBullet(o)) continue;
+        const auto* h = world.getHealth(o);
+        if (!h || h->current <= 0.0f) continue;
+        const auto* tr = world.getTransform(o);
+        if (!tr) continue;
+        const float dx = tr->x - x, dz = tr->z - z;
+        const float d2 = dx * dx + dz * dz;
+        if (d2 < best2) { best2 = d2; ox = tr->x; oy = tr->y; oz = tr->z; found = true; }
+    }
+    return found;
 }
 
 // Quale segnale segue QUESTO clone. Non il più importante: la scelta è pesata ma
@@ -690,9 +725,22 @@ void AiSystem::update(World& world, float dt)
                 d.x = sec.x; d.z = sec.z; d.radius = sec.radius; d.label = sec.label;
                 const bool holdIt = weHold && threatened;
                 d.stance = holdIt ? EC::Hold : EC::Advance;
-                d.weight = sec.importance * (1.0f + st.pressure)
-                         + (st.controllingTeam == 1 ? 0.3f : 0.0f)   // attaccare terreno nemico
-                         + (holdIt ? 0.35f : 0.0f);                   // difendere un obiettivo conteso conta
+                // Peso GUIDATO DALLA CONTESA, coerente con la torre (changelog 80):
+                // l'importanza è la base autorata, ma la pressione pesa forte e in
+                // ADDIZIONE — così i droidi si massano DOVE SI COMBATTE, non solo dove
+                // il settore vale di più a mappa ferma. Prima era `importanza×(1+pressione)`
+                // (importanza-dominante): i droidi seguivano i pesi statici mentre i cloni
+                // già seguivano il fuoco → i due lati si comportavano in modo incoerente.
+                d.weight = sec.importance
+                         + st.pressure * 2.0f                          // la contesa comanda
+                         + (st.controllingTeam == 1 ? 0.6f : 0.0f)     // attaccare terreno nemico
+                         + (holdIt ? 0.5f : 0.0f);                     // difendere un obiettivo conteso conta
+                // Termini speculari alla torre (updateAllyIntel), ora anche lato droidi:
+                // allies=team1 cloni, enemies=team2 droidi ([[AiSystem.cpp:318]]).
+                if (st.allies > st.enemies)                            // droidi in MINORANZA → rinforza
+                    d.weight += (float)(st.allies - st.enemies) * 0.8f;
+                if (sec.importance > 0.5f && st.allies <= 1 && st.controllingTeam != 2)
+                    d.weight += 0.4f;                                  // valore poco difeso → sfrutta
                 dirs.push_back(d);
             }
             // Le strutture nemiche sono fronti d'attacco (priorità autorata).
@@ -882,6 +930,30 @@ void AiSystem::update(World& world, float dt)
              {"tiro_assente",        g_tac.repoFiringMiss},
              {"manovre_avviate",     g_tac.repoStarted},
              {"scartate_troppo_vicine", g_tac.repoTooClose}});
+
+        // ── OSSERVABILITÀ DISTRIBUZIONE (ricerca #1, 2026-07-24) ──────────
+        // Occupazione per-settore nel tempo: rende MISURABILE se gli alleati/nemici
+        // si spalmano sui settori (contesi/importanti) o si ammassano. È il dato che
+        // mancava per giudicare se la "base" distribuisce davvero. Permanente: rete
+        // anti-regressione contro i bug silenziosi di distribuzione (metodo: rendere
+        // visibili le decisioni, misurare lo scarto dall'atteso).
+        if (const MapDef* dm = world.activeMap)
+            if (!dm->sectors.empty())
+            {
+                nlohmann::json secArr = nlohmann::json::array();
+                for (std::size_t s = 0; s < dm->sectors.size(); ++s)
+                {
+                    const auto& sec = dm->sectors[s];
+                    const World::SectorState st = (s < world.sectorStates.size())
+                        ? world.sectorStates[s] : World::SectorState{};
+                    secArr.push_back({{"s", sec.label}, {"imp", sec.importance},
+                                      {"all", st.allies}, {"nem", st.enemies},
+                                      {"press", st.pressure}});
+                }
+                telemetry::event(telemetry::Level::Info, "AI", "sector distribution",
+                                 {{"n", (int)dm->sectors.size()}, {"settori", secArr}});
+            }
+
         g_tac.reset();
     }
 
@@ -1497,7 +1569,7 @@ void AiSystem::update(World& world, float dt)
                             if (aiRand01() < ai->flankChance)
                             {
                                 dest = worldintel::bestFlankingPosition(
-                                    *world.activeMap, et->x, et->z, tt->x, tt->z,
+                                    *world.activeMap, et->x, et->z, tt->x, tt->y, tt->z,
                                     et->x, et->z, 20.0f);
                                 if (dest) ++g_tac.repoFlankHit; else ++g_tac.repoFlankMiss;
                             }
@@ -1506,7 +1578,7 @@ void AiSystem::update(World& world, float dt)
                             if (!dest && (engageSeek || aiRand01() < ai->coverPreference))
                             {
                                 dest = worldintel::bestFiringPosition(
-                                    *world.activeMap, et->x, et->z, tt->x, tt->z, 16.0f);
+                                    *world.activeMap, et->x, et->z, tt->x, tt->y, tt->z, 16.0f);
                                 if (dest) ++g_tac.repoFiringHit; else ++g_tac.repoFiringMiss;
                             }
                             // Ci si sposta solo se è davvero un altro posto.
@@ -1728,12 +1800,19 @@ void AiSystem::update(World& world, float dt)
                                     tx = d->x + std::cos(ang) * d->radius * 0.6f;
                                     tz = d->z + std::sin(ang) * d->radius * 0.6f;
                                 }
-                                // Miglior terreno vantaggioso del fronte, SE raggiungibile:
-                                // lo si occupa (superiorità di fuoco) invece del bare centro.
-                                const TacticalPositionDef* adv = world.activeMap
-                                    ? worldintel::bestAdvantageInArea(*world.activeMap,
-                                                                      et->x, et->z, d->x, d->z, d->radius)
-                                    : nullptr;
+                                // ENEMY-AWARE (KI #82): posizione di TIRO che batte un nemico
+                                // noto del fronte (LOS verificata), anche elevata, invece del
+                                // solo terreno importante (che può essere cieco). Senza nemico
+                                // noto → miglior terreno (proattivo, superiorità di fuoco).
+                                const TacticalPositionDef* adv = nullptr;
+                                float ex, ey, ez;
+                                if (world.activeMap
+                                    && nearestEnemyNear(world, 2, d->x, d->z, d->radius + 15.0f, ex, ey, ez))
+                                    adv = worldintel::bestFiringPosition(*world.activeMap,
+                                                                         d->x, d->z, ex, ey, ez, d->radius + 4.0f);
+                                if (!adv && world.activeMap)
+                                    adv = worldintel::bestAdvantageInArea(*world.activeMap,
+                                                                          et->x, et->z, d->x, d->z, d->radius);
                                 if (adv && (!world.nav || !world.nav->crowdReady()
                                             || world.nav->isReachable({et->x, et->y, et->z},
                                                                       {adv->x, adv->y, adv->z})))
@@ -1785,17 +1864,27 @@ void AiSystem::update(World& world, float dt)
                                 // RAGGIUNGIBILE: niente isole (scale troppo ripide) o
                                 // passaggi erosi dove il clone finirebbe in trappola
                                 // contro un muro (screenshot utente 2026-07-23).
-                                const TacticalPositionDef* adv = world.activeMap
-                                    ? worldintel::bestAdvantageInArea(*world.activeMap,
-                                                                      et->x, et->z, sx, sz, srad)
-                                    : nullptr;
+                                // ENEMY-AWARE (KI #82): se c'è un nemico noto nell'area,
+                                // scegli una posizione di TIRO che lo BATTE (LOS verificata
+                                // da bestFiringPosition) — così si occupa una posizione che
+                                // spara davvero, anche ELEVATA, invece di un punto cieco.
+                                // Senza nemico noto → miglior terreno (proattivo).
+                                const TacticalPositionDef* adv = nullptr;
+                                float ex, ey, ez;
+                                if (world.activeMap
+                                    && nearestEnemyNear(world, 1, sx, sz, srad + 15.0f, ex, ey, ez))
+                                    adv = worldintel::bestFiringPosition(*world.activeMap,
+                                                                         sx, sz, ex, ey, ez, srad + 4.0f);
+                                if (!adv && world.activeMap)
+                                    adv = worldintel::bestAdvantageInArea(*world.activeMap,
+                                                                          et->x, et->z, sx, sz, srad);
                                 if (adv && (!world.nav || !world.nav->crowdReady()
                                             || world.nav->isReachable({et->x, et->y, et->z},
                                                                       {adv->x, adv->y, adv->z})))
                                 { tx = adv->x; tz = adv->z; }
                                 else
                                 {
-                                    float px, pz;   // niente vantage raggiungibile → il post del fronte
+                                    float px, pz;   // niente posizione raggiungibile → il post del fronte
                                     if (nearestCapturablePost(world, et->x, et->z, 1, px, pz, sx, sz, srad))
                                     { tx = px; tz = pz; }
                                 }
@@ -2079,9 +2168,14 @@ void AiSystem::update(World& world, float dt)
         // sé stesso (doc 35): senza `ignore` una struttura colpibile era
         // ingaggiabile ma mai colpibile.
         const auto* tcol = world.getCollider(nearest);
-        // Mira al CORPO del bersaglio: struttura = collider; unità = transform
-        // (~0.5 m), così il colpo non passa sopra la testa.
-        const float aimY = tt->y + (tcol ? tcol->hy * 0.5f : 0.0f);
+        // Mira: STRUTTURA al corpo (collider, transform a terra); UNITÀ al BUSTO ALTO
+        // (~ground+0.85 m). Restare nella hitbox (~1 m) ma abbastanza in alto da far
+        // SCAVALCARE i muretti bassi lungo il raggio (fix interim KI #82) — puntare al
+        // centro-corpo (~0.5 m) faceva cadere il raggio e un muretto vicino al bersaglio
+        // lo tagliava, anche se il nemico era colpibile in alto.
+        const float aimY = isStructure(nearest)
+            ? tt->y + (tcol ? tcol->hy * 0.5f : 1.0f)
+            : tt->y + config::AI_HALF_Y * 0.7f;
         // Origine del tiro = OCCHI (KI #79): coerente con l'acquisizione E con lo
         // spawn/traiettoria del proiettile sotto → l'unità spara SOPRA la propria
         // cover verso il corpo del nemico, invece di piantare il colpo nel muro davanti.
@@ -2089,6 +2183,14 @@ void AiSystem::update(World& world, float dt)
         float dx = tt->x-eyePos.x, dy = aimY-eyePos.y, dz = tt->z-eyePos.z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;
+
+        // MUZZLE (interim, senza pose): il proiettile parte AVANTI lungo la linea di
+        // tiro GIÀ verificata (non dal petto) → sembra uscire dall'arma e supera un
+        // ostacolo a ridosso del tiratore. Sicuro: il punto è sul raggio LOS-ok.
+        const float kMuzzleFwd = 0.5f;
+        const glm::vec3 muzzle{ eyePos.x + dx/len*kMuzzleFwd,
+                                eyePos.y + dy/len*kMuzzleFwd,
+                                eyePos.z + dz/len*kMuzzleFwd };
 
         // Dispersione dal profilo AI: accuracy 1 = perfetto, 0 = max spread.
         // Perturba la direzione normalizzata di un angolo casuale.
@@ -2112,8 +2214,9 @@ void AiSystem::update(World& world, float dt)
 
         float inv = ai->bulletSpeed / len;
         EntityId b = world.createEntity();
-        // Spawn del proiettile ad altezza occhi (coerente con LOS e traiettoria, KI #79).
-        world.addTransform(b, TransformComponent{.x=eyePos.x,.y=eyePos.y,.z=eyePos.z,.sx=0.10f,.sy=0.10f,.sz=0.10f});
+        // Spawn dal MUZZLE stimato (avanti sulla linea di tiro): coerente con LOS e
+        // traiettoria; sembra uscire dall'arma invece che dal petto (fix interim KI #82).
+        world.addTransform(b, TransformComponent{.x=muzzle.x,.y=muzzle.y,.z=muzzle.z,.sx=0.10f,.sy=0.10f,.sz=0.10f});
         world.addVelocity(b, {dx*inv, dy*inv, dz*inv});
         world.addTeam(b, {myTeam});
         world.addBullet(b, {ai->bulletDamage, ai->bulletLifetime, myTeam});

@@ -2,6 +2,152 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-07-26 (85) — Droide tattico: peso delle direttive coerente con la torre (contesa + minoranza + opportunità)
+
+Prima tappa della revisione **droide tattico + torre**. Trovata un'asimmetria: la torre (cloni) era già
+"guidata dalla contesa" (peso `importanza + pressione×2 + minoranza + opportunità`, changelog 80), ma il
+comandante (droidi) era rimasto "guidato dall'importanza statica" (`importanza × (1+pressione)`, la pressione
+solo come moltiplicatore) e privo dei termini minoranza/opportunità. → **i cloni seguivano il fuoco, i droidi
+seguivano i pesi a mappa ferma**: due lati incoerenti, e i droidi si massavano meno dove si combatte.
+- **Fix peso (contesa-dominante, additivo)**: `importanza + pressione×2 + (terreno nemico 0.6) + (hold 0.5)`
+  — stessa filosofia della torre. La pressione guida sia la SCELTA dei top-3 fronti sia la distribuzione dei
+  droidi tra essi.
+- **Termini speculari alla torre** aggiunti al comandante (`allies`=team1 cloni, `enemies`=team2 droidi,
+  [AiSystem.cpp:318]): `+ (allies-enemies)×0.8` se i droidi sono in **minoranza** nel settore (rinforza dove
+  siamo sotto) e `+0.4` **opportunità** (settore di valore con ≤1 clone e non in mano loro → sfrutta). Ora i
+  droidi rinforzano e sfruttano, non solo "seguono il peso".
+- **Build-verified** (Debug + Release); `--sim` Training Ground 90 s: nessun crash, combattimento attivo su
+  entrambi i lati, respawn/salute regolari. Richiede smoke test visivo in Release (droidi che si massano sui
+  fronti caldi e coprono i lati, non solo l'alta-importanza a riposo).
+- **Ritrovamento (ripiego PER-FRONTE, rimandato con motivo)**: le direttive NON sono assegnate spazialmente —
+  ogni droide sceglie UNA direttiva via `pickEnemyDirective(bias)`, pesata per weight, **non per dove si
+  trova**; e `Retreat` manda comunque allo `spawnTeam2` ignorando `d.x/d.z`. Un ripiego per-fronte ingenuo
+  farebbe ripiegare droidi scelti dal bias, non quelli davvero sul fronte perdente → incoerente. Serve prima
+  l'**assegnazione spaziale** delle direttive (chi è su/vicino al settore che collassa ripiega). Registrato in
+  06_Todo, non forzato come estensione ad-hoc (CLAUDE.md §5.3).
+- Nota di revisione: torre e comandante restano DUE implementazioni della stessa idea ("valuta i settori →
+  distribuisci le forze"), già derivate a mano due volte. Candidato futuro: layer condiviso `worldintel`
+  di scoring dei settori con raggruppamento in FRONTI/corsie (copertura strutturale, non emergente).
+  [[world-tactical-intelligence]] [[control-tower-informs-not-orders]]
+
+## 2026-07-26 (84) — Multi-spawn: UI editor (nella sezione Spawn) + fix distribuzione in ConquestMode
+
+Completato e SISTEMATO il multi-spawn (79 aveva schema+loader+spawn; mancava l'UI, e la distribuzione non
+funzionava in partita).
+- **UI editor** nella **sezione "Spawn"** (con i due spawn originali, non in fondo agli altri metadata —
+  feedback utente sull'ordine): lista `[T1/T2] punto #i` + "+ punto T1/T2" (nasce sul focus del viewport) + "-".
+  Punti selezionabili dal viewport (pickId team1 -3000-i, team2 -3100-i) e spostabili col **gizmo**. Croci
+  azzurre (team1)/arancio (team2). Storage `m_spawnPoints1/2`; save via `saveJsonRMW` (ADR-010): array se
+  presenti, campo rimosso se vuoti.
+- **Fix distribuzione (era rotta)**: `--sim` gira in **ConquestMode**, non in SandboxMode. Avevo aggiornato solo
+  SandboxMode (spawn del bootstrap, poi SCARTATO) → le AI spawnavano comunque tutte al centro. Corretto in
+  `ConquestMode::genPositions` (round-robin sui punti). **Verificato**: su Training Ground gli alleati partono
+  ora su Charlie (sx)/Bravo-Charlie (centro)/Bravo (dx), le 3 corsie, non più ammassati al centro.
+- Build-verified (GFEngine + GFEditor, Debug + Release). Lezione: verificare il MODE reale, non il bootstrap
+  ([[verify-effect-not-data]]).
+
+## 2026-07-26 (83) — Muretti bassi + muzzle: fix INTERIM del tiro (senza pose) (KI #82)
+
+Dopo il (82) i cloni sparano dalle rialzate, ma NON dove un muretto basso è nel raggio, e il proiettile esce
+dal petto (non dall'arma). Causa: la LOS/tiro va da occhio (1.2 m) al CORPO del bersaglio (~0.5 m) → raggio in
+DISCESA che un muretto vicino al bersaglio taglia; e il modello AI è alto 1 m (occhio a 1.2 m, sopra il
+modello) → finestra di mira stretta. Fix interim scelto dall'utente (pose rimandate, [[animations-blocked]]):
+- **Mira al BUSTO ALTO** (unità): `aimY = tt->y + AI_HALF_Y*0.7` (~ground+0.85 m) invece del centro-corpo →
+  il raggio resta più alto e SCAVALCA i muretti bassi, restando dentro la hitbox (~1 m). Strutture invariate
+  (mira al collider).
+- **Muzzle stimato**: il proiettile parte 0.5 m AVANTI lungo la linea di tiro già verificata (non dal petto) →
+  sembra uscire dall'arma e supera un ostacolo a ridosso del tiratore. Sicuro (punto sul raggio LOS-ok).
+- **Band-aid dichiarato**: la soluzione vera (muzzle reale della canna + parti del corpo colpibili) richiede le
+  POSE, tenute in pausa. Quando si sbloccano, questo va sostituito.
+- Nessuna regressione (`--sim`: 1 downed, fermi=0, contatti 46, no crash). Build-verified (Debug + Release).
+  Conferma visiva utente: cloni che sparano scavalcando i muretti bassi + proiettile dall'arma.
+
+## 2026-07-25 (82) — VERTICALITÀ: la scelta della posizione di tiro valuta la quota REALE del bersaglio (KI #82)
+
+Il vero motivo per cui NESSUNO sparava cross-quota (cloni sopra↔droidi sotto, "vedono solo un piano
+orizzontale"): `bestFiringPosition` e `bestFlankingPosition` controllavano la LOS di tiro con **`p.y + 1.2`
+per ENTRAMBI gli estremi** — origine E bersaglio alla quota della POSIZIONE. Cioè valutavano la scelta su un
+**piano orizzontale**: una posizione elevata veniva promossa/scartata in base a una LOS a 4.5 m orizzontale,
+non verso il nemico a terra → le unità finivano su posti che "sembravano" da tiro ma non battevano sopra/sotto
+(l'ingaggio reale, con LOS 3D corretta, poi falliva). La graph dei link (139) usava già le quote reali (per
+questo 39/43 elevate risultavano corrette), ma le QUERY di selezione no.
+- **Fix**: aggiunto `targetY` a `bestFiringPosition`/`bestFlankingPosition`; la LOS di tiro va ora dall'occhio
+  sulla posizione (`p.y+1.2`) alla **quota reale del bersaglio** (`targetY+1`). Aggiornati TUTTI i chiamanti
+  (reposition: `tt->y`; enterHunt: suolo alla XZ del contatto via `groundHeightAt`; enemy-aware cloni/droidi:
+  `nearestEnemyNear` ora restituisce anche la y). Generale: vale per qualsiasi dislivello.
+- **Misurato** (`--sim`, DIAG temporaneo poi rimosso): LOS cross-quota **5%→10%** (2×) e le situazioni di
+  ingaggio cross-quota quasi raddoppiate (3724→7128 coppie) — le unità ora si posizionano per il combattimento
+  verticale. Salute ok (1 downed, fermi=0).
+- **Onestà**: 10% è ancora la media su TUTTE le coppie in gittata (incluse le lontane bloccate dalla mappa
+  densa); il punto è il RADDOPPIO e il fatto che ora scelgono posizioni che battono cross-quota. Conferma
+  visiva utente: i cloni sparano dal ponte / i droidi sparano in su.
+- Build-verified (Debug + Release). Collegato: [[combat-los-eye-height]].
+
+## 2026-07-25 (81) — Positioning ENEMY-AWARE: le unità occupano posizioni con LOS sul nemico (fix "non sparano dal ponte", KI #82)
+
+Diagnosi lunga e rigorosa del "cloni sul ponte non sparano" (KI #82): NON è la mappa (39/43 posizioni elevate
+hanno LOS verso il basso) né la gittata (aggro 50) né i muretti. È che i cloni **non occupano le posizioni
+buone**: sceglievano il waypoint con `bestAdvantageInArea` (importanza/protezione, **cieco al nemico**) → si
+piantavano su punti senza LOS sul bersaglio, col catch-22 (cieco→no target→no Alert→no reposition).
+- **Fix** (`AiSystem`, scelta waypoint di cloni E droidi): se c'è un nemico noto nell'area (`nearestEnemyNear`,
+  contatti di fatto condivisi), scegli una **posizione di TIRO che lo batte** (`bestFiringPosition`, LOS
+  verificata dal peek) invece del terreno solo-importante; fallback a `bestAdvantageInArea` (proattivo) senza
+  nemico. Generalizza a tutta la **verticalità** ("sparare da ovunque ci sia una buona posizione").
+- **Misurato** (`--sim`, cloni sul ponte, DIAG temporaneo poi rimosso): LOS libera **1%→17%** (~20×), bersaglio
+  acquisito **18%→27%**, e frame-cloni bloccati sul ponte cieco **637→353** (~metà). Combattimento sano
+  (1 downed, fermi=0).
+- **Onestà**: miglioramento chiaro ma PARZIALE — ~83% dei frame-ponte ancora senza LOS (cloni in TRANSITO verso
+  la posizione, ciechi mentre si muovono; alcuni non la raggiungono del tutto). Conferma visiva utente.
+- Collegato: [[combat-los-eye-height]], [[orders-design-vision]]. Build-verified (Debug + Release).
+
+## 2026-07-25 (80) — Torre di controllo: la CONTESA guida la distribuzione (le forze seguono il combattimento)
+
+Dopo l'analisi della torre (changelog 79): la distribuzione concentrava perché il peso-segnale era dominato
+dall'importanza STATICA. Lever #1 (contesa): l'importanza resta il valore di base, ma la **pressione/combattimento
+pesa forte** → i cloni affluiscono dove si combatte davvero, spalmandosi coi nemici (che ora spawnano distribuiti).
+- **Cambio** (`AiSystem::updateAllyIntel`, peso segnale): `pressione ×0.6→×2.0`, `minoranza ×0.4→×0.8`, `in mano
+  nemica ×0.3→×0.6`. Importanza-baseline invariata. [[control-tower-informs-not-orders]]
+- **Misurato** (`--sim` Training Ground, 60s): fronti coperti per campione **~2 → 3-4** (ora anche **Alpha R/L**
+  e Bravo/Charlie, non solo il centro); gli alleati vanno sui settori **contesi** (Alpha L press=1.0, Alpha
+  press=0.67). Nessuna regressione (2 downed, fermi=0). Delta-Echo (profondo, lato nemico) resta scoperto (atteso).
+- **Nota**: sinergico col riequilibrio importanze dell'utente (flanchi 2.75 > centro 2.5) e col multi-spawn (79).
+- **Aperto**: conferma VISIVA utente; eventuali leve successive (capacità per-segnale 3→2, semantica spawn).
+- Build-verified (Debug + Release).
+
+## 2026-07-24 (79) — Multi-spawn per fazione (opzionale) — feature che funziona, ma rivela il vero collo di bottiglia
+
+Richiesta utente: poter aggiungere PIÙ punti di spawn per fazione per migliorare la distribuzione iniziale.
+- **Feature (retrocompatibile)**: nuovo campo mappa `spawn_points_team1/2` (array di [x,y,z]); se presente, le
+  unità AI si distribuiscono sui punti (`SandboxMode`, un gruppo per punto), altrimenti spawn singolo su
+  `spawnTeamN` (invariato). `MapDef.spawnPointsTeam1/2`, parsing nel loader, known-keys aggiornate. Training
+  Ground: 3 punti per fazione (corsie sinistra/centro/destra).
+- **Verificato (DIAG temporaneo, poi rimosso)**: i punti si caricano (3+3) e gli alleati spawnano DAVVERO
+  sparsi su x (−32 … +10), non più tutti al centro. La feature fa ciò che deve.
+- **MA finding onesto (il metodo paga)**: nella distribuzione osservata restano comunque quasi al centro. Causa:
+  spawnano nel "gap" a z≈35 (fuori dai settori), poi la **torre li ri-converge su Alpha** (imp 5) prima che
+  entrino nei settori. → il multi-spawn (causa 1, spawn iniziale) è **necessario ma insufficiente**: il vero
+  collo di bottiglia dei "fronti laterali ignorati" è la **concentrazione della torre** (causa 2), che pesa
+  `w = importance + …` e coi soli 6 cloni riempie i settori top senza spalmarsi.
+- **Prossimo target di ricerca**: la logica di distribuzione torre/comandante — spalmare vs concentrare.
+- Build-verified (Debug + Release). ConquestMode non ancora esteso al multi-spawn (segue, se serve).
+
+## 2026-07-24 (78) — Ricerca/stabilizzazione: osservabilità distribuzione + fix del clamp sull'importanza (KI #81)
+
+Fase di ricerca cauta (metodo: osservabilità → misura scarto → una causa/un fix), dopo il revert (77).
+- **Osservabilità distribuzione (PERMANENTE)**: nuovo evento telemetria `sector distribution` nell'heartbeat AI
+  (occupazione alleati/nemici + importanza + pressione per settore, nel tempo). Rende MISURABILE se l'AI si
+  spalma sui settori o si ammassa — rete anti-regressione contro i bug silenziosi di distribuzione.
+- **Bug silenzioso trovato e fixato (KI #81)**: il loader applicava `clamp01` all'`importance` di settori E
+  delle 170 posizioni tattiche → l'autore l'aveva graduata 0.5–6 (Alpha=5, spawn=6, fronti=4…) ma il runtime
+  vedeva **1.0 per tutto ≥1**: la regia tattica per priorità non arrivava all'AI. Fix: floor a 0, niente tetto.
+  Verificato: runtime ora Alpha 5.0 / fronti 4.0 / flanchi 2.5 (prima 1.0). Consumatori lineari, nessuno
+  assumeva [0,1]; editor legge raw (UX invariata); validazione OK; nessuna regressione (fermi=0, letale).
+- **Metodo che ha pagato**: l'audit geometrico ha CORRETTO una mia prima ipotesi sovrastimata (sovrapposizioni
+  di settori: in realtà griglia 3×3 adiacente, doppio-conteggio solo ai bordi) prima che diventasse un fix
+  sbagliato. È il valore del "capire la causa prima di toccare".
+- **Aperto**: osservare la distribuzione su dati ora corretti (ricerca #1 continua); valutare se l'importanza
+  (fino a 6) over-domina protezione/pericolo in alcune query → ri-bilanciamento misurato. Build-verified.
+
 ## 2026-07-24 (77) — REVERT del Hold/Advance/reposition custom: gli ordini scavalcavano l'AI che già funziona
 
 Diagnosi strumentata (contatori DIAG temporanei in `--sim`, poi rimossi) che ha chiuso il ciclo fix-su-fix:

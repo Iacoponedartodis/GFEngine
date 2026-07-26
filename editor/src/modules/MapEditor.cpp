@@ -131,6 +131,18 @@ void MapEditor::tick(float dt)
             auto& p = m_positions[-1000 - m_selBox];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
         }
+        else if (m_selBox <= -3000 && m_selBox > -3100
+                 && (-3000 - m_selBox) < (int)m_spawnPoints1.size())   // multi-spawn team1
+        {
+            auto& p = m_spawnPoints1[-3000 - m_selBox];
+            p[0] += delta.x; p[1] += delta.y; p[2] += delta.z;
+        }
+        else if (m_selBox <= -3100 && m_selBox > -3200
+                 && (-3100 - m_selBox) < (int)m_spawnPoints2.size())   // multi-spawn team2
+        {
+            auto& p = m_spawnPoints2[-3100 - m_selBox];
+            p[0] += delta.x; p[1] += delta.y; p[2] += delta.z;
+        }
         else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
         {
             m_commander.x += delta.x; m_commander.z += delta.z;
@@ -279,6 +291,8 @@ void MapEditor::loadMap(const std::string& id)
     m_routes.clear();
     m_vehSpawns.clear();
     m_targets.clear();
+    m_spawnPoints1.clear();
+    m_spawnPoints2.clear();
     m_selRoutePt = 0;
     m_selBox = -1;
 
@@ -286,6 +300,15 @@ void MapEditor::loadMap(const std::string& id)
         m_spawnTeam1 = {j["spawn_team1"][0], j["spawn_team1"][1], j["spawn_team1"][2]};
     if (j.contains("spawn_team2") && j["spawn_team2"].size() >= 3)
         m_spawnTeam2 = {j["spawn_team2"][0], j["spawn_team2"][1], j["spawn_team2"][2]};
+    // Multi-spawn (opzionale): array di punti [x,y,z] per fazione.
+    for (const char* key : {"spawn_points_team1", "spawn_points_team2"})
+    {
+        if (!j.contains(key) || !j[key].is_array()) continue;
+        auto& out = (std::string(key).back() == '1') ? m_spawnPoints1 : m_spawnPoints2;
+        for (auto& pt : j[key])
+            if (pt.is_array() && pt.size() >= 3)
+                out.push_back({(float)pt[0], (float)pt[1], (float)pt[2]});
+    }
 
     // Comandante strategico (ADR-024/041): uno per mappa, campo `commander`.
     m_commander = CommanderEntry{};
@@ -467,6 +490,16 @@ bool MapEditor::saveMap()
     j["name"] = (m_mapDisplayName[0] != '\0') ? std::string(m_mapDisplayName) : m_mapId;
     j["spawn_team1"] = {m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]};
     j["spawn_team2"] = {m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]};
+    // Multi-spawn: scrivi l'array se ci sono punti, altrimenti RIMUOVI il campo (RMW:
+    // niente residuo che distribuirebbe comunque le AI).
+    auto writeSpawnPts = [&](const char* key, const std::vector<std::array<float,3>>& pts) {
+        if (pts.empty()) { j.erase(key); return; }
+        json arr = json::array();
+        for (const auto& p : pts) arr.push_back({p[0], p[1], p[2]});
+        j[key] = arr;
+    };
+    writeSpawnPts("spawn_points_team1", m_spawnPoints1);
+    writeSpawnPts("spawn_points_team2", m_spawnPoints2);
 
     json geom = json::array();
     for (const auto& b : m_boxes)
@@ -797,6 +830,27 @@ void MapEditor::updateViewport()
         s.pickId = -3;
         draws.push_back(s);
     }
+    // Punti multi-spawn: croci più piccole, azzurro (team1) / arancio (team2).
+    for (int i = 0; i < (int)m_spawnPoints1.size(); ++i)
+    {
+        FreeCameraViewport::MapBoxDraw s;
+        s.x = m_spawnPoints1[i][0]; s.y = m_spawnPoints1[i][1]; s.z = m_spawnPoints1[i][2];
+        s.ry = 0; s.sx = 0.5f; s.sy = 1.0f; s.sz = 0.5f;
+        s.r = 0.40f; s.g = 0.70f; s.b = 1.00f;
+        s.selected = (m_selBox == -3000 - i);
+        s.pickId = -3000 - i;
+        draws.push_back(s);
+    }
+    for (int i = 0; i < (int)m_spawnPoints2.size(); ++i)
+    {
+        FreeCameraViewport::MapBoxDraw s;
+        s.x = m_spawnPoints2[i][0]; s.y = m_spawnPoints2[i][1]; s.z = m_spawnPoints2[i][2];
+        s.ry = 0; s.sx = 0.5f; s.sy = 1.0f; s.sz = 0.5f;
+        s.r = 1.00f; s.g = 0.55f; s.b = 0.30f;
+        s.selected = (m_selBox == -3100 - i);
+        s.pickId = -3100 - i;
+        draws.push_back(s);
+    }
 
     // Command post: palo alto + area di cattura, colorati per team
     for (int i = 0; i < (int)m_posts.size(); ++i)
@@ -1033,6 +1087,20 @@ void MapEditor::updateViewport()
     else if (m_selBox == -3)
     {
         m_viewport.setGizmoTarget({m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -3000 && m_selBox > -3100
+             && (-3000 - m_selBox) < (int)m_spawnPoints1.size())   // multi-spawn team1
+    {
+        const auto& p = m_spawnPoints1[-3000 - m_selBox];
+        m_viewport.setGizmoTarget({p[0], p[1], p[2]}, true);
+        m_viewport.setGizmoCanRotateScale(false, false);
+    }
+    else if (m_selBox <= -3100 && m_selBox > -3200
+             && (-3100 - m_selBox) < (int)m_spawnPoints2.size())   // multi-spawn team2
+    {
+        const auto& p = m_spawnPoints2[-3100 - m_selBox];
+        m_viewport.setGizmoTarget({p[0], p[1], p[2]}, true);
         m_viewport.setGizmoCanRotateScale(false, false);
     }
     else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
@@ -1399,6 +1467,45 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     if (ImGui::Selectable("[T2] Spawn Nemici", spawnT2)) { m_selBox = -3; updateViewport(); }
     ImGui::PopStyleColor();
 
+    // Punti multi-spawn AGGIUNTIVI: le AI si distribuiscono su questi + lo spawn
+    // principale della fazione. Selezionabili dal viewport, spostabili col gizmo.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.75f, 1.0f, 1.0f));
+    for (int i = 0; i < (int)m_spawnPoints1.size(); ++i)
+    {
+        char lbl[48]; std::snprintf(lbl, sizeof(lbl), "  [T1] punto #%d##sp1_%d", i, i);
+        if (ImGui::Selectable(lbl, m_selBox == -3000 - i)) { m_selBox = -3000 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.30f, 1.0f));
+    for (int i = 0; i < (int)m_spawnPoints2.size(); ++i)
+    {
+        char lbl[48]; std::snprintf(lbl, sizeof(lbl), "  [T2] punto #%d##sp2_%d", i, i);
+        if (ImGui::Selectable(lbl, m_selBox == -3100 - i)) { m_selBox = -3100 - i; updateViewport(); }
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::SmallButton("+ punto T1"))
+    { const glm::vec3 fp = m_viewport.groundFocusPoint();
+      m_spawnPoints1.push_back({fp.x, 0.86f, fp.z});
+      m_selBox = -3000 - ((int)m_spawnPoints1.size()-1); m_dirty = true; updateViewport(); }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("+ punto T2"))
+    { const glm::vec3 fp = m_viewport.groundFocusPoint();
+      m_spawnPoints2.push_back({fp.x, 0.86f, fp.z});
+      m_selBox = -3100 - ((int)m_spawnPoints2.size()-1); m_dirty = true; updateViewport(); }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("-##sp"))
+    {
+        if (m_selBox <= -3000 && m_selBox > -3100)
+        { int i = -3000 - m_selBox; if (i >= 0 && i < (int)m_spawnPoints1.size())
+          { m_spawnPoints1.erase(m_spawnPoints1.begin()+i); m_selBox = -1; m_dirty = true; updateViewport(); } }
+        else if (m_selBox <= -3100 && m_selBox > -3200)
+        { int i = -3100 - m_selBox; if (i >= 0 && i < (int)m_spawnPoints2.size())
+          { m_spawnPoints2.erase(m_spawnPoints2.begin()+i); m_selBox = -1; m_dirty = true; updateViewport(); } }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Rimuove il punto multi-spawn selezionato.\n"
+                          "Le AI si distribuiscono sui punti + lo spawn principale.");
+
     // ── Comandante strategico (ADR-041): uno per mappa ───────────────────
     ImGui::Separator();
     ImGui::TextDisabled("Comando");
@@ -1642,7 +1749,7 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         m_dirty = true; updateViewport();
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("-##vs") && m_selBox <= -400)
+    if (ImGui::SmallButton("-##vs") && m_selBox <= -400 && m_selBox > -500)
     {
         int i = -400 - m_selBox;
         if (i >= 0 && i < (int)m_vehSpawns.size())

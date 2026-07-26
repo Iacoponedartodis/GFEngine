@@ -1,5 +1,79 @@
 # 08 — Known Issues
 
+## 82. Combattimento cross-quota (sparare sopra/sotto) — FIX 2026-07-25 (changelog 81+82; conferma visiva in sospeso)
+- **Radice finale (changelog 82)**: `bestFiringPosition`/`bestFlankingPosition` valutavano la LOS di tiro su un
+  PIANO ORIZZONTALE (bersaglio a `p.y+1.2`, la quota della posizione) invece che alla quota REALE del nemico →
+  la scelta della posizione era cieca alla verticalità. Fix: `targetY` reale in entrambe le query + tutti i
+  chiamanti. Misurato: LOS cross-quota 5%→10% (2×), ingaggi cross-quota quasi raddoppiati.
+- **Prima (changelog 81)**: positioning enemy-aware (scegliere una firing position col nemico noto invece del
+  terreno solo-importante) — necessario ma insufficiente da solo, perché la firing position era scelta col bug
+  della quota. I due fix insieme abilitano il combattimento verticale.
+- **Da confermare visivamente**: cloni che sparano dal ponte, droidi che sparano in su. Se ancora scarso, resta
+  la densità della mappa (molte coppie a lunga gittata bloccate) e il transito — ma la capacità c'è.
+- **Muretti bassi (changelog 83, fix INTERIM)**: la mira era al centro-corpo (~0.5 m) → raggio in discesa
+  tagliato da muretti bassi vicini al bersaglio. Interim: mira al busto alto (~0.85 m, dentro la hitbox 1 m) +
+  proiettile dal muzzle stimato (0.5 m avanti). **Band-aid**: la soluzione vera (muzzle canna + parti corpo
+  colpibili reali) richiede le POSE ([[animations-blocked]], tenute in pausa) → da sostituire quando si sbloccano.
+
+## 82-orig. (storico) I cloni sul PONTE non sparano: il DECK blocca la LOS verso i nemici a terra (HIGH) — DIAGNOSTICATO 2026-07-25
+- **Sintomo (utente, ricorrente)**: buona parte dei cloni sale sul ponte ma non spara; togliere i muretti NON
+  cambia nulla.
+- **Diagnosi strumentata** (DIAG temporaneo, poi rimosso; --sim Training Ground): per i team-1 in alto (y≈3.8,
+  occhio ~4.6) la LOS verso il nemico più vicino è **bloccata il ~99%** (5 su 637). aggroRange=50 (gittata ok),
+  nemici a 26-30 m (in portata). Il **primo collider bloccante**: nel **46%** è un box piatto sottile a Y≈3.2,
+  alt 0.2 = **il DECK del ponte**; 25% un muro centrale (Y1.7, alt3.6); 22% struttura a livello ponte. Blocco
+  nella **prima metà del raggio** (blk_frac 0.15-0.5).
+- **Causa**: un clone su un deck solido, con l'occhio a ~4.6 m, per battere un nemico a terra (~1.2 m) deve
+  tirare in DISCESA; il raggio scende sotto il livello del deck (3.3) mentre è ancora SOPRA il deck → colpisce
+  il proprio deck. **Non può battere nulla sotto il livello del deck** a meno di stare proprio sul bordo. I
+  muretti erano irrilevanti: il blocco è il deck. (Differenza con le "rialzate iniziali" che affacciavano
+  un'area aperta più in basso: tiro in discesa libero.)
+- **AGGIORNAMENTO (verificato col grafo tattico)**: la MAPPA È A POSTO. Delle 43 posizioni elevate, **39
+  hanno LOS verso il basso** (426 link verso posizioni più basse) — l'autore le ha piazzate bene, scavalcano
+  il deck. Quindi il clone che sta su una di quelle posizioni VEDE il terreno. Il problema è che i cloni **non
+  occupano quelle 39 posizioni**: stanno in punti CIECHI del deck (centro-settore dove li manda la torre, o
+  una posizione scelta per importanza ma senza LOS sul nemico corrente).
+- **Vero fix = AI (positioning enemy-aware)**: quando un'unità contende un'area con nemici, deve occupare una
+  posizione di TIRO con LOS reale sul nemico (una delle buone), non un punto cieco. Rompe il catch-22 (cieco →
+  niente bersaglio → niente Alert → niente reposition) muovendosi verso una posizione con LOS in base ai
+  CONTATTI noti, non solo alla LOS diretta. È il "refinement enemy-aware" rimandato (KI #79/#80) — ora è LA
+  chiave, e generalizza (verticalità: sparare da ovunque ci sia una buona posizione).
+- Collegato: [[combat-los-eye-height]] (LOS d'ingaggio corretta), [[orders-design-vision]].
+
+## 81. `importance` di settori E posizioni tattiche SCHIACCIATA a [0,1] dal loader — RISOLTO 2026-07-24 (changelog 78)
+- **Fix**: rimosso `clamp01` sull'importanza nel loader (settori + posizioni tattiche), sostituito con floor a
+  0 (nessun tetto). `importance` è ora un PESO tattico relativo (≥0), non [0,1]. Commenti in `Definitions.hpp`
+  aggiornati. Audit consumatori: tutti lineari (`w=importance`, `importance×k`, soglia `>0.5`) → nessuno
+  assumeva [0,1], nessuna formula rotta. L'editor legge l'importanza raw dal JSON (indipendente dal loader) →
+  UX invariata. Validazione contenuti OK.
+- **Verificato in runtime** (telemetria `sector distribution`): Alpha 5.0, fronti 4.0, flanchi 2.5, spawn 6.0
+  (prima tutti 1.0). La gradazione dell'autore ora arriva ai pesi di torre/comandante/query tattiche. Nessuna
+  regressione (combattimento letale, fermi=0, no crash).
+- **Aperto a valle**: ora che i pesi sono corretti, va OSSERVATO se la distribuzione migliora davvero e se
+  l'importanza (ora fino a 6) OVER-domina protezione/pericolo in alcune query tattiche (`bestCoverToward`,
+  `bestAdvantageInArea`) → eventuale ri-bilanciamento misurato. Ricerca #1 continua su dati puliti.
+
+## 81-orig. (storico) `importance` SCHIACCIATA a [0,1] — diagnosi
+- **Trovato con l'osservabilità della distribuzione (ricerca #1/#2, changelog 78)**: la telemetria `sector
+  distribution` mostrava importanza runtime **1.0** per tutti i fronti; il JSON invece grada **0.5–6**
+  (Training Ground: Alpha=5, Bravo-Charlie/Delta-Echo=4, flanchi=2-2.5, spawn=6, corsie=0.5; e le 170
+  posizioni tattiche 0.5–6.0).
+- **Causa**: `DefinitionRegistry` applica `clamp01()` all'importanza — settori a
+  [DefinitionRegistry.cpp:512](../src/game/data/DefinitionRegistry.cpp#L512), posizioni tattiche a
+  [DefinitionRegistry.cpp:412](../src/game/data/DefinitionRegistry.cpp#L412). Tutto ciò che è ≥1 → 1.0. La
+  convenzione dichiarata in `Definitions.hpp` è "0..1", ma **l'autore ha usato una scala 0–6** (più alto =
+  più importante). Mismatch mentale autore↔sistema.
+- **Effetto (bug silenzioso)**: l'AI non può prioritizzare. Tutti i consumatori di `importance` — pesi dei
+  settori (torre/comandante), `bestAdvantageInArea` (importance×1.5), `bestHoldPosition` — vedono il fronte
+  centrale chiave uguale a un flanco o a uno spawn. La regia tattica dell'autore non arriva all'AI.
+- **Fix (DA DECIDERE, non ancora fatto — tocca molti consumatori)**: scegliere la scala. O (a) allargare la
+  convenzione a un range esplicito (es. 0–1 normalizzato o 0–N) e **ri-tarare i consumatori** che assumono
+  [0,1]; o (b) rinormalizzare i dati dell'autore a [0,1]; o (c) far usare all'autore [0,1]. Va valutato con
+  cura misurata (before/after sulla distribuzione via [[world-tactical-intelligence]]).
+- **Minori correlati (stesso audit)**: settori quasi non sovrapposti (griglia 3×3, doppio-conteggio solo ai
+  bordi — mia prima ipotesi SOVRASTIMATA); etichette spawn scambiate ("Separatist Spawn" è dove spawna la
+  Repubblica) — cosmetico ma segnala metadata da ripulire.
+
 ## 80b. Ordini custom (Hold/Advance/reposition) REVERTATI — ripensare come bias sull'AI autonoma — 2026-07-24
 - Il Hold/Advance custom e il reposition-gate (changelog 72/74/76) sono stati **revertati** (changelog 77):
   scavalcavano l'AI autonoma che già bounda/ingaggia bene, disconnettendo le unità dai bersagli. Base tornata
