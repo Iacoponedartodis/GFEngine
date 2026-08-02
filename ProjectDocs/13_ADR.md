@@ -2352,3 +2352,102 @@ DURANTE il combattimento (opzione A): un droide in TIENI si àncora alla posizio
 `chokepoint` sono finalmente attivi. Combattimento sano, `fermi=0`, nessuna passività.
 **Nota harness**: le misure `--sim` con id mappa contenente spazi vanno quotate ([[powershell-quote-args-with-spaces]],
 KI #77): una prima misura su "Training Ground" girava su un'altra mappa per via dello spazio non quotato.
+
+---
+
+## ADR-047 — La geometria a BOX è la verità tattica; Blender fornisce il visivo (Proposed, 2026-07-27)
+
+### Context
+Le mappe future saranno prodotte con un flusso ibrido (editor + Blender). La tentazione naturale è
+importare le mesh Blender come geometria del livello. Verificato sul codice (2026-07-27): `MapGeometryBox`
+è **solo primitive** (nessun `meshPath`); il **navmesh si costruisce dai box collider**
+(`NavManager`: "box collider → triangle soup"); `worldintel::hasLineOfFire` è uno **slab test sui box**.
+La LOS è il costo dominante dell'AI ed è veloce *proprio perché* la geometria è analitica.
+
+### Decision
+La geometria di collisione, di navigazione e di analisi tattica resta **a box**. Le mesh importate da
+Blender sono **esclusivamente visive** e non entrano mai in collisione, LOS o navmesh. Ogni asset esterno
+porta con sé un **proxy di collisione** composto da box.
+
+### Consequences
+- **Positivo**: si preservano LOS analitica veloce, navmesh pulito, editing immediato e tutta l'analisi
+  tattica esistente (grafo coperture/esposizione, visuale verticale). È il pattern AAA standard
+  (visual mesh + collision proxy).
+- **Costo**: l'autore deve fornire il proxy (poche box) accanto alla mesh. Costo reale basso, e
+  ripagato dal fatto che il proxy È anche il modello tattico.
+- **Rischio**: la scorciatoia "usiamo la mesh anche per la collisione, tanto per provare" degraderebbe
+  LOS e navmesh in modo difficile da tornare indietro → va impedita con un controllo in `--validate`.
+
+### Status
+**Proposed.** Diventa Accepted quando la pipeline prefab sarà implementata e verificata.
+
+---
+
+## ADR-048 — Il significato tattico si autora per ASSET, non per ISTANZA (prefab) (Proposed, 2026-07-27)
+
+### Context
+Training Ground ha **167 posizioni tattiche piazzate a mano**. Le mappe "profonde" previste dal GDD ne
+richiederebbero 1000+: l'authoring per istanza non scala per un team di una persona. Il tentativo di
+generare automaticamente le coperture dalla geometria è già stato fatto e **rimosso** (ADR-026) perché
+produceva risultati insensati. Serve una terza via fra "tutto a mano" e "tutto automatico".
+
+### Decision
+Introdurre i **prefab**: un asset (`data/prefabs/<id>.json`, id = filename stem per ADR-001) dichiara
+insieme la mesh visiva, il proxy di collisione (box in coordinate LOCALI), le posizioni tattiche locali e
+i volumi interni. La mappa contiene **istanze** (id + trasformazione); il motore le **espande al load**.
+Corollario: la macchina **analizza e valida**, l'uomo **crea e decide** — non si torna alla generazione
+automatica di posizioni dalla geometria.
+
+Le posizioni espanse da prefab sono **dati derivati** (non salvati, rigenerati); quelle piazzate a mano
+sono **autorate** (salvate). La distinzione è esplicita nel campo `source`.
+
+### Consequences
+- **Positivo**: il significato tattico si autora una volta e si moltiplica per istanza → mappe profonde
+  diventano possibili. Coerente col principio dei dati derivati (ADR-033): non possono diventare stale.
+- **Costo**: nuovo formato dati + espansione al load + UI di piazzamento (fase successiva).
+- **Rischio**: aggiornare un prefab potrebbe cancellare modifiche manuali → mitigato da `source`, che
+  permette di rigenerare solo ciò che viene dal prefab.
+
+### Status
+**Proposed.** Diventa Accepted a implementazione + verifica (`--validate` e confronto con mappa a mano).
+
+---
+
+## ADR-049 — Scheletro comune dei moduli editor: COMPOSIZIONE, non ereditarietà (Proposed, 2026-08-02)
+
+### Context
+L'editor cresce col progetto ed è già a 7 moduli / ~7400 righe (MapEditor da solo 2787). L'audit di coerenza
+(doc 39, 2026-08-02) ha misurato la deriva: *Elimina* manca in 5 moduli su 7, *Duplica* in 3, il
+ridimensionamento del pannello in 2 — e i quattro bug del changelog 106 (gizmo assente, pannello non
+riallargabile, scroll tagliato) sono sintomi della stessa causa: **ogni modulo rifà la struttura a modo suo**.
+
+Verificato però che le UTILITY sono già fattorizzate e vanno preservate: `FreeCameraViewport` (viewport 3D +
+gizmo sposta/ruota/scala, usato da 4 moduli), `DefinitionRename` (ADR-010), `JsonSave::saveJsonRMW`,
+`UiWidgets`. Il buco non è nelle utility: è nello **scheletro** che le mette insieme.
+
+### Decision
+Introdurre uno scheletro comune **per COMPOSIZIONE** (componenti riusabili che un modulo adotta), **non per
+ereditarietà** (una classe base con virtual per ogni fase):
+- **`ModuleShell`** — layout standard *lista | contenuto | proprietà* con splitter espliciti, clamp e scroll
+  corretti (regole R5/R6 di doc 39), in un posto solo.
+- **`AssetBrowser`** — ciclo di vita completo di una definizione su file: Crea, Duplica, Rinomina (comando
+  ADR-010), Elimina (R1) — parametrizzato su cartella e contenuto di default.
+- Il viewport resta `FreeCameraViewport`: già condiviso, non si tocca.
+
+**Perché composizione e non una base class**: i moduli sono strutturalmente diversi (MapEditor = viewport 3D
+con molti tipi selezionabili; BalanceEditor = tabelle di numeri; ClassEditor = form). Una gerarchia con
+virtual per tutto diventerebbe un framework rigido da combattere al primo modulo che non ci rientra, e
+imporrebbe di riscrivere tutti e sette insieme. I componenti si adottano **uno alla volta**, dove servono.
+
+### Consequences
+- **Positivo**: una funzione migliorata migliora tutti i moduli che la usano; le regole di doc 39 diventano
+  strutturali invece che disciplina da ricordare; i moduli nuovi partono già coerenti.
+- **Costo**: i componenti vanno progettati abbastanza generali da servire, abbastanza specifici da non essere
+  vuoti. Rischio mitigato dall'adozione incrementale.
+- **Rischio principale — l'editor è GUI e NON è verificabile con `--sim`**: un refactor big-bang dei sette
+  moduli non sarebbe testabile in un colpo solo. Perciò la migrazione è **un modulo alla volta**, ognuno con
+  il suo smoke test manuale, partendo da un pilota semplice. Nessun modulo viene toccato "per allineamento"
+  senza un motivo funzionale.
+
+### Status
+**Proposed.** Diventa Accepted quando `ModuleShell` sarà adottato dal modulo pilota e verificato a mano.

@@ -1,0 +1,25 @@
+{
+    "name": "Postazione con sacchi di sabbia",
+    "tags": ["hard_cover", "emplacement"],
+
+    "collision": [
+        { "x": 0.0, "y": 0.45, "z": -1.6, "sx": 4.2, "sy": 0.9, "sz": 0.5, "collider": true,
+          "r": 0.42, "g": 0.38, "b": 0.28 },
+        { "x": -2.1, "y": 0.45, "z": -0.6, "sx": 0.5, "sy": 0.9, "sz": 2.5, "collider": true,
+          "r": 0.42, "g": 0.38, "b": 0.28 },
+        { "x": 2.1, "y": 0.45, "z": -0.6, "sx": 0.5, "sy": 0.9, "sz": 2.5, "collider": true,
+          "r": 0.42, "g": 0.38, "b": 0.28 }
+    ],
+
+    "tactical": [
+        { "x": -1.2, "y": 0.0, "z": -1.0, "facing_deg": 180.0, "role": "cover",
+          "protection": 0.75, "height": 0.9, "can_shoot": true,
+          "importance": 1.0, "fire_arc_deg": 120.0, "fire_range": 30.0 },
+        { "x": 1.2, "y": 0.0, "z": -1.0, "facing_deg": 180.0, "role": "cover",
+          "protection": 0.75, "height": 0.9, "can_shoot": true,
+          "importance": 1.0, "fire_arc_deg": 120.0, "fire_range": 30.0 },
+        { "x": 0.0, "y": 0.0, "z": 0.2, "facing_deg": 180.0, "role": "defensive",
+          "protection": 0.55, "height": 0.9, "can_shoot": true,
+          "importance": 1.2, "radius": 5.0, "fire_arc_deg": 160.0, "fire_range": 28.0 }
+    ]
+}

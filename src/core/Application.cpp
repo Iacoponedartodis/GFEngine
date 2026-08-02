@@ -128,7 +128,8 @@ static glm::mat4 toModelMatrix(const TransformComponent& t)
 void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                       const std::string& mapOverride, int stressAiCount,
                       const std::string& missionId,
-                      const std::string& classId)
+                      const std::string& classId,
+                      int simTicks)
 {
     using namespace config;
     initialize();
@@ -343,6 +344,16 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     // ADR-037: campionato all'apertura della ruota — decide se il 4° settore
     // legge SEGUI (impartisci) o LIBERI (revoca → stato privo di ordini).
     bool  wheelFollowActive = false;
+    // Velocità della simulazione (indice in config::SIM_SPEEDS). Strumento di
+    // OSSERVAZIONE: rallenta il mondo lasciando il giocatore a velocità piena.
+    int   simSpeedIdx = config::SIM_SPEED_DEFAULT;
+    // Compagni SELEZIONATI a cui indirizzare gli ordini ([[orders-design-vision]]):
+    // si mira un compagno e si preme il tasto ordini per aggiungerlo/toglierlo. Con
+    // la selezione non vuota, ordini rapidi E ruota vanno SOLO a loro → si possono
+    // dare ordini DIVERSI a gruppi diversi. Vuota = tutta la squadra (comportamento
+    // storico). Vive qui perché è stato di INPUT/UI, non di gioco: il World riceve
+    // solo l'intenzione già risolta (mailbox, ADR-002/doc 10).
+    std::vector<EntityId> squadSel;
     // Selezione del punto di respawn mentre si è a terra (mappa top-down, doc
     // 30). `respawnSel` = indice in mode->availableSpawns() (0 = spawn base);
     // `deathPos` = dove si è caduti (marker di orientamento sulla mappa).
@@ -1079,6 +1090,21 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
 
                 if (sc == SDL_SCANCODE_F11) window.toggleFullscreen();
 
+                // ── Velocità della simulazione: [ rallenta, ] accelera ───
+                // Tasti e non solo click: in partita/osservazione il mouse è CATTURATO
+                // per guardarsi intorno, quindi un menu solo-cliccabile sarebbe
+                // inutilizzabile proprio quando serve — mentre si osserva.
+                if ((sc == SDL_SCANCODE_LEFTBRACKET || sc == SDL_SCANCODE_RIGHTBRACKET)
+                    && state == GameState::Playing)
+                {
+                    simSpeedIdx += (sc == SDL_SCANCODE_RIGHTBRACKET) ? 1 : -1;
+                    if (simSpeedIdx < 0) simSpeedIdx = 0;
+                    if (simSpeedIdx >= config::SIM_SPEED_COUNT)
+                        simSpeedIdx = config::SIM_SPEED_COUNT - 1;
+                    hud.toast((std::string("Velocita' simulazione: ")
+                               + config::SIM_SPEED_LABELS[simSpeedIdx]).c_str());
+                }
+
                 // ── F12: dump completo dello stato (ADR-013 + Phase 4) ─
                 if (sc == SDL_SCANCODE_F12)
                 {
@@ -1361,8 +1387,14 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         // guida veicolo), così rallenta TUTTO insieme. UI, camera e selezione
         // della ruota restano a velocità reale (usano `elapsed`). `wheelOpen` è
         // del frame precedente: scarto di 1 frame, impercettibile.
-        const float timeScale  = wheelOpen ? config::WHEEL_TIME_SCALE : 1.0f;
-        const float simElapsed = elapsed * timeScale;
+        const float wheelScale = wheelOpen ? config::WHEEL_TIME_SCALE : 1.0f;
+        // Velocità di OSSERVAZIONE (strumento, non gameplay): scala il MONDO ma NON il
+        // giocatore — altrimenti rallentando per guardare da vicino si diventerebbe
+        // lenti anche a camminare, e osservare un dettaglio richiederebbe un'eternità.
+        // La slow-mo della ruota resta invece "onesta" e rallenta anche il giocatore.
+        const float timeScale  = wheelScale * config::SIM_SPEEDS[simSpeedIdx];
+        hud.setSimSpeed(simSpeedIdx);
+        const float simElapsed = elapsed * wheelScale;
 
         if (state == GameState::Playing)
         {
@@ -1583,6 +1615,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                   hud.toast(wheelSel == 2 ? "In osservatore la squadra non segue"
                                           : "Mira un punto a terra per l'ordine"); }
 
+                // Anche la RUOTA rispetta la selezione: si possono tenere due gruppi su
+                // posture diverse (es. #1-#2 in HOLD su una cover, #3 in ADVANCE).
+                if (req.pending && !squadSel.empty()) req.directedMembers = squadSel;
                 if (req.pending) { world.squadOrder = req; if (toastMsg) hud.toast(toastMsg); }
                 wheelSel = -1;
             }
@@ -1780,7 +1815,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         {
                             req.order          = OrderType::Revive;
                             req.targetEntity   = aimAlly;
-                            req.directedMember = reviver;
+                            req.directedMembers = { reviver };
                             req.pending        = true;
                             hud.toast("Rianimazione: compagno in soccorso");
                         }
@@ -1789,14 +1824,31 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     }
                     else
                     {
-                        // Compagno vivo → fuoco di copertura: tiene la posizione
-                        // (dove si trova ora) e spara di supporto.
-                        req.order          = OrderType::CoveringFire;
-                        req.directedMember = aimAlly;
-                        if (const auto* at = world.getTransform(aimAlly))
-                        { req.targetX = at->x; req.targetZ = at->z; }
-                        req.pending        = true;
-                        hud.toast("Fuoco di copertura");
+                        // Compagno vivo → SELEZIONE (toggle). Non parte un ordine: si
+                        // sceglie CHI comanderà il prossimo. Poi lo stesso tasto su un
+                        // nemico/punto — o la ruota — manda l'ordine SOLO ai selezionati,
+                        // così gruppi diversi ricevono ordini diversi. Con selezione
+                        // vuota tutto resta com'era (ordine a tutta la squadra).
+                        // NB: questo gesto prima dava CoveringFire; ora lo si ottiene
+                        // selezionando il compagno e dandogli HOLD dalla ruota, che
+                        // ancora la posizione e ci combatte.
+                        const auto it = std::find(squadSel.begin(), squadSel.end(), aimAlly);
+                        if (it != squadSel.end())
+                        {
+                            squadSel.erase(it);
+                            hud.toast(squadSel.empty()
+                                      ? "Selezione azzerata: ordini a tutta la squadra"
+                                      : "Compagno deselezionato");
+                        }
+                        else
+                        {
+                            squadSel.push_back(aimAlly);
+                            char sb[64];
+                            std::snprintf(sb, sizeof(sb), "Compagno selezionato (%d)",
+                                          (int)squadSel.size());
+                            hud.toast(sb);
+                        }
+                        req.pending = false;   // nessun ordine: solo selezione
                     }
                 }
                 else
@@ -1888,6 +1940,11 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         world.pushEvent("Ordine rifiutato: posizione irraggiungibile");
                     }
                 }
+                // Destinatari: se ci sono compagni SELEZIONATI, l'ordine va solo a loro
+                // (a meno che non ne abbia già di propri, come Revive). Selezione vuota
+                // → tutta la squadra, comportamento storico. [[orders-design-vision]]
+                if (req.pending && req.directedMembers.empty() && !squadSel.empty())
+                    req.directedMembers = squadSel;
                 if (req.pending) world.squadOrder = req;
             }
 
@@ -1983,11 +2040,28 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         dist = glm::length(glm::vec2{sq->targetX - t->x,
                                                      sq->targetZ - t->z});
                 }
+                // La selezione va TENUTA PULITA: i caduti respawnano come entità NUOVE,
+                // quindi un id selezionato può diventare invalido — e un ordine mandato
+                // a fantasmi non arriverebbe a nessuno, in silenzio (il peggior tipo di
+                // bug: sembra che gli ordini "non funzionino"). Si scarta anche chi è a
+                // terra: non esegue ordini.
+                squadSel.erase(std::remove_if(squadSel.begin(), squadSel.end(),
+                    [&](EntityId id) {
+                        if (!world.isValidEntity(id)) return true;
+                        const auto* s = world.getSquad(id);
+                        return !s || s->squadId == 0 || s->downed;
+                    }), squadSel.end());
+
                 if (members == 0) hud.setSquadOrder("");
                 else
                 {
                     char sb[128];
                     char downTag[48] = "";
+                    char selTag[32] = "";
+                    // Chi riceverà il prossimo ordine: senza questo il giocatore non sa
+                    // se sta comandando la squadra o un gruppo scelto.
+                    if (!squadSel.empty())
+                        std::snprintf(selTag, sizeof(selTag), "  [SEL %d]", (int)squadSel.size());
                     // Lo stato "a terra" è la cosa più urgente: va davanti, con il
                     // conto alla rovescia della perdita più imminente.
                     if (downed > 0)
@@ -1996,16 +2070,16 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     // FocusFire non ha una destinazione: mostrarne una distanza
                     // sarebbe un numero inventato.
                     if (found && ord != OrderType::FocusFire)
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s  %.0fm%s",
-                                      members, orderName(ord), dist, downTag);
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s  %.0fm%s%s",
+                                      members, orderName(ord), dist, downTag, selTag);
                     else if (found)
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s%s",
-                                      members, orderName(ord), downTag);
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  %s%s%s",
+                                      members, orderName(ord), downTag, selTag);
                     else
                         // ADR-037: nessun ordine attivo NON è un buco d'informazione,
                         // è lo stato normale — truppe indipendenti.
-                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  LIBERI%s",
-                                      members, downTag);
+                        std::snprintf(sb, sizeof(sb), "SQUADRA (%d)  LIBERI%s%s",
+                                      members, downTag, selTag);
                     hud.setSquadOrder(sb);
                 }
             }
@@ -2258,6 +2332,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         // Fine frame: svuota il buffer del log JSONL su disco (ADR-016), così
         // session_latest.jsonl è sempre leggibile a valle di ogni frame.
         telemetry::flushEvents();
+
+        // ── Uscita a TICK FISSI (--sim-ticks N) ──────────────────────────────
+        // Chiude dopo N tick di SIMULAZIONE (non frame né secondi): due run fanno
+        // esattamente la stessa quantità di mondo, quindi i totali sono confrontabili.
+        // Serve perché `--sim` + timeout esterno dipende dal carico della macchina:
+        // misurato ±10% sulla STESSA build (211/215/224/224), abbastanza da nascondere
+        // una piccola regressione o da inventarne una. Si conta il tick del World, che
+        // avanza solo quando il mondo è simulato (i menu non lo muovono).
+        if (simTicks > 0 && world.getTickCount() >= (std::uint64_t)simTicks)
+        {
+            std::cout << "[Sim] " << world.getTickCount()
+                      << " tick simulati — uscita (--sim-ticks)." << std::endl;
+            // Snapshot ISPEZIONABILE a fine run (doc 40 A5): senza, l'ispettore del
+            // ragionamento sarebbe raggiungibile solo premendo F12 al momento giusto
+            // durante una partita — cioè inutilizzabile per diagnosticare headless
+            // perché un'AI non ingaggia (KI #86). Ora ogni misura lascia anche il
+            // "perché", non solo i totali.
+            telemetry::dumpGameState(buildStateDump("sim-ticks"));
+            m_running = false;
+        }
     }
 
     telemetry::setStateDumpCallback(nullptr);   // evita dangling dopo il loop

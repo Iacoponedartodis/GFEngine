@@ -31,8 +31,41 @@ static std::string getDataDir() { return editor::datapath::dir(); }
 
 VehicleEditor::VehicleEditor()
 {
+    // Ciclo di vita degli asset delegato al componente condiviso (ADR-049 R1): questo
+    // modulo aveva "Nuovo veicolo" ma NON Duplica, Rinomina o Elimina. Ora li ha tutti,
+    // e con le regole del progetto applicate per costruzione (id = filename, rename via
+    // comando ADR-010, RMW, conferma sull'eliminazione).
+    editor::AssetBrowser::Config cfg;
+    cfg.folder   = "vehicles";
+    cfg.title    = "Veicoli";
+    cfg.category = editor::rename::Category::Vehicle;
+    cfg.makeDefault = [](const std::string& id) {
+        mini::VehicleDef d; d.name = id;
+        nlohmann::json j;
+        j["name"]          = d.name;
+        j["hp"]            = d.hp;
+        j["max_speed"]     = d.maxSpeed;
+        j["accel"]         = d.accel;
+        j["turn_rate_deg"] = d.turnRateDeg;
+        j["half_x"] = d.halfX; j["half_y"] = d.halfY; j["half_z"] = d.halfZ;
+        j["color"]  = {d.color[0], d.color[1], d.color[2]};
+        return j;
+    };
+    m_browser.configure(cfg);
+
     loadEntries();
     if (!m_entries.empty()) selectEntry(0);
+    syncFromBrowser();
+}
+
+// Allinea la selezione del modulo a quella del browser (che ragiona per ID, non per
+// indice: gli indici cambiano a ogni crea/elimina, l'id no).
+void VehicleEditor::syncFromBrowser()
+{
+    const std::string& id = m_browser.selectedId();
+    for (int i = 0; i < (int)m_entries.size(); ++i)
+        if (m_entries[i].id == id) { selectEntry(i); return; }
+    m_sel = -1;
 }
 
 void VehicleEditor::tick(float dt)
@@ -157,71 +190,44 @@ void VehicleEditor::draw()
             if (m_entries[i].id == id) { selectEntry(i); break; }
     }
 
+    // ── Layout via ModuleShell (ADR-049) ─────────────────────────────
+    // Prima questo modulo si costruiva il layout da sé e replicava il bug del pannello
+    // destro (`ChildFlags_ResizeX`: grip sul bordo finestra → una volta stretto non si
+    // riallarga). Ora la struttura sta in un posto solo: correggerla lì corregge ogni
+    // modulo che la adotta.
+    m_shell.begin();
+
     // ── Lista (sinistra) ─────────────────────────────────────────────
-    ImGui::BeginGroup();
-    ImGui::Text("Veicoli:");
-    ImGui::BeginChild("##vlist", ImVec2(m_listW, -78),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
-    for (int i = 0; i < (int)m_entries.size(); ++i)
+    if (m_shell.beginList())
     {
-        const auto& e = m_entries[i];
-        if (ImGui::Selectable((e.def.name + "##v" + std::to_string(i)).c_str(),
-                              m_sel == i))
-            selectEntry(i);
-    }
-    ImGui::EndChild();
-    m_listW = ImGui::GetItemRectSize().x;
-
-    // Nuovo veicolo
+    // Lista + ciclo di vita completo dal componente condiviso (ADR-049 R1).
+    // Quando qualcosa cambia (selezione o contenuto della cartella) si ricarica: gli
+    // indici locali non sopravvivono a una creazione o a un'eliminazione, gli id sì.
+    if (m_browser.draw())
     {
-        static char newVId[64] = "";
-        ImGui::SetNextItemWidth(m_listW);
-        ImGui::InputText("##newvid", newVId, sizeof(newVId));
-        if (ImGui::Button("+ Nuovo veicolo", {m_listW, 0}) && newVId[0] != '\0')
-        {
-            const std::string path = getDataDir() + "vehicles/" + newVId + ".json";
-            if (!fs::exists(path))
-            {
-                mini::VehicleDef d;
-                d.name = newVId;
-                editor::jsonsave::saveJsonRMW(path, [&](json& j) {
-                    j["name"]          = d.name;
-                    j["hp"]            = d.hp;
-                    j["max_speed"]     = d.maxSpeed;
-                    j["accel"]         = d.accel;
-                    j["turn_rate_deg"] = d.turnRateDeg;
-                    j["half_x"] = d.halfX; j["half_y"] = d.halfY; j["half_z"] = d.halfZ;
-                    j["color"]  = {d.color[0], d.color[1], d.color[2]};
-                    return true;
-                });
-                m_pendingSelectId = newVId;
-                newVId[0] = '\0';
-            }
-        }
+        loadEntries();
+        syncFromBrowser();
     }
-    if (ImGui::Button("Ricarica lista", {m_listW, 0})) loadEntries();
-    ImGui::EndGroup();
 
-    ImGui::SameLine();
+    if (ImGui::Button("Ricarica lista", {ImGui::GetContentRegionAvail().x, 0}))
+        loadEntries();
+    m_shell.endList();
+    }
 
     // ── Viewport 3D (centro) ─────────────────────────────────────────
-    static float s_propW = 300.0f;
-    const float vpW = ImGui::GetContentRegionAvail().x - s_propW
-                    - ImGui::GetStyle().ItemSpacing.x;
-    ImGui::BeginChild("##vvp", ImVec2(vpW < 120.0f ? 120.0f : vpW, 0),
-                      ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    m_viewport.draw(false);
-    ImGui::EndChild();
-
-    ImGui::SameLine();
+    if (m_shell.beginContent(/*noScroll=*/true))
+    {
+        m_viewport.draw(false);
+        m_shell.endContent();
+    }
 
     // ── Proprietà (destra) ───────────────────────────────────────────
-    ImGui::BeginChild("##vprops", ImVec2(s_propW, 0),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
-    drawProperties();
-    ImGui::EndChild();
-    s_propW = ImGui::GetItemRectSize().x;
+    if (m_shell.beginProperties())
+    {
+        drawProperties();
+        m_shell.endProperties();
+    }
+    m_shell.end();
 }
 
 void VehicleEditor::drawProperties()

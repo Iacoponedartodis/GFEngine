@@ -1,5 +1,7 @@
 #pragma once
 #include "viewport/FreeCameraViewport.hpp"
+#include "framework/ModuleShell.hpp"   // layout condiviso (ADR-049)
+#include "framework/AssetBrowser.hpp"  // ciclo di vita asset (ADR-049 R1)
 #include "mini/game/data/Definitions.hpp"
 #include <string>
 #include <vector>
@@ -37,9 +39,12 @@ private:
 
     FreeCameraViewport m_viewport;
     float m_listW = 190.0f;
+    editor::ModuleShell m_shell{190.0f, 300.0f};   // ADR-049
+    editor::AssetBrowser m_browser;                // crea/duplica/rinomina/elimina
 
     void loadEntries();
     void selectEntry(int idx);
+    void syncFromBrowser();   // allinea la selezione locale a quella del browser (per ID)
     void saveSelected();
     void updateViewport();
 

@@ -250,6 +250,20 @@ public:
     //    destinazione imposta**. È ogni clone a scegliere per conto suo quale
     //    segnale seguire — ed è così che i cloni restano più indipendenti dei
     //    droidi (direttiva utente 2026-07-20).
+    // ── Stimoli SONORI del tick (doc 40, percezione) ─────────────────────────
+    // Mailbox come le altre (doc 10): chi produce rumore lo deposita, l'AI lo consuma.
+    // È EVENT-DRIVEN, non polling: costo esattamente zero quando nessuno spara. Serve
+    // perché prima le AI erano SORDE (hearing_range autorato ma mai letto): uno sparo
+    // alle spalle non allertava nessuno e le battaglie non si propagavano.
+    struct SoundStimulus
+    {
+        float x = 0.0f, z = 0.0f;   // origine del rumore
+        float radius = 0.0f;        // quanto lontano è udibile
+        int   team   = 0;           // chi l'ha prodotto (non allerta i suoi)
+        EntityId source = 0;        // chi ha sparato (contatto: è LUI il bersaglio)
+    };
+    std::vector<SoundStimulus> sounds;   // svuotata a fine tick da AiSystem
+
     struct AllyIntel
     {
         bool active = false;   // esiste una torre di controllo VIVA di team 1

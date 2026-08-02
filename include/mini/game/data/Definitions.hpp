@@ -353,6 +353,18 @@ struct TacticalPositionDef
     // contro gli ostacoli arriverà col precalcolo (M4, doc 33 §5-bis).
     float fireArcDeg = 120.0f;    // ampiezza totale del settore (gradi)
     float fireRange  = 25.0f;     // gittata utile dalla posizione (m)
+    // Provenienza (ADR-048): `true` = generata espandendo un PREFAB, quindi DERIVATA
+    // (non si salva, si rigenera al load). `false` = piazzata a mano nell'editor, quindi
+    // AUTORATA (si salva). Serve a poter aggiornare un prefab senza cancellare il lavoro
+    // manuale — è la distinzione che rende sicuro rigenerare.
+    bool  fromPrefab = false;
+    // DERIVATO (doc 41 B3): la posizione ha qualcosa SOPRA (soffitto/impalcato/tettoia)
+    // entro `OVERHEAD_PROBE_HEIGHT`. Calcolato al load come il grafo dei link, mai
+    // autorato, mai salvato → non può diventare stale.
+    // ATTENZIONE al nome: è "coperto dall'alto", NON "interno". Un sottopasso lo è
+    // quanto un bunker. L'interno vero richiede la CHIUSURA (pareti attorno) ed è
+    // un'analisi diversa (stanze, B8): non usare questo campo per dedurlo.
+    bool  hasOverhead = false;
 };
 
 // ── Settore / Combat Area (ADR-034) ──────────────────────────────────────
@@ -375,6 +387,40 @@ struct PatrolRouteDef
 {
     std::string id = "route";
     std::vector<std::array<float,3>> points;   // ordinati
+};
+
+// ── PREFAB tattico (ADR-048) ───────────────────────────────────────────────
+// Un asset che porta con sé il proprio SIGNIFICATO TATTICO, non solo la mesh.
+// Motivo: Training Ground ha 167 posizioni piazzate A MANO; le mappe profonde ne
+// richiederebbero 1000+, che non scala per un team di una persona. E la generazione
+// automatica dalla geometria è già stata provata e rimossa (ADR-026) perché produceva
+// posizioni insensate. La terza via: **si autora una volta per ASSET, si moltiplica
+// per ISTANZA**. Piazzare un bunker porta con sé le sue coperture, già pensate.
+//
+// La mesh è SOLO visiva: collisione, navmesh e LOS restano sui box (ADR-047), che è
+// ciò che rende l'analisi tattica veloce e analitica.
+// Coordinate di `collision`/`tactical`/`indoor`: LOCALI al prefab; il motore le
+// trasforma all'espansione (posizione + rotazione dell'istanza).
+// id = filename stem (ADR-001): data/prefabs/<id>.json
+struct PrefabDef
+{
+    std::string id;
+    std::string name;
+    std::string meshPath;                       // visivo (GLB), opzionale
+    std::vector<MapGeometryBox>       collision; // proxy: la verità fisica/tattica
+    std::vector<TacticalPositionDef>  tactical;  // significato autorato una volta
+    std::vector<std::string>          tags;      // "building", "hard_cover", ...
+};
+
+// ── ISTANZA di prefab in una mappa (ADR-048) ───────────────────────────────
+// La mappa non duplica i dati del prefab: ne referenzia l'id e la trasformazione.
+// L'espansione avviene AL LOAD → i dati espansi sono DERIVATI (mai salvati), come il
+// grafo delle coperture (ADR-033): non possono diventare stale rispetto al prefab.
+struct PrefabInstanceDef
+{
+    std::string prefabId;
+    float x = 0, y = 0, z = 0;
+    float ry = 0;                 // rotazione attorno a Y (gradi)
 };
 
 // Area esposta/pericolosa (hint morbido, NON un collider).
@@ -441,6 +487,9 @@ struct MapDef
     // si distribuiscono su questi punti → migliore distribuzione iniziale sulla mappa
     // (es. un gruppo per corsia). Vuoti = spawn singolo su spawnTeamN (retrocompat).
     std::vector<std::array<float,3>> spawnPointsTeam1, spawnPointsTeam2;
+    // Istanze di prefab (ADR-048): referenziate, non duplicate. Espanse AL LOAD in
+    // `geometry` e `tacticalPositions` → i dati espansi sono DERIVATI e non si salvano.
+    std::vector<PrefabInstanceDef> prefabs;
     int maxTickets = 10;
     int enemyCount = 6;
     int allyCount  = 1;

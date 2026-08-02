@@ -13,6 +13,11 @@
 // runtime invece di duplicarne la regola nell'editor.
 #include "mini/game/data/Definitions.hpp"
 #include "mini/game/ai/WorldIntel.hpp"
+// Salute tattica (doc 41 B4): STESSE regole del gate `--validate`, mai una copia.
+#include "mini/game/data/ContentValidation.hpp"
+// Stesse costanti del runtime per la visuale verticale (KI #83): l'editor deve
+// misurare con lo stesso modello con cui il gioco combatte, non con uno suo.
+#include "mini/core/GameConfig.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -49,6 +54,13 @@ MapEditor::MapEditor()
                 if (entry.path().extension() == ".json")
                     m_vehicleIds.push_back(entry.path().stem().string());
         std::sort(m_vehicleIds.begin(), m_vehicleIds.end());
+    }
+    // Prefab (ADR-048): caricati col loader del RUNTIME, non con un parser dell'editor
+    // — un secondo parser divergerebbe al primo campo aggiunto.
+    {
+        m_prefabReg.loadPrefabs(getDataDir());
+        for (const auto& [id, def] : m_prefabReg.prefabs()) m_prefabIds.push_back(id);
+        std::sort(m_prefabIds.begin(), m_prefabIds.end());
     }
     // CommanderDef per il combo del comandante (ADR-044: fuori dalle classi)
     {
@@ -143,6 +155,11 @@ void MapEditor::tick(float dt)
             auto& p = m_spawnPoints2[-3100 - m_selBox];
             p[0] += delta.x; p[1] += delta.y; p[2] += delta.z;
         }
+        else if (m_selBox <= -4000 && (-4000 - m_selBox) < (int)m_prefabInsts.size())
+        {   // Istanza di prefab (ADR-048): si sposta l'ISTANZA, il contenuto la segue.
+            auto& p = m_prefabInsts[-4000 - m_selBox];
+            p.x += delta.x; p.y += delta.y; p.z += delta.z;
+        }
         else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
         {
             m_commander.x += delta.x; m_commander.z += delta.z;
@@ -182,6 +199,12 @@ void MapEditor::tick(float dt)
         {
             auto& p = m_positions[-1000 - m_selBox];
             p.facing = wrap(p.facing + rotDelta.y);
+            m_dirty = true; updateViewport();
+        }
+        else if (m_selBox <= -4000 && (-4000 - m_selBox) < (int)m_prefabInsts.size())
+        {   // Istanza di prefab (ADR-048): ruota tutto il contenuto con sé.
+            auto& p = m_prefabInsts[-4000 - m_selBox];
+            p.ry = wrap(p.ry + rotDelta.y);
             m_dirty = true; updateViewport();
         }
     }
@@ -256,7 +279,7 @@ void MapEditor::loadMaps()
         json j;
         try { f >> j; } catch (...) { continue; }
         MapEntry me;
-        me.id   = j.value("id",   entry.path().stem().string());
+        me.id   = entry.path().stem().string();   // ADR-001: MAI dal contenuto (KI #21/#84)
         me.path = entry.path().string();
         m_mapList.push_back(me);
     }
@@ -276,13 +299,9 @@ void MapEditor::loadMap(const std::string& id)
 
     m_mapId      = id;
     m_mapJsonPath = it->path;
-    // Nome visualizzato (campo `name`): è ciò che partita/sandbox MOSTRANO, ed è
-    // separato dall'id/filename. Fallback = id (come fa il runtime).
-    {
-        std::string nm = j.value("name", id);
-        std::strncpy(m_mapDisplayName, nm.c_str(), sizeof(m_mapDisplayName) - 1);
-        m_mapDisplayName[sizeof(m_mapDisplayName) - 1] = '\0';
-    }
+    // Il nome visualizzato NON si carica più in un campo editabile: è l'id (2026-08-02).
+    // Esisteva una casella separata che lo cambiava senza rinominare il file, creando
+    // due nomi divergenti per la stessa mappa.
     m_boxes.clear();
     m_posts.clear();
     m_positions.clear();
@@ -293,8 +312,23 @@ void MapEditor::loadMap(const std::string& id)
     m_targets.clear();
     m_spawnPoints1.clear();
     m_spawnPoints2.clear();
+    m_prefabInsts.clear();
     m_selRoutePt = 0;
     m_selBox = -1;
+
+    // Istanze di prefab (ADR-048): si carica il RIFERIMENTO, non i dati espansi —
+    // quelli li rigenera il motore al load, così aggiornare il prefab aggiorna tutte
+    // le istanze e non possono diventare stale.
+    if (j.contains("prefabs") && j["prefabs"].is_array())
+        for (auto& pi : j["prefabs"])
+        {
+            if (!pi.contains("id")) continue;
+            PrefabInstEntry e;
+            e.id = pi["id"].get<std::string>();
+            e.x  = pi.value("x", 0.0f); e.y = pi.value("y", 0.0f);
+            e.z  = pi.value("z", 0.0f); e.ry = pi.value("ry", 0.0f);
+            m_prefabInsts.push_back(std::move(e));
+        }
 
     if (j.contains("spawn_team1") && j["spawn_team1"].size() >= 3)
         m_spawnTeam1 = {j["spawn_team1"][0], j["spawn_team1"][1], j["spawn_team1"][2]};
@@ -487,7 +521,10 @@ bool MapEditor::saveMap()
     j.erase("id"); // deprecato: id = nome file (ADR-001)
     // Nome visualizzato: se vuoto usa l'id, così il campo non resta un residuo
     // vecchio (era la causa del "il rename non cambia il nome", 2026-07-21).
-    j["name"] = (m_mapDisplayName[0] != '\0') ? std::string(m_mapDisplayName) : m_mapId;
+    // UN SOLO NOME (2026-08-02): il nome visualizzato è l'id. Non esiste più un modo
+    // separato di cambiarlo — si rinomina, e cambia ovunque. Se un file vecchio aveva
+    // un `name` divergente, il primo salvataggio lo riallinea.
+    j["name"] = m_mapId;
     j["spawn_team1"] = {m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]};
     j["spawn_team2"] = {m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]};
     // Multi-spawn: scrivi l'array se ci sono punti, altrimenti RIMUOVI il campo (RMW:
@@ -500,6 +537,18 @@ bool MapEditor::saveMap()
     };
     writeSpawnPts("spawn_points_team1", m_spawnPoints1);
     writeSpawnPts("spawn_points_team2", m_spawnPoints2);
+
+    // Istanze di prefab (ADR-048): si scrivono SOLO i riferimenti. I box e le posizioni
+    // che ne derivano NON vanno mai salvati: sono dati derivati, e scriverli
+    // significherebbe congelare una copia che diverge appena il prefab cambia.
+    if (m_prefabInsts.empty()) j.erase("prefabs");
+    else
+    {
+        json arr = json::array();
+        for (const auto& p : m_prefabInsts)
+            arr.push_back({{"id", p.id}, {"x", p.x}, {"y", p.y}, {"z", p.z}, {"ry", p.ry}});
+        j["prefabs"] = arr;
+    }
 
     json geom = json::array();
     for (const auto& b : m_boxes)
@@ -750,6 +799,121 @@ void MapEditor::deleteBox(int idx)
     updateViewport();
 }
 
+// ── savePrefabFromZone (ADR-048) ─────────────────────────────────────────────
+// Promuove ad ASSET ciò che è stato costruito nella mappa: prende i box e le posizioni
+// tattiche entro un raggio dal focus del viewport, li converte in coordinate LOCALI e
+// scrive `data/prefabs/<id>.json`. È il flusso naturale dell'authoring — si costruisce
+// il pezzo dove lo si vede, poi lo si rende riusabile — e senza di esso il sistema
+// prefab sarebbe monco: si potevano piazzare solo asset scritti a mano nel JSON.
+// Cosa finirebbe nel prefab ORA. UNA sola funzione, usata sia dall'anteprima nel
+// viewport sia dal salvataggio: se fossero due, l'utente vedrebbe evidenziata una cosa
+// e ne otterrebbe un'altra — il tipo di divergenza che questo progetto paga sempre caro.
+// Regola: il RAGGIO fa la selezione grossolana, i ritocchi manuali (Shift+click) la
+// correggono; una volta toccato a mano, comanda la lista manuale.
+void MapEditor::prefabZoneCollect(std::vector<int>& boxes,
+                                  std::vector<int>& positions) const
+{
+    boxes.clear(); positions.clear();
+    if (m_prefabPickManual)
+    {
+        boxes     = m_prefabPickBoxes;
+        positions = m_prefabPickPositions;
+        return;
+    }
+    const float r2 = m_newPrefabRadius * m_newPrefabRadius;
+    for (int i = 0; i < (int)m_boxes.size(); ++i)
+    {
+        const float dx = m_boxes[i].x - m_prefabZoneX, dz = m_boxes[i].z - m_prefabZoneZ;
+        if (dx*dx + dz*dz <= r2) boxes.push_back(i);
+    }
+    for (int i = 0; i < (int)m_positions.size(); ++i)
+    {
+        const float dx = m_positions[i].x - m_prefabZoneX, dz = m_positions[i].z - m_prefabZoneZ;
+        if (dx*dx + dz*dz <= r2) positions.push_back(i);
+    }
+}
+
+bool MapEditor::savePrefabFromZone(std::string& err)
+{
+    const std::string id = m_newPrefabId;
+    if (id.empty()) { err = "Serve un nome (id = nome del file, ADR-001)."; return false; }
+    for (char c : id)
+        if (!(std::isalnum((unsigned char)c) || c == ' ' || c == '_' || c == '-'))
+        { err = "Usa lettere, numeri, spazio, _ o -"; return false; }
+    if (m_prefabReg.getPrefab(id))
+    { err = "Esiste gia' un prefab con questo nome."; return false; }
+
+    // Centro CONGELATO all'apertura del popup, non il focus corrente: se seguisse la
+    // telecamera, ciò che era evidenziato cambierebbe mentre si compila il nome.
+    const glm::vec3 c{m_prefabZoneX, 0.0f, m_prefabZoneZ};
+
+    // STESSA selezione mostrata nel viewport (raggio + ritocchi manuali).
+    std::vector<int> boxIdx, posIdx;
+    prefabZoneCollect(boxIdx, posIdx);
+
+    nlohmann::json coll = nlohmann::json::array();
+    nlohmann::json tact = nlohmann::json::array();
+    for (int i : boxIdx)
+    {
+        const auto& b = m_boxes[i];
+        coll.push_back({{"x", b.x - c.x}, {"y", b.y}, {"z", b.z - c.z}, {"ry", b.ry},
+                        {"sx", b.sx}, {"sy", b.sy}, {"sz", b.sz},
+                        {"collider", b.isCollider},
+                        {"r", b.r}, {"g", b.g}, {"b", b.b}});
+    }
+    for (int i : posIdx)
+    {
+        const auto& p = m_positions[i];
+        tact.push_back({{"x", p.x - c.x}, {"y", p.y}, {"z", p.z - c.z},
+                        {"facing_deg", p.facing}, {"role", p.role},
+                        {"height", p.height}, {"protection", p.protection},
+                        {"can_shoot", p.canShoot}, {"importance", p.importance},
+                        {"radius", p.radius},
+                        {"fire_arc_deg", p.fireArc}, {"fire_range", p.fireRange}});
+    }
+    if (coll.empty() && tact.empty())
+    { err = "Nessun elemento selezionato."; return false; }
+
+    nlohmann::json pj;
+    pj["name"]      = id;
+    pj["collision"] = coll;
+    pj["tactical"]  = tact;
+
+    const std::string path = (fs::path(getDataDir()) / "prefabs" / (id + ".json")).string();
+    std::error_code ec;
+    fs::create_directories(fs::path(getDataDir()) / "prefabs", ec);
+    if (!editor::jsonsave::saveJsonRMW(path, [&](nlohmann::json& j) { j = pj; return true; }))
+    { err = "Scrittura fallita: " + path; return false; }
+
+    // Ricarica il registry: il nuovo prefab dev'essere subito piazzabile.
+    m_prefabReg.loadPrefabs(getDataDir());
+    m_prefabIds.clear();
+    for (const auto& [pid, def] : m_prefabReg.prefabs()) m_prefabIds.push_back(pid);
+    std::sort(m_prefabIds.begin(), m_prefabIds.end());
+
+    if (m_newPrefabConsume)
+    {
+        // Gli elementi assorbiti escono dalla mappa e tornano come ISTANZA: così non
+        // restano duplicati (una copia "cotta" nella mappa + una dal prefab) che poi
+        // divergerebbero. Si rimuove dal fondo per non invalidare gli indici.
+        for (auto it = boxIdx.rbegin(); it != boxIdx.rend(); ++it)
+            m_boxes.erase(m_boxes.begin() + *it);
+        for (auto it = posIdx.rbegin(); it != posIdx.rend(); ++it)
+            m_positions.erase(m_positions.begin() + *it);
+        PrefabInstEntry inst;
+        inst.id = id; inst.x = c.x; inst.y = 0.0f; inst.z = c.z; inst.ry = 0.0f;
+        m_prefabInsts.push_back(inst);
+        m_selBox = -4000 - ((int)m_prefabInsts.size() - 1);
+    }
+    m_newPrefabId[0] = '\0';
+    m_prefabZoneMode = false;         // esce dalla modalità selezione
+    m_prefabPickManual = false;
+    m_prefabPickBoxes.clear(); m_prefabPickPositions.clear();
+    m_dirty = true;
+    updateViewport();
+    return true;
+}
+
 // ── recomputeExposure (ADR-033) ───────────────────────────────────────────────
 // Costruisce un MapDef temporaneo dai dati dell'editor e chiama la STESSA funzione
 // del runtime: la regola dell'esposizione esiste in un posto solo. Si ricalcola a
@@ -779,6 +943,85 @@ void MapEditor::recomputeExposure()
     }
     mini::worldintel::buildTacticalLinks(tmp);
     m_exposure = tmp.positionExposure;
+
+    // ── VISUALE VERTICALE (KI #83) ───────────────────────────────────────────
+    // Quante posizioni a QUOTA DIVERSA vede ciascuna posizione, con lo stesso modello
+    // di combattimento del runtime: origine agli OCCHI, bersaglio al CORPO
+    // ([[combat-los-eye-height]]), e la stessa `hasLineOfFire`.
+    // A cosa serve: è stato misurato che l'AI ingaggia tutto ciò che vede a quota
+    // diversa e spara — il collo di bottiglia è che quasi non VEDE, perché le
+    // piattaforme piene occludono verso il basso oltre il proprio bordo. Questo numero
+    // rende quel limite visibile QUI, mentre si autora, invece che a tentativi in
+    // partita: 0 = posizione elevata inutile per battere chi sta sotto.
+    // La LOS si calcola solo sulle coppie cross-quota (il filtro sul dislivello viene
+    // PRIMA), quindi il costo resta una frazione di quello dei link.
+    // Copertura dall'alto (doc 41 B3): stessa funzione del runtime, calcolata sul
+    // MapDef temporaneo → l'editor e il gioco dicono la stessa cosa.
+    m_overhead.assign(m_positions.size(), 0);
+    for (size_t i = 0; i < tmp.tacticalPositions.size() && i < m_overhead.size(); ++i)
+    {
+        const auto& p = tmp.tacticalPositions[i];
+        m_overhead[i] = mini::worldintel::hasOverheadCover(
+            tmp, p.x, p.y, p.z, mini::config::OVERHEAD_PROBE_HEIGHT) ? 1 : 0;
+    }
+
+    m_vertSight.assign(m_positions.size(), 0);
+    m_vertPairs.assign(m_positions.size(), 0);
+    for (size_t i = 0; i < tmp.tacticalPositions.size(); ++i)
+    {
+        const auto& a = tmp.tacticalPositions[i];
+        for (size_t j = 0; j < tmp.tacticalPositions.size(); ++j)
+        {
+            if (i == j) continue;
+            const auto& b = tmp.tacticalPositions[j];
+            if (std::fabs(a.y - b.y) <= mini::config::VERTICAL_ENGAGE_DY) continue;
+            ++m_vertPairs[i];
+            if (mini::worldintel::hasLineOfFire(
+                    tmp, a.x, a.y + mini::config::COMBAT_EYE_HEIGHT, a.z,
+                         b.x, b.y + mini::config::AI_HALF_Y,          b.z))
+                ++m_vertSight[i];
+        }
+    }
+
+    // ── SALUTE TATTICA (doc 41 B4) ───────────────────────────────────────────
+    // Aggrega in un elenco unico i difetti che prima si scoprivano solo ispezionando
+    // un elemento per volta. Non inventa regole nuove: usa i dati derivati già
+    // calcolati qui sopra (grafo, esposizione, visuale verticale) + due controlli di
+    // coerenza. Ogni voce porta il codice di selezione → è cliccabile.
+    // Regole CONDIVISE col gate `--validate` (ADR-018): stanno in ContentValidation,
+    // mai duplicate qui — due copie divergerebbero al primo ritocco di soglia.
+    // I settori vanno copiati nel MapDef temporaneo, altrimenti la regola "settore
+    // senza posizioni" non avrebbe nulla su cui lavorare.
+    tmp.sectors.reserve(m_sectors.size());
+    for (const auto& s : m_sectors)
+    {
+        mini::SectorDef sd;
+        sd.label = s.label; sd.x = s.x; sd.z = s.z;
+        sd.radius = s.radius; sd.importance = s.importance;
+        tmp.sectors.push_back(sd);
+    }
+    m_issues.clear();
+    for (const auto& d : mini::analyzeTacticalHealth(tmp))
+    {
+        const int sel = (d.target == mini::TacticalDefect::Target::Position)
+                      ? (-1000 - d.index) : (-2000 - d.index);
+        m_issues.push_back({sel, d.severity, (int)d.kind, d.text});
+    }
+    // Difetto specifico dell'EDITOR: la visuale verticale è un dato che vive qui
+    // (m_vertSight/m_vertPairs), quindi la regola resta qui — è l'unica.
+    for (size_t i = 0; i < m_vertPairs.size() && i < m_vertSight.size(); ++i)
+        if (m_vertPairs[i] > 0 && m_vertSight[i] == 0)
+        {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "[%s %d] cieca verso le altre quote (0/%d)",
+                          i < tmp.tacticalPositions.size()
+                              ? tmp.tacticalPositions[i].role.c_str() : "pos",
+                          (int)i + 1, m_vertPairs[i]);
+            m_issues.push_back({-1000 - (int)i, 1,
+                                (int)mini::TacticalDefect::Kind::BlindVertical, buf});
+        }
+    std::stable_sort(m_issues.begin(), m_issues.end(),
+                     [](const TacticalIssue& a, const TacticalIssue& b) { return a.sev > b.sev; });
 }
 
 // ── updateViewport ────────────────────────────────────────────────────────────
@@ -922,6 +1165,84 @@ void MapEditor::updateViewport()
         draws.push_back(s);
     }
 
+    // ── Creazione prefab: RAGGIO e SELEZIONE visibili (2026-08-02) ───────
+    // Prima il raggio era invisibile e si doveva indovinare cosa sarebbe finito nel
+    // prefab. Ora si vede il disco della zona e gli elementi presi sono evidenziati:
+    // la stessa selezione che verrà salvata (`prefabZoneCollect`, una sola verità).
+    if (m_prefabZoneMode)
+    {
+        FreeCameraViewport::MapBoxDraw disc;
+        disc.x = m_prefabZoneX; disc.y = 0.04f; disc.z = m_prefabZoneZ; disc.ry = 0.0f;
+        disc.sx = m_newPrefabRadius * 2.0f; disc.sy = 0.03f;
+        disc.sz = m_newPrefabRadius * 2.0f;
+        disc.r = 0.35f; disc.g = 0.85f; disc.b = 0.95f;   // ciano = zona di raccolta
+        disc.selected = false; disc.pickId = FreeCameraViewport::MapBoxDraw::kNoPick;
+        draws.push_back(disc);
+
+        std::vector<int> selBoxes, selPos;
+        prefabZoneCollect(selBoxes, selPos);
+        // Marker sopra ogni elemento incluso: si legge a colpo d'occhio COSA entra,
+        // anche quando gli oggetti sono uno dietro l'altro.
+        for (int i : selBoxes)
+        {
+            if (i < 0 || i >= (int)m_boxes.size()) continue;
+            const auto& b = m_boxes[i];
+            FreeCameraViewport::MapBoxDraw m;
+            m.x = b.x; m.y = b.y + b.sy * 0.5f + 0.45f; m.z = b.z; m.ry = 45.0f;
+            m.sx = 0.4f; m.sy = 0.4f; m.sz = 0.4f;
+            m.r = 0.35f; m.g = 0.95f; m.b = 1.0f;
+            m.selected = false; m.pickId = i;   // cliccabile per il toggle Shift+click
+            draws.push_back(m);
+        }
+        for (int i : selPos)
+        {
+            if (i < 0 || i >= (int)m_positions.size()) continue;
+            const auto& p = m_positions[i];
+            FreeCameraViewport::MapBoxDraw m;
+            m.x = p.x; m.y = p.y + 1.9f; m.z = p.z; m.ry = 45.0f;
+            m.sx = 0.35f; m.sy = 0.35f; m.sz = 0.35f;
+            m.r = 0.35f; m.g = 0.95f; m.b = 1.0f;
+            m.selected = false; m.pickId = -1000 - i;
+            draws.push_back(m);
+        }
+    }
+
+    // ── Istanze di PREFAB (ADR-048): anteprima ───────────────────────────
+    // Si disegnano i box del prefab con la STESSA trasformazione dell'espansione del
+    // motore (rotazione attorno a Y + traslazione), così ciò che si vede nell'editor è
+    // ciò che esisterà in partita. Tinta distinta: sono contenuto DERIVATO, non box
+    // della mappa — non si editano qui, si edita l'istanza.
+    for (int i = 0; i < (int)m_prefabInsts.size(); ++i)
+    {
+        const auto& inst = m_prefabInsts[i];
+        const mini::PrefabDef* pf = m_prefabReg.getPrefab(inst.id);
+        const bool sel = (m_selBox == -4000 - i);
+        if (!pf)
+        {   // Riferimento rotto: marker rosso, così si vede invece di sparire in silenzio.
+            FreeCameraViewport::MapBoxDraw bad;
+            bad.x = inst.x; bad.y = inst.y + 1.0f; bad.z = inst.z;
+            bad.sx = 1.0f; bad.sy = 2.0f; bad.sz = 1.0f;
+            bad.r = 0.95f; bad.g = 0.15f; bad.b = 0.15f;
+            bad.selected = sel; bad.pickId = -4000 - i;
+            draws.push_back(bad);
+            continue;
+        }
+        const float rad = inst.ry * 3.14159265f / 180.0f;
+        const float cs = std::cos(rad), sn = std::sin(rad);
+        for (const auto& b : pf->collision)
+        {
+            FreeCameraViewport::MapBoxDraw d;
+            d.x  = inst.x + b.x * cs + b.z * sn;
+            d.z  = inst.z - b.x * sn + b.z * cs;
+            d.y  = inst.y + b.y;
+            d.ry = b.ry + inst.ry;
+            d.sx = b.sx; d.sy = b.sy; d.sz = b.sz;
+            d.r = 0.55f; d.g = 0.45f; d.b = 0.75f;   // viola: contenuto da prefab
+            d.selected = sel; d.pickId = -4000 - i;
+            draws.push_back(d);
+        }
+    }
+
     // ── Posizioni tattiche (ADR-030) ─────────────────────────────────────
     // Un solo marker per tutte: colore dal RUOLO, altezza dalla copertura.
     // Chi ripara (protection > 0) è una lastra alta `height` (si vede cosa
@@ -955,6 +1276,23 @@ void MapEditor::updateViewport()
         nose.r = r * 0.6f; nose.g = g * 0.6f; nose.b = b * 0.6f;
         nose.selected = sel; nose.pickId = -1000 - i;
         draws.push_back(nose);
+
+        // Segnale di posizione CIECA sopra/sotto (KI #83): tacca rossa sospesa. Si
+        // disegna SOLO dove il difetto esiste davvero — ci sono altre quote in giro
+        // (vertPairs > 0) ma da qui non se ne batte nessuna. Serve a trovarle a colpo
+        // d'occhio, senza selezionarle una per una: il colore del corpo resta quello
+        // del RUOLO, che non va perso.
+        if (i < (int)m_vertSight.size() && i < (int)m_vertPairs.size()
+            && m_vertPairs[i] > 0 && m_vertSight[i] == 0)
+        {
+            FreeCameraViewport::MapBoxDraw blind;
+            blind.x = p.x; blind.y = p.y + h + 0.55f; blind.z = p.z;
+            blind.ry = 45.0f;   // rombo: si distingue dai marker quadrati
+            blind.sx = 0.34f; blind.sy = 0.34f; blind.sz = 0.34f;
+            blind.r = 0.95f; blind.g = 0.25f; blind.b = 0.20f;
+            blind.selected = sel; blind.pickId = -1000 - i;
+            draws.push_back(blind);
+        }
 
         if (p.role == "defensive" || p.role == "chokepoint")
         {
@@ -1159,6 +1497,16 @@ void MapEditor::updateViewport()
         m_viewport.setGizmoRotAxes(false, true, false);   // fronte della posizione
         m_viewport.setGizmoCanRotateScale(true, false);
     }
+    // Istanza di PREFAB (ADR-048): PRIMA del ramo settori, che usa `<= -2000` e
+    // catturerebbe anche -4000. Sposta e RUOTA (la scala no: scalare un prefab
+    // deformerebbe le posizioni tattiche che porta con sé).
+    else if (m_selBox <= -4000 && (-4000 - m_selBox) < (int)m_prefabInsts.size())
+    {
+        const auto& p = m_prefabInsts[-4000 - m_selBox];
+        m_viewport.setGizmoTarget({p.x, p.y + 1.0f, p.z}, true);
+        m_viewport.setGizmoRotAxes(false, true, false);   // solo yaw
+        m_viewport.setGizmoCanRotateScale(true, false);
+    }
     else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
     {
         const auto& s = m_sectors[-2000 - m_selBox];
@@ -1206,12 +1554,27 @@ void MapEditor::draw()
 
     ImGui::SameLine();
 
+    // ── Maniglia di ridimensionamento del pannello destro ────────────────
+    // Splitter ESPLICITO invece di `ChildFlags_ResizeX`: quel flag mette il grip sul
+    // bordo DESTRO del child, che qui coincide col bordo della finestra — una volta
+    // stretto il pannello non c'era più nulla da afferrare e non si riallargava
+    // (segnalato dall'utente). Con una maniglia a SINISTRA il gesto è simmetrico.
+    ImGui::InvisibleButton("##propsplit", ImVec2(6.0f, remaining));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive())
+        s_propW -= ImGui::GetIO().MouseDelta.x;   // trascinando a sinistra si ALLARGA
+    // Clamp: mai sotto il minimo leggibile, mai oltre metà finestra → non può
+    // "incastrarsi" in uno stato da cui non si torna indietro.
+    const float propMax = (totalW > 400.0f) ? totalW * 0.5f : 200.0f;
+    if (s_propW < 180.0f)    s_propW = 180.0f;
+    if (s_propW > propMax)   s_propW = propMax;
+    ImGui::SameLine();
+
     // ── Proprietà ────────────────────────────────────────────────────────
-    ImGui::BeginChild("##box_props", ImVec2(s_propW, 0),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    ImGui::BeginChild("##box_props", ImVec2(s_propW, 0), ImGuiChildFlags_Borders);
     drawProperties(ImGui::GetContentRegionAvail().x, remaining);
     ImGui::EndChild();
-    s_propW = ImGui::GetItemRectSize().x;
 
     ImGui::EndChild();
 }
@@ -1264,51 +1627,55 @@ void MapEditor::drawToolbar()
         ImGui::OpenPopup("##del_confirm");
     }
 
-    // ── Nome visualizzato (campo `name`, ciò che si vede in partita/sandbox) ─
-    if (!m_mapId.empty())
-    {
-        ImGui::SameLine(0, 16);
-        ImGui::TextUnformatted("Nome:");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(130.0f);
-        if (ImGui::InputText("##mapname", m_mapDisplayName, sizeof(m_mapDisplayName)))
-            m_dirty = true;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Nome mostrato in partita e sandbox (campo 'name').\n"
-                              "Distinto dall'id/filename. Ricordati di Salvare.");
-    }
-
-    // ── Rinomina mappa (ADR-010) ─────────────────────────────────────────
+    // ── Rinomina mappa: UN SOLO nome, UN SOLO comando (ADR-010) ──────────
+    // Prima c'erano DUE caselle di testo affiancate con semantiche diverse: una
+    // cambiava il NOME VISUALIZZATO (campo `name`), l'altra faceva il RENAME vero
+    // (file + cross-reference). Due modi di "cambiare nome" con effetti diversi sono
+    // una trappola, e occupavano permanentemente la toolbar (segnalato dall'utente
+    // 2026-08-02). Ora: **un pulsante, un popup**, come Nuova mappa/Elimina — e il
+    // rename allinea filename, id e nome visualizzato, così **il nome è uno solo,
+    // uguale da qualunque parte lo si guardi**.
     if (!m_mapId.empty())
     {
         ImGui::SameLine(0, 16);
         static char renameBuf[64] = "";
         static std::string renameErr;
-        ImGui::SetNextItemWidth(110.0f);
-        ImGui::InputText("##mrename", renameBuf, sizeof(renameBuf));
-        ImGui::SameLine();
-        if (ImGui::Button("Rinomina") && renameBuf[0] != '\0')
+        if (ImGui::Button("Rinomina..."))
         {
-            int refs = 0;
-            renameErr = editor::rename::renameDefinition(
-                getDataDir() + "/", editor::rename::Category::Map,
-                m_mapId, renameBuf, &refs);
-            if (renameErr.empty())
-            {
-                std::string newId = renameBuf;
-                renameBuf[0] = '\0';
-                // Il rename cambia filename/id; sincronizza anche il nome
-                // MOSTRATO (campo `name`) col nuovo id, così partita e sandbox non
-                // continuano a far vedere quello vecchio (segnalato 2026-07-21).
-                editor::jsonsave::saveJsonRMW(
-                    getDataDir() + "/maps/" + newId + ".json",
-                    [&](nlohmann::json& j) { j["name"] = newId; return true; });
-                loadMaps();
-                loadMap(newId);   // ricarica → m_mapDisplayName = nuovo name
-            }
+            std::snprintf(renameBuf, sizeof(renameBuf), "%s", m_mapId.c_str());
+            renameErr.clear();
+            ImGui::OpenPopup("Rinomina mappa");
         }
-        if (!renameErr.empty())
-        { ImGui::SameLine(); ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str()); }
+        if (ImGui::BeginPopup("Rinomina mappa"))
+        {
+            ImGui::TextDisabled("Il nome cambia ovunque: file, elenco e partita.");
+            ImGui::SetNextItemWidth(220.0f);
+            ImGui::InputText("##mrename", renameBuf, sizeof(renameBuf));
+            if (!renameErr.empty())
+                ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());
+            if (ImGui::Button("Rinomina", {110,0}) && renameBuf[0] != '\0'
+                && m_mapId != renameBuf)
+            {
+                int refs = 0;
+                renameErr = editor::rename::renameDefinition(
+                    getDataDir() + "/", editor::rename::Category::Map,
+                    m_mapId, renameBuf, &refs);
+                if (renameErr.empty())
+                {
+                    const std::string newId = renameBuf;
+                    // Il nome VISUALIZZATO segue l'id: è ciò che rende il nome unico.
+                    editor::jsonsave::saveJsonRMW(
+                        getDataDir() + "/maps/" + newId + ".json",
+                        [&](nlohmann::json& j) { j["name"] = newId; return true; });
+                    loadMaps();
+                    loadMap(newId);
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Annulla", {110,0})) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
 
     ImGui::SameLine(0, 16);
@@ -1423,6 +1790,77 @@ void MapEditor::drawToolbar()
 // ── drawBoxList ───────────────────────────────────────────────────────────────
 void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
 {
+    // ── SALUTE TATTICA (doc 41 B4) ───────────────────────────────────────
+    // In CIMA e chiuso di default: si vede subito SE la mappa ha problemi senza che
+    // rubi spazio quando non ne ha. Prima questi controlli esistevano ma andavano
+    // cercati un elemento per volta — impraticabile oltre le poche decine di posizioni.
+    {
+        int problems = 0;
+        for (const auto& is : m_issues) if (is.sev == 1) ++problems;
+        const int warns = (int)m_issues.size() - problems;
+
+        if (m_issues.empty())
+            ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f), "Salute tattica: OK");
+        else
+        {
+            char hdr[96];
+            std::snprintf(hdr, sizeof(hdr), "Salute tattica: %d problemi, %d avvisi###salute",
+                          problems, warns);
+            ImGui::PushStyleColor(ImGuiCol_Text, problems > 0 ? ImVec4(0.95f, 0.55f, 0.35f, 1.0f)
+                                                              : ImVec4(0.90f, 0.85f, 0.40f, 1.0f));
+            const bool open = ImGui::CollapsingHeader(hdr);
+            ImGui::PopStyleColor();
+            if (open)
+            {
+                ImGui::TextDisabled("Clicca una voce per selezionare l'elemento.");
+                // RAGGRUPPATO PER TIPO (richiesta utente 2026-08-02): un elenco lungo e
+                // indifferenziato si smette di leggere. Ogni categoria è una tendina
+                // richiudibile, così le famiglie intenzionali per QUESTA mappa (es. i
+                // settori di solo transito) si chiudono una volta e non disturbano più,
+                // senza doverle disattivare — restano lì se un giorno servono.
+                ImGui::BeginChild("##issues", ImVec2(0, 220), true);
+                for (int kind = 0; kind < (int)mini::TacticalDefect::Kind::Count; ++kind)
+                {
+                    int nProb = 0, nWarn = 0;
+                    for (const auto& is : m_issues)
+                        if (is.kind == kind) { if (is.sev == 1) ++nProb; else ++nWarn; }
+                    if (nProb + nWarn == 0) continue;   // categoria vuota → non si mostra
+
+                    char khdr[128];
+                    std::snprintf(khdr, sizeof(khdr), "%s (%d)###k%d",
+                                  mini::tacticalDefectKindName((mini::TacticalDefect::Kind)kind),
+                                  nProb + nWarn, kind);
+                    // I gruppi con PROBLEMI si aprono da soli; quelli di soli avvisi
+                    // restano chiusi: si vede subito cosa merita attenzione.
+                    if (nProb > 0) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        nProb > 0 ? ImVec4(0.95f, 0.60f, 0.50f, 1.0f)
+                                  : ImVec4(0.85f, 0.82f, 0.55f, 1.0f));
+                    const bool kopen = ImGui::TreeNode(khdr);
+                    ImGui::PopStyleColor();
+                    if (!kopen) continue;
+                    for (int k = 0; k < (int)m_issues.size(); ++k)
+                    {
+                        const auto& is = m_issues[k];
+                        if (is.kind != kind) continue;
+                        char lbl[192];
+                        std::snprintf(lbl, sizeof(lbl), "%s %s##iss%d",
+                                      is.sev == 1 ? "!" : "-", is.text.c_str(), k);
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            is.sev == 1 ? ImVec4(0.95f, 0.60f, 0.50f, 1.0f)
+                                        : ImVec4(0.85f, 0.82f, 0.55f, 1.0f));
+                        if (ImGui::Selectable(lbl, m_selBox == is.sel))
+                        { m_selBox = is.sel; updateViewport(); }
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::TreePop();
+                }
+                ImGui::EndChild();
+            }
+        }
+        ImGui::Separator();
+    }
+
     ImGui::TextDisabled("Box (%d)", (int)m_boxes.size());
     ImGui::Separator();
 
@@ -1616,13 +2054,159 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     ImGui::Separator();
     ImGui::TextDisabled("Metadata AI");
 
+    // Riepilogo VISUALE VERTICALE (KI #83): quante posizioni, pur avendo altre quote
+    // in giro, non ne battono NESSUNA. È lo stato di salute verticale della mappa a
+    // colpo d'occhio — prima lo si scopriva solo giocando. Le cieche hanno un rombo
+    // rosso sopra nel viewport; qui si vede subito se sono un caso isolato o la norma.
+    {
+        int blind = 0, withPairs = 0;
+        for (size_t i = 0; i < m_vertPairs.size(); ++i)
+            if (m_vertPairs[i] > 0)
+            { ++withPairs; if (i < m_vertSight.size() && m_vertSight[i] == 0) ++blind; }
+        if (withPairs > 0)
+        {
+            if (blind > 0)
+                ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f),
+                                   "Verticale: %d/%d cieche", blind, withPairs);
+            else
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                                   "Verticale: tutte battono altre quote");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Posizioni che NON vedono nessuna quota diversa.\n"
+                                  "Rombo rosso nel viewport. Rimedi: avvicinare al bordo,\n"
+                                  "abbassare i parapetti, o accettare che il piano alto\n"
+                                  "domini solo le lunghe distanze.");
+        }
+    }
+
+    // ── PREFAB (ADR-048) ─────────────────────────────────────────────────
+    // Piazzare un prefab porta con sé collisione E posizioni tattiche già pensate:
+    // è il modo di autorare mappe profonde senza piazzare mille posizioni a mano.
+    ImGui::Separator();
+    ImGui::TextDisabled("Prefab (%d)", (int)m_prefabInsts.size());
+
+    // CREAZIONE da zona: si costruisce il pezzo nella mappa e lo si promuove ad asset.
+    // Senza questo si potevano solo piazzare prefab scritti a mano nel JSON.
+    {
+        static std::string prefabErr;
+        if (ImGui::SmallButton("Crea prefab da zona..."))
+        {
+            prefabErr.clear();
+            // Centro CONGELATO all'apertura: se seguisse la telecamera, la selezione
+            // cambierebbe sotto gli occhi mentre si scrive il nome.
+            const glm::vec3 fp = m_viewport.groundFocusPoint();
+            m_prefabZoneX = fp.x; m_prefabZoneZ = fp.z;
+            m_prefabZoneMode = true; m_prefabPickManual = false;
+            m_prefabPickBoxes.clear(); m_prefabPickPositions.clear();
+            updateViewport();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Prende box e posizioni tattiche entro un raggio dal punto\n"
+                              "inquadrato e li salva come asset riusabile.");
+        // Pannello INLINE, non un popup: un popup ImGui si chiude al primo click fuori,
+        // quindi cliccare nel viewport per rifinire la selezione lo faceva sparire e il
+        // Shift+click arrivava a modalità già spenta (segnalato dall'utente 2026-08-02).
+        // Un'azione che richiede di cliccare nella SCENA non può vivere in un popup.
+        if (m_prefabZoneMode)
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("Zona in CIANO nel viewport; gli elementi presi hanno un rombo.");
+            ImGui::TextDisabled("Shift/Ctrl+click su un elemento per aggiungerlo o toglierlo.");
+            std::vector<int> selB, selP;
+            prefabZoneCollect(selB, selP);
+            ImGui::TextColored({0.35f,0.95f,1.0f,1.0f}, "Selezionati: %d box, %d posizioni%s",
+                               (int)selB.size(), (int)selP.size(),
+                               m_prefabPickManual ? "  (ritoccato a mano)" : "");
+            ImGui::SetNextItemWidth(180.0f);
+            ImGui::InputText("Nome", m_newPrefabId, sizeof(m_newPrefabId));
+            // Il raggio agisce solo finché non si ritocca a mano: dopo comanda la lista.
+            ImGui::BeginDisabled(m_prefabPickManual);
+            if (editor::ui::sliderRow("Raggio", m_newPrefabRadius, 1.f, 40.f, 0.5f, "%.1f m"))
+                updateViewport();
+            ImGui::EndDisabled();
+            if (m_prefabPickManual && ImGui::SmallButton("Torna al raggio"))
+            { m_prefabPickManual = false; updateViewport(); }
+            ImGui::Checkbox("Sostituisci in mappa con un'istanza", &m_newPrefabConsume);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Consigliato: evita di avere due copie (una fissa nella\n"
+                                  "mappa e una dal prefab) che poi divergono.");
+            if (!prefabErr.empty())
+                ImGui::TextColored({0.95f,0.35f,0.30f,1.0f}, "%s", prefabErr.c_str());
+            if (ImGui::Button("Crea", {110,0}))
+                savePrefabFromZone(prefabErr);   // esce da sé dalla modalità se riesce
+            ImGui::SameLine();
+            if (ImGui::Button("Annulla", {110,0}))
+            {
+                prefabErr.clear();
+                m_prefabZoneMode = false; m_prefabPickManual = false;
+                m_prefabPickBoxes.clear(); m_prefabPickPositions.clear();
+                updateViewport();
+            }
+            ImGui::Separator();
+        }
+    }
+
+    if (m_prefabIds.empty())
+        ImGui::TextDisabled("nessun prefab in data/prefabs/");
+    else
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.72f, 0.62f, 0.95f, 1.0f));
+        for (int i = 0; i < (int)m_prefabInsts.size(); ++i)
+        {
+            const auto& p = m_prefabInsts[i];
+            const bool broken = (m_prefabReg.getPrefab(p.id) == nullptr);
+            char lbl[96];
+            std::snprintf(lbl, sizeof(lbl), "%s%s##pfi%d",
+                          broken ? "! " : "", p.id.c_str(), i);
+            if (ImGui::Selectable(lbl, m_selBox == -4000 - i))
+            { m_selBox = -4000 - i; updateViewport(); }
+            if (broken && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Prefab '%s' non trovato in data/prefabs/", p.id.c_str());
+        }
+        ImGui::PopStyleColor();
+
+        if (m_prefabPick >= (int)m_prefabIds.size()) m_prefabPick = 0;
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::BeginCombo("##pfsel", m_prefabIds[m_prefabPick].c_str()))
+        {
+            for (int k = 0; k < (int)m_prefabIds.size(); ++k)
+                if (ImGui::Selectable(m_prefabIds[k].c_str(), m_prefabPick == k))
+                    m_prefabPick = k;
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("+ Piazza"))
+        {
+            const glm::vec3 fp = m_viewport.groundFocusPoint();
+            PrefabInstEntry e;
+            e.id = m_prefabIds[m_prefabPick];
+            e.x = fp.x; e.y = 0.0f; e.z = fp.z;
+            m_prefabInsts.push_back(e);
+            m_selBox = -4000 - ((int)m_prefabInsts.size() - 1);
+            m_dirty = true; updateViewport();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("-##pfi") && m_selBox <= -4000)
+        {
+            const int i = -4000 - m_selBox;
+            if (i >= 0 && i < (int)m_prefabInsts.size())
+            { m_prefabInsts.erase(m_prefabInsts.begin() + i); m_selBox = -1;
+              m_dirty = true; updateViewport(); }
+        }
+    }
+
+    ImGui::Separator();
     // Posizioni tattiche (ADR-030): una sola lista, il ruolo è nell'etichetta.
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.75f, 1.0f));
     for (int i = 0; i < (int)m_positions.size(); ++i)
     {
-        char lbl[72];
-        std::snprintf(lbl, sizeof(lbl), "[%s] %d##tpos%d",
-                      m_positions[i].role.c_str(), i + 1, i);
+        // Marcatore "cieca" anche in lista: si trova la posizione difettosa senza
+        // doverle aprire una a una.
+        const bool blindPos = i < (int)m_vertPairs.size() && m_vertPairs[i] > 0
+                           && i < (int)m_vertSight.size() && m_vertSight[i] == 0;
+        char lbl[80];
+        std::snprintf(lbl, sizeof(lbl), "%s[%s] %d##tpos%d",
+                      blindPos ? "! " : "", m_positions[i].role.c_str(), i + 1, i);
         if (ImGui::Selectable(lbl, m_selBox == -1000 - i))
         { m_selBox = -1000 - i; updateViewport(); }
     }
@@ -1821,6 +2405,32 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         return;
     }
 
+    // ── Istanza di PREFAB selezionata (ADR-048) ──────────────────────────
+    // PRIMA del ramo settori: quello usa `<= -2000` come catch-all e catturerebbe
+    // anche i codici dei prefab (-4000).
+    if (m_selBox <= -4000 && (-4000 - m_selBox) < (int)m_prefabInsts.size())
+    {
+        auto& inst = m_prefabInsts[-4000 - m_selBox];
+        const mini::PrefabDef* pf = m_prefabReg.getPrefab(inst.id);
+        ImGui::TextColored({0.72f,0.62f,0.95f,1.0f}, "Prefab: %s", inst.id.c_str());
+        ImGui::Separator();
+        if (!pf)
+            ImGui::TextColored({0.95f,0.35f,0.30f,1.0f},
+                               "NON TROVATO in data/prefabs/ — l'istanza non produrra' nulla");
+        else
+            ImGui::TextDisabled("%d box di collisione, %d posizioni tattiche",
+                                (int)pf->collision.size(), (int)pf->tactical.size());
+        bool changed = false;
+        changed |= editor::ui::dragRow("X", inst.x, 0.1f, -500.f, 500.f, "%.2f");
+        changed |= editor::ui::dragRow("Y", inst.y, 0.1f, -100.f, 100.f, "%.2f");
+        changed |= editor::ui::dragRow("Z", inst.z, 0.1f, -500.f, 500.f, "%.2f");
+        changed |= editor::ui::sliderRow("Rotazione", inst.ry, 0.f, 360.f, 5.f, "%.0f");
+        ImGui::TextDisabled("Contenuto e posizioni tattiche sono DERIVATI dal prefab:");
+        ImGui::TextDisabled("si modificano nel file del prefab, valgono per ogni istanza.");
+        if (changed) { m_dirty = true; updateViewport(); }
+        return;
+    }
+
     // ── Settore selezionato (ADR-034) ────────────────────────────────────
     if (m_selBox <= -2000)
     {
@@ -1917,6 +2527,37 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
             ImGui::TextDisabled(ex >= 0.5f ? "Molto allo scoperto: battuta da meta' mappa"
                               : ex <= 0.15f ? "Riparata: pochi angoli di tiro la battono"
                                             : "Media");
+        }
+
+        // Copertura dall'alto (doc 41 B3): DERIVATA, sola lettura. Utile a capire se una
+        // posizione è al riparo da tiro/lanci dall'alto e se sta sotto una struttura.
+        if (pi < (int)m_overhead.size())
+            ImGui::TextDisabled(m_overhead[pi] ? "Coperta dall'alto: si' (sotto una struttura)"
+                                               : "Coperta dall'alto: no (cielo aperto)");
+
+        // Visuale VERTICALE (KI #83): DERIVATA, sola lettura. Misurato in partita che
+        // l'AI ingaggia tutto cio' che vede a quota diversa e spara: se qui c'e' 0, il
+        // problema non e' l'AI ma la geometria — da qui non si battera' MAI nessuno
+        // sopra/sotto, per quanto la posizione sia elevata.
+        if (pi < (int)m_vertSight.size() && pi < (int)m_vertPairs.size())
+        {
+            const int vs = m_vertSight[pi], vp = m_vertPairs[pi];
+            if (vp == 0)
+                ImGui::TextDisabled("Visuale verticale: n/d (nessuna posizione ad altra quota)");
+            else if (vs == 0)
+            {
+                ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.35f, 1.0f),
+                                   "Visuale verticale: 0 / %d — CIECA sopra/sotto", vp);
+                ImGui::TextDisabled("Da qui non si battera' MAI un'altra quota:");
+                ImGui::TextDisabled("avvicinala al BORDO, o abbassa il parapetto.");
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1.0f),
+                                   "Visuale verticale: %d / %d (%.0f%%)",
+                                   vs, vp, 100.0f * (float)vs / (float)vp);
+                ImGui::TextDisabled("Utile al combattimento verticale (ponti/rialzati).");
+            }
         }
 
         ImGui::TextDisabled("Tattica");
@@ -2239,9 +2880,36 @@ void MapEditor::drawViewport(float vpW, float vpH)
     int picked = 0;
     if (m_viewport.popClickedMapBox(picked))
     {
-        m_selBox = picked;
-        if (m_selBox <= -300 && m_selBox > -400) m_selRoutePt = 0;   // route: primo punto attivo
-        updateViewport();   // rinfresca evidenziazione + bersaglio del gizmo
+        // In modalità creazione prefab, Shift/Ctrl+click NON cambia la selezione: la
+        // RIFINISCE (aggiunge/toglie l'elemento), come nei file manager e nei software
+        // 3D. Il raggio fa la presa grossolana, il click il lavoro di precisione.
+        const bool refine = m_prefabZoneMode
+                          && (ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl);
+        if (refine)
+        {
+            // Al primo ritocco si "congela" la selezione corrente del raggio, così si
+            // parte da ciò che si sta già vedendo invece che da una lista vuota.
+            if (!m_prefabPickManual)
+            {
+                prefabZoneCollect(m_prefabPickBoxes, m_prefabPickPositions);
+                m_prefabPickManual = true;
+            }
+            auto toggle = [](std::vector<int>& v, int idx) {
+                auto it = std::find(v.begin(), v.end(), idx);
+                if (it != v.end()) v.erase(it); else v.push_back(idx);
+            };
+            if (picked >= 0)                                   // box
+                toggle(m_prefabPickBoxes, picked);
+            else if (picked <= -1000 && picked > -2000)         // posizione tattica
+                toggle(m_prefabPickPositions, -1000 - picked);
+            updateViewport();
+        }
+        else
+        {
+            m_selBox = picked;
+            if (m_selBox <= -300 && m_selBox > -400) m_selRoutePt = 0;   // route: primo punto
+            updateViewport();   // rinfresca evidenziazione + bersaglio del gizmo
+        }
     }
     (void)vpW; (void)vpH;
 }

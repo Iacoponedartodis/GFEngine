@@ -1,5 +1,6 @@
 #pragma once
 #include "mini/ecs/ISystem.hpp"
+#include "mini/ecs/Entity.hpp"   // EntityId (firma di updateEnemyCommand)
 #include <vector>
 
 namespace mini
@@ -18,6 +19,13 @@ public:
     static constexpr float k_bulletLife  = 5.0f;
 
 private:
+    // Livello di COMANDO del lato separatista (doc 32 v2 / ADR-024): legge i settori,
+    // aggiorna torre e quadro tattico, e — con la sua CADENZA — ricostruisce le
+    // direttive del Droide Tattico. Definito in `AiCommandLayer.cpp` insieme al resto
+    // del command layer (audit #7): `update()` era 1740 righe. Restituisce la deriva
+    // del comandante dalla sua casa (leash ADR-041), che serve alla telemetria.
+    float updateEnemyCommand(World& world, const std::vector<EntityId>& snap, float dt);
+
     // ── Contatti condivisi (doc 34) ──────────────────────────────────────
     // Prima erano ricostruiti da zero ogni tick: un avvistamento si propagava
     // ISTANTANEAMENTE e non c'era nulla su cui la rete di comunicazione potesse
@@ -25,7 +33,11 @@ private:
     // intatte è utilizzabile subito, senza torre solo dopo `shareDelay` — e la
     // posizione resta quella dell'avvistamento, quindi i compagni convergono su
     // dove il nemico ERA. L'informazione vecchia è imprecisa: è il punto.
-    struct SharedContact { float x, z; int team; float age; };
+    // `confidence`: quanto ci si può fidare di questo contatto ORA (doc 40 A2). Nasce
+    // alta se l'ha prodotto la VISTA, bassa se l'UDITO (si sa da dove, non chi), e
+    // decade col tempo. È ciò che permette di distinguere "so dov'è" da "lì è successo
+    // qualcosa": senza, l'informazione vecchia e quella fresca valevano uguale.
+    struct SharedContact { float x, z; int team; float age; float confidence; };
     std::vector<SharedContact> m_contacts;
 
     // Rete di comunicazione: quando il comando ha rivalutato la direttiva, per

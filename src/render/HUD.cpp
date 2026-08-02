@@ -1,4 +1,5 @@
 #include "mini/render/HUD.hpp"
+#include "mini/core/GameConfig.hpp"   // SIM_SPEEDS (indicatore velocita simulazione)
 
 #include <cstdio>
 #include <cmath>
@@ -275,6 +276,32 @@ void HUD::render(float playerHp, float playerMaxHp, int state,
                 m_ui.rect(axr - PW, SY, 3, 22.0f, 0.30f, 0.85f, 0.60f);
                 m_ui.text(axr - PW + 10, SY + 5, 1.5f, m_squadOrder.c_str(),
                           0.75f, 1.0f, 0.88f);
+            }
+
+            // ── Velocità della SIMULAZIONE (angolo alto a destra) ─────────
+            // Strumento di osservazione: rallentare il mondo per leggere manovre e
+            // reazioni che a velocità piena scorrono troppo in fretta. Il giocatore
+            // resta a velocità normale, quindi si può andare a guardare da vicino.
+            // Pannellino pensato per CRESCERE con altri comandi di osservazione.
+            {
+                const float BW = 46.0f, BH = 20.0f, GAP = 3.0f;
+                const float totW = config::SIM_SPEED_COUNT * BW
+                                 + (config::SIM_SPEED_COUNT - 1) * GAP;
+                const float bx0 = (float)W - totW - 14.0f, by = 12.0f;
+                m_ui.rect(bx0 - 8, by - 6, totW + 16, BH + 26,
+                          0.05f, 0.07f, 0.10f, 0.72f);
+                m_ui.text(bx0, by - 4, 1.2f, "VELOCITA'  [ / ]", 0.60f, 0.68f, 0.75f);
+                for (int i = 0; i < config::SIM_SPEED_COUNT; ++i)
+                {
+                    const float bx = bx0 + i * (BW + GAP);
+                    const bool on = (i == m_simSpeedIdx);
+                    if (on) m_ui.rect(bx, by + 14, BW, BH, 0.18f, 0.45f, 0.55f, 0.95f);
+                    else    m_ui.rect(bx, by + 14, BW, BH, 0.10f, 0.12f, 0.16f, 0.85f);
+                    m_ui.textCentered(bx + BW * 0.5f, by + 19, 1.3f,
+                                      config::SIM_SPEED_LABELS[i],
+                                      on ? 0.85f : 0.55f, on ? 1.0f : 0.60f,
+                                      on ? 1.0f : 0.65f);
+                }
             }
 
             // Nemici (rosso) — a destra del centro

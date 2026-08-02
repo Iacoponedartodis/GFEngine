@@ -148,9 +148,13 @@ void SquadSystem::update(World& world, float dt)
             continue;   // un'unità a terra non riceve/esegue ordini
         }
 
-        // Ordine DIRETTO: se req.directedMember è impostato, solo quel membro lo
-        // riceve (comandi che puntano un compagno). 0 = tutta la squadra (default).
-        const bool addressed = (req.directedMember == 0 || req.directedMember == e);
+        // Ordine DIRETTO: se `directedMembers` non è vuoto, lo ricevono SOLO quelli
+        // (compagni selezionati dal giocatore, o il destinatario di Revive/CoveringFire).
+        // Lista vuota = tutta la squadra, come prima.
+        const bool addressed = req.directedMembers.empty()
+                            || std::find(req.directedMembers.begin(),
+                                         req.directedMembers.end(), e)
+                               != req.directedMembers.end();
         // REVOCA (ADR-037): OrderType::None come richiesta è un ordine valido —
         // "liberi", si torna truppa indipendente. Va gestito qui perché il blocco
         // di assegnazione filtra su isImplemented(), che None non soddisfa.
@@ -391,7 +395,7 @@ void SquadSystem::update(World& world, float dt)
     // Un solo messaggio per ordine di SQUADRA (non uno per membro). Gli ordini
     // DIRETTI a un compagno (Revive/CoveringFire) li annuncia già l'Application
     // col suo toast: dire anche "Squadra (1)" sarebbe fuorviante e ridondante.
-    if (assigned > 0 && req.directedMember == 0)
+    if (assigned > 0 && req.directedMembers.empty())
         world.pushEvent(std::string("Squadra (") + std::to_string(assigned)
                         + "): " + orderName(req.order));
 }

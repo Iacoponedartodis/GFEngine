@@ -88,6 +88,10 @@ public:
     // ordine, stato e distanza). Stringa vuota = nessuna squadra → niente pannello.
     // Completamento e causa di fallimento arrivano invece dal feed (pushEvent).
     void setSquadOrder(std::string s) { m_squadOrder = std::move(s); }
+    // Velocità della simulazione (strumento di osservazione): l'indice attivo fra
+    // `config::SIM_SPEEDS`. Mostrato in alto a destra — un pannellino destinato a
+    // crescere con altri comandi utili durante l'osservazione.
+    void setSimSpeed(int idx) { m_simSpeedIdx = idx; }
 
     // Obiettivi della missione attiva (ADR-019, doc 25). Vuoto = nessuna missione
     // → niente pannello, e il gioco resta identico a prima.
@@ -136,6 +140,7 @@ private:
     float       m_toastTimer  = 0.0f;
     std::string m_toast;
     std::string m_squadOrder;   // ADR-020 Phase B; vuota = nessun pannello
+    int m_simSpeedIdx = 3;      // indice in config::SIM_SPEEDS (3 = 1x)
     std::vector<ObjectiveLine> m_objectives;   // ADR-019; vuoto = nessun pannello
     std::vector<std::string> m_debrief;       // doc 25/GDD 9.6; vuoto = nessun debrief
     std::vector<PostStatus> m_posts;

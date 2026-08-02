@@ -209,6 +209,7 @@ add_executable(GFEngine
     src/ecs/systems/ObjectiveSystem.cpp
     src/game/data/ContentValidation.cpp
     src/ecs/systems/AiSystem.cpp
+    src/ecs/systems/AiCommandLayer.cpp
     src/ecs/systems/CrowdSystem.cpp
     src/game/game_modes/ConquestMode.cpp
     src/game/game_modes/SandboxMode.cpp

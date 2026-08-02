@@ -12,6 +12,12 @@ giocare a mano.
 ## Verifica headless via telemetria (nuovo canale primario)
 Molto comportamento (AI, nav, game mode, command post) si verifica SENZA input manuale:
 1. Avvia una simulazione headless: `GFEngine.exe --sim` (osservatore) o `--stress N` (N AI/team).
+   - **Per CONFRONTARE due run o due build usa `--sim-ticks N`** (changelog 99), es.
+     `--sim-ticks 3000 --map "Training Ground"`: esce dopo N tick di SIMULAZIONE, quindi le due run
+     fanno la stessa quantità di mondo. `--sim` + timeout esterno gira finché la macchina lo consente →
+     i totali variano col carico (**misurato ±10% sulla stessa build**: 211/215/224/224), abbastanza da
+     nascondere una regressione o da inventarne una. A tick fissi: 155/155/155, deterministico.
+   - Corollario: "prima 206 / dopo 206" con `--sim` **non è** una prova di invarianza per un refactor.
 2. Leggi `_telemetry_data/session_latest.jsonl` — una riga JSON per evento (doc 21). Filtra per
    `system`/`msg`, parsa con qualsiasi tool JSON (es. `ConvertFrom-Json`).
 3. Esempi: `navmesh built`/`sample path` (nav ok), `state change`/`stuck` (AI), `Ticket bleed`/

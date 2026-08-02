@@ -19,11 +19,13 @@
 #include "mini/core/Result.hpp"
 
 #include <string>
+#include <vector>
 
 namespace mini
 {
 class DefinitionRegistry;
 struct MissionDef;
+struct MapDef;
 
 // Valida l'intero contenuto caricato. `dataRoot` serve solo ai controlli sugli
 // asset (path relativi ai file dati); vuoto = salta quei gate.
@@ -41,5 +43,34 @@ struct MissionDef;
 // Emette le diagnostiche su telemetria JSONL (doc 21) e le stampa. Ritorna true
 // se c'è almeno un Error (= contenuto critico invalido).
 bool reportDiagnostics(const Diagnostics& diags, bool printToStdout);
+
+// ── SALUTE TATTICA di una mappa (doc 41 B4) ────────────────────────────────
+// Difetti che rendono una mappa tatticamente povera senza essere errori di dato:
+// posizioni che non coprono nulla, cieche verso le altre quote, troppo esposte,
+// ridondanti; settori privi di posizioni. Sta QUI e non nell'editor per la stessa
+// ragione di `validateMission`: i consumatori sono DUE (editor e `--validate`) e
+// regole duplicate divergono. L'editor le mostra cliccabili, il gate le stampa.
+//
+// PRECONDIZIONE: `map.positionCovers`/`positionExposure` già calcolati
+// (`worldintel::buildTacticalLinks`) — è vero sia per le mappe del registry sia per
+// il MapDef temporaneo dell'editor.
+struct TacticalDefect
+{
+    enum class Target { Position, Sector };
+    // Categoria del difetto: serve a RAGGRUPPARE l'elenco per tipo, così chi autora
+    // può chiudere in blocco le famiglie che nel suo caso sono intenzionali (es. i
+    // settori di solo transito) senza perdere le altre. Richiesta utente 2026-08-02:
+    // un elenco lungo e indifferenziato si smette di leggere.
+    enum class Kind { NoCoverage, BlindVertical, HighExposure, Redundant, EmptySector, Count };
+    Target      target   = Target::Position;
+    Kind        kind     = Kind::NoCoverage;
+    int         index    = 0;      // indice in tacticalPositions / sectors
+    int         severity = 0;      // 0 = avviso (valutare), 1 = problema
+    std::string text;
+};
+
+// Etichetta leggibile di una categoria (usata dal pannello editor e dal gate).
+[[nodiscard]] const char* tacticalDefectKindName(TacticalDefect::Kind k);
+[[nodiscard]] std::vector<TacticalDefect> analyzeTacticalHealth(const MapDef& map);
 
 } // namespace mini

@@ -296,6 +296,81 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
     }
 }
 
+// ── Parser CONDIVISI mappa ↔ prefab (ADR-048) ──────────────────────────────
+// Uno schema solo: un box e una posizione tattica si scrivono allo STESSO modo che
+// stiano in una mappa o in un prefab. Estratti dalle lambda locali di `loadMaps`
+// proprio per evitare due parser che divergono al primo campo aggiunto.
+static MapGeometryBox parseGeometryBox(const json& gb)
+{
+    MapGeometryBox box;
+    box.x  = getf(gb, "x",  0.0f);
+    box.y  = getf(gb, "y",  0.0f);
+    box.z  = getf(gb, "z",  0.0f);
+    box.ry = getf(gb, "ry", 0.0f);
+    box.sx = getf(gb, "sx", 2.0f);
+    box.sy = getf(gb, "sy", 2.0f);
+    box.sz = getf(gb, "sz", 2.0f);
+    box.r  = getf(gb, "r",  0.35f);
+    box.g  = getf(gb, "g",  0.32f);
+    box.b  = getf(gb, "b",  0.28f);
+    box.collider = getb(gb, "collider", true);
+    return box;
+}
+
+static TacticalPositionDef parseTacticalPosition(const json& p, const char* roleKey,
+                                                 const char* defRole)
+{
+    auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+    // `importance` è un PESO tattico relativo (≥0, senza tetto), non un [0,1]: un
+    // clamp01 ne schiaccerebbe la gradazione autorata (KI #81).
+    auto nonneg  = [](float v) { return v < 0.0f ? 0.0f : v; };
+    TacticalPositionDef t;
+    t.x          = getf(p, "x", 0.0f);
+    t.y          = getf(p, "y", 0.0f);
+    t.z          = getf(p, "z", 0.0f);
+    t.facingDeg  = getf(p, "facing_deg", 0.0f);
+    t.role       = gets(p, roleKey);
+    if (t.role.empty()) t.role = defRole;
+    t.height     = getf(p, "height", 1.0f);
+    t.protection = clamp01(getf(p, "protection", 0.5f));
+    t.canShoot   = p.contains("can_shoot") ? (bool)p["can_shoot"] : true;
+    t.importance = nonneg(getf(p, "importance", 0.5f));
+    t.radius     = getf(p, "radius", 4.0f);
+    t.fireArcDeg = getf(p, "fire_arc_deg", 120.0f);
+    if (t.fireArcDeg < 5.0f)   t.fireArcDeg = 5.0f;
+    if (t.fireArcDeg > 360.0f) t.fireArcDeg = 360.0f;
+    t.fireRange  = getf(p, "fire_range", 25.0f);
+    if (t.fireRange < 1.0f) t.fireRange = 1.0f;
+    return t;
+}
+
+// ── Caricamento PREFAB (ADR-048) ───────────────────────────────────────────
+// Va chiamato PRIMA di `loadMaps`: le mappe li espandono al load.
+void DefinitionRegistry::loadPrefabs(const std::string& dir)
+{
+    fs::path folder = dir + "/prefabs";
+    if (!fs::exists(folder)) return;   // il progetto funziona anche senza prefab
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        PrefabDef p;
+        p.id       = entry.path().stem().string();   // ADR-001
+        p.name     = gets(*j, "name", p.id);
+        p.meshPath = gets(*j, "mesh");               // SOLO visivo (ADR-047)
+        if ((*j).contains("collision") && (*j)["collision"].is_array())
+            for (auto& b : (*j)["collision"]) p.collision.push_back(parseGeometryBox(b));
+        if ((*j).contains("tactical") && (*j)["tactical"].is_array())
+            for (auto& t : (*j)["tactical"])
+                p.tactical.push_back(parseTacticalPosition(t, "role", "cover"));
+        p.tags = getStrArray(*j, "tags");
+        std::cout << "[Registry] Prefab: " << p.id
+                  << " (collisione:" << p.collision.size()
+                  << " tattiche:" << p.tactical.size() << ")\n";
+        m_prefabs[p.id] = std::move(p);
+    }
+}
+
 void DefinitionRegistry::loadMaps(const std::string& dir)
 {
     fs::path folder = dir + "/maps";
@@ -331,21 +406,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         if ((*j).contains("geometry") && (*j)["geometry"].is_array())
         {
             for (auto& gb : (*j)["geometry"])
-            {
-                MapGeometryBox box;
-                box.x  = getf(gb, "x",  0.0f);
-                box.y  = getf(gb, "y",  0.0f);
-                box.z  = getf(gb, "z",  0.0f);
-                box.ry = getf(gb, "ry", 0.0f);
-                box.sx = getf(gb, "sx", 2.0f);
-                box.sy = getf(gb, "sy", 2.0f);
-                box.sz = getf(gb, "sz", 2.0f);
-                box.r  = getf(gb, "r",  0.35f);
-                box.g  = getf(gb, "g",  0.32f);
-                box.b  = getf(gb, "b",  0.28f);
-                box.collider = getb(gb, "collider", true);
-                m.geometry.push_back(box);
-            }
+                m.geometry.push_back(parseGeometryBox(gb));   // parser condiviso col prefab
         }
         if ((*j).contains("command_posts") && (*j)["command_posts"].is_array())
         {
@@ -414,26 +475,8 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         auto nonneg = [](float v) { return v < 0.0f ? 0.0f : v; };
         auto readPos = [&](const nlohmann::json& p, const char* roleKey,
                            const char* defRole) {
-            TacticalPositionDef t;
-            t.x          = getf(p, "x", 0.0f);
-            t.y          = getf(p, "y", 0.0f);
-            t.z          = getf(p, "z", 0.0f);
-            t.facingDeg  = getf(p, "facing_deg", 0.0f);
-            t.role       = gets(p, roleKey);
-            if (t.role.empty()) t.role = defRole;
-            t.height     = getf(p, "height", 1.0f);
-            t.protection = clamp01(getf(p, "protection", 0.5f));
-            t.canShoot   = p.contains("can_shoot") ? (bool)p["can_shoot"] : true;
-            t.importance = nonneg(getf(p, "importance", 0.5f));   // peso tattico, non [0,1] (KI #81)
-            t.radius     = getf(p, "radius", 4.0f);
-            // Settore di tiro (ADR-031): default ampio → le posizioni già
-            // autorate restano utilizzabili senza ri-autorarle.
-            t.fireArcDeg = getf(p, "fire_arc_deg", 120.0f);
-            if (t.fireArcDeg < 5.0f)   t.fireArcDeg = 5.0f;
-            if (t.fireArcDeg > 360.0f) t.fireArcDeg = 360.0f;
-            t.fireRange  = getf(p, "fire_range", 25.0f);
-            if (t.fireRange < 1.0f) t.fireRange = 1.0f;
-            m.tacticalPositions.push_back(t);
+            // Parser CONDIVISO col prefab: uno schema solo (ADR-048).
+            m.tacticalPositions.push_back(parseTacticalPosition(p, roleKey, defRole));
         };
 
         if ((*j).contains("tactical_positions") && (*j)["tactical_positions"].is_array())
@@ -507,7 +550,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         // un refuso DENTRO un box di geometry passa tuttora liscio. Vedi 08 KI #40.
         noteUnknownKeys(*j, "maps/" + m.id + ".json",
             {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
-             "spawn_team1","spawn_team2","spawn_points_team1","spawn_points_team2",
+             "spawn_team1","spawn_team2","spawn_points_team1","spawn_points_team2","prefabs",
              "enemy_types","ally_types","geometry",
              "command_posts","strategic_targets","cover_points","patrol_routes",
              "danger_zones","vehicle_spawns","tactical_positions","tactical_points",
@@ -530,6 +573,73 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
             }
         }
 
+        // ── Istanze di PREFAB (ADR-048) ──────────────────────────────────
+        if ((*j).contains("prefabs") && (*j)["prefabs"].is_array())
+        {
+            for (auto& pi : (*j)["prefabs"])
+            {
+                PrefabInstanceDef inst;
+                inst.prefabId = gets(pi, "id");
+                if (inst.prefabId.empty()) continue;
+                inst.x  = getf(pi, "x", 0.0f);
+                inst.y  = getf(pi, "y", 0.0f);
+                inst.z  = getf(pi, "z", 0.0f);
+                inst.ry = getf(pi, "ry", 0.0f);
+                m.prefabs.push_back(inst);
+            }
+        }
+        // ESPANSIONE: le istanze diventano geometria e posizioni tattiche REALI, come
+        // se fossero state piazzate a mano. Avviene PRIMA del grafo dei link, così le
+        // posizioni dei prefab partecipano a coperture/esposizione come tutte le altre.
+        // I dati espansi sono DERIVATI (mai riscritti sul file della mappa, come il
+        // grafo ADR-033): il file resta la lista di istanze, e aggiornare un prefab
+        // aggiorna tutte le sue istanze al load successivo.
+        if (!m.prefabs.empty())
+        {
+            size_t addedBoxes = 0, addedPos = 0, missing = 0;
+            for (const auto& inst : m.prefabs)
+            {
+                auto it = m_prefabs.find(inst.prefabId);
+                if (it == m_prefabs.end())
+                {   // Riferimento rotto: va DETTO, non ignorato in silenzio (ADR-018).
+                    std::cout << "[Registry]   ATTENZIONE: prefab '" << inst.prefabId
+                              << "' non trovato (mappa " << m.id << ")\n";
+                    ++missing; continue;
+                }
+                const PrefabDef& pf = it->second;
+                const float rad = inst.ry * 3.14159265f / 180.0f;
+                const float cs = std::cos(rad), sn = std::sin(rad);
+                // Rotazione attorno a Y del punto locale, poi traslazione.
+                auto toWorldX = [&](float lx, float lz) { return inst.x + lx * cs + lz * sn; };
+                auto toWorldZ = [&](float lx, float lz) { return inst.z - lx * sn + lz * cs; };
+                for (const auto& b : pf.collision)
+                {
+                    MapGeometryBox wb = b;
+                    wb.x  = toWorldX(b.x, b.z);
+                    wb.z  = toWorldZ(b.x, b.z);
+                    wb.y  = inst.y + b.y;
+                    wb.ry = b.ry + inst.ry;     // il box ruota con l'istanza
+                    m.geometry.push_back(wb);
+                    ++addedBoxes;
+                }
+                for (const auto& t : pf.tactical)
+                {
+                    TacticalPositionDef wt = t;
+                    wt.x = toWorldX(t.x, t.z);
+                    wt.z = toWorldZ(t.x, t.z);
+                    wt.y = inst.y + t.y;
+                    wt.facingDeg = t.facingDeg + inst.ry;   // anche il fronte ruota
+                    wt.fromPrefab = true;                   // DERIVATA, non salvarla (B2)
+                    m.tacticalPositions.push_back(wt);
+                    ++addedPos;
+                }
+            }
+            std::cout << "[Registry]   prefab espansi: " << m.prefabs.size()
+                      << " istanze → " << addedBoxes << " box, " << addedPos
+                      << " posizioni" << (missing ? " (RIFERIMENTI ROTTI: " : "")
+                      << (missing ? std::to_string(missing) + ")" : "") << "\n";
+        }
+
         // Grafo "chi copre chi" (ADR-032): derivato dalle posizioni autorate +
         // geometria. Si calcola QUI, una volta al load, così a runtime le AI lo
         // leggono e basta — è la scelta "meccaniche pesanti precalcolate nel mondo".
@@ -540,9 +650,11 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                                 std::chrono::steady_clock::now() - t0).count();
             size_t links = 0;
             for (const auto& v : m.positionCovers) links += v.size();
+            size_t overhead = 0;
+            for (const auto& t : m.tacticalPositions) if (t.hasOverhead) ++overhead;
             std::cout << "[Registry]   link tattici: " << links << " su "
                       << m.tacticalPositions.size() << " posizioni ("
-                      << ms << " ms)\n";
+                      << ms << " ms), coperte dall'alto: " << overhead << "\n";
         }
 
         std::cout << "[Registry] Map: " << m.id
@@ -932,6 +1044,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     m_enemies.clear();
     m_allies.clear();
     m_maps.clear();
+    m_prefabs.clear();
     m_hitboxProfiles.clear();
     m_playerDefs.clear();
     m_vehicles.clear();
@@ -946,6 +1059,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadHitboxProfiles(dataRoot);
     loadEnemies(dataRoot);
     loadAllies(dataRoot);
+    loadPrefabs(dataRoot);   // ADR-048: PRIMA delle mappe, che li espandono
     loadMaps(dataRoot);
     loadPlayerDefs(dataRoot);
     loadVehicles(dataRoot);
@@ -977,6 +1091,7 @@ GETTER(m_aiProfiles,     AiProfileDef,     getAiProfile)
 GETTER(m_enemies,        EnemyDef,         getEnemy)
 GETTER(m_allies,         EnemyDef,         getAlly)
 GETTER(m_maps,           MapDef,           getMap)
+GETTER(m_prefabs,        PrefabDef,        getPrefab)
 GETTER(m_vehicles,       VehicleDef,       getVehicle)
 GETTER(m_hitboxProfiles, HitboxProfile,    getHitboxProfile)
 GETTER(m_playerDefs,     PlayerDef,        getPlayerDef)

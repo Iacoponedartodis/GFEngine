@@ -112,6 +112,60 @@ constexpr float ORDER_ENEMY_SCAN      = 35.0f;  // m — raggio per trovare il n
 constexpr float TAC_PICTURE_PERIOD    = 0.33f;  // s — cadenza ricalcolo LOS della torre (torre-hub)
 constexpr float TAC_FIRE_BONUS        = 2.0f;   // score in più se la posizione BATTE un nemico ORA
 constexpr float POSITION_DEFAULT_FIRE_RANGE = 25.0f;  // m — gittata di una posizione senza fireRange autorato
+// Dislivello oltre il quale un ingaggio conta come CROSS-QUOTA (ponte/rialzato vs
+// terra) nella telemetria di verticalità. Un piano rialzato tipico sta ~2-3 m sopra;
+// 1.5 m esclude i dislivelli irrilevanti (gradini, pendenze) senza perdere i ponti.
+constexpr float VERTICAL_ENGAGE_DY    = 1.5f;   // m
+// ── PERCEZIONE (doc 40, Fase 1) ────────────────────────────────────────────
+// Il campo visivo NON va applicato come taglio netto: produrrebbe il difetto classico
+// "il nemico mi sta di fianco e non mi vede". Entro questo raggio l'unità percepisce a
+// 360° (presenza ravvicinata: rumore, movimento, visione periferica) anche fuori dal cono.
+constexpr float PERCEPTION_PERIPHERAL_RADIUS = 6.0f;   // m
+// Chi SPARA si rivela: il lampo/rumore lo rende percepibile anche fuori dal cono visivo
+// entro questo raggio. È ciò che fa "girare" i soldati verso chi apre il fuoco.
+constexpr float PERCEPTION_MUZZLE_REVEAL     = 35.0f;  // m
+// Quanto lontano si sente uno sparo. Molto maggiore della gittata di ingaggio: è il
+// meccanismo con cui una battaglia si PROPAGA invece di restare locale.
+constexpr float SOUND_GUNSHOT_RADIUS         = 45.0f;  // m
+// Un contatto nato dall'UDITO è impreciso: direzione sì, identità no. Il punto riportato
+// è disturbato di questo raggio → si accorre "verso il rumore", non sulla testa del nemico.
+constexpr float SOUND_CONTACT_SCATTER        = 4.0f;   // m
+// `hearing_range` del profilo è una SENSIBILITÀ RELATIVA, non un raggio assoluto: il
+// raggio udibile è quello dell'EVENTO scalato da (hearing_range / questo riferimento).
+// Motivo (misurato 2026-07-27): preso come raggio assoluto, il valore autorato 12 m
+// rendeva l'udito inutile — si sente a 12 m ciò che si VEDE già a 50 — e le battaglie si
+// spegnevano. Come sensibilità, 12 = udito normale (sente uno sparo alla sua distanza
+// piena), 6 = mezzo sordo, 24 = orecchio fino: i dati già autorati acquistano senso
+// senza doverli riscrivere.
+constexpr float HEARING_REFERENCE            = 12.0f;
+// ── Copertura dall'ALTO (doc 41 B3) ────────────────────────────────────────
+// Quanto in alto si sonda per decidere se un punto ha qualcosa SOPRA (soffitto,
+// impalcato, tettoia). Oltre questa quota si considera "cielo aperto". NB: questo
+// misura la copertura dall'alto, NON "interno": un sottopasso la dà come un bunker.
+// L'interno vero richiede la CHIUSURA (pareti attorno), che è un'analisi diversa.
+constexpr float OVERHEAD_PROBE_HEIGHT        = 8.0f;   // m
+// ── CONFIDENZA sui contatti (doc 40, Fase A2) ──────────────────────────────
+// Un contatto non è un fatto: è un'informazione che INVECCHIA. Decade come
+// c(t) = c0 · e^(−t/τ). Sopra `ENGAGE` l'unità lo tratta come un nemico da ingaggiare
+// (sa dov'è); sotto, come un posto da ANDARE A GUARDARE — che è ciò che distingue un
+// soldato che insegue un fantasma da uno che perlustra.
+constexpr float CONTACT_CONFIDENCE_TAU       = 6.0f;   // s (dimezza circa ogni 4 s)
+constexpr float CONTACT_CONFIDENCE_ENGAGE    = 0.45f;  // sopra = bersaglio, sotto = da investigare
+// La vista dà identità e posizione precise; l'udito solo una direzione approssimata.
+constexpr float CONTACT_CONFIDENCE_SIGHT     = 1.0f;
+constexpr float CONTACT_CONFIDENCE_SOUND     = 0.4f;
+// ── SOPPRESSIONE (doc 40, Fase A3) ─────────────────────────────────────────
+// Essere sotto tiro cambia il comportamento anche quando NON si viene colpiti: è
+// l'elemento che più fa leggere una sparatoria come militare invece che come
+// deathmatch. Un colpo che passa vicino accumula soppressione, che poi decade.
+constexpr float SUPPRESSION_NEAR_MISS   = 2.2f;   // m — quanto vicino deve passare
+constexpr float SUPPRESSION_PER_SHOT    = 0.28f;  // quanto accumula un colpo ravvicinato
+constexpr float SUPPRESSION_TAU         = 2.5f;   // s — decadimento (si "riprende fiato")
+// Effetti a soppressione piena (scalati linearmente):
+constexpr float SUPPRESSION_ACC_PENALTY = 0.55f;  // quanto peggiora la mira (0..1)
+constexpr float SUPPRESSION_COVER_BONUS = 0.5f;   // quanto aumenta la voglia di coprirsi
+// Sopra questa soglia l'unità è "inchiodata": non avvia manovre allo scoperto.
+constexpr float SUPPRESSION_PINNED      = 0.6f;
 // Per quanto un contatto resta utilizzabile DOPO essere arrivato. Con la torre
 // viva (ritardo 0) la finestra utile è 0..FRESH secondi, cioè in pratica gli
 // avvistamenti correnti: il comportamento nominale resta quello di prima, quando
@@ -153,6 +207,17 @@ constexpr float POST_RESPAWN_SLOW = 0.15f;
 // guida). Solo UI, camera e selezione della ruota restano a velocità reale, così
 // si sceglie l'ordine senza perdere tempo prezioso ma con un minimo di immersione.
 constexpr float WHEEL_TIME_SCALE    = 0.15f;  // ~1/7 → tempo molto rallentato (non pausa)
+
+// ── Velocità della SIMULAZIONE (strumento di osservazione) ─────────────────
+// Rallentare il mondo per guardare nel dettaglio movimenti, manovre e reazioni —
+// i sistemi AI producono comportamenti troppo rapidi da leggere a velocità piena.
+// DIFFERENZA CHIAVE dalla slow-mo della ruota: quella rallenta TUTTO (giocatore
+// incluso, è una scelta di gameplay); questa rallenta solo il MONDO e lascia il
+// giocatore a velocità normale, così ci si può muovere per andare a vedere.
+inline constexpr float SIM_SPEEDS[]      = {0.1f, 0.25f, 0.5f, 1.0f, 2.0f};
+inline constexpr const char* SIM_SPEED_LABELS[] = {"0.1x", "0.25x", "0.5x", "1x", "2x"};
+constexpr int   SIM_SPEED_COUNT     = 5;
+constexpr int   SIM_SPEED_DEFAULT   = 3;      // indice di 1x
 
 // ── Camera ────────────────────────────────────────────────────────────────
 constexpr float CAMERA_FOV    = 60.0f;    // gradi

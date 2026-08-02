@@ -13,6 +13,10 @@ class DefinitionRegistry
 {
 public:
     void loadAll(const std::string& dataRoot = "data");
+    // Pubblica (ADR-048): l'EDITOR carica i soli prefab per la lista di piazzamento e
+    // l'anteprima, senza pagare `loadAll` e — soprattutto — senza un secondo parser che
+    // divergerebbe da questo. Chiamata anche da `loadAll`, PRIMA delle mappe.
+    void loadPrefabs(const std::string& dir);
     void reload (const std::string& dataRoot = "data") { loadAll(dataRoot); }
 
     [[nodiscard]] const AbilityDef*    getAbility      (const std::string& id) const;
@@ -28,6 +32,9 @@ public:
     [[nodiscard]] const CommanderDef*  getCommander    (const std::string& id) const;
     [[nodiscard]] const ObjectiveDef*  getObjective    (const std::string& id) const;
     [[nodiscard]] const MissionDef*    getMission      (const std::string& id) const;
+    [[nodiscard]] const PrefabDef*     getPrefab       (const std::string& id) const;
+    // Tutti i prefab (per l'editor: lista di piazzamento e validazione).
+    [[nodiscard]] const std::unordered_map<std::string, PrefabDef>& prefabs() const { return m_prefabs; }
 
     [[nodiscard]] const auto& abilities()      const { return m_abilities; }
     [[nodiscard]] const auto& weapons()        const { return m_weapons; }
@@ -62,6 +69,7 @@ private:
     std::unordered_map<std::string, EnemyDef>      m_enemies;
     std::unordered_map<std::string, EnemyDef>      m_allies;   // stessa struct, team=1
     std::unordered_map<std::string, MapDef>        m_maps;
+    std::unordered_map<std::string, PrefabDef>     m_prefabs;   // ADR-048
     std::unordered_map<std::string, HitboxProfile> m_hitboxProfiles;
     std::unordered_map<std::string, PlayerDef>     m_playerDefs;
     std::unordered_map<std::string, ClassDef>      m_classes;      // doc 14

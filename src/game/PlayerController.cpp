@@ -427,6 +427,10 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
     });
     world.addTeam(b, {1});
     world.addBullet(b, {w.bulletDamage, life, 1, /*fromPlayer=*/true});
+    // Anche il GIOCATORE fa rumore sparando (doc 40): i nemici devono accorrere verso
+    // di lui: senza questo, aprire il fuoco non ha conseguenze tattiche.
+    world.sounds.push_back({org.x, org.z, config::SOUND_GUNSHOT_RADIUS, 1,
+                            world.playerEntity});
     if (bulletMesh)
         world.addMeshRenderer(b, {bulletMesh, nullptr,
                                    w.bulletR, w.bulletG, w.bulletB});

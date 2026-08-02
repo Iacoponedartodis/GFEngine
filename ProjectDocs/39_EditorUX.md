@@ -118,3 +118,101 @@ Floor 70×92. **Buco netto: 0 danger zones** → cover-evita-pericolo (ADR-046) 
 - ADR-001 (id = filename), ADR-002 (due binari), ADR-003 (rendering compat Intel), ADR-010 (save RMW +
   rename command). Ogni cambio di schema mappa (aggiunta `y`) impatta `DefinitionRegistry` (load) e il
   runtime che legge quei campi → tracciare l'impatto globale come da CLAUDE.md §1.4.
+
+---
+
+# Audit di COERENZA fra i moduli e regole vincolanti (2026-08-02)
+
+Segnalazione utente: *"spesso le stesse funzioni non stanno su un modulo e stanno su un altro, alcune cose
+che dovrebbero essere uguali per tutto l'editor a volte cambiano tra moduli o alcuni proprio non ce l'hanno."*
+Verificato: è vero ed è **misurabile**. I quattro bug del changelog 106 (gizmo assente sui prefab, creazione
+prefab mancante, pannello non riallargabile, scroll tagliato) non sono incidenti isolati — sono **sintomi**
+di assenza di regole comuni.
+
+## 1. Inventario (conteggio grezzo delle occorrenze; 0 = certamente assente)
+
+| Modulo | Duplica | Rinomina | Elimina | Pannello ridimensionabile |
+|---|---|---|---|---|
+| BalanceEditor  | ❌ | ❌ | ❌ | ✅ |
+| ClassEditor    | ❌ | ✅ | ❌ | ❌ |
+| EntityEditor   | ✅ | ✅ | ❌ | ✅ |
+| MapEditor      | ✅ | ✅ | ✅ | ✅ (corretto in 106) |
+| MissionEditor  | ✅ | ✅ | ✅ | ❌ |
+| VehicleEditor  | ✅ | ✅ | ❌ | ✅ |
+| WeaponEditor   | ❌ | ✅ | ❌ | ✅ |
+
+**Buchi principali**: **Elimina manca in 5 moduli su 7**; **Duplica in 3**; il ridimensionamento del pannello
+in 2. Un autore che impara un modulo non può trasferire l'abitudine a un altro: è il costo nascosto.
+
+## 2. REGOLE VINCOLANTI (valgono per ogni modulo, presente e futuro)
+
+Stessa natura delle regole già in vigore sui dati (id = filename, RMW, dropdown dal registry): non sono
+preferenze estetiche, sono **contratti**. Violarle è un errore di implementazione.
+
+**R1 — Ciclo di vita completo.** Ogni modulo che gestisce definizioni su file espone **Crea, Duplica,
+Rinomina, Elimina**. Se una di queste non ha senso per quel tipo, va scritto perché nel codice — non
+semplicemente omessa. *(Oggi il buco maggiore.)*
+
+**R2 — Rinominare è un COMANDO, non un salvataggio con nome nuovo** (ADR-010). Mai creare un file nuovo
+lasciando il vecchio orfano: è la causa dei near-duplicate di KI #7.
+
+**R3 — Ogni scrittura passa da `saveJsonRMW`** (ADR-010). Rispettata ovunque oggi: mantenerla.
+
+**R4 — Un riferimento a un'altra definizione è SEMPRE un dropdown dal registry**, mai testo libero
+(CLAUDE.md). Vale anche per i campi nuovi.
+
+**R5 — Layout a tre pannelli**: lista | contenuto/viewport | proprietà. Il pannello ancorato a un bordo si
+ridimensiona con uno **splitter esplicito**, mai con `ImGuiChildFlags_ResizeX` (il suo grip finisce sul bordo
+finestra e il pannello non si riallarga più — bug reale, changelog 106). Sempre con **clamp** min/max: nessuno
+stato irreversibile.
+
+**R6 — Il contenuto posizionato con coordinate assolute deve estendere l'area scrollabile** (un `Dummy`
+finale). Altrimenti lo scroll si ferma sull'ultimo elemento e la schermata sembra tagliata (changelog 106).
+
+**R7 — Ogni elemento selezionabile ha il suo gizmo dichiarato.** Aggiungendo un tipo selezionabile si
+aggiorna il dispatch del gizmo *nello stesso change set*: se un tipo non è trasformabile, va detto — la
+sparizione silenziosa dei tool si legge come un bug (changelog 106).
+**Corollario (fragilità nota)**: i codici di selezione del Map Editor sono un unico range crescente con rami
+`<= soglia` usati come catch-all (`<= -2000` per i settori cattura anche -4000 dei prefab). Aggiungendo un
+tipo, il suo ramo va messo **prima** del catch-all. Da irrobustire quando se ne aggiungerà un altro.
+
+**R8 — Niente comandi tagliati**: quando un pannello cresce, si raggruppa in sezioni/tendine invece di far
+uscire i comandi dalla vista ([[ui-no-clipping-use-dropdowns]]). Le tendine ricordano lo stato aperto/chiuso.
+
+**R9 — I difetti si mostrano dove si autora.** Un modulo che può produrre contenuto invalido mostra i propri
+problemi in loco (modello: "Salute tattica" del Map Editor, changelog 103-104), non solo nel pannello
+Validazione. Le regole stanno in `ContentValidation` (condivise col gate headless), mai duplicate nella UI.
+
+## 2-bis. Lo SCHELETRO comune (ADR-049) — come le regole diventano strutturali
+
+Le regole di §2 restano disciplina finché ogni modulo rifà la struttura da sé. La soluzione (proposta
+dall'utente, 2026-08-02) è raccoglierle in componenti condivisi:
+
+| Componente | Copre | Stato |
+|---|---|---|
+| `FreeCameraViewport` | viewport 3D + gizmo sposta/ruota/scala | ✅ **già esisteva**, usato da 4 moduli |
+| `DefinitionRename` · `saveJsonRMW` · `UiWidgets` | R2, R3, widget | ✅ già esistevano |
+| **`ModuleShell`** | R5 (splitter + clamp), R6 (scroll), layout a 3 pannelli | ✅ fatto (changelog 107), pilota `VehicleEditor` |
+| **`AssetBrowser`** | R1 (Crea/Duplica/Rinomina/Elimina) | ⚠️ costruito (changelog 108) ma **non ancora adottato** → finché non lo è, è debito |
+
+**Regola di adozione**: un modulo si migra **quando lo si tocca per un motivo funzionale**, mai "per
+allineamento". Motivo: l'editor è GUI e non è verificabile con `--sim`; sette migrazioni insieme non sarebbero
+testabili in un colpo solo, e il rischio di regressioni supererebbe il beneficio.
+
+**Prova che il metodo funziona**: migrando il pilota è emerso che `VehicleEditor` replicava **lo stesso bug
+del pannello** già corretto nel Map Editor, e nessuno l'aveva notato. Una funzione scritta due volte è un bug
+scritto due volte.
+
+## 3. Piano di allineamento (proposto, non ancora applicato)
+
+| Priorità | Intervento | Costo |
+|---|---|---|
+| **Alta** | **R1**: aggiungere *Elimina* ai 5 moduli che non ce l'hanno (con conferma esplicita) | Medio |
+| **Alta** | **R5**: splitter esplicito nei moduli senza ridimensionamento (Class, Mission) | Basso |
+| Media | **R1**: *Duplica* in Balance, Class, Weapon | Basso |
+| Media | **R9**: portare i difetti in loco anche negli altri moduli | Medio |
+| Bassa | **R7-corollario**: irrobustire i codici di selezione (range espliciti, non catch-all) | Medio |
+
+> Nota di metodo: queste regole vanno applicate **quando si tocca un modulo**, non con un refactor unico di
+> tutti e sette. Un refactor totale dell'editor non è verificabile in un colpo solo (è GUI: niente `--sim`),
+> e il rischio di regressioni supera il beneficio.

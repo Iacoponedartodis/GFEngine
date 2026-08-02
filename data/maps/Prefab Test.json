@@ -1,0 +1,21 @@
+{
+    "name": "Prefab Test",
+    "max_tickets": 10,
+    "enemy_count": 2,
+    "ally_count": 2,
+    "enemy_types": ["B1 Battle Droid"],
+    "ally_types": ["Clone Trooper"],
+
+    "spawn_team1": [0.0, 0.86, 20.0],
+    "spawn_team2": [0.0, 0.86, -20.0],
+
+    "geometry": [
+        { "x": 0.0, "y": -0.5, "z": 0.0, "sx": 60.0, "sy": 1.0, "sz": 60.0,
+          "collider": true, "r": 0.30, "g": 0.30, "b": 0.32 }
+    ],
+
+    "prefabs": [
+        { "id": "sandbag_nest", "x": -8.0, "y": 0.0, "z": 0.0, "ry": 0.0 },
+        { "id": "sandbag_nest", "x": 8.0, "y": 0.0, "z": 0.0, "ry": 90.0 }
+    ]
+}

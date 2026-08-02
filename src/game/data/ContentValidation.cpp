@@ -9,6 +9,7 @@
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cstdio>   // snprintf (salute tattica, doc 41 B4)
 #include <cctype>
 #include <filesystem>
 #include <iostream>
@@ -718,6 +719,112 @@ bool reportDiagnostics(const Diagnostics& diags, bool printToStdout)
             << "\n         → " << x.suggestion << "\n";
     }
     return hasErrors(diags);
+}
+
+// ── Salute tattica di una mappa (doc 41 B4) ────────────────────────────────
+// Regole in UN SOLO POSTO: le usano editor (pannello cliccabile) e `--validate`
+// (gate headless). Non inventano dati: leggono i derivati gia calcolati.
+const char* tacticalDefectKindName(TacticalDefect::Kind k)
+{
+    switch (k)
+    {
+        case TacticalDefect::Kind::NoCoverage:    return "Non coprono nessuna posizione";
+        case TacticalDefect::Kind::BlindVertical: return "Cieche verso le altre quote";
+        case TacticalDefect::Kind::HighExposure:  return "Molto esposte";
+        case TacticalDefect::Kind::Redundant:     return "Ridondanti";
+        case TacticalDefect::Kind::EmptySector:   return "Settori senza posizioni";
+        default:                                   return "Altro";
+    }
+}
+
+std::vector<TacticalDefect> analyzeTacticalHealth(const MapDef& map)
+{
+    std::vector<TacticalDefect> out;
+    const size_t np = map.tacticalPositions.size();
+    char buf[192];
+    for (size_t i = 0; i < np; ++i)
+    {
+        const auto& p = map.tacticalPositions[i];
+        const int idx = (int)i;
+        // 1) Non copre NESSUNO: da qui non si batte alcuna altra posizione — spesso
+        //    guarda un muro, o ha arco/gittata troppo stretti. Tatticamente muta.
+        if (p.canShoot && i < map.positionCovers.size() && map.positionCovers[i].empty())
+        {
+            // Distinzione necessaria (misurata 2026-08-02): "non copre altre posizioni"
+            // NON basta a dire che una posizione è inutile — una di PRIMA LINEA copre il
+            // terreno e l'avvicinamento, non altri nodi, ed è legittima. Il difetto vero
+            // è l'ISOLAMENTO: non copre nessuno **e** nessuno la batte → è fuori dalla
+            // rete tattica, nessuno la userà mai. Se invece è esposta, è nel gioco: avviso.
+            const float exposure = (i < map.positionExposure.size())
+                                 ? map.positionExposure[i] : 0.0f;
+            const bool isolated = (exposure <= 0.001f);
+            std::snprintf(buf, sizeof(buf),
+                          isolated ? "[%s %d] ISOLATA: non copre nessuno e nessuno la batte"
+                                   : "[%s %d] non copre altre posizioni (avanzata? esp. %.0f%%)",
+                          p.role.c_str(), idx + 1, exposure * 100.0f);
+            out.push_back({TacticalDefect::Target::Position, TacticalDefect::Kind::NoCoverage,
+                           idx, isolated ? 1 : 0, buf});
+        }
+        // 2) Molto esposta: battuta da mezza mappa (ADR-033) → cattiva posizione di tiro.
+        if (i < map.positionExposure.size() && map.positionExposure[i] >= 0.55f)
+        {
+            std::snprintf(buf, sizeof(buf), "[%s %d] molto esposta (%.0f%%)",
+                          p.role.c_str(), idx + 1, map.positionExposure[i] * 100.0f);
+            out.push_back({TacticalDefect::Target::Position, TacticalDefect::Kind::HighExposure, idx, 0, buf});
+        }
+        // 3) Ridondante: stesso ruolo, a meno di 2 m E che guarda DALLA STESSA PARTE.
+        //    Il facing e' decisivo: due posizioni sovrapposte con versi OPPOSTI (o molto
+        //    diversi) coprono archi diversi e sono due opzioni tattiche legittime — es.
+        //    due vantage schiena a schiena su una torretta. Segnalarle era un falso
+        //    positivo (segnalato dall'utente 2026-08-02). Ridondante e' solo chi
+        //    duplica davvero: stessa zona E stessa direzione.
+        for (size_t j = i + 1; j < np; ++j)
+        {
+            const auto& q = map.tacticalPositions[j];
+            if (q.role != p.role) continue;
+            const float dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+            if (dx*dx + dy*dy + dz*dz > 4.0f) continue;
+            // Differenza angolare minima fra i due fronti, normalizzata a [0,180].
+            float dAng = std::fabs(q.facingDeg - p.facingDeg);
+            while (dAng > 360.0f) dAng -= 360.0f;
+            if (dAng > 180.0f) dAng = 360.0f - dAng;
+            if (dAng > 45.0f) continue;   // guardano altrove: NON ridondanti
+            std::snprintf(buf, sizeof(buf), "[%s %d] ridondante con #%d (< 2 m, stesso fronte)",
+                          p.role.c_str(), idx + 1, (int)j + 1);
+            out.push_back({TacticalDefect::Target::Position, TacticalDefect::Kind::Redundant, idx, 0, buf});
+            break;
+        }
+    }
+    // 4) Settore SENZA posizioni tattiche: il comando ci manda unita che non trovano
+    //    dove stare → buco di copertura a livello di teatro.
+    for (size_t s = 0; s < map.sectors.size(); ++s)
+    {
+        const auto& sec = map.sectors[s];
+        bool any = false;
+        for (const auto& p : map.tacticalPositions)
+        {
+            const float dx = p.x - sec.x, dz = p.z - sec.z;
+            if (dx*dx + dz*dz <= sec.radius * sec.radius) { any = true; break; }
+        }
+        if (!any)
+        {
+            // Severita' proporzionale all'IMPORTANZA autorata: un settore che il comando
+            // sceglie come fronte e senza posizioni e' un buco vero; una corsia di
+            // TRANSITO a bassa importanza (o uno spawn) e' normale che non ne abbia.
+            // Senza questa distinzione l'elenco si riempiva di falsi positivi (misurato
+            // su Training Ground: 9 su 13 "problemi" erano corsie/spawn) — e un elenco
+            // rumoroso si smette di leggere.
+            const bool matters = sec.importance >= 1.0f;
+            std::snprintf(buf, sizeof(buf),
+                          matters ? "[settore %s] nessuna posizione tattica dentro (imp. %.1f)"
+                                  : "[settore %s] nessuna posizione tattica (transito? imp. %.1f)",
+                          sec.label.c_str(), sec.importance);
+            out.push_back({TacticalDefect::Target::Sector, TacticalDefect::Kind::EmptySector, (int)s, matters ? 1 : 0, buf});
+        }
+    }
+    std::stable_sort(out.begin(), out.end(),
+        [](const TacticalDefect& a, const TacticalDefect& b) { return a.severity > b.severity; });
+    return out;
 }
 
 } // namespace mini

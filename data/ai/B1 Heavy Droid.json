@@ -4,7 +4,7 @@
     "cover_preference": 0.5400000214576721,
     "flank_chance": 0.20000000298023224,
     "fov_deg": 110.0,
-    "hearing_range": 12.0,
+    "hearing_range": 50.0,
     "hide_duration_max": 1.7999999523162842,
     "hide_duration_min": 0.800000011920929,
     "jump_enabled": true,

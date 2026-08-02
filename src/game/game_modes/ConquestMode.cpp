@@ -425,6 +425,9 @@ void ConquestMode::spawnUnit(World& world, const RespawnEntry& info)
             aic.peekMin = ap->peekDurationMin;  aic.peekMax = ap->peekDurationMax;
             aic.hideMin = ap->hideDurationMin;  aic.hideMax = ap->hideDurationMax;
             aic.flankChance     = ap->flankChance;
+            // Percezione (doc 40): erano autorati ma non arrivavano all'AI.
+            aic.fovDeg          = ap->fovDeg;
+            aic.hearingRange    = ap->hearingRange;
         }
     }
 

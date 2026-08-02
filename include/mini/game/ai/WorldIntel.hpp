@@ -120,6 +120,15 @@ const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float
 const TacticalPositionDef* nearestPositionByRole(const MapDef& map, float x, float z,
                                                  const char* role, float maxDist);
 
+// C'è qualcosa SOPRA questo punto (soffitto, impalcato, tettoia) entro `probeHeight`?
+// Sonda verticale contro la geometria della mappa. È la classificazione più economica
+// dello spazio: un raycast per punto, calcolabile in bake.
+// NOMENCLATURA DELIBERATA: "copertura dall'alto", **non** "interno". Un sottopasso o un
+// balcone la danno esattamente come una stanza; l'interno vero richiede la CHIUSURA
+// (pareti attorno), che è un'analisi distinta. Chiamarlo `indoor` porterebbe a dedurre
+// comportamenti da interno dove non c'è un interno.
+bool hasOverheadCover(const MapDef& map, float x, float y, float z, float probeHeight);
+
 // Coordinata LATERALE di (x,z): proiezione sull'asse PERPENDICOLARE alla direzione
 // d'attacco (spawnTeam1→spawnTeam2). Due punti con lat vicina sono nella STESSA
 // corsia/fronte, a prescindere dalla profondità lungo l'asse; |Δlat| grande = corsie

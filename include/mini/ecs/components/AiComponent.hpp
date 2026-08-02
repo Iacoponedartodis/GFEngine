@@ -19,6 +19,28 @@ struct AiComponent
     float    shootCooldown  = 0.0f;
     float    shootInterval  = 2.5f;
     float    aggroRange     = 16.0f;
+    // ── Percezione (doc 40 Fase 1) ────────────────────────────────────────
+    // `fov_deg` e `hearing_range` erano AUTORATI nei profili ma non arrivavano mai
+    // qui: le AI vedevano a 360° ed erano sorde (authoring inerte, trovato 2026-07-27).
+    // Un soldato credibile non vede alle spalle e ACCORRE al rumore degli spari.
+    float    fovDeg         = 110.0f;   // ampiezza TOTALE del cono visivo
+    float    hearingRange   = 12.0f;    // raggio entro cui percepisce un evento sonoro
+    // SOPPRESSIONE (doc 40 A3), 0..1: quanto l'unità è "sotto tiro" ORA. Cresce coi
+    // colpi che passano vicino — anche quando NON colpiscono — e decade da sé.
+    // Peggiora la mira e spinge a stare coperti: è ciò che rende una raffica utile
+    // anche se non uccide, cioè la differenza fra una sparatoria militare e un duello.
+    float    suppression    = 0.0f;
+    // Serve a rilevare la TRANSIZIONE verso/da "inchiodato" e annunciarla una sola
+    // volta: un sistema che non si vede, per il giocatore non esiste — e senza vederlo
+    // non lo si può nemmeno tarare.
+    bool     wasPinned      = false;
+    // RUOLO DI COMBATTIMENTO (doc 40 A4), assegnato all'ingaggio e per SATURAZIONE:
+    // 0 nessuno · 1 SOPPRIME (fissa il nemico, non si espone) · 2 AGGIRA (cerca il
+    // fianco) · 3 AVANZA (preme di fronte). Prima ogni soldato tirava i dadi per conto
+    // suo (`flankChance`), quindi la squadra non si divideva i compiti: potevano
+    // aggirare tutti o nessuno. Il ruolo rende esplicito il "tu fissi, io aggiro" —
+    // che ha senso solo perché la soppressione (A3) morde davvero.
+    int      combatRole     = 0;
     Mesh*    bulletMesh     = nullptr;
     Texture* bulletTexture  = nullptr;
     float    bulletR = 1.0f, bulletG = 0.25f, bulletB = 0.1f;
@@ -104,6 +126,12 @@ struct AiComponent
     float huntPatience = 20.0f; // soglia di huntTimer, dal profilo AI (doc 16)
     float exposeTimer = 0.0f;   // countdown della fase corrente
     bool  evading     = false;  // true = fase evasiva (non spara)
+    // Da quanto dura la fase evasiva CORRENTE. Non è decorazione: `evading` chiude il
+    // gate di fuoco, quindi una fase che non finisce è un'AI che non spara più — il
+    // sintomo di KI #86. Con hide_duration_max = 1.8 s, qualunque valore molto oltre
+    // è un CONGELAMENTO per definizione, e questo lo rende misurabile invece che
+    // giudicabile a occhio (gli eventi di combattimento aggregati non lo vedono).
+    float evadeElapsed = 0.0f;
     bool  flankActive = false;  // sta raggiungendo il punto di fiancheggiamento
     float flankX = 0.0f, flankZ = 0.0f;
 

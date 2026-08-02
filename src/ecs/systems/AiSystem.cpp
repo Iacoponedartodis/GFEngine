@@ -18,8 +18,17 @@
 #include <iostream>
 #include <vector>
 
+// Livello di COMANDO (settori, torre di controllo, quadro tattico, direttive del
+// Droide Tattico, scelta posizione per gli ordini): vive in AiCommandLayer.cpp
+// dopo lo split del monolite (audit #7). Qui resta il COME la singola unità esegue.
+#include "AiInternal.hpp"
+
 namespace mini
 {
+
+// I nomi del command layer si usano non qualificati: erano `static` in questo file
+// e i chiamanti restano identici — lo split non tocca il comportamento.
+using namespace aicmd;
 
 static constexpr float PI = 3.14159265f;
 
@@ -47,6 +56,78 @@ struct TacticalStats
     int overwatchStarted = 0;  // manovre di copertura esplicite via grafo (ADR-032)
     int holdPosOccupied = 0;   // Hold su posizione difensiva/chokepoint (ADR-046)
     int obsSightBoost   = 0;   // vista estesa da punto d'osservazione (ADR-046)
+    // ── FUNNEL dell'ingaggio CROSS-QUOTA (ponti/rialzati) ────────────────
+    // Domanda dell'utente: "i cloni sul ponte sparano davvero? i droidi sotto li
+    // prendono di mira?". A occhio è impossibile dirlo (proiettili lenti = schermo
+    // pieno di tracce non attribuibili). Questi contatori misurano il funnel nei suoi
+    // TRE punti di morte, separando cross-quota (|Δy| > VERTICAL_ENGAGE_DY) da piano:
+    //   candidati in gittata → bersaglio ACQUISITO → colpo SPARATO.
+    // Se vertCand è alto ma vertAcq ~0 → muore in acquisizione (LOS/geometria o i K
+    // candidati più vicini sono tutti bloccati). Se vertAcq è alto ma vertShot ~0 →
+    // muore al gate di fuoco. `flatShot` è il CONTROLLO: se è alto e vertShot ~0, il
+    // combattimento verticale è rotto e non è un problema generale di tiro.
+    int vertCand = 0;        // candidati a quota diversa entro l'aggro
+    // (Indagine 2026-07-27: qui erano anche `vertCandLos` e i bucket per distanza
+    // orizzontale, che costavano una LOS EXTRA per candidato cross-quota. Servivano a
+    // stabilire la causa — fatto, vedi 08_KnownIssues #83 — e sono stati tolti: il
+    // funnel qui sotto basta come guardia permanente e costa solo confronti.)
+    int candTotal = 0;       // TUTTI i candidati (denominatore di vertCand)
+    int vertAcq  = 0;        // bersagli acquisiti a quota diversa
+    int acqTotal = 0;        // TUTTE le acquisizioni (denominatore di vertAcq)
+    int vertShot = 0;        // colpi effettivamente sparati cross-quota
+    int vertFireBlocked = 0; // acquisito cross-quota ma LOS di tiro fallita
+    int flatShot = 0;        // colpi sparati sullo stesso piano (controllo)
+    int acqAllBlocked = 0;   // c'erano candidati ma NESSUNO con LOS (saturazione dei K)
+    // ── PERCEZIONE (doc 40 Fase 1): l'effetto va MISURATO, non supposto ──
+    int fovRejected = 0;     // bersagli scartati perché FUORI dal campo visivo
+    int heardShots  = 0;     // contatti nati dall'UDITO (spari sentiti)
+    // Confidenza (A2): quante volte l'informazione era buona abbastanza da INGAGGIARE
+    // e quante invece solo da andare a GUARDARE. Il rapporto dice se il modello vive.
+    int highConfContact = 0;
+    int lowConfInvestigate = 0;
+    // Soppressione (A3): tick sotto tiro e tick INCHIODATI. Se "inchiodati" fosse
+    // vicino a "soppressi", la taratura starebbe paralizzando le AI invece di premerle.
+    int suppressedTicks = 0;
+    int pinnedTicks = 0;
+    // Quante volte si e ANNUNCIATO un inchiodamento: serve a sapere se il feed
+    // informa o SPAMMA — un canale che spamma smette di essere letto.
+    int pinnedAnnounced = 0;
+    // Ruoli assegnati (A4), indicizzati 1=sopprime 2=aggira 3=avanza. Se uno restasse
+    // a zero, la composizione o le affinita sarebbero sbagliate.
+    int roleAssigned[4] = {0,0,0,0};
+    // ── FUNNEL D'INGAGGIO (KI #86) ──────────────────────────────────────────
+    // Sintomo riportato: "è estremamente comune vedere AI che stanno davanti a dei
+    // nemici senza sparare". A occhio non si distingue **non vede** da **vede e non
+    // spara**, e sono due bug diversi in due file diversi. Il funnel separa i due
+    // tronconi e, dentro il secondo, QUALE gate uccide il colpo.
+    //
+    // PERCEZIONE (contati solo nel tick di sensing, così i tre numeri hanno lo
+    // stesso denominatore e il rapporto è leggibile):
+    int occInRange = 0;      // AI-tick con almeno un nemico ENTRO L'AGGRO (ignorando il cono)
+    int occInCone  = 0;      // ...di cui almeno uno passa il CAMPO VISIVO
+    int occAcquired = 0;     // ...di cui almeno uno con LOS → bersaglio acquisito
+    // GATE DI FUOCO (contati ogni tick, ma SOLO per chi HA un bersaglio: è
+    // esattamente la popolazione del sintomo). `gateCooldown` che domina è NORMALE
+    // — la cadenza di tiro è ~1 colpo/s su 60 tick: il segnale sta negli ALTRI.
+    int gateState = 0;       // ha un bersaglio ma NON è in Alert (anomalia vera)
+    int gateEvading = 0;     // in fase "hide" del peek/hide
+    // Decomposizione di `gateEvading` (indagine KI #86): `exposeTimer` scorre SOLO
+    // nel ramo "Alert + bersaglio + non in manovra + non stationary". Negli altri
+    // rami la fase di hide è CONGELATA — e il gate di fuoco continua a bloccare.
+    // Questi due contatori dicono quanta parte del "non spara" è ciclo legittimo e
+    // quanta è timer fermo.
+    int evadingInRepo = 0;   // evasivo MENTRE manovra (timer congelato)
+    int evadingFrozen = 0;   // evasivo e stationary (timer mai decrementato)
+    // CONGELAMENTO della fase evasiva: la misura DIRETTA del sintomo di KI #86.
+    // Gli eventi di combattimento aggregati non servono a deciderlo — fra due run la
+    // simulazione diverge e la differenza non è attribuibile. Questi due sì: con
+    // hide_duration_max = 1.8 s, una fase oltre 3 s è un bug per definizione.
+    int evadeStuckTicks = 0;   // tick-AI con fase evasiva oltre 3 s
+    float evadeMaxSec = 0.0f;  // la fase evasiva più lunga osservata nella finestra
+    int gateCooldown = 0;    // cadenza di tiro (atteso alto)
+    int gateOverheat = 0;    // arma surriscaldata
+    int gateLos = 0;         // LOS ri-verificata al tiro: fallita (bersaglio coperto)
+    int gateFired = 0;       // colpo partito
     void reset() { *this = TacticalStats{}; }
 };
 static TacticalStats g_tac;
@@ -112,6 +193,10 @@ static void enterHunt(AiComponent& ai, const TransformComponent& et, const World
 {
     ai.state = AiState::Hunt;
     ai.repositionActive = false;   // la manovra di combattimento finisce col contatto (ADR-035)
+    // Il RUOLO (A4) vale per QUESTO ingaggio: perso il contatto si rilascia, così al
+    // prossimo scontro la squadra si ridistribuisce sulla situazione nuova invece di
+    // trascinarsi compiti decisi per una battaglia che non esiste più.
+    ai.combatRole = 0;
     if (!ai.hasLastKnown || ai.flankActive) return;
 
     const float tx = ai.lastKnownX, tz = ai.lastKnownZ;
@@ -257,552 +342,6 @@ static void joinNearestRoute(AiComponent& ai, const MapDef* map, float x, float 
     ai.patrolReverse = (bestPt > (int)pts.size() / 2);
 }
 
-// Command post più vicino a (x,z) NON posseduto da `team`: l'obiettivo naturale
-// da prendere per QUELLA unità. Ogni droide sceglie il proprio (ADR-024 v2): il
-// comandante dà l'intento "avanzate", non un unico punto per tutti — così la
-// forza si distribuisce su più obiettivi invece di ammassarsi su uno solo.
-// `areaRadius > 0` limita la scelta ai post dentro il settore-obiettivo
-// (ADR-034): il comandante indirizza la forza su una ZONA, ma ogni droide sceglie
-// da sé il punto più vicino lì dentro — la direzione resta del comandante, il COME
-// resta dell'AI, e le unità non si ammassano tutte sullo stesso post.
-static bool nearestCapturablePost(const World& world, float x, float z, int team,
-                                  float& outX, float& outZ,
-                                  float areaX = 0.0f, float areaZ = 0.0f,
-                                  float areaRadius = 0.0f)
-{
-    if (!world.activeMap) return false;
-    float best2 = 1e18f; bool found = false;
-    for (const auto& st : world.commandPostStates)
-    {
-        if (st.owner == team) continue;
-        for (const auto& cp : world.activeMap->commandPosts)
-        {
-            if (cp.label != st.label) continue;
-            if (areaRadius > 0.0f)
-            {
-                const float ax = cp.x - areaX, az = cp.z - areaZ;
-                if (ax * ax + az * az > areaRadius * areaRadius) break;   // fuori settore
-            }
-            const float dx = cp.x - x, dz = cp.z - z;
-            const float d2 = dx * dx + dz * dz;
-            if (d2 < best2) { best2 = d2; outX = cp.x; outZ = cp.z; found = true; }
-            break;
-        }
-    }
-    return found;
-}
-
-// Aggiorna lo stato dei settori (ADR-034): una sola passata sulle entità vive.
-// Presenze contrapposte → chi controlla e quanto la zona è contesa. È il livello
-// su cui il comandante ragiona invece di guardare solo l'owner dei command post.
-static void updateSectorStates(World& world, const std::vector<EntityId>& snap)
-{
-    const MapDef* map = world.activeMap;
-    if (!map || map->sectors.empty()) { world.sectorStates.clear(); return; }
-
-    world.sectorStates.assign(map->sectors.size(), World::SectorState{});
-    for (EntityId e : snap)
-    {
-        const auto* tm = world.getTeam(e);
-        const auto* tr = world.getTransform(e);
-        const auto* h  = world.getHealth(e);
-        if (!tm || !tr || !h || h->current <= 0.0f) continue;
-        // Solo TRUPPE: strutture, veicoli e comandante non "controllano" una zona.
-        if (world.getBullet(e) || world.getVehicle(e) || world.hasCommander(e)) continue;
-
-        for (size_t s = 0; s < map->sectors.size(); ++s)
-        {
-            const auto& sec = map->sectors[s];
-            const float dx = tr->x - sec.x, dz = tr->z - sec.z;
-            if (dx * dx + dz * dz > sec.radius * sec.radius) continue;
-            if (tm->teamId == 1)      ++world.sectorStates[s].allies;
-            else if (tm->teamId == 2) ++world.sectorStates[s].enemies;
-        }
-    }
-
-    for (auto& st : world.sectorStates)
-    {
-        const int tot = st.allies + st.enemies;
-        if (tot == 0) { st.controllingTeam = 0; st.pressure = 0.0f; continue; }
-        st.controllingTeam = (st.allies > st.enemies) ? 1
-                           : (st.enemies > st.allies) ? 2 : 0;
-        // Contesa = quanto le due parti si equivalgono lì dentro.
-        const int lo = (st.allies < st.enemies) ? st.allies : st.enemies;
-        st.pressure = (float)(2 * lo) / (float)tot;
-    }
-}
-
-// Peso tattico BASE di un settore dal punto di vista di `myTeam` — l'analisi
-// CONDIVISA da torre (updateAllyIntel, cloni) e droide tattico (updateEnemyCommand,
-// droidi). Un'unica formula, così le due non possono più divergere: la 85 fu proprio
-// un riallineamento a mano dopo che erano derivate. La CONTESA (pressione) è il motore,
-// l'importanza la base; poi minoranza (in inferiorità → rinforza), possesso nemico
-// (riprendere) e opportunità (valore poco difeso → sfruttare). `allies`=team1,
-// `enemies`=team2 ([[AiSystem.cpp:318]]). Il comandante ci aggiunge fuori il bonus di
-// stance (hold conteso) e i casi speciali (collasso). Non tocca la stance: solo il peso.
-static float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, int myTeam)
-{
-    const int mine = (myTeam == 1) ? st.allies : st.enemies;
-    const int foe  = (myTeam == 1) ? st.enemies : st.allies;
-    const int foeTeam = (myTeam == 1) ? 2 : 1;
-    float w = sec.importance;                          // valore intrinseco (baseline)
-    w += st.pressure * 2.0f;                            // CONTESO: c'è battaglia → forte richiamo
-    if (foe > mine)                                     // in MINORANZA → rinforza (urgente)
-        w += (float)(foe - mine) * 0.8f;
-    if (st.controllingTeam == foeTeam) w += 0.6f;      // in mano nemica → riprenderlo
-    if (sec.importance > 0.5f && foe <= 1 && st.controllingTeam != myTeam)
-        w += 0.4f;                                      // valore poco difeso → sfruttarlo
-    return w;
-}
-
-// ── Torre di controllo dei cloni (doc 36, ADR-040) ───────────────────────────
-// Pubblica una LISTA di posti che contano. Non sceglie per nessuno: non esiste
-// un "obiettivo dei cloni", esistono segnali che ogni clone valuta per conto suo.
-// È la differenza deliberata col Droide Tattico, che invece dà un intento unico.
-static void updateAllyIntel(World& world)
-{
-    world.allyIntel.active = false;
-    world.allyIntel.signals.clear();
-
-    bool tower = false;
-    for (const auto& s : world.strategicTargets)
-        if (s.isControl && s.team == 1 && s.entity != 0
-            && world.isValidEntity(s.entity))
-        { tower = true; break; }
-    if (!tower) return;   // senza torre i cloni restano truppe puramente autonome
-
-    const MapDef* map = world.activeMap;
-    if (map)
-        for (size_t i = 0; i < map->sectors.size(); ++i)
-        {
-            const auto& sec = map->sectors[i];
-            const World::SectorState st = (i < world.sectorStates.size())
-                                        ? world.sectorStates[i] : World::SectorState{};
-            // Saldamente nostro e tranquillo → non è un posto che "conta".
-            if (st.controllingTeam == 1 && st.pressure < 0.2f) continue;
-            World::AllyIntel::Signal sig;
-            sig.x = sec.x; sig.z = sec.z; sig.radius = sec.radius;
-            // ── ANALISI tattica del settore (info, non ordine, doc 36) ──────
-            // La torre non dice "andate lì": PESA quanto un settore conta, con
-            // criteri leggibili — così i cloni si distribuiscono da soli dove
-            // serve. [[control-tower-informs-not-orders]] Analisi CONDIVISA col
-            // droide tattico (sectorTacticalWeight) → i due lati non divergono.
-            sig.weight = sectorTacticalWeight(sec, st, 1);
-            sig.label = sec.label;
-            world.allyIntel.signals.push_back(sig);
-        }
-
-    // Strutture nemiche: "lì c'è un obiettivo", non "andate a distruggerlo".
-    for (const auto& s : world.strategicTargets)
-    {
-        if (s.entity == 0 || s.team == 1) continue;
-        if (!world.isValidEntity(s.entity)) continue;
-        World::AllyIntel::Signal sig;
-        sig.x = s.x; sig.z = s.z; sig.radius = 8.0f;
-        sig.weight = s.priority * (s.isComms ? 1.6f : 1.0f);
-        sig.label = s.label;
-        world.allyIntel.signals.push_back(sig);
-    }
-
-    world.allyIntel.active = !world.allyIntel.signals.empty();
-
-    // Saturazione (KI #73): quante truppe team-1 sono GIÀ su ogni segnale. Un
-    // segnale già presidiato smette di attirarne altri, così i cloni si
-    // distribuiscono invece di ammassarsi tutti sul poco che resta. Prima la
-    // dispersione era solo emergente dal numero di segnali: con pochi segnali
-    // fallisce, ed è proprio ciò che l'utente ha osservato.
-    if (world.allyIntel.active)
-        for (EntityId e : world.getEntities())
-        {
-            const auto* tm = world.getTeam(e);
-            if (!tm || tm->teamId != 1) continue;
-            if (world.getBullet(e) || !world.getAi(e)) continue;   // solo truppe AI
-            const auto* t = world.getTransform(e);
-            if (!t) continue;
-            for (auto& sig : world.allyIntel.signals)
-            {
-                const float dx = sig.x - t->x, dz = sig.z - t->z;
-                if (dx * dx + dz * dz < sig.radius * sig.radius) { ++sig.crowd; break; }
-            }
-        }
-}
-
-// Nemico vivo più vicino a (x,z) entro maxDist, di team diverso da myTeam. Serve al
-// positioning ENEMY-AWARE (KI #82): scegliere una posizione di TIRO che batte un
-// nemico noto, non un punto cieco scelto per sola importanza. I contatti sono di
-// fatto condivisi (una squadra sa dove sono i nemici), quindi si usa la posizione
-// reale del nemico più vicino all'area — anche se QUESTA unità non lo vede ancora.
-static bool nearestEnemyNear(const World& world, int myTeam, float x, float z,
-                             float maxDist, float& ox, float& oy, float& oz)
-{
-    float best2 = maxDist * maxDist; bool found = false;
-    for (EntityId o : world.getEntities())
-    {
-        const auto* tm = world.getTeam(o);
-        if (!tm || tm->teamId == 0 || tm->teamId == myTeam) continue;
-        if (world.getBullet(o)) continue;
-        const auto* h = world.getHealth(o);
-        if (!h || h->current <= 0.0f) continue;
-        const auto* tr = world.getTransform(o);
-        if (!tr) continue;
-        const float dx = tr->x - x, dz = tr->z - z;
-        const float d2 = dx * dx + dz * dz;
-        if (d2 < best2) { best2 = d2; ox = tr->x; oy = tr->y; oz = tr->z; found = true; }
-    }
-    return found;
-}
-
-// Quale segnale segue QUESTO clone. Non il più importante: la scelta è pesata ma
-// decorrelata dal `bias` individuale, così due cloni con la stessa informazione
-// vanno in posti diversi. Se scegliessero tutti il massimo avremmo ricostruito
-// un comando unico con un altro nome — esattamente ciò che la torre NON deve fare.
-static bool pickAllySignal(const World& world, float bias,
-                           float fromX, float fromZ,
-                           float& outX, float& outZ, float& outRadius)
-{
-    const auto& sigs = world.allyIntel.signals;
-    if (sigs.empty()) return false;
-
-    // 1) Se sono GIÀ dentro un segnale, ci resto: stabilità contro l'oscillazione
-    //    (senza, un segnale saturo verrebbe abbandonato → si svuota → tutti
-    //    tornano → si riempie, un pendolo). Chi c'è, presidia.
-    for (const auto& s : sigs)
-    {
-        const float dx = s.x - fromX, dz = s.z - fromZ;
-        if (dx * dx + dz * dz < s.radius * s.radius)
-        { outX = s.x; outZ = s.z; outRadius = s.radius; return true; }
-    }
-
-    // 2) Altrimenti scelgo, pesato dal bias, SOLO fra i segnali NON saturi
-    //    (crowd < capacità): un posto già presidiato non ne attira altri → i
-    //    cloni si distribuiscono, e quando è tutto coperto i restanti tornano
-    //    alla propria pattuglia invece di ammassarsi (KI #73).
-    float total = 0.0f;
-    for (const auto& s : sigs)
-        if (s.crowd < config::ALLY_SIGNAL_CAPACITY)
-            total += (s.weight > 0.01f ? s.weight : 0.01f);
-    if (total <= 0.0f) return false;   // tutto già coperto → pattuglia normale
-
-    if (total > 0.0f)
-    {
-        float roll = bias * total;
-        for (const auto& s : sigs)
-        {
-            if (s.crowd >= config::ALLY_SIGNAL_CAPACITY) continue;
-            roll -= (s.weight > 0.01f ? s.weight : 0.01f);
-            if (roll <= 0.0f)
-            { outX = s.x; outZ = s.z; outRadius = s.radius; return true; }
-        }
-    }
-
-    // 3) Tutti i segnali SATURI: invece di ripiegare sulla pattuglia locale (idle
-    //    avanti-indietro vicino allo spawn mentre gli altri combattono — segnalato
-    //    dall'utente), RINFORZA il fronte più vicino. Così TUTTI i cloni avanzano
-    //    in modo coerente; la distribuzione fra fronti la garantisce già il passo 2,
-    //    questo è la "seconda ondata" che converge sul fronte più prossimo.
-    {
-        float best2 = 1e18f; const World::AllyIntel::Signal* nearest = nullptr;
-        for (const auto& s : sigs)
-        {
-            const float dx = s.x - fromX, dz = s.z - fromZ;
-            const float d2 = dx * dx + dz * dz;
-            if (d2 < best2) { best2 = d2; nearest = &s; }
-        }
-        if (nearest)
-        { outX = nearest->x; outZ = nearest->z; outRadius = nearest->radius; return true; }
-    }
-    return false;
-}
-
-// Quale FRONTE segue QUESTO droide (doc 32 v2). Come per la torre di controllo:
-// scelta pesata ma decorrelata dal `bias`, così la forza si DISTRIBUISCE sui vari
-// fronti invece di convergere tutta sul più prezioso. Il comandante concentra
-// (pochi fronti, i più importanti); il bias divide le truppe fra quei fronti.
-// ASSEGNAZIONE SPAZIALE (2026-07-26): il peso strategico è modulato dalla
-// PROSSIMITÀ del fronte al droide (x,z) → si serve il fronte rilevante per dove
-// si è, e — soprattutto — una direttiva di RIPIEGO su un fronte viene raccolta
-// dai droidi VICINI a quel fronte, non da droidi scelti dal solo bias (era la
-// precondizione mancante del ripiego per-fronte). Prossimità gentile
-// (COMMAND_PROXIMITY_HALFDIST): un fronte molto più caldo lontano vince ancora.
-static const World::EnemyCommand::Directive*
-pickEnemyDirective(const World& world, float bias, float x, float z)
-{
-    const auto& dirs = world.enemyCommand.directives;
-    if (dirs.empty()) return nullptr;
-    float total = 0.0f;
-    for (const auto& d : dirs)
-    {
-        const float dx = d.x - x, dz = d.z - z;
-        const float dist = std::sqrt(dx * dx + dz * dz);
-        const float prox = 1.0f / (1.0f + dist / config::COMMAND_PROXIMITY_HALFDIST);
-        total += (d.weight > 0.01f ? d.weight : 0.01f) * prox;
-    }
-    float roll = bias * total;
-    for (const auto& d : dirs)
-    {
-        const float dx = d.x - x, dz = d.z - z;
-        const float dist = std::sqrt(dx * dx + dz * dz);
-        const float prox = 1.0f / (1.0f + dist / config::COMMAND_PROXIMITY_HALFDIST);
-        roll -= (d.weight > 0.01f ? d.weight : 0.01f) * prox;
-        if (roll <= 0.0f) return &d;
-    }
-    return &dirs.back();
-}
-
-// Punto di RIPIEGO per un droide (ripiego per-fronte, doc 32): il settore che i
-// droidi CONTROLLANO più vicino — la linea su cui cadere e riorganizzarsi —
-// altrimenti lo spawn separatista (retro). Così un fronte in avanti che collassa
-// non manda i droidi fino a casa: li fa arretrare sulla linea tenuta più vicina.
-static void retreatPointForTeam(const World& world, int team, float x, float z,
-                                float& outX, float& outZ)
-{
-    float best2 = 1e18f; bool got = false;
-    const MapDef* map = world.activeMap;
-    if (map)
-        for (size_t i = 0; i < map->sectors.size(); ++i)
-        {
-            const World::SectorState st = (i < world.sectorStates.size())
-                                        ? world.sectorStates[i] : World::SectorState{};
-            if (st.controllingTeam != team) continue;   // solo terreno NOSTRO
-            const float dx = map->sectors[i].x - x, dz = map->sectors[i].z - z;
-            const float d2 = dx * dx + dz * dz;
-            if (d2 < best2) { best2 = d2; outX = map->sectors[i].x; outZ = map->sectors[i].z; got = true; }
-        }
-    if (got) return;
-    if (map)   // niente linea → retro (spawn della propria fazione)
-    { const auto& sp = (team == 1) ? map->spawnTeam1 : map->spawnTeam2;
-      outX = sp[0]; outZ = sp[2]; }
-    else { outX = x; outZ = z; }
-}
-
-// ── QUADRO TATTICO della torre (Fase torre-hub) ──────────────────────────────
-// La TORRE fa il lavoro pesante UNA volta per tutti: per ogni posizione tattica utile,
-// se BATTE un nemico ORA (LOS verificata) e con che valore. I cloni (ordini + autonomi)
-// poi LEGGONO questi dati (world.allyTac) invece di rifare la LOS ciascuno → meno calcolo
-// per-clone, scelte coerenti. Attivo solo con una torre di controllo team-1 VIVA; altrimenti
-// `active=false` e i cloni ricadono sul punteggio locale ([[structures-degrade-not-block]]).
-static void updateAllyTactical(World& world)
-{
-    auto& at = world.allyTac;
-    const MapDef* map = world.activeMap;
-    const size_t n = map ? map->tacticalPositions.size() : 0;
-    at.score.assign(n, 0.0f);
-    at.canFire.assign(n, 0);
-    at.active = false;
-    for (const auto& s : world.strategicTargets)
-        if (s.isControl && s.team == 1 && s.entity != 0 && world.isValidEntity(s.entity))
-        { at.active = true; break; }
-    if (!map || n == 0) return;
-
-    // Nemici (team 2) vivi, una volta sola.
-    std::vector<glm::vec3> foes;
-    for (EntityId e : world.getEntities())
-    {
-        const auto* tm = world.getTeam(e);
-        if (!tm || tm->teamId != 2 || world.getBullet(e)) continue;
-        const auto* h = world.getHealth(e); if (!h || h->current <= 0.0f) continue;
-        const auto* tr = world.getTransform(e); if (!tr) continue;
-        foes.push_back({tr->x, tr->y, tr->z});
-    }
-    for (size_t i = 0; i < n; ++i)
-    {
-        const auto& p = map->tacticalPositions[i];
-        if (!worldintel::isTacticalHoldRole(p.role)) continue;
-        const float fr = (p.fireRange > 1.0f) ? p.fireRange : config::POSITION_DEFAULT_FIRE_RANGE;
-        bool fires = false;
-        for (const auto& f : foes)   // batte un nemico entro gittata con LOS pulita?
-        {
-            const float dx = f.x - p.x, dz = f.z - p.z;
-            if (dx * dx + dz * dz > fr * fr) continue;
-            if (worldintel::hasLineOfFire(*map, p.x, p.y + config::COMBAT_EYE_HEIGHT, p.z,
-                                          f.x, f.y + 1.0f, f.z))
-            { fires = true; break; }
-        }
-        at.canFire[i] = fires ? 1 : 0;
-        // PRIORITÀ: importanza autorata + protezione − pericolo, + forte bonus se BATTE
-        // un nemico ora → i cloni scelgono posizioni da cui SPARANO davvero (fix "sparano
-        // meno": prima Hold sceglieva per sola importanza, anche posizioni cieche).
-        at.score[i] = p.importance * 1.5f + p.protection
-                    - worldintel::dangerAt(*map, p.x, p.z) + (fires ? config::TAC_FIRE_BONUS : 0.0f);
-    }
-}
-
-// Miglior posizione LIBERA per un ordine, TOWER-AWARE: usa i punteggi pre-calcolati
-// dalla torre (world.allyTac.score, che premia chi BATTE un nemico) se disponibili,
-// altrimenti un punteggio locale; salta le posizioni già rivendicate (occupancy CENTRALE
-// world.allyTac.claimed) e rispetta la direzione (dirToThreat +1 avanti / -1 indietro /
-// 0 qualunque, rispetto a threat). La reachability la verifica il chiamante. outIdx=indice.
-static const TacticalPositionDef* bestOrderPosition(
-    World& world, float px, float pz,
-    float areaX, float areaZ, float areaRadius,
-    int dirToThreat, float threatX, float threatZ, int* outIdx)
-{
-    const MapDef* map = world.activeMap;
-    if (outIdx) *outIdx = -1;
-    if (!map) return nullptr;
-    const auto& at = world.allyTac;
-    const bool haveScores = at.active && at.score.size() == map->tacticalPositions.size();
-    const float ar2 = areaRadius * areaRadius;
-    const float fromToThreat = (dirToThreat != 0)
-        ? std::sqrt((threatX - px) * (threatX - px) + (threatZ - pz) * (threatZ - pz)) : 0.0f;
-    float bestScore = -1e30f; const TacticalPositionDef* best = nullptr; int bestIdx = -1;
-    for (int i = 0; i < (int)map->tacticalPositions.size(); ++i)
-    {
-        const auto& p = map->tacticalPositions[i];
-        if (!worldintel::isTacticalHoldRole(p.role)) continue;
-        if (i < (int)at.claimed.size() && at.claimed[i]) continue;   // occupata (occupancy centrale)
-        const float ax = p.x - areaX, az = p.z - areaZ;
-        if (areaRadius > 0.0f && ax * ax + az * az > ar2) continue;
-        if (dirToThreat != 0)
-        {
-            const float pTt = std::sqrt((threatX - p.x) * (threatX - p.x)
-                                      + (threatZ - p.z) * (threatZ - p.z));
-            if (dirToThreat > 0 && pTt > fromToThreat - 1.0f) continue;   // non abbastanza avanti
-            if (dirToThreat < 0 && pTt < fromToThreat + 1.0f) continue;   // non abbastanza indietro
-        }
-        const float dx = p.x - px, dz = p.z - pz;
-        float score = haveScores ? at.score[i]
-                    : (p.importance * 1.5f + p.protection - worldintel::dangerAt(*map, p.x, p.z));
-        score -= std::sqrt(dx * dx + dz * dz) * 0.05f;   // a parità, la più vicina
-        if (score > bestScore) { bestScore = score; best = &p; bestIdx = i; }
-    }
-    if (outIdx) *outIdx = bestIdx;
-    return best;
-}
-
-// Selettore UNIFICATO del waypoint per gli ORDINI di postura del player
-// ([[orders-design-vision]]): il membro salta di posizione LIBERA in posizione libera
-// (occupancy: `claimed`) scegliendo la PRIORITÀ più alta fra i ruoli utili, nella
-// DIREZIONE della postura. Commitment via ai.allySig* (non ri-sceglie ogni tick).
-// Imposta ai.allySig* (waypoint) e, per Hold, ai.holdX/Z/holdRadius (clamp di presidio).
-// NON è un override: dà solo il waypoint; mira/fuoco/reposition restano autonomi.
-//   Hold    → area designata, qualunque direzione, poi DIFENDE (clamp).
-//   Advance → verso il nemico (posizioni più AVANTI), a sbalzi.
-//   Retreat → lontano dal nemico (posizioni più INDIETRO), fronteggiandolo.
-//   Follow  → attorno al player, verso il nemico (lo copre).
-//   Regroup → settore CONTESO a peso massimo (raduno; non una posizione).
-static void selectOrderWaypoint(World& world, AiComponent& ai, float dt,
-                                const SquadComponent& sq, float px, float py, float pz)
-{
-    const MapDef& map = *world.activeMap;
-    auto& claimed = world.allyTac.claimed;   // occupancy CENTRALE (per-tick)
-    ai.holdRadius = 0.0f;
-
-    // REGROUP: raduno sul settore CONTESO a peso massimo (dinamico), non una posizione.
-    if (sq.order == OrderType::Regroup)
-    {
-        float bestW = -1e30f, bx = px, bz = pz; bool got = false;
-        for (size_t s = 0; s < map.sectors.size(); ++s)
-        {
-            const World::SectorState st = (s < world.sectorStates.size())
-                                        ? world.sectorStates[s] : World::SectorState{};
-            if (st.allies == 0 && st.enemies == 0) continue;   // solo settori ATTIVI/contesi
-            const float w = sectorTacticalWeight(map.sectors[s], st, 1);
-            if (w > bestW) { bestW = w; bx = map.sectors[s].x; bz = map.sectors[s].z; got = true; }
-        }
-        ai.allySigX = bx; ai.allySigZ = bz; ai.allySigValid = true;
-        ai.allySigTimer = config::REGROUP_COMMIT_TIME; ai.allySigIdx = -1;
-        return;
-    }
-
-    // Commitment: posizione già impegnata, valida e non raggiunta → resta MIA (la
-    // ri-rivendico così i compagni non la prendono) e non ri-scelgo.
-    ai.allySigTimer -= dt;
-    const float rdx = px - ai.allySigX, rdz = pz - ai.allySigZ;
-    const bool reached = ai.allySigValid && (rdx * rdx + rdz * rdz < 3.0f * 3.0f);
-    if (ai.allySigValid && ai.allySigIdx >= 0 && !reached && ai.allySigTimer > 0.0f)
-    {
-        if (ai.allySigIdx < (int)claimed.size()) claimed[ai.allySigIdx] = 1;   // resta mia
-        if (sq.order == OrderType::HoldPosition)
-        { ai.holdX = ai.allySigX; ai.holdZ = ai.allySigZ; ai.holdRadius = config::HOLD_ANCHOR_RADIUS; }
-        return;
-    }
-
-    // Area + direzione (minaccia) per postura.
-    float areaX = px, areaZ = pz, areaR = config::HOLD_AREA_RADIUS;
-    int dir = 0; float thX = px, thZ = pz; float ex, ey, ez;
-    if (sq.order == OrderType::HoldPosition)
-    { areaX = sq.targetX; areaZ = sq.targetZ; areaR = config::HOLD_AREA_RADIUS; }
-    else if (sq.order == OrderType::Advance)
-    {
-        const bool foe = nearestEnemyNear(world, 1, sq.targetX, sq.targetZ,
-                                          config::ORDER_ENEMY_SCAN, ex, ey, ez);
-        thX = foe ? ex : sq.targetX; thZ = foe ? ez : sq.targetZ;
-        areaX = px; areaZ = pz; areaR = config::ORDER_BOUND_STEP; dir = +1;
-    }
-    else if (sq.order == OrderType::Retreat)
-    {
-        const bool foe = nearestEnemyNear(world, 1, px, pz, config::ORDER_ENEMY_SCAN, ex, ey, ez);
-        thX = foe ? ex : px; thZ = foe ? ez : pz;
-        areaX = px; areaZ = pz; areaR = config::ORDER_BOUND_STEP; dir = foe ? -1 : 0;
-    }
-    else   // Follow
-    {
-        const bool foe = nearestEnemyNear(world, 1, sq.targetX, sq.targetZ,
-                                          config::ORDER_ENEMY_SCAN, ex, ey, ez);
-        thX = foe ? ex : sq.targetX; thZ = foe ? ez : sq.targetZ;
-        areaX = sq.targetX; areaZ = sq.targetZ; areaR = config::FOLLOW_COVER_RADIUS;
-        dir = foe ? +1 : 0;
-    }
-
-    // Miglior posizione LIBERA (tower-aware) e RAGGIUNGIBILE nella direzione; le
-    // irraggiungibili le marca "occupate" per saltarle al giro dopo (isole isolate:
-    // irraggiungibili per tutti, e claimed si azzera ogni tick); se nella direzione
-    // non ce n'è, rilassa la direzione.
-    auto pick = [&](int d) -> const TacticalPositionDef* {
-        for (int t = 0; t < 4; ++t)
-        {
-            int idx = -1;
-            const TacticalPositionDef* p =
-                bestOrderPosition(world, px, pz, areaX, areaZ, areaR, d, thX, thZ, &idx);
-            if (!p) return nullptr;
-            const bool reach = (!world.nav || !world.nav->crowdReady()
-                                || world.nav->isReachable({px, py, pz}, {p->x, p->y, p->z}));
-            if (reach) { ai.allySigIdx = idx; return p; }
-            if (idx >= 0 && idx < (int)claimed.size()) claimed[idx] = 1;   // salta l'irraggiungibile
-        }
-        return nullptr;
-    };
-    const TacticalPositionDef* pos = pick(dir);
-    if (!pos && dir != 0) pos = pick(0);
-
-    if (pos)
-    {
-        ai.allySigX = pos->x; ai.allySigZ = pos->z;
-        ai.allySigValid = true; ai.allySigTimer = config::ORDER_COMMIT_TIME;
-        if (ai.allySigIdx >= 0 && ai.allySigIdx < (int)claimed.size()) claimed[ai.allySigIdx] = 1;
-        if (sq.order == OrderType::HoldPosition)
-        { ai.holdX = pos->x; ai.holdZ = pos->z; ai.holdRadius = config::HOLD_ANCHOR_RADIUS; }
-    }
-    else   // niente posizione LIBERA: destinazione sensata per postura (mai "resta fermo")
-    {
-        if (sq.order == OrderType::Retreat)
-            retreatPointForTeam(world, 1, px, pz, ai.allySigX, ai.allySigZ);   // retro
-        else if (sq.order == OrderType::Advance)
-        { ai.allySigX = thX; ai.allySigZ = thZ; }                 // verso il nemico/area
-        else if (sq.order == OrderType::Follow)
-        { ai.allySigX = sq.targetX; ai.allySigZ = sq.targetZ; }   // verso il leader
-        else { ai.allySigX = areaX; ai.allySigZ = areaZ; }        // Hold → centro area
-        ai.allySigValid = true; ai.allySigTimer = config::ORDER_COMMIT_FALLBACK; ai.allySigIdx = -1;
-    }
-}
-
-// La struttura nemica viva più vicina (doc 35). Destinazione di RIPIEGO quando
-// non restano unità nemiche: l'ultimo bersaglio da finire prima di ripattugliare.
-static bool nearestEnemyStructure(const World& world, int myTeam,
-                                  float x, float z, float& outX, float& outZ)
-{
-    float best2 = 1e18f; bool got = false;
-    for (const auto& s : world.strategicTargets)
-    {
-        if (s.entity == 0 || s.team == myTeam) continue;
-        if (!world.isValidEntity(s.entity)) continue;
-        const float dx = s.x - x, dz = s.z - z;
-        const float d2 = dx * dx + dz * dz;
-        if (d2 < best2) { best2 = d2; outX = s.x; outZ = s.z; got = true; }
-    }
-    return got;
-}
 
 // Genera un punto di ricerca attorno all'ultima posizione nota (raggio
 // ~12m) — mappa-agnostico. Le vecchie coordinate globali -8..+8 erano
@@ -869,253 +408,9 @@ void AiSystem::update(World& world, float dt)
     // unità nascevano già "informate" di nemici che non esistono più.
     if (tick == 0 && !m_contacts.empty()) m_contacts.clear();
 
-    float cmdDrift = -1.0f;   // deriva del comandante dalla sua casa (leash, ADR-041)
-
-    // ── Comando nemico (Droide Tattico, ADR-024 / doc 32) ────────────────────
-    // Controparte del comando del giocatore: un comandante di team 2 VIVO fa
-    // convergere i droidi sul command post non-separatista più vicino a lui.
-    // Precalcolo una volta per tick. Nessun comandante vivo → direttiva spenta e
-    // i droidi tornano alla pattuglia; la transizione vivo→morto emette la
-    // conseguenza leggibile (feed), come la torre comunicazioni.
-    {
-        float cmdrX = 0.0f, cmdrZ = 0.0f;
-        bool  aliveCmdr = false;
-        for (EntityId e : snap)
-        {
-            if (!world.hasCommander(e)) continue;
-            const auto* tm = world.getTeam(e);
-            const auto* t  = world.getTransform(e);
-            if (!tm || tm->teamId != 2 || !t) continue;
-            const auto* h = world.getHealth(e);
-            if (h && h->current <= 0.0f) continue;
-            cmdrX = t->x; cmdrZ = t->z; aliveCmdr = true;
-            if (world.activeMap)
-            {
-                const float dx = cmdrX - world.activeMap->commander.x;
-                const float dz = cmdrZ - world.activeMap->commander.z;
-                cmdDrift = std::sqrt(dx * dx + dz * dz);   // leash: deve restare ≤ raggio
-            }
-            break;   // v0: dirige il primo comandante vivo (uno stratega per lato)
-        }
-
-        // Stato dei settori (ADR-034): serve al comandante per LEGGERE la
-        // situazione. Il MONDO si osserva sempre; è la DECISIONE ad avere una
-        // cadenza (sotto) — sensori continui, ordini periodici.
-        updateSectorStates(world, snap);
-
-        // Torre di controllo dei cloni (doc 36): segnala, non comanda. Sta qui
-        // perché legge gli stessi settori, ma è un canale SEPARATO da
-        // `enemyCommand` — fonderli farebbe dei cloni la copia dei droidi.
-        updateAllyIntel(world);
-
-        // Quadro tattico della torre (Fase torre-hub): la torre pre-calcola LOS posizioni↔
-        // nemici a intervalli (pesante, non serve fresca al frame). I cloni lo leggono in
-        // `selectOrderWaypoint`/ramo torre invece di rifare la LOS ciascuno.
-        m_allyTacTimer -= dt;
-        if (m_allyTacTimer <= 0.0f)
-        { m_allyTacTimer = config::TAC_PICTURE_PERIOD; updateAllyTactical(world); }
-
-        // ── Cadenza della decisione (doc 34, ADR-038) ─────────────────────
-        // Prima la direttiva si ricalcolava OGNI TICK: un comando istantaneo, e
-        // quindi impossibile da rallentare. Ora ha un periodo, che la rete di
-        // comunicazione allunga quando la torre della fazione è caduta: i droidi
-        // continuano a eseguire un intento ormai vecchio. La morte del comandante
-        // resta invece rilevata immediatamente — è un fatto, non un ordine.
-        const float period = config::COMMAND_DECISION_PERIOD
-                           * world.comms[2].orderPeriodMult;
-        const bool refresh = !aliveCmdr                            // direttiva da spegnere
-                          || !world.enemyCommand.commanderAlive    // comandante appena entrato
-                          || (m_time - m_lastCommandDecision[2]) >= period;
-        if (refresh)
-        {
-        if (aliveCmdr) m_lastCommandDecision[2] = m_time;
-        using EC = World::EnemyCommand;
-
-        // ── Bilancio GLOBALE (solo per il ripiegamento) ───────────────────
-        // Non è più la stance (che ora è per-settore): serve solo a decidere se
-        // l'intero esercito deve ritirarsi perché in netta inferiorità.
-        int nDroids = 0, nFoes = 0;
-        for (EntityId e : snap)
-        {
-            const auto* tm = world.getTeam(e);
-            const auto* h  = world.getHealth(e);
-            if (!tm || !h || h->current <= 0.0f) continue;
-            if (world.getBullet(e) || world.getVehicle(e) || world.hasCommander(e)) continue;
-            bool isStruct = false;
-            for (const auto& s : world.strategicTargets)
-                if (s.entity == e) { isStruct = true; break; }
-            if (isStruct) continue;
-            if (tm->teamId == 2) ++nDroids;
-            else if (tm->teamId == 1) ++nFoes;
-        }
-        const bool globalRetreat = aliveCmdr && nDroids <= (int)(nFoes * 0.5f) && nFoes > 0;
-
-        // ── Costruzione delle DIRETTIVE (fronti gestiti insieme, doc 32 v2) ─
-        std::vector<EC::Directive> dirs;
-        const MapDef* map = world.activeMap;
-        if (aliveCmdr && globalRetreat && map)
-        {
-            // Ripiegamento generale: un solo ordine, verso lo spawn separatista.
-            EC::Directive d;
-            d.x = map->spawnTeam2[0]; d.z = map->spawnTeam2[2];
-            d.radius = 8.0f; d.stance = EC::Retreat; d.weight = 1.0f;
-            d.label = "Ripiegamento";
-            dirs.push_back(d);
-        }
-        else if (aliveCmdr && map)
-        {
-            // Un fronte per SETTORE che conta, con la stance dal bilancio LOCALE:
-            // dove i droidi dominano ma sono pressati → TIENI; altrove (conteso o
-            // in mano nemica) → SPINGI. È il salto da "una stance globale" a
-            // "gestione di più fronti insieme".
-            for (size_t s = 0; s < map->sectors.size(); ++s)
-            {
-                const auto& sec = map->sectors[s];
-                const World::SectorState st = (s < world.sectorStates.size())
-                                            ? world.sectorStates[s] : World::SectorState{};
-                // Il settore ospita un command post che i droidi POSSIEDONO? Un
-                // obiettivo catturato è terreno da TENERE, non solo da attraversare.
-                // È la condizione STABILE che al Hold mancava: prima chiedeva una
-                // maggioranza di UNITÀ droidi nel settore (evento raro in 6v6), così
-                // il presidio non scattava mai (misura F5, doc 39). Il possesso del
-                // post no — dura finché non te lo riprendono. (ADR-046: attiva
-                // finalmente bestHoldPosition sui ruoli defensive/chokepoint.)
-                bool ownsPost = false;
-                for (const auto& pstt : world.commandPostStates)
-                {
-                    if (pstt.owner != 2) continue;
-                    for (const auto& cp : map->commandPosts)
-                        if (cp.label == pstt.label)
-                        {
-                            const float dx = cp.x - sec.x, dz = cp.z - sec.z;
-                            if (dx*dx + dz*dz <= sec.radius * sec.radius) ownsPost = true;
-                            break;
-                        }
-                    if (ownsPost) break;
-                }
-                const bool weHold     = (st.controllingTeam == 2) || ownsPost; // teniamo il terreno
-                const bool threatened = (st.allies > 0);                       // cloni che contendono
-                // Nostro e tranquillo → nessun fronte. Altrimenti: TIENI ciò che è
-                // nostro ed è minacciato; SPINGI sul resto (conteso o nemico).
-                if (weHold && !threatened) continue;
-                // Fronte in avanti che COLLASSA: droidi presenti ma NETTAMENTE sotto,
-                // su terreno NEMICO (non nostro da tenere) → RIPIEGO per-fronte invece
-                // di alimentare una posizione persa. I droidi VICINI lo raccolgono
-                // (assegnazione spaziale in pickEnemyDirective) e cadono sulla linea; il
-                // rinforzo va ai fronti adiacenti TENIBILI, non qui. La soglia +2 e il
-                // possesso nemico distinguono "collassa" (→ ripiega) da "poco sotto ma
-                // rinforzabile" (→ Advance, col termine minoranza che alza il peso).
-                const bool collapsing = !weHold
-                                     && st.enemies >= 1                       // droidi lì da ritirare
-                                     && st.allies  >= st.enemies + 2          // nettamente in inferiorità
-                                     && st.controllingTeam == 1;              // in mano nemica
-                EC::Directive d;
-                d.x = sec.x; d.z = sec.z; d.radius = sec.radius; d.label = sec.label;
-                const bool holdIt = weHold && threatened;
-                d.stance = collapsing ? EC::Retreat : (holdIt ? EC::Hold : EC::Advance);
-                if (collapsing)
-                {
-                    // Peso MODESTO: basta a farlo raccogliere dai droidi vicini, senza
-                    // rubare uno slot top-3 a un fronte produttivo né "massare sul ripiego"
-                    // (i termini minoranza/opportunità qui NON valgono: si lascia, non si rinforza).
-                    d.weight = sec.importance + st.pressure;
-                }
-                else
-                {
-                    // Analisi CONDIVISA con la torre (sectorTacticalWeight, dal punto di
-                    // vista dei droidi) + il bonus di stance specifico del comandante:
-                    // difendere un obiettivo conteso conta. Prima questi termini erano
-                    // duplicati inline e derivavano dalla torre (riallineati a mano, 85).
-                    d.weight = sectorTacticalWeight(sec, st, 2)
-                             + (holdIt ? 0.5f : 0.0f);
-                }
-                dirs.push_back(d);
-            }
-            // Le strutture nemiche sono fronti d'attacco (priorità autorata).
-            for (const auto& stx : world.strategicTargets)
-            {
-                if (stx.entity == 0 || stx.team == 2) continue;
-                if (!world.isValidEntity(stx.entity)) continue;
-                EC::Directive d;
-                d.x = stx.x; d.z = stx.z; d.radius = 8.0f; d.stance = EC::Advance;
-                d.weight = stx.priority * (stx.isComms ? 1.6f : 1.0f);
-                d.label = stx.label;
-                dirs.push_back(d);
-            }
-            // Tieni i K fronti più preziosi: il comandante concentra, non disperde su
-            // tutto. Ma la COPERTURA DELLE CORSIE è strutturale, non emergente: invece
-            // dei soli 3 pesi più alti — che possono cadere tutti nella stessa corsia
-            // lasciandone una scoperta — si prendono prima fronti in CORSIE DIVERSE
-            // (distanza LATERALE ≥ COMMAND_LANE_SEP), poi si riempiono gli slot rimasti
-            // coi pesi più alti. La torre segnala già tutti i settori (copertura
-            // implicita lato cloni); qui il troncamento top-3 la richiede esplicita.
-            std::sort(dirs.begin(), dirs.end(),
-                      [](const EC::Directive& a, const EC::Directive& b)
-                      { return a.weight > b.weight; });
-            if (dirs.size() > 3)
-            {
-                std::vector<float> lat(dirs.size());
-                for (size_t i = 0; i < dirs.size(); ++i)
-                    lat[i] = worldintel::lateralCoord(*map, dirs[i].x, dirs[i].z);
-                std::vector<size_t> chosen;
-                auto newLane = [&](size_t i) {
-                    for (size_t c : chosen)
-                        if (std::fabs(lat[i] - lat[c]) < config::COMMAND_LANE_SEP) return false;
-                    return true;
-                };
-                for (size_t i = 0; i < dirs.size() && chosen.size() < 3; ++i)   // 1) corsie diverse
-                    if (newLane(i)) chosen.push_back(i);
-                for (size_t i = 0; i < dirs.size() && chosen.size() < 3; ++i)   // 2) riempi per peso
-                    if (std::find(chosen.begin(), chosen.end(), i) == chosen.end())
-                        chosen.push_back(i);
-                std::vector<EC::Directive> pick; pick.reserve(chosen.size());
-                for (size_t i : chosen) pick.push_back(dirs[i]);
-                dirs.swap(pick);
-            }
-
-            // Fallback senza settori: il post non-separatista più vicino, come v1.
-            if (dirs.empty())
-            {
-                float best2 = 1e18f; EC::Directive d; bool got = false;
-                for (const auto& stt : world.commandPostStates)
-                {
-                    if (stt.owner == 2) continue;
-                    for (const auto& cp : map->commandPosts)
-                    {
-                        if (cp.label != stt.label) continue;
-                        const float dx = cp.x - cmdrX, dz = cp.z - cmdrZ;
-                        const float d2 = dx * dx + dz * dz;
-                        if (d2 < best2)
-                        { best2 = d2; d.x = cp.x; d.z = cp.z; d.radius = 4.0f;
-                          d.stance = EC::Advance; d.weight = 1.0f; d.label = cp.label; got = true; }
-                        break;
-                    }
-                }
-                if (got) dirs.push_back(d);
-            }
-        }
-
-        // ── Feed: annuncia i CAMBIAMENTI, non ogni rivalutazione ──────────
-        auto topLabel = [](const std::vector<EC::Directive>& v)
-        { return v.empty() ? std::string() : v.front().label; };
-        if (world.enemyCommand.commanderAlive && !aliveCmdr)
-            world.pushEvent("Comandante tattico nemico eliminato: i droidi perdono coordinamento");
-        else if (aliveCmdr && !dirs.empty()
-                 && (dirs.size() != world.enemyCommand.directives.size()
-                     || topLabel(dirs) != topLabel(world.enemyCommand.directives)))
-        {
-            const int st0 = dirs.front().stance;
-            const char* nm = (st0 == EC::Advance) ? "AVANZATA"
-                           : (st0 == EC::Retreat) ? "RIPIEGAMENTO" : "TENERE";
-            world.pushEvent("Droide Tattico: " + std::to_string((int)dirs.size())
-                            + " fronti — priorità " + nm + " su " + dirs.front().label);
-        }
-
-        world.enemyCommand.commanderAlive = aliveCmdr;
-        world.enemyCommand.active         = aliveCmdr && !dirs.empty();
-        world.enemyCommand.directives     = std::move(dirs);
-        }   // fine rivalutazione periodica delle direttive
-    }
+    // Livello di COMANDO (settori, torre di controllo, quadro tattico, direttive del
+    // Droide Tattico): vive in AiCommandLayer.cpp dopo lo split del monolite (audit #7).
+    const float cmdDrift = updateEnemyCommand(world, snap, dt);
 
     // ── Bounding overwatch EMERGENTE (ADR-035) ───────────────────────────
     // Quanti di ogni squadra si stanno già riposizionando: sotto si consente a
@@ -1124,6 +419,11 @@ void AiSystem::update(World& world, float dt)
     // vicenda" senza alcun coordinamento esplicito.
     int repositioning[3] = {0, 0, 0};
     int teamAlive[3]     = {0, 0, 0};
+    // Saturazione dei RUOLI di combattimento (A4), per team: quanti stanno già
+    // sopprimendo / aggirando / avanzando. È il denominatore che impedisce a tutti di
+    // scegliere lo stesso compito — lo stesso principio dell'occupancy delle posizioni.
+    int roleCount[3][4]  = {};
+    int engagedCount[3]  = {0, 0, 0};
     for (EntityId e : snap)
     {
         const auto* a  = world.getAi(e);
@@ -1133,6 +433,8 @@ void AiSystem::update(World& world, float dt)
         const int t = (tm->teamId == 1 || tm->teamId == 2) ? tm->teamId : 0;
         ++teamAlive[t];
         if (a->repositionActive) ++repositioning[t];
+        if (a->combatRole > 0 && a->combatRole < 4)
+        { ++roleCount[t][a->combatRole]; ++engagedCount[t]; }
     }
 
     // Heartbeat diagnostico (ogni ~10s a 60Hz): quante AI e in che stato.
@@ -1236,6 +538,44 @@ void AiSystem::update(World& world, float dt)
              {"overwatch_avviati", g_tac.overwatchStarted},
              {"hold_su_posizione", g_tac.holdPosOccupied},   // ADR-046
              {"obs_vista_estesa",  g_tac.obsSightBoost},      // ADR-046
+             // Funnel VERTICALITÀ (ponti/rialzati): candidati → acquisiti → sparati.
+             // Guardia permanente: rende verificabile in ogni momento se il
+             // combattimento cross-quota funziona, senza doverlo giudicare a occhio.
+             {"vert_candidati",     g_tac.vertCand},
+             {"tot_candidati",      g_tac.candTotal},   // denominatore di vert_candidati
+             {"vert_acquisiti",     g_tac.vertAcq},
+             {"tot_acquisizioni",   g_tac.acqTotal},    // denominatore di vert_acquisiti
+             {"vert_colpi",         g_tac.vertShot},
+             {"vert_tiro_bloccato", g_tac.vertFireBlocked},
+             {"piano_colpi",        g_tac.flatShot},
+             {"acq_tutti_bloccati", g_tac.acqAllBlocked},
+             // Percezione (doc 40): quanto pesa il campo visivo e quanto l'udito.
+             {"fuori_campo_visivo", g_tac.fovRejected},
+             {"spari_uditi",        g_tac.heardShots},
+             {"contatti_certi",     g_tac.highConfContact},      // A2: si ingaggia
+             {"contatti_da_indagare", g_tac.lowConfInvestigate},  // A2: si va a guardare
+             {"tick_soppressi",     g_tac.suppressedTicks},        // A3
+             {"tick_inchiodati",    g_tac.pinnedTicks},            // A3: soglia PINNED
+             {"annunci_inchiodato", g_tac.pinnedAnnounced},        // A3: informa o spamma?
+             // Funnel d'INGAGGIO (KI #86): il percorso completo da "c'è un nemico"
+             // a "parte un colpo", con il nome del gate che lo ferma. Guardia
+             // permanente: "AI davanti a un nemico che non spara" torna misurabile.
+             {"occ_in_raggio",  g_tac.occInRange},    // sensing tick: nemico entro l'aggro
+             {"occ_nel_cono",   g_tac.occInCone},     // ...visibile nel campo visivo
+             {"occ_acquisito",  g_tac.occAcquired},   // ...con LOS → bersaglio
+             {"gate_stato",     g_tac.gateState},     // ha bersaglio ma non è in Alert
+             {"gate_evasivo",   g_tac.gateEvading},
+             {"evasivo_in_manovra", g_tac.evadingInRepo},   // timer congelato
+             {"evasivo_fermo",      g_tac.evadingFrozen},
+             {"evasivo_congelato_tick", g_tac.evadeStuckTicks},   // fase hide oltre 3 s
+             {"evasivo_durata_max_s",   g_tac.evadeMaxSec},
+             {"gate_cooldown",  g_tac.gateCooldown},  // atteso alto (cadenza di tiro)
+             {"gate_surriscaldato", g_tac.gateOverheat},
+             {"gate_los_tiro",  g_tac.gateLos},       // coperto al momento del tiro
+             {"gate_sparato",   g_tac.gateFired},
+             {"ruolo_sopprime",     g_tac.roleAssigned[1]},        // A4
+             {"ruolo_aggira",       g_tac.roleAssigned[2]},
+             {"ruolo_avanza",       g_tac.roleAssigned[3]},
              {"fianco_trovato",      g_tac.repoFlankHit},
              {"fianco_assente",      g_tac.repoFlankMiss},
              {"tiro_trovato",        g_tac.repoFiringHit},
@@ -1311,7 +651,10 @@ void AiSystem::update(World& world, float dt)
     // I contatti PERSISTONO fra i tick con la loro età (doc 34): è ciò che
     // permette alla rete di comunicazione di ritardarli. Prima si invecchiano i
     // vecchi e si scartano gli scaduti, poi si registrano quelli di questo tick.
-    for (auto& c : m_contacts) c.age += dt;
+    // Invecchiamento + DECADIMENTO della confidenza (doc 40 A2): c(t) = c0·e^(−t/τ).
+    // L'età sola diceva "quando", non "quanto ci credo".
+    const float confDecay = std::exp(-dt / config::CONTACT_CONFIDENCE_TAU);
+    for (auto& c : m_contacts) { c.age += dt; c.confidence *= confDecay; }
     m_contacts.erase(std::remove_if(m_contacts.begin(), m_contacts.end(),
                                     [](const SharedContact& c)
                                     { return c.age > config::COMMS_CONTACT_TTL; }),
@@ -1361,10 +704,62 @@ void AiSystem::update(World& world, float dt)
                     < config::COMMS_CONTACT_MERGE_DIST * config::COMMS_CONTACT_MERGE_DIST)
                 { dup = true; break; }
             }
-            if (!dup) m_contacts.push_back({tp.x, tp.z, myTeam, 0.0f});
+            if (!dup) m_contacts.push_back({tp.x, tp.z, myTeam, 0.0f,
+                                            config::CONTACT_CONFIDENCE_SIGHT});   // VISTA: preciso
             break;
         }
     }
+
+    // ── UDITO (doc 40, Fase 1) ───────────────────────────────────────────────
+    // Uno sparo genera un CONTATTO per chi lo sente: impreciso (posizione disturbata:
+    // si sa da DOVE, non CHI) e solo per la fazione avversaria. Prima le AI erano
+    // sorde — `hearing_range` era autorato ma mai letto — e una sparatoria non si
+    // propagava: chi era girato dall'altra parte restava a pattugliare.
+    // Costo: nullo quando nessuno spara (mailbox vuota); qui è O(unità × suoni-tick).
+    if (!world.sounds.empty())
+    {
+        for (EntityId e : snap)
+        {
+            const auto* ai = world.getAi(e);   if (!ai) continue;
+            const auto* et = world.getTransform(e);
+            const auto* tm = world.getTeam(e);
+            if (!et || !tm) continue;
+            const auto* h = world.getHealth(e);
+            if (h && h->current <= 0.0f) continue;
+            const auto* sq = world.getSquad(e);
+            if (sq && sq->downed) continue;             // un caduto non sente
+            for (const auto& s : world.sounds)
+            {
+                if (s.team == tm->teamId) continue;      // non ci si allerta da soli
+                const float dx = s.x - et->x, dz = s.z - et->z;
+                const float d2 = dx * dx + dz * dz;
+                // Raggio udibile = quanto è FORTE l'evento × quanto BENE sente l'unità.
+                // (Non `min(orecchio, evento)`: con hearing_range 12 e sparo 45 m si
+                // sentiva a 12 m ciò che si vede già a 50 → udito inerte, misurato.)
+                const float r = s.radius * (ai->hearingRange / config::HEARING_REFERENCE);
+                if (d2 >= r * r) continue;
+                // Direzione sì, precisione no: il punto è disturbato in modo stabile
+                // (dipende da chi sente e da dove) → si accorre VERSO il rumore.
+                const float jx = (aiRand01() - 0.5f) * 2.0f * config::SOUND_CONTACT_SCATTER;
+                const float jz = (aiRand01() - 0.5f) * 2.0f * config::SOUND_CONTACT_SCATTER;
+                const float cx = s.x + jx, cz = s.z + jz;
+                bool dup = false;
+                for (const auto& c : m_contacts)
+                {
+                    if (c.team != tm->teamId || c.age > config::COMMS_CONTACT_MERGE_AGE) continue;
+                    const float ddx = c.x - cx, ddz = c.z - cz;
+                    if (ddx * ddx + ddz * ddz
+                        < config::COMMS_CONTACT_MERGE_DIST * config::COMMS_CONTACT_MERGE_DIST)
+                    { dup = true; break; }
+                }
+                if (!dup) { m_contacts.push_back({cx, cz, tm->teamId, 0.0f,
+                                                  config::CONTACT_CONFIDENCE_SOUND});   // UDITO: vago
+                            ++g_tac.heardShots; }
+                break;   // un rumore per tick basta ad allertare
+            }
+        }
+    }
+    world.sounds.clear();   // mailbox del tick: consumata qui
 
     // Overwatch esplicito (ADR-032): le avanzate si leggono dal pool `m_advancesPrev`,
     // dove PERSISTONO per il loro TTL (~durata manovra) invece di sparire dopo un
@@ -1386,6 +781,37 @@ void AiSystem::update(World& world, float dt)
         auto* et   = world.getTransform(e);
         auto* team = world.getTeam(e);
         if (!et || !team) continue;
+
+        // SOPPRESSIONE (A3): decade da sé — l'unità "riprende fiato" quando smette di
+        // arrivarle addosso. Senza decadimento resterebbe inchiodata per sempre.
+        if (ai->suppression > 0.0f)
+        {
+            ai->suppression *= std::exp(-dt / config::SUPPRESSION_TAU);
+            if (ai->suppression < 0.01f) ai->suppression = 0.0f;
+            else
+            {
+                ++g_tac.suppressedTicks;
+                if (ai->suppression >= config::SUPPRESSION_PINNED) ++g_tac.pinnedTicks;
+            }
+        }
+        // LEGGIBILITÀ della soppressione: si annuncia la TRANSIZIONE, non lo stato (che
+        // spammerebbe ogni tick). Senza questo il sistema resta invisibile: il giocatore
+        // non capisce perché un nemico ha smesso di avanzare, né che il suo fuoco di
+        // soppressione sta funzionando — e nemmeno noi possiamo tararlo a occhio.
+        {
+            const bool pinnedNow = ai->suppression >= config::SUPPRESSION_PINNED;
+            if (pinnedNow != ai->wasPinned)
+            {
+                ai->wasPinned = pinnedNow;
+                if (pinnedNow)
+                {
+                    world.pushEvent(team->teamId == 1
+                        ? "Compagno INCHIODATO dal fuoco nemico"
+                        : "Nemico INCHIODATO: non avanza finche' lo tieni sotto tiro");
+                    ++g_tac.pinnedAnnounced;
+                }
+            }
+        }
 
         const AiState oldState = ai->state;   // telemetria: log solo sul CAMBIO
         auto* sq = world.getSquad(e);         // ordine di squadra (ADR-020), può mancare
@@ -1460,7 +886,7 @@ void AiSystem::update(World& world, float dt)
             const auto& cs = world.comms[myTeam];
             const float shareR = config::AI_CONTACT_SHARE_RADIUS * cs.shareRangeMult;
             float bestD2 = shareR * shareR;
-            bool  got = false; float cx = 0.0f, cz = 0.0f;
+            bool  got = false; float cx = 0.0f, cz = 0.0f, cconf = 0.0f;
             for (const auto& c : m_contacts)
             {
                 if (c.team != myTeam) continue;
@@ -1468,13 +894,23 @@ void AiSystem::update(World& world, float dt)
                 if (c.age > cs.shareDelay + config::COMMS_CONTACT_FRESH) continue;  // già vecchio
                 const float dx = c.x - et->x, dz = c.z - et->z;
                 const float d2 = dx * dx + dz * dz;
-                if (d2 < bestD2) { bestD2 = d2; cx = c.x; cz = c.z; got = true; }
+                if (d2 < bestD2) { bestD2 = d2; cx = c.x; cz = c.z; cconf = c.confidence; got = true; }
             }
             if (got)
             {
                 ai->lastKnownX = cx;
                 ai->lastKnownZ = cz;
                 ai->hasLastKnown = true;
+                // CONFIDENZA (doc 40 A2): alta = "so dov'è" → ci si va per ingaggiare
+                // (comportamento storico). Bassa = "lì è successo qualcosa" → diventa un
+                // punto da PERLUSTRARE, non un nemico da inseguire. È la differenza fra
+                // un soldato che indaga e uno che rincorre un fantasma con certezza.
+                if (cconf < config::CONTACT_CONFIDENCE_ENGAGE)
+                {
+                    ai->searchX = cx; ai->searchZ = cz;
+                    ++g_tac.lowConfInvestigate;
+                }
+                else ++g_tac.highConfContact;
             }
         }
 
@@ -1504,12 +940,40 @@ void AiSystem::update(World& world, float dt)
                                                      et->x, et->z, "observation", 10.0f))
                 { aggro *= 1.5f; ++g_tac.obsSightBoost; }
             const float aggro2 = aggro * aggro;
+            // Direzione dello sguardo, per il campo visivo (doc 40).
+            const float faceR = et->ry * (PI / 180.0f);
+            const float fwdX = std::sin(faceR), fwdZ = std::cos(faceR);
+            const float cosHalfFov = std::cos(ai->fovDeg * 0.5f * (PI / 180.0f));
+            bool anyInRange = false;   // funnel KI #86: il mondo offriva qualcosa?
             for (size_t i = 0; i < targets.size(); ++i)
             {
                 if (targets[i] == e) continue;
                 const glm::vec3& tp = tgtPos[i];   // contiguo, niente hash lookup
                 const float d2 = (tp.x-ePos.x)*(tp.x-ePos.x)+(tp.y-ePos.y)*(tp.y-ePos.y)+(tp.z-ePos.z)*(tp.z-ePos.z);
                 if (d2 >= aggro2) continue;
+                anyInRange = true;
+                // ── CAMPO VISIVO (doc 40) ────────────────────────────────
+                // Prima le AI vedevano a 360°: arrivare alle spalle non valeva nulla.
+                // NON è un taglio netto, che darebbe il difetto "mi sta di fianco e non
+                // mi vede": restano percepibili chi è RAVVICINATO (visione periferica,
+                // rumore, movimento) e chi STA SPARANDO (lampo e fragore lo rivelano).
+                {
+                    const float hx = tp.x - ePos.x, hz = tp.z - ePos.z;
+                    const float hl = std::sqrt(hx * hx + hz * hz);
+                    const bool inCone = (hl < 0.001f) ||
+                        ((hx * fwdX + hz * fwdZ) / hl >= cosHalfFov);
+                    if (!inCone)
+                    {
+                        const bool close = d2 < config::PERCEPTION_PERIPHERAL_RADIUS
+                                              * config::PERCEPTION_PERIPHERAL_RADIUS;
+                        bool firing = false;   // ha sparato in questo tick? → si rivela
+                        if (!close && d2 < config::PERCEPTION_MUZZLE_REVEAL
+                                         * config::PERCEPTION_MUZZLE_REVEAL)
+                            for (const auto& s : world.sounds)
+                                if (s.source == targets[i]) { firing = true; break; }
+                        if (!close && !firing) { ++g_tac.fovRejected; continue; }
+                    }
+                }
                 if (kn == K && d2 >= kD2[K-1]) continue;   // più lontano dei K correnti
                 int pos = (kn < K) ? kn : K - 1;           // inserimento ordinato
                 while (pos > 0 && kD2[pos-1] > d2)
@@ -1519,10 +983,45 @@ void AiSystem::update(World& world, float dt)
             }
             nearest = 0;
             for (int j = 0; j < kn; ++j)
-                // Origine occhi, bersaglio al CORPO (`tgtPos`, transform ~0.5 m): KI #79.
-                if (physics::hasLineOfSight(eyePos, tgtPos[kIdx[j]],
-                                            world, targets[kIdx[j]]))
+            {
+                // Origine occhi (KI #79), bersaglio al BUSTO ALTO — lo STESSO punto
+                // che userà il gate di fuoco (`tt->y + AI_HALF_Y*0.7`). Prima qui si
+                // mirava al transform nudo (~0.35 m più in basso): il raggio cadeva e
+                // un muretto vicino al bersaglio lo tagliava, quindi **l'AI non
+                // riusciva a VEDERE bersagli che sarebbe riuscita a COLPIRE** — il
+                // fix interim di KI #82 era stato applicato al tiro e mai qui.
+                // Misurato (KI #86): acquisizione 39% → 61% dei nemici nel cono.
+                const glm::vec3& raw = tgtPos[kIdx[j]];
+                const glm::vec3 aimPt{ raw.x, raw.y + config::AI_HALF_Y * 0.7f, raw.z };
+                if (physics::hasLineOfSight(eyePos, aimPt, world, targets[kIdx[j]]))
                 { nearest = targets[kIdx[j]]; break; }
+            }
+            // Funnel verticalità (1/3): quanti candidati erano a quota diversa, e il
+            // bersaglio scelto lo è? `acqAllBlocked` isola il caso "c'erano candidati
+            // ma nessuno visibile" — il sintomo della saturazione dei K più vicini
+            // (es. sul ponte i più vicini in 3D sono quelli SOTTO, coperti dal ponte).
+            // I totali sono i DENOMINATORI: senza, "1291 candidati cross vs 28
+            // acquisizioni" è un confronto falso (un'unità produce fino a K candidati
+            // ma UNA sola acquisizione per tick). Il dato che conta è il rapporto fra
+            // la quota di OPPORTUNITÀ cross-quota e la quota di ACQUISIZIONI cross-quota:
+            // se le opportunità sono il 30% e le acquisizioni il 2%, c'è un bias reale.
+            // Funnel d'ingaggio, troncone PERCEZIONE (KI #86): raggio → cono → LOS.
+            // Se il calo grosso è raggio→cono il problema è il FOV senza scansione
+            // (l'AI guarda dove cammina); se è cono→LOS è geometria/saturazione dei K.
+            if (anyInRange) ++g_tac.occInRange;
+            if (kn > 0)     ++g_tac.occInCone;
+            if (nearest != 0) ++g_tac.occAcquired;
+            g_tac.candTotal += kn;
+            for (int j = 0; j < kn; ++j)
+                if (std::fabs(tgtPos[kIdx[j]].y - ePos.y) > config::VERTICAL_ENGAGE_DY)
+                    ++g_tac.vertCand;
+            if (kn > 0 && nearest == 0) ++g_tac.acqAllBlocked;
+            if (nearest != 0)
+            {
+                ++g_tac.acqTotal;
+                if (const auto* ntr = world.getTransform(nearest))
+                    if (std::fabs(ntr->y - ePos.y) > config::VERTICAL_ENGAGE_DY) ++g_tac.vertAcq;
+            }
 
             // ── Ingaggio delle STRUTTURE (doc 35) ────────────────────────
             // Una struttura è un bersaglio a PRIORITÀ PIÙ BASSA delle unità: si
@@ -1588,8 +1087,11 @@ void AiSystem::update(World& world, float dt)
                     {
                         const auto* fcol = world.getCollider(sqf->targetEntity);
                         // Origine occhi (KI #79); mira al CORPO: struttura = collider,
-                        // unità = transform (~0.5 m). Non oltre la testa del bersaglio.
-                        const float aimY = ft->y + (fcol ? fcol->hy * 0.5f : 0.0f);
+                        // unità = BUSTO ALTO — lo stesso punto dell'acquisizione e del
+                        // gate di fuoco (KI #86): col transform nudo un muretto vicino
+                        // al designato tagliava il raggio e il FocusFire non prendeva mai.
+                        const float aimY = ft->y + (fcol ? fcol->hy * 0.5f
+                                                         : config::AI_HALF_Y * 0.7f);
                         if (physics::hasLineOfSight(eyePos, {ft->x, aimY, ft->z},
                                                     world, sqf->targetEntity))
                             nearest = sqf->targetEntity;
@@ -1600,6 +1102,39 @@ void AiSystem::update(World& world, float dt)
         else
         {
             nearest = ai->targetEntity;   // riusa il bersaglio cachato
+        }
+
+        // Durata della fase evasiva corrente + guardia sul congelamento (KI #86).
+        if (ai->evading)
+        {
+            ai->evadeElapsed += dt;
+            if (ai->evadeElapsed > 3.0f) ++g_tac.evadeStuckTicks;
+            if (ai->evadeElapsed > g_tac.evadeMaxSec) g_tac.evadeMaxSec = ai->evadeElapsed;
+        }
+        else ai->evadeElapsed = 0.0f;
+
+        // LA FASE DI HIDE NON SI CONGELA MAI (KI #86). `exposeTimer` scorreva solo nel
+        // ramo d'ingaggio sul posto, che richiede un bersaglio — ma nascondersi dietro
+        // una cover è ESATTAMENTE ciò che rompe il proprio LOS: si entrava in hide, si
+        // perdeva il contatto, il timer si CONGELAVA, e al ri-contatto il gate di fuoco
+        // restava chiuso per tutta la fase residua. È il sintomo riportato dall'utente
+        // ("si piazzano dietro a un muro e rimangono lì").
+        //
+        // Qui si fa la cosa MINIMA: il timer continua a scorrere e la fase finisce da
+        // sola. Non si azzera `hasCover` — un primo tentativo che lo faceva ha fatto
+        // CALARE il combattimento del 17% (255→212 eventi): senza bersaglio il LOS
+        // sfarfalla di continuo, e togliere la copertura sfrattava le AI dalle
+        // posizioni autorate, che sono proprio quelle con le buone linee di tiro.
+        if (nearest == 0 && ai->evading)
+        {
+            ai->exposeTimer -= dt;
+            // Scaduta: si torna esposti. Niente nuovo roll di hide — non ci si
+            // nasconde da un nemico che non si vede; il roll spetta all'ingaggio.
+            if (ai->exposeTimer <= 0.0f)
+            {
+                ai->evading     = false;
+                ai->exposeTimer = aiRandRange(ai->peekMin, ai->peekMax);
+            }
         }
 
         // ── Transizioni stato ────────────────────────────────────────
@@ -1629,6 +1164,40 @@ void AiSystem::update(World& world, float dt)
                 // probabilità. Segnalato dall'utente: "sparano allo scoperto".
                 ai->repositionTimer = 0.0f;
                 ai->justEngaged     = true;
+
+                // ── RUOLO DI COMBATTIMENTO (A4) ─────────────────────────
+                // Si assegna all'INGAGGIO, una volta: la squadra si divide i compiti
+                // invece che ognuno tirare i dadi per sé. Il ruolo più adatto al
+                // profilo, fra quelli NON ancora saturi — stessa logica dell'occupancy
+                // delle posizioni: chi sceglie dopo trova occupato ciò che è già preso.
+                {
+                    const int t = (myTeam == 1 || myTeam == 2) ? myTeam : 0;
+                    const int engaged = engagedCount[t] + 1;
+                    // Composizione desiderata: ~metà sopprime, un terzo avanza, il resto
+                    // aggira. Una squadra che aggira tutta insieme lascia il nemico
+                    // libero di muoversi; una che sopprime e basta non conclude nulla.
+                    const int wantSup   = (engaged + 1) / 2;
+                    const int wantFlank = engaged / 3;
+                    // Affinità dal PROFILO: chi ama la copertura sopprime, chi è
+                    // aggressivo e incline al fianco aggira (i parametri esistono già).
+                    const float affSup   = (1.0f - ai->flankChance) * (0.5f + ai->coverPreference);
+                    const float affFlank = ai->flankChance * (0.5f + ai->aggression);
+                    const bool supFree   = roleCount[t][1] < wantSup;
+                    const bool flankFree = roleCount[t][2] < wantFlank;
+                    int chosen = 3;                                   // default: avanza
+                    if (supFree && (!flankFree || affSup >= affFlank)) chosen = 1;
+                    else if (flankFree)                               chosen = 2;
+                    ai->combatRole = chosen;
+                    ++roleCount[t][chosen]; ++engagedCount[t];
+                    ++g_tac.roleAssigned[chosen];
+                    // LEGGIBILITÀ (stessa regola imposta per la soppressione: il canale
+                    // si scrive INSIEME alla meccanica, non dopo). Si annuncia solo
+                    // l'AGGIRAMENTO di un compagno — l'informazione che cambia le scelte
+                    // del giocatore ("qualcuno sta girando, io tengo il fronte") — e solo
+                    // per la sua squadra, altrimenti il feed diventa un bollettino.
+                    if (myTeam == 1 && chosen == 2)
+                        world.pushEvent("Compagno in AGGIRAMENTO: tieni il fronte");
+                }
             }
             ai->state = AiState::Alert;
             ai->alertTimer = 3.0f;
@@ -1742,6 +1311,15 @@ void AiSystem::update(World& world, float dt)
                     // a mirare e sparare (il fuoco resta autonomo: si vincola solo
                     // il movimento). `orderTravel` forza il pathfinding, altrimenti
                     // in Alert si userebbe lo steering diretto e ci si incastra.
+                    //
+                    // MANOVRARE NON È NASCONDERSI (KI #86). `exposeTimer` scorre solo
+                    // nel ramo d'ingaggio sul posto: chi entrava in manovra con
+                    // `evading` attivo restava evasivo per TUTTA la manovra — timer
+                    // congelato, gate di fuoco chiuso — e la promessa qui sopra ("il
+                    // fuoco resta autonomo") era falsa. Misurato fino a 1492 tick-AI
+                    // per finestra. Una manovra deliberata SUPERA la fase di hide.
+                    ai->evading  = false;
+                    ai->hasCover = false;
                     moveDX = ai->repositionX - et->x;
                     moveDZ = ai->repositionZ - et->z;
                     const float rd = norm2D(moveDX, moveDZ);
@@ -1782,7 +1360,12 @@ void AiSystem::update(World& world, float dt)
                     {
                         // Chi fa fuoco di copertura NON si copre: resta esposto e
                         // continua a sparare (soppressione). Gli altri peek/hide.
-                        if (!covering && !ai->evading && aiRand01() < ai->coverPreference)
+                        // SOPPRESSIONE (A3): sotto tiro ci si copre MOLTO più volentieri.
+                        // È il primo effetto osservabile — una raffica che non colpisce
+                        // fa comunque abbassare la testa.
+                        const float coverWant = ai->coverPreference
+                            + ai->suppression * config::SUPPRESSION_COVER_BONUS;
+                        if (!covering && !ai->evading && aiRand01() < coverWant)
                         {
                             ai->evading = true;
                             ai->exposeTimer = aiRandRange(ai->hideMin, ai->hideMax);
@@ -1878,7 +1461,17 @@ void AiSystem::update(World& world, float dt)
                     const bool tooManyMoving =
                         repositioning[myT] * 2 >= (teamAlive[myT] > 0 ? teamAlive[myT] : 1);
 
+                    // SOPPRESSIONE (A3): chi è INCHIODATO non attraversa lo scoperto per
+                    // manovrare — resta dov'è finché la pressione non cala. È ciò che
+                    // permette a una squadra di fissare il nemico mentre un'altra aggira.
+                    // RUOLO SOPPRESSIONE (A4): chi fissa il nemico NON manovra dopo
+                    // essersi sistemato — è il suo compito restare lì e tenerlo sotto
+                    // tiro mentre gli altri aggirano. Il primo riposizionamento (quello
+                    // d'ingaggio, per non restare allo scoperto) resta permesso.
+                    const bool holdingFire = (ai->combatRole == 1) && !ai->justEngaged;
                     if (ai->repositionTimer <= 0.0f && !retreating && !covering
+                        && !holdingFire
+                        && ai->suppression < config::SUPPRESSION_PINNED
                         && world.activeMap && !ai->repositionActive)
                     {
                         ++g_tac.repoEval;
@@ -1900,8 +1493,11 @@ void AiSystem::update(World& world, float dt)
                         if (!tooManyMoving)
                         {
                             const TacticalPositionDef* dest = nullptr;
-                            // Aggiramento: colpirlo da un'altra direzione (profilo).
-                            if (aiRand01() < ai->flankChance)
+                            // Aggiramento: ora lo decide il RUOLO (A4), non un tiro di
+                            // dadi individuale. Prima ognuno estraeva su `flankChance`,
+                            // quindi potevano aggirare tutti insieme (nessuno fissava il
+                            // nemico) o nessuno. Col ruolo la squadra si divide i compiti.
+                            if (ai->combatRole == 2)
                             {
                                 dest = worldintel::bestFlankingPosition(
                                     *world.activeMap, et->x, et->z, tt->x, tt->y, tt->z,
@@ -2492,10 +2088,21 @@ void AiSystem::update(World& world, float dt)
         }
 
         // ── Sparo (solo in Alert con LOS, mai in fase evasiva) ───────
-        if (ai->state != AiState::Alert || nearest == 0) continue;
-        if (ai->evading) continue; // peek/hide: in "hide" non spara
-        if (ai->shootCooldown > 0.0f) { ai->shootCooldown -= dt; continue; }
-        if (ai->overheated) continue; // arma surriscaldata: attende il cooling
+        // Funnel d'ingaggio, troncone GATE (KI #86): la popolazione è "ha un
+        // bersaglio", cioè esattamente il sintomo "sta davanti a un nemico". Ogni
+        // ramo che NON spara viene attribuito, così il colpo mancato ha un nome.
+        if (nearest == 0) continue;
+        if (ai->state != AiState::Alert) { ++g_tac.gateState; continue; }
+        if (ai->evading)
+        {   // peek/hide: in "hide" non spara
+            ++g_tac.gateEvading;
+            if (ai->repositionActive) ++g_tac.evadingInRepo;
+            if (ai->stationary)       ++g_tac.evadingFrozen;
+            continue;
+        }
+        if (ai->shootCooldown > 0.0f)
+        { ++g_tac.gateCooldown; ai->shootCooldown -= dt; continue; }
+        if (ai->overheated) { ++g_tac.gateOverheat; continue; } // arma surriscaldata: attende il cooling
 
         const auto* tt = world.getTransform(nearest);
         if (!tt) continue;
@@ -2520,7 +2127,15 @@ void AiSystem::update(World& world, float dt)
         // Origine del tiro = OCCHI (KI #79): coerente con l'acquisizione E con lo
         // spawn/traiettoria del proiettile sotto → l'unità spara SOPRA la propria
         // cover verso il corpo del nemico, invece di piantare il colpo nel muro davanti.
-        if (!physics::hasLineOfSight(eyePos, {tt->x, aimY, tt->z}, world, nearest)) continue;
+        // Funnel verticalità (2/3 e 3/3): l'ingaggio è cross-quota? e il gate di tiro
+        // lo lascia passare o lo uccide qui? È la distinzione che a occhio non si vede:
+        // "acquisisce ma non spara" (LOS di tiro) vs "non acquisisce" (sopra).
+        const bool vertEngage =
+            std::fabs(tt->y - et->y) > config::VERTICAL_ENGAGE_DY;
+        if (!physics::hasLineOfSight(eyePos, {tt->x, aimY, tt->z}, world, nearest))
+        { ++g_tac.gateLos; if (vertEngage) ++g_tac.vertFireBlocked; continue; }
+        ++g_tac.gateFired;
+        if (vertEngage) ++g_tac.vertShot; else ++g_tac.flatShot;
         float dx = tt->x-eyePos.x, dy = aimY-eyePos.y, dz = tt->z-eyePos.z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
         if (len < 0.001f) continue;
@@ -2543,6 +2158,10 @@ void AiSystem::update(World& world, float dt)
         if (team->teamId == 2 && world.battleState.enemyAccuracyMult != 1.0f)
             effAccuracy = std::clamp(effAccuracy * world.battleState.enemyAccuracyMult,
                                      0.0f, 1.0f);
+        // SOPPRESSIONE (A3): sotto tiro si mira peggio. È l'effetto che rende il fuoco
+        // di soppressione una tattica reale invece che munizioni sprecate.
+        if (ai->suppression > 0.001f)
+            effAccuracy *= (1.0f - ai->suppression * config::SUPPRESSION_ACC_PENALTY);
         const float spread = (1.0f - effAccuracy) * config::AI_SPREAD_MAX;
         if (spread > 0.0f)
         {
@@ -2561,6 +2180,9 @@ void AiSystem::update(World& world, float dt)
         world.addVelocity(b, {dx*inv, dy*inv, dz*inv});
         world.addTeam(b, {myTeam});
         world.addBullet(b, {ai->bulletDamage, ai->bulletLifetime, myTeam});
+        // Lo sparo FA RUMORE (doc 40): chiunque abbia orecchie nel raggio se ne accorge.
+        // È il meccanismo che propaga una battaglia invece di lasciarla locale.
+        world.sounds.push_back({et->x, et->z, config::SOUND_GUNSHOT_RADIUS, myTeam, e});
         if (ai->bulletMesh)
             world.addMeshRenderer(b, {ai->bulletMesh, ai->bulletTexture, ai->bulletR, ai->bulletG, ai->bulletB});
 

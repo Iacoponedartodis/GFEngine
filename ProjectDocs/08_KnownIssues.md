@@ -1,5 +1,154 @@
 # 08 — Known Issues
 
+## 86. AI che non sparano pur avendo nemici davanti — DUE CAUSE STRUTTURALI TROVATE E CORRETTE, la terza resta aperta (2026-08-02, changelog 118)
+
+**L'ipotesi principale del punto 86-orig qui sotto — "FOV senza scandaglio" — è SMENTITA dalla misura.**
+Il funnel d'ingaggio (nuovo, permanente) separa i tronconi che a occhio si confondono:
+
+| passaggio | misurato (6000 tick, Training Ground) | lettura |
+|---|---|---|
+| nemico entro l'aggro | 10.5k tick-sensing | il contatto **non** è raro (aggro = `sight_range` 45-75 m ≥ mappa) |
+| ...dentro il campo visivo | **92-95%** | **il FOV costa il 5-8%, non è la causa** |
+| ...con LOS → bersaglio | **28-39%** | **è QUI che muore l'ingaggio** |
+| ha bersaglio → spara | 2,4% dei tick (il resto è cadenza di tiro, atteso) | il gate di fuoco funziona |
+
+**Causa 1 — l'AI non vedeva bersagli che sapeva colpire (CORRETTA).** L'acquisizione mirava al `transform`
+nudo, il gate di fuoco al **busto alto** (`+AI_HALF_Y*0.7`): il fix interim di KI #82 era stato applicato al
+tiro e **mai** all'acquisizione. Un muretto vicino al bersaglio tagliava il raggio d'avvistamento ma non
+quello di tiro. Misurato **sulla stessa traiettoria** (non fra run divergenti): **13,2% di TUTTE le
+acquisizioni** esistono solo grazie al punto alzato. Stessa asimmetria corretta anche nel FocusFire.
+
+**Causa 2 — la fase di hide si CONGELAVA (CORRETTA).** `exposeTimer` scorreva solo nel ramo "Alert +
+bersaglio + non in manovra": ma nascondersi dietro una copertura è **esattamente** ciò che rompe il proprio
+LOS → perso il bersaglio, il timer si fermava e `evading` (che chiude il gate di fuoco) restava attivo a
+tempo indeterminato. Stesso congelamento entrando in manovra, in contraddizione col commento del codice che
+prometteva *"il fuoco resta autonomo"*. A/B controllato sul sintomo:
+
+| | tick-AI congelati (>3 s) | fase di hide più lunga |
+|---|---|---|
+| senza fix | **3549** | **26,6 s** (contro `hide_duration_max` = 1,8 s) |
+| con fix | **0** | **1,8 s** = il massimo autorato |
+
+È la spiegazione letterale del sintomo riportato: *"si piazzano dietro una copertura e restano lì"*.
+
+**Causa 3 — APERTA: il 61-72% di perdita fra "nel cono" e "con LOS".** `acq_tutti_bloccati` coincide
+esattamente con quella perdita: tutti i K candidati più vicini bloccati. **Non** è saturazione dei K (K=8 ≥
+nemici vivi per lato) — è geometria reale. Da decidere se sia fisiologico per uno sparatutto a coperture o
+se manchi una reazione: oggi un'AI senza LOS **non manovra per procurarselo**. Prossimo passo prima di
+toccare codice: distinguere "coperto da una cover autorata" (corretto: c'è un contro-gioco) da "coperto da
+geometria muta" (difetto di mappa → 41_TacticalWorldData/B7).
+
+**Nota di metodo.** Gli eventi di combattimento aggregati **non** decidono questo bug: fra due run la
+simulazione diverge e la differenza non è attribuibile (un primo tentativo di fix, che azzerava anche
+`hasCover`, faceva calare il combattimento del 17% — sfrattava le AI dalle posizioni autorate). La decisione
+è stata presa su un contatore che misura **il sintomo**, non l'esito. Volume di combattimento finale
+240 → 236: invariato entro la divergenza.
+
+**Guardie permanenti**: `occ_in_raggio`/`occ_nel_cono`/`occ_acquisito`, `gate_*`,
+`evasivo_congelato_tick`, `evasivo_durata_max_s`. Quest'ultima deve restare ≤ `hide_duration_max`: se
+risale, il congelamento è tornato.
+
+## 86-orig. (storico) AI che non sparano — ipotesi "regressione del FOV" (CRITICO, 2026-08-02) — SMENTITA
+- **Sintomo (utente, osservato col rallentatore)**: *"moltissimi bot, sia cloni che droidi, spesso si fermano
+  e non sparano più; a volte si piazzano dietro una copertura e restano lì; è **estremamente comune** vedere
+  AI che stanno davanti a dei nemici senza sparare"*.
+- **Dati (telemetria esistente)**: `fuori_campo_visivo` **10.4k-16.2k** contro `tot_candidati` 14.8k-17.4k;
+  `acq_tutti_bloccati` **1141-1573** contro `tot_acquisizioni` 973-1422 → **circa metà delle volte** un'AI ha
+  candidati in gittata e non ne acquisisce nessuno.
+- **Causa più probabile**: il campo visivo (changelog 100, A1) è stato introdotto **senza lo SCANDAGLIO**.
+  Il `facing` dell'AI è legato al movimento o al bersaglio già ingaggiato: chi cammina verso un waypoint ha
+  un cono fisso davanti e un **angolo cieco permanente** ai lati. Prima vedevano a 360° (sbagliato ma
+  funzionale); ora vedono correttamente ma **non guardano** — peggio di entrambi.
+- **Direzioni di fix da valutare** (nell'ordine): (a) **scandaglio**: rotazione lenta della vista fuori dal
+  combattimento, come un soldato che perlustra; (b) allargare la fascia periferica
+  (`PERCEPTION_PERIPHERAL_RADIUS`, oggi 6 m) e/o il FOV dei profili; (c) rivedere il fatto che il facing è
+  incatenato al movimento (testa e corpo dovrebbero essere disaccoppiati).
+- **Sospetti secondari da escludere** per il "si fermano dietro copertura": il ruolo *sopprime* (A4) che
+  blocca la manovra, e la fase `evading`/hide — entrambi devono comunque lasciar SPARARE. Da verificare con
+  un funnel dedicato (candidati → acquisiti → gate di fuoco) prima di intervenire.
+- **PRIMA EVIDENZA dall'ispettore** (changelog 116, dump `sim-ticks` su Training Ground): 12 AI totali →
+  **8 in Alert** ma **7 senza bersaglio acquisito** (`target: 0`), e **5 in `evading`** (fase di copertura,
+  che per design non spara). Quindi le unità *sanno* di essere in combattimento ma non acquisiscono nessuno:
+  il gate che fallisce è l'**ACQUISIZIONE**, non il tiro — coerente con l'ipotesi FOV-senza-scandaglio.
+  Concausa da quantificare: quanto pesa `evading` (5/12 è molto) rispetto al FOV.
+- **Prossimo passo diagnostico**: incrociare `facing_deg` con la posizione dei nemici nello stesso dump per
+  misurare quanti bersagli cadono fuori dal cono, e separare il contributo di `evading`.
+- **Decisione utente 2026-08-02**: rimandato, si procede con A5. **Ma è il primo item da riprendere**: è un
+  difetto di gameplay fondamentale (le AI non combattono) e ogni sistema aggiunto sopra lo rende più
+  difficile da bisezionare.
+
+## 87. Performance: il numero massimo di AI senza lag sta CALANDO (2026-08-02)
+- **Sintomo (utente)**: *"dovremo lavorare ancora di più con l'ottimizzazione perché il numero di AI
+  contemporanee massimo per non avere lag sta iniziando a scendere"*.
+- **Cause plausibili accumulate** (da misurare, non da assumere): FOV+udito per candidato (A1), la LOS extra
+  del funnel, il quadro tattico della torre O(posizioni × nemici) ogni 0.33 s, `buildTacticalLinks` O(N²) al
+  load, il near-miss della soppressione per proiettile × unità (A3).
+- **Metodo**: **misurare prima** con Tracy (ADR-015, già integrato) invece di ottimizzare a intuito; poi le
+  leve già identificate in doc 40 §11 / doc 41 §9 — AI LOD, sleeping agents, job del precompute, e il filtro
+  spaziale per `buildTacticalLinks` (soglia ~300 posizioni).
+- **Nota**: `--sim-ticks` misura il COMPORTAMENTO a tick fissi, non il costo per frame: per la performance
+  serve il profiler, non quel contatore.
+
+## 84. Map Editor: la barra "nome mappa" sembra inefficace — ✅ RISOLTO 2026-08-02 (changelog 109)
+- **Fix**: rimosse ENTRAMBE le caselle di testo (nome visualizzato e nuovo-nome); resta un solo pulsante
+  "Rinomina…" con popup. Il rename allinea filename, id e `name` → **un nome solo, uguale ovunque**.
+  Corretta anche la violazione di ADR-001 (`me.id` ora è sempre il filename stem, mai letto dal contenuto).
+- Diagnosi originale sotto.
+
+## 84-orig. (storico) Map Editor: la barra "nome mappa" sembra inefficace — DIAGNOSTICATO 2026-08-02
+- **Sintomo (utente)**: nel Map Editor c'è una barra col nome della mappa, accanto a quella del rename;
+  scrivendoci il nome **non cambia né nell'elenco dell'editor né in partita**, mentre il campo accanto al
+  tasto *Rinomina* funziona. Sospetto dell'utente: rimasuglio della prima versione del rename. Confermato in
+  parte, ma la causa è un'altra e più seria.
+- **Causa 1 — violazione di ADR-001 (l'id è il filename stem)**: `MapEditor::loadMaps` fa
+  `me.id = j.value("id", filename_stem)` → legge l'`id` **dal contenuto del file**, mentre il runtime
+  (`DefinitionRegistry::loadMaps`) usa sempre il filename. Un JSON con un campo `id` stantio fa mostrare
+  all'elenco dell'editor un nome diverso da quello reale — è **esattamente KI #21**, che quel fallback
+  doveva eliminare. Il save fa già `j.erase("id")`, quindi il campo è deprecato: la lettura non deve esserci.
+  **Fix: una riga** — `me.id = entry.path().stem().string();`
+- **Causa 2 — l'elenco mostra l'ID, non il nome**: `MapEntry` ha solo `{id, path}`, nessun `name`. Quindi
+  cambiare la barra del nome non può cambiare l'elenco, *by design* ma in modo poco leggibile. In partita il
+  nome è usato (`sbMaps.push_back({me.id, me.name})`), quindi lì dovrebbe cambiare: da verificare se il
+  sintomo riguarda anche la partita o solo l'elenco.
+- **Ridondanza reale**: due campi di testo adiacenti che sembrano fare la stessa cosa ma non la fanno
+  (uno è il NOME VISUALIZZATO, l'altro l'IDENTITÀ del file). Vanno separati visivamente e etichettati, o
+  unificati nel flusso di rename.
+- **Correlato**: R1/R4 di doc 39 (coerenza dei moduli) e il futuro `AssetBrowser`, che centralizzerà
+  identità e rename e toglierà l'occasione di ripetere questo errore.
+
+## 85. Testi ancora TAGLIATI in alcuni punti dell'editor — DA CONTROLLARE (utente 2026-08-02)
+- Segnalazione: restano scritte tagliate in alcune schermate. Da individuare e correggere applicando R8
+  ([[ui-no-clipping-use-dropdowns]]): raggruppare in sezioni/tendine invece di far uscire i comandi.
+- Da fare durante la migrazione dei moduli a `ModuleShell` (ADR-049), che è l'occasione naturale.
+
+## 83. Verticalità: l'AI è CORRETTA, il limite è la GEOMETRIA della mappa — MISURATO 2026-07-27
+- **Domanda utente**: "i cloni sul ponte non sembra sparino, i droidi sotto non prendono di mira quelli sopra —
+  c'è un modo per verificare ESATTAMENTE?" (i proiettili lenti riempivano lo schermo di tracce non attribuibili).
+- **Strumento**: funnel a 3 stadi nella telemetria (`tactical decisions`), **permanente** e a costo ~zero —
+  `vert_candidati`/`tot_candidati` → `vert_acquisiti`/`tot_acquisizioni` → `vert_colpi`, più
+  `vert_tiro_bloccato`, `piano_colpi` (controllo) e `acq_tutti_bloccati`. Separa le TRE cause che a occhio
+  danno lo stesso sintomo: non vede / vede ma non mira / mira ma il colpo è bloccato.
+- **Misurato** (`--sim` Release, 5 report): opportunità cross-quota **19-22%** di tutte le opportunità, ma
+  acquisizioni cross-quota **0-6%**. E il dato che chiude la questione: **candidati cross-quota VISIBILI =
+  acquisiti, 1:1** (17→17, 28→28) e **`vert_tiro_bloccato` = 0 sempre**.
+  → **L'AI non ha bug di verticalità**: tutto ciò che vede lo ingaggia, e quando ingaggia spara. Il collo di
+  bottiglia è la VISIBILITÀ: solo l'**1-3%** dei nemici a quota diversa è visibile.
+- **Causa (geometria della mappa, non codice)**: le piattaforme di Training Ground sono **blocchi PIENI**
+  (`sx=7.8, sz=8.3, top≈3.1 m`), non impalcature. Chi ci sta sopra ha gli occhi a ~4.3 m e il PROPRIO bordo a
+  ~3.9 m, alto 3.1 m: il raggio deve scendere solo 1.2 m in 3.9 m → vincolo geometrico **distanza orizzontale
+  ≳ 12 m** per vedere qualcuno a terra. Coerente col misurato: bersagli **<8 m sempre bloccati (0%)** — è il
+  proprio blocco a nasconderli; e i **≥15 m**, che passerebbero, cadono sulle numerose **pareti alte 3 m**
+  (`sx=3.6, sz=0.1, top=3.02`) diffuse sulla mappa. La LOS (slab test 3D, rotazione, clamp) è stata riletta:
+  corretta.
+- **Non è quindi un fix di codice.** Leve di AUTHORING: posizioni tattiche **sul bordo** delle piattaforme;
+  parapetti **bassi** (≤1 m) invece di pareti 3 m sul perimetro; piattaforme con sporgenza/balcone; oppure
+  accettare che il piano alto domini solo le lunghe distanze (scelta di design legittima).
+- **Aperto**: manca uno strumento in EDITOR che mostri, per ogni posizione tattica, quante posizioni a quota
+  diversa VEDE (riusando `worldintel::hasLineOfFire`, la stessa del runtime → nessuna doppia verità), così
+  l'authoring verticale è guidato dai dati invece che a occhio. Vedi 06_Todo. [[editor-accessibility-priority]]
+- **Nota di metodo**: un'ipotesi iniziale (saturazione dei K=8 candidati più vicini) è stata **smentita** dalla
+  misura — con 8 nemici in campo i candidati sono già tutti. Registrata per non riproporla.
+
 ## 82. Combattimento cross-quota (sparare sopra/sotto) — FIX 2026-07-25 (changelog 81+82; conferma visiva in sospeso)
 - **Radice finale (changelog 82)**: `bestFiringPosition`/`bestFlankingPosition` valutavano la LOS di tiro su un
   PIANO ORIZZONTALE (bersaglio a `p.y+1.2`, la quota della posizione) invece che alla quota REALE del nemico →
@@ -251,7 +400,12 @@
   però non viene più tradita in silenzio. Dettaglio originale sotto.
 
 ## 25b. (dettaglio originale) Campi editabili nell'editor ma MAI consumati dal runtime
-- `min_range`, `projectile_mesh`, `fov_deg`, `hearing_range`, `reposition_chance`,
+- **✅ `fov_deg` e `hearing_range` RISOLTI 2026-07-27 (changelog 100)**: ora arrivano ad `AiComponent` e
+  guidano campo visivo e udito. Erano in questa lista **dal 2026-07-10** — cioè il difetto era noto e
+  tracciato, ma nessuno l'aveva chiuso, e intanto l'AI restava onnisciente e sorda. Lezione: un campo in
+  questa lista non è "un dettaglio di UI", può essere un **buco di gameplay**; questa lista va riletta
+  quando si progetta sopra quei sistemi.
+- `min_range`, `projectile_mesh`, `reposition_chance`,
   `damage_scale`, `MapDef.metadata/navmesh/max_tickets/enemy_count/ally_count`,
   `EnemyDef.texture`, `AbilityDef.passive`. Inoltre `EnemyDef.moveSpeed` è sovrascritto dal
   `patrol_speed` del profilo AI quando il profilo esiste. Il problema è che l'editor li

@@ -50,6 +50,19 @@ nlohmann::json build(const char* reason, int gameState, bool worldReady,
                     case AiState::Search: ent["ai_state"] = "Search"; break;
                 }
                 if (ai->hasLastKnown) ent["goal"] = {ai->lastKnownX, ai->lastKnownZ};
+                // ── Ispettore del RAGIONAMENTO (doc 40 A5) ────────────────
+                // Perché quest'unità sta (o non sta) combattendo. Senza questi campi,
+                // "l'AI non spara" è un'osservazione che non si può indagare: si vede
+                // il risultato e non la causa. Servono direttamente a KI #86 — dove
+                // GUARDA (facing + ampiezza del cono) rispetto a dove sono i nemici, e
+                // quale dei gate la sta bloccando.
+                ent["facing_deg"]  = tr->ry;          // dove guarda ORA
+                ent["fov_deg"]     = ai->fovDeg;      // quanto ampio è il suo cono
+                ent["target"]      = ai->targetEntity;  // 0 = nessun bersaglio acquisito
+                ent["suppression"] = ai->suppression;   // >0 = sotto tiro
+                ent["role"]        = ai->combatRole;    // 1 sopprime, 2 aggira, 3 avanza
+                ent["evading"]     = ai->evading;       // in fase di copertura (non spara)
+                ent["reposition"]  = ai->repositionActive;
             }
             if (world.getBullet(id))  ent["kind"] = "bullet";
             if (world.getVehicle(id)) ent["kind"] = "vehicle";

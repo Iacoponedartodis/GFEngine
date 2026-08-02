@@ -1,5 +1,94 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ★ PIANO DIRETTORE AI + MONDO TATTICO (doc 40 + doc 41, dal 2026-07-27)
+Due binari **paralleli e indipendenti**: l'AI può migliorare senza attendere la pipeline dati, e viceversa.
+Ordine dentro ogni binario, non fra binari. Ogni voce è verificabile (`--sim-ticks`, `--validate`, telemetria).
+
+> **P0 in corso — KI #86 (ingaggio).** Due cause strutturali trovate e corrette (changelog 118): punto di
+> mira dell'acquisizione disallineato dal gate di fuoco (**13,2%** delle acquisizioni), e fase di hide che
+> si congelava fino a **26,6 s** con il fuoco bloccato. **Resta la causa 3**: il 61-72% di perdita fra
+> "nemico nel cono" e "LOS ok". Prossimo passo *diagnostico*, non di codice: distinguere il bloccato da una
+> **cover autorata** (fisiologico, ha un contro-gioco) dal bloccato da **geometria muta** (difetto di mappa
+> → B7). Solo dopo si decide se serve una reazione ("non ho LOS → me la procuro"), che oggi non esiste.
+
+### Binario A — AI (doc 40)
+- ✅ **A1 Percezione: FOV + udito** (changelog 100). Misurato: fuori-campo 2000-3100/report, spari uditi
+  72-138. **Smoke test utente in sospeso** (aggirare senza essere visti; sparare e farsi sentire).
+- ✅ **A2 Confidenza sui contatti** (changelog 111): `c(t)=c₀·e^(−t/τ)`; vista 1.0 / udito 0.4; sotto soglia il
+  contatto diventa META DI PERLUSTRAZIONE invece di bersaglio. Misurato: entrambi i rami vivi (fino al 53% di
+  investigazioni), `fermi` 0, combat 116→128. **Fase 1 AI COMPLETA** (percezione + memoria).
+- ✅ **A3 Soppressione** (changelog 112): near-miss entro 2.2 m → soppressione con decadimento; effetti su
+  mira, copertura e blocco delle manovre allo scoperto. Misurato: inchiodati **12-26%** dei tick soppressi
+  (preme senza paralizzare), manovre non crollate, `fermi` 0, combat 128→**151**. **Smoke test dovuto.**
+- ✅ **A4 Ruoli di combattimento** (changelog 114): ruolo assegnato all'ingaggio per saturazione + affinità di
+  profilo (sopprime/aggira/avanza); chi sopprime non manovra; rilascio alla perdita del contatto. Misurato
+  ≈55/30/18%, manovre salite, `fermi` 0. **Fase 2 COMPLETA.**
+  - ▶ Resta il comando player **"Suppress"** (ora ha una meccanica sotto) e da valutare in playtest se il
+    combattimento risulta "manovrato" o "fiacco" (eventi combat 151→128, vedi changelog 114).
+- ✅ **A5 Utility formalizzata** (changelog 116 + 117): **ispettore** nel dump di stato (`facing_deg`,
+  `fov_deg`, `target`, `suppression`, `role`, `evading`, `reposition` — "perché questo agente ha scelto
+  quella posizione") + gli **8 bilanci di pesi in `include/mini/game/ai/AiUtility.hpp`**, non più numeri
+  magici in nove formule su tre file. Refactor a comportamento invariato: `--sim-ticks` **128 = baseline**.
+  - ▶ Resta da fare, ora che è possibile in un posto solo: **tarare** le curve verso doc 40 §6. Volutamente
+    NON fatto insieme al refactor (altrimenti una differenza non sarebbe attribuibile), e da fare **dopo**
+    KI #86 — tarare pesi mentre l'ingaggio ha un bug significa inseguire il sintomo sbagliato.
+- ▶ **A6 Obiettivi nel decisore** (doc 40 Cucitura 2): l'utility passa da "quale settore" a "quale
+  obiettivo, e quale settore lo serve". `ObjectiveSystem` esiste ma **non alimenta l'AI**. *Dipende da:
+  A5 + B3. È l'abilitatore reale delle mappe profonde con approcci alternativi.*
+- ⏸ **A7 Repertorio di azioni dichiarato** (`requires`/`provides`) — Cucitura 3. Costa poco, e rende un
+  risolutore GOAP-like (o un HTN) un'AGGIUNTA invece che una riscrittura.
+- ⏸ **A8 BT per manovre multi-passo** · **A9 HTN** (quando gli obiettivi saranno profondi) ·
+  **A10 risolutore stile GOAP** su azione bloccata, profondità ≤3 (trigger: quando ci si ritrova a scrivere
+  a mano il 3°/4° ripiego annidato). Regola: **una tecnica per tipo di domanda** (doc 41 §8).
+
+### Binario B — Mondo tattico e pipeline dati (doc 41)
+- ✅ **B1 Formato PREFAB + espansione al load** (changelog 101). Verificato: 1 prefab × 2 istanze ruotate
+  0°/90° → 6 box + 6 posizioni, `--validate` 0 errori, Training Ground invariata. Parser condivisi
+  mappa↔prefab (uno schema solo). Riferimento rotto = messaggio esplicito.
+- ✅ **B2 `fromPrefab` sui nodi tattici** (changelog 101) — derivato vs autorato, prerequisito per rigenerare
+  senza perdere il lavoro manuale.
+  - **Limite noto**: l'editor non conosce ancora i prefab (→ B5); non li mostra ma **non li perde**
+    (`saveJsonRMW` preserva le chiavi altrui — verificato).
+- ✅ **B3 Copertura dall'ALTO derivata** (changelog 102) — `worldintel::hasOverheadCover`, calcolata in
+  `buildTacticalLinks`, mostrata in editor e nel log. Misurato: Training Ground 25/167, firebase 0/60.
+  **NON è "indoor"**: è "c'è qualcosa sopra" (un sottopasso conta quanto un bunker). L'interno vero richiede
+  il rilevamento della CHIUSURA → B8. *Consumatori presenti dal primo giorno (lezione KI #25b).*
+- ✅ **B4 Salute tattica** (changelog 103): `analyzeTacticalHealth` in **ContentValidation** (regole condivise
+  editor ↔ `--validate`, mai duplicate) — 5 difetti: non copre nessuno · cieca cross-quota · esposta ≥55% ·
+  ridondante <2 m · settore senza posizioni (severità per importanza). Pannello editor cliccabile + gate
+  headless. Misurato Training Ground **5 problemi / 53 avvisi**. **Smoke test editor dovuto.**
+  - ✅ **Rifinito col playtest (changelog 104)**: bug ridondanza (ignorava il `facing` → segnalava posizioni
+    con versi opposti) → avvisi Training Ground **53→19**; avvisi raggruppati per tipo con tendine;
+    `NoCoverage` distingue **ISOLATA** (problema) da "avanzata" (avviso). Prefab corretto (era colpa mia).
+  - **▶ Difetto REALE residuo da correggere in authoring**: su **firebase**, `vantage 45` e `vantage 46` sono
+    **ISOLATE** (non coprono nessuno e nessuno le batte) → nessuna AI le userà mai. Training Ground e Prefab
+    Test: **0 problemi**.
+- ✅ **B5 Editor: piazzamento prefab** (changelog 105) — lista + combo + "+ Piazza", anteprima nel viewport
+  con la stessa trasformazione del motore, gizmo + rotazione, riferimenti rotti visibili, save dei soli
+  riferimenti. `loadPrefabs` pubblica → l'editor usa il loader del runtime, nessun secondo parser.
+  **Smoke test dovuto** (piazzare, salvare, riaprire, verificare in partita).
+  - **Binario B: fondamenta COMPLETE** (B1-B5). Restano gli avanzati: B6 Blender · B7 choke point ·
+    B8 stanze/ingressi · B9 copertura distruttibile.
+- ⏸ **B6 Pipeline Blender**: convenzioni `UCX_` (collisione) / `TP_<ruolo>` (posizioni) / `ENTRY_`,
+  importatore GLB→prefab. **Rischio più alto del piano** (pipeline esterna, qualità asset).
+  *Dipende da: B1. Non iniziare prima: importare mesh senza un posto dove mettere il significato
+  ripeterebbe il fallimento di ADR-026.*
+- ⏸ **B7 Choke point** (analisi del grafo navmesh) · **B8 stanze/ingressi** · **B9 copertura distruttibile**
+  (riusa `strategicTargets`: HP + collider già presenti).
+
+### Vincoli di scala da affrontare PRIMA delle mappe profonde
+- **`buildTacticalLinks` è O(N²)** — **misurato** 2026-07-27: 60 pos → 0.43 ms; **167 pos → 7.9 ms**.
+  Estrapolando: 500 → ~70 ms, 1000 → ~280 ms, 1500 → ~640 ms (inaccettabile al load).
+  *(Correzione: una stima precedente diceva ~20 ms a 500 — la realtà è ~3× peggio.)*
+  Mitigazione: limitare le coppie alla gittata massima con griglia spaziale (→ ~O(N·k)).
+  **Soglia d'intervento abbassata a ~300 posizioni.** Oggi non è un problema.
+- **`allyTac`** è O(posizioni × nemici) ogni 0.33 s → filtrare ai soli settori contesi quando servirà.
+
+### Cosa NON fare (deciso, con motivo)
+ML/ONNX a runtime (uccide determinismo/debug/autorabilità — ML solo **offline** per tarare i pesi) ·
+auto-generazione di posizioni dalla geometria (ADR-026, già fallita) · mesh Blender nella collisione
+(ADR-047) · nuove strutture spaziali finché il profiling non le chiede · room clearing prima di B3/B8.
+
 ## ▶ USO SENSATO DI COVER/METADATA (playtest 2026-07-23)
 - **✅ Fix 1 — cerca copertura all'ingaggio (changelog 67)**: entrando in Alert, valutazione proattiva di
   `bestFiringPosition` (riusa ADR-035, non un sistema nuovo). Misurato: uso posizioni di tiro su, `fermi=0`.
@@ -74,18 +163,38 @@
       Ordini del player da validare **visivamente**.
     - Se il visivo conferma, il rework ordini è completo per questa fase. Futuro: ordini rapidi per-membro;
       coordinamento più ricco dalla torre (ruoli, bounding coordinato).
+- **▶ VERTICALITÀ — è AUTHORING, non codice (KI #83, changelog 96)**: misurato che l'AI ingaggia tutto ciò che
+  vede a quota diversa e spara (visibili = acquisiti 1:1, tiro mai bloccato); il limite è che solo l'1-3% dei
+  nemici cross-quota è VISIBILE, per la forma della mappa (piattaforme = blocchi pieni 7.8×8.3×3.1 → serve
+  ≳12 m orizzontali per vedere a terra; più pareti alte 3 m diffuse).
+  - ✅ **Strumento EDITOR "visuale verticale" FATTO (changelog 97)**: per ogni posizione, `X / Y` posizioni a
+    quota diversa viste (stessa `hasLineOfFire` e stesse quote occhi/corpo del runtime). Riepilogo
+    `Verticale: N/M cieche` sopra la lista, `!` sulle voci difettose, rombo rosso nel viewport sulle cieche.
+    Build-verified e **confermato dall'utente 2026-07-27** (il conteggio reagisce allo spostamento delle
+    posizioni). [[editor-accessibility-priority]]
+  - Leve di authoring immediate (senza attendere lo strumento): posizioni sul BORDO delle piattaforme,
+    parapetti ≤1 m invece di pareti 3 m sul perimetro, o sporgenze/balconi.
 - **▶ DEBITO TECNICO (audit 2026-07-27, changelog 94)** — sistemati #1/#2/#3/#5/#10; rimandati:
-  - **#7 `AiSystem.cpp` = 2578 righe (MONOLITE)**: sensing, combattimento, reposition, comandante, torre,
-    ordini, tower-hub, leash, muzzle tutto in un file e in una `update()` enorme. Regge ma è il punto più a
-    rischio per modifiche future. Candidato a split (`AiCombat`/`AiOrders`/`AiCommandLayer`). **Refactor grande,
-    da valutare a parte** (comportamento invariato, verificabile con `--sim` prima/dopo).
+  - **✅ #7 Split del monolite FATTO (changelog 95)**: `AiSystem.cpp` 2578 → **1805** righe; nuovo
+    **`AiCommandLayer.cpp`** (843) col livello di comando (settori, torre, quadro tattico, direttive del Droide
+    Tattico, selezione posizioni per gli ordini) + seam privato `AiInternal.hpp` (`namespace mini::aicmd`).
+    Spostamento verbatim, `--sim` 206 identico prima/dopo, build Debug+Release pulite.
+    - **▶ Resta il ciclo per-entità (~1200 righe) dentro `update()`**: spezzarlo richiede di sciogliere decine di
+      variabili locali condivise fra le fasi (bersagli SoA, `teamAlive`, `repositioning`, `moveDX/DZ`…). Refactor
+      a sé, rischio/beneficio diverso — valutare solo se quel codice tornerà a dare problemi.
   - **#4** la retry di reachability marca `allyTac.claimed` le posizioni irraggiungibili per l'intero tick →
     saltate anche da compagni che le raggiungerebbero (impatto basso: le isole sono irraggiungibili per tutti).
   - **#6** quadro tattico torre stale ≤`TAC_PICTURE_PERIOD` (0.33 s): un clone può puntare una posizione verso
     un nemico appena morto (impatto minimo).
   - **#11** Regroup è no-op se nessun settore è conteso (early game senza contatto) → il membro resta fermo.
-  - Futuro: ordini rapidi solo alla piccola squadra del player + ordini a singoli membri
-    (`SquadOrderRequest.directedMember`).
+  - ✅ **Ordini a MEMBRI SPECIFICI (changelog 98)**: `directedMembers` (lista) + selezione mirando il compagno
+    (toggle), rispettata da ordini rapidi E ruota → gruppi diversi con ordini diversi. Auto-pulizia della
+    selezione (respawn = entità nuove). HUD `[SEL n]`. **Smoke test manuale da fare.**
+    - Conseguenza: CoveringFire non è più sul tasto rapido (si ottiene con selezione + HOLD dalla ruota).
+      Se servirà un accesso diretto, riesporlo senza affollare la ruota.
+  - **▶ Futuro**: ambito ristretto alla "piccola squadra del player" (oggi la squadra = tutti gli alleati
+    team-1). Rimandato per scelta: in 6v6 la squadra è già piccola e la selezione copre il bisogno; da
+    riprendere quando le partite saranno più grandi.
 
 ## ▶ PERFORMANCE (playtest utente 2026-07-23): lag con ~25 AI su Training Ground
 - **✅ Indice spaziale collisioni/LOS (changelog 62)**: `hasLineOfSight`/`hasCollision` da O(tutte le

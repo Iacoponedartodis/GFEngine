@@ -194,6 +194,17 @@ ActiveModule HomeScreen::draw(bool& wantsLaunchGame, bool& wantsLaunchSandbox)
         ImGui::PopStyleColor();
     }
 
+    // Margine sotto l'ultima riga: le card sono piazzate con coordinate ASSOLUTE
+    // (SetCursorPos), quindi il contenuto della finestra finiva esattamente sul loro
+    // bordo inferiore — lo scroll si fermava di netto e la griglia sembrava tagliata
+    // (segnalato dall'utente). Un elemento invisibile sotto l'ultima riga estende
+    // l'area scrollabile e restituisce il respiro visivo.
+    {
+        const int lastRow = (k_moduleCount - 1) / cols;
+        ImGui::SetCursorPos({startX, startY + (lastRow + 1) * (cardH + gapY)});
+        ImGui::Dummy({gridW, 24.0f});
+    }
+
     ImGui::End();
     return selected;
 }

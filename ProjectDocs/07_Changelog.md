@@ -2,6 +2,599 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-02 (118) — KI #86: il funnel d'ingaggio, e due difetti che a occhio si confondevano
+
+L'utente riportava *"è estremamente comune vedere AI che stanno davanti a dei nemici senza sparare"* e
+*"si piazzano dietro una copertura e restano lì"*. La mia ipotesi principale era **FOV senza scandaglio**
+(l'AI guarda dove cammina → angoli ciechi permanenti). **La misura l'ha smentita.**
+
+**Lo strumento prima del fix.** Nuovo funnel d'ingaggio nella telemetria: `occ_in_raggio` → `occ_nel_cono`
+→ `occ_acquisito`, poi il gate di fuoco decomposto per CAUSA (`gate_stato`, `gate_evasivo`,
+`gate_cooldown`, `gate_los_tiro`, `gate_sparato`). Serve a separare **"non vede"** da **"vede e non spara"**
+— due bug diversi, in due punti diversi, indistinguibili guardando lo schermo. Risultato: il campo visivo
+costa il **5-8%** (non è la causa), mentre fra "nel cono" e "acquisito" si perde il **61-72%**.
+
+**Difetto 1 — l'AI non VEDEVA bersagli che sapeva COLPIRE.** L'acquisizione mirava al `transform` nudo, il
+gate di fuoco al busto alto (`+AI_HALF_Y*0.7`): il fix interim di KI #82 era stato applicato al tiro e mai
+all'acquisizione. Un muretto vicino al bersaglio tagliava il raggio d'avvistamento ma non quello di tiro.
+Misurato **sulla stessa traiettoria** (calcolando entrambi i punti nella stessa run, perché fra run diverse
+la simulazione diverge): **13,2% di tutte le acquisizioni** esistevano solo grazie al punto alzato. Corretta
+la stessa asimmetria nel FocusFire, dove un designato dietro un muretto non veniva mai preso.
+
+**Difetto 2 — la fase di hide si CONGELAVA.** `exposeTimer` scorreva solo nel ramo "Alert + bersaglio + non
+in manovra" — ma nascondersi dietro una copertura è **esattamente** ciò che rompe il proprio LOS: perso il
+bersaglio, il timer si fermava e `evading` (che chiude il gate di fuoco) restava attivo a tempo
+indeterminato. Stesso congelamento entrando in manovra, dove il commento del codice prometteva *"il fuoco
+resta autonomo"* — promessa falsa per chiunque manovrasse mentre era in hide (fino a 1492 tick-AI per
+finestra). A/B controllato: **senza fix 3549 tick congelati e fase di hide fino a 26,6 s** (contro
+`hide_duration_max` = 1,8 s); **con fix 0 e massimo 1,8 s**. È la spiegazione letterale del sintomo.
+
+**Un tentativo di fix è stato scartato dalla misura.** La prima versione azzerava anche `hasCover` alla
+perdita del bersaglio: il combattimento è **calato del 17%** (255→212 eventi) perché senza bersaglio il LOS
+sfarfalla di continuo e le AI venivano sfrattate dalle posizioni autorate — che sono proprio quelle con le
+buone linee di tiro. Sostituita con la versione minima: il timer scorre, la copertura resta.
+
+**Metodo, esplicito.** Gli eventi di combattimento aggregati **non** decidono questo bug: fra due run la
+simulazione diverge e la differenza non è attribuibile a un cambio. La decisione è stata presa su
+`evasivo_durata_max_s`, che misura **il sintomo** invece dell'esito. Volume finale 240 → 236: invariato
+entro la divergenza — il guadagno qui è "le AI non si bloccano più", non "si spara di più".
+
+**Verificato**: build Release pulita; `--sim-ticks 6000` con 0 congelamenti e hide max 1,8 s.
+**Da verificare a mano**: lo smoke test col rallentatore (`[`/`]`) — se le AI ancora si piantano dietro le
+coperture, la causa non è più questa. **Resta aperta la causa 3** (61-72% di perdita in LOS, vedi KI #86).
+
+## 2026-08-02 (117) — A5 (parte 2): i PESI dell'utility in un posto solo — `AiUtility.hpp`
+
+L'AI di questo progetto **era già una Utility AI**, ma non lo si poteva vedere: ogni scelta (quale copertura,
+quale posizione di tiro, quale fronte rinforzare) nasceva da un punteggio i cui pesi erano **numeri magici
+sparsi in nove formule su tre file**. Non esisteva un punto da cui rispondere a *"quanto conta il riparo
+rispetto all'importanza autorata?"*, e tararli significava cercarli a grep sperando di trovarli tutti — è
+esattamente il modo in cui due formule che dovevano essere coerenti divergono in silenzio (già successo:
+torre vs comandante, changelog 88).
+
+- **Nuovo `include/mini/game/ai/AiUtility.hpp`**: gli **8 bilanci** dichiarati insieme e commentati per
+  *intento*, non per valore — `kCover` (mi riparo), `kFlank` (aggiro), `kOverwatch` (copro chi avanza),
+  `kFiring` (colpisco restando coperto), `kHold` (presidio), `kAdvantage` (buon terreno), `kPicture` (quadro
+  tattico della torre), `kSector` (quanto conta questo fronte). **Le differenze fra i blocchi SONO il
+  design**: Hold pesa protezione e importanza alla pari, Advantage premia l'importanza, Flank premia
+  l'angolo nuovo. Affiancate diventano discutibili invece che implicite.
+- **Convertite**: `bestCoverToward`, `bestFlankingPosition`, `bestOverwatchForPosition`, `bestFiringPosition`,
+  `bestHoldPosition`, `bestAdvantageInArea` (WorldIntel.cpp) + `sectorTacticalWeight`, `updateAllyTactical`,
+  `bestOrderPosition` e il bonus di stance del comandante (AiCommandLayer.cpp). Zero formule con costanti
+  inline rimaste nei due file.
+- **`TAC_FIRE_BONUS` resta in GameConfig** di proposito: è una leva di *gameplay* già esposta, chi tara la
+  cerca lì. `AiUtility` ospita i pesi *interni* al ragionamento.
+
+**Comportamento invariato — e questa volta misurato bene.** I valori sono **esattamente** quelli già in uso:
+non ho sostituito le curve con quelle "raccomandate" da doc 40 §6, perché farlo insieme al refactor avrebbe
+reso impossibile attribuire una differenza all'uno o all'altra — e c'è un bug aperto (KI #86) proprio sul
+comportamento di ingaggio. Verifica: `--sim-ticks 3000 --map "Training Ground"` → **128 eventi `[Combat]`,
+identico al baseline**, e ripetibile (111 "Colpito" su due run consecutive). Build Release pulita.
+
+*Cambiare i pesi è il passo successivo e separato: ora si fa in un file, e si misura con lo stesso comando.*
+
+**Cosa NON è verificato**: nulla di visivo cambia, quindi non serve smoke test dedicato — ma la prossima
+partita è comunque l'occasione per l'osservazione di KI #86 (AI in Alert senza bersaglio).
+
+## 2026-08-02 (116) — A5 (parte 1): ISPETTORE del ragionamento AI — si vede il perché, non solo il risultato
+
+Il piano prevedeva *utility formalizzata + ispettore*. Ho invertito le priorità dentro A5 e fatto prima
+l'**ispettore**, perché l'utente ha appena segnalato che *"è estremamente comune vedere AI che stanno davanti
+a dei nemici senza sparare"* (KI #86) — e quella è un'osservazione che senza strumenti **non si può
+indagare**: si vede il risultato, mai la causa.
+- **Nel dump di stato, per ogni AI**: `facing_deg` (dove GUARDA) + `fov_deg` (quanto è ampio il suo cono),
+  `target` (0 = nessun bersaglio), `suppression`, `role`, `evading`, `reposition`. Con questi si incrocia
+  dove guarda un'unità con dove sono i nemici e si capisce **quale gate la sta bloccando**.
+- **Collegato all'uscita di `--sim-ticks`**: ogni misura lascia ora anche uno snapshot ispezionabile. Senza,
+  l'ispettore sarebbe raggiungibile solo premendo F12 al momento giusto in partita — inutile per una
+  diagnosi headless.
+- **Ha già prodotto la prima evidenza su KI #86** (in trenta secondi): 12 AI → 8 in Alert, **7 senza
+  bersaglio**, 5 in `evading`. Le unità sanno di essere in combattimento ma non acquisiscono: **il gate che
+  fallisce è l'ACQUISIZIONE, non il tiro**. Annotato in KI #86 col prossimo passo diagnostico.
+- Build-verified (Release). **Resta di A5**: la formalizzazione delle curve di utility in un modulo
+  dichiarativo e tarabile — refactor a comportamento invariato, verificabile con `--sim-ticks`.
+
+## 2026-08-02 (115) — Velocità della simulazione: rallentare il MONDO, non il giocatore
+
+Richiesta utente: poter rallentare (e un po' accelerare) la simulazione per osservare movimenti e dettagli,
+**restando liberi di muoversi normalmente**, con un menu in alto a destra destinato a crescere.
+- **Cinque livelli** (`SIM_SPEEDS` 0.1x · 0.25x · 0.5x · 1x · 2x) con indicatore in alto a destra che
+  evidenzia quello attivo.
+- **Distinzione chiave rispetto alla slow-mo della ruota** (che esisteva già): quella rallenta TUTTO,
+  giocatore incluso, ed è una scelta di *gameplay*; questa scala solo il **mondo** e lascia il giocatore a
+  velocità piena — è uno *strumento di osservazione*. Senza la distinzione, rallentare per guardare da vicino
+  avrebbe reso lentissimo anche il camminare, e raggiungere il punto da osservare un'eternità.
+  Implementazione: `timeScale` (mondo) separato da `simElapsed` (giocatore), che ora usa solo `wheelScale`.
+- **Comandata da TASTI `[` e `]`**, non solo dal pannello: in partita/osservazione il mouse è **catturato**
+  per guardarsi intorno, quindi un menu solo-cliccabile sarebbe inutilizzabile proprio nel momento in cui
+  serve. Toast di conferma a ogni cambio.
+- Il pannello è pensato come **contenitore per futuri comandi di osservazione**, non come indicatore isolato.
+- Build-verified (Release); `--sim-ticks` invariata (128 eventi, `fermi` 0) → nessun effetto sulla
+  simulazione headless, che gira a velocità 1x.
+
+## 2026-08-02 (114) — A4: RUOLI di combattimento — la squadra si divide i compiti (doc 40 Fase 2 COMPLETA)
+
+Ultimo passo della Fase 2. Prima ogni soldato **tirava i dadi da solo** (`aiRand01() < flankChance`) per
+decidere se aggirare: con 6 unità potevano aggirare **tutte insieme** (nessuno che fissa il nemico) o
+**nessuna** (assalto frontale in massa). Il coordinamento era un caso statistico, non una decisione.
+- **Ruolo assegnato all'INGAGGIO per SATURAZIONE**: 1 sopprime · 2 aggira · 3 avanza. Si sceglie fra i ruoli
+  non ancora saturi, per **affinità col profilo** (chi ama la copertura sopprime, chi è aggressivo e incline
+  al fianco aggira — parametri già autorati, nessun nuovo dato). Stesso principio dell'occupancy delle
+  posizioni: chi sceglie dopo trova occupato ciò che è già preso.
+- **Composizione desiderata** ~½ sopprime, ⅓ aggira, resto avanza: una squadra che aggira tutta lascia il
+  nemico libero di muoversi, una che sopprime e basta non conclude nulla.
+- **Chi SOPPRIME non manovra più** dopo essersi sistemato: resta a tenere il nemico sotto tiro — ed è
+  esattamente ciò che rende possibile l'aggiramento altrui. Ha senso **solo perché A3 morde davvero**.
+- **Il ruolo si RILASCIA perdendo il contatto** (`enterHunt`): al prossimo scontro la squadra si
+  ridistribuisce sulla situazione nuova invece di trascinarsi compiti di una battaglia finita.
+- **Leggibilità scritta INSIEME alla meccanica** (regola imposta nel 113, non rifinitura successiva): si
+  annuncia solo l'aggiramento di un compagno — l'informazione che cambia le scelte del giocatore ("qualcuno
+  gira, io tengo il fronte") — e solo per la sua squadra, altrimenti il feed diventa un bollettino.
+- **Misurato** (`--sim-ticks 3000`): tutti e tre i ruoli assegnati — sopprime 6-11, aggira 3-4, avanza 2-3
+  (≈55/30/18%, vicino alla composizione voluta); `manovre_avviate` **salite** a 7-11 (da 5-10),
+  `fianco_trovato` vivo, `fermi` **0**.
+- **Onestà sul dato che è calato**: eventi di combattimento 151 → **128**. Interpretazione *plausibile ma non
+  dimostrata*: più unità in manovra d'aggiramento e chi sopprime fermo a fissare = meno duello frontale, più
+  combattimento posizionale. Se in playtest risultasse "fiacco" invece che "manovrato", le leve sono la
+  composizione (quota di chi sopprime) e `SUPPRESSION_PINNED`.
+- Build-verified (Release). **Fase 2 della roadmap AI COMPLETA** (A3 soppressione + A4 ruoli).
+
+## 2026-08-02 (113) — Soppressione LEGGIBILE: un sistema che non si vede, per il giocatore non esiste
+
+Riscontro utente dopo il (112): *"mi sembra ci sia una differenza, ma non riesco a dirti in maniera sicura se
+funziona"*. **Questo è un dato, non un'incertezza da liquidare**: se chi sa cosa cercare non riesce a vederlo,
+per un giocatore quel sistema non esiste — e il requisito del progetto è *soldati credibili*, cioè
+PERCEPIBILI. C'è anche un problema pratico: senza leggibilità la soppressione non è tarabile a occhio.
+- **Annuncio della TRANSIZIONE** (non dello stato, che spammerebbe ogni tick) nel feed eventi già esistente:
+  *"Nemico INCHIODATO: non avanza finché lo tieni sotto tiro"* / *"Compagno INCHIODATO dal fuoco nemico"*.
+  Il giocatore capisce sia perché un nemico ha smesso di avanzare, sia che il proprio fuoco di soppressione
+  sta funzionando. Nessuna posa richiesta ([[animations-blocked]]).
+- **Misurato che informa e non spamma**: 5-12 annunci per finestra contro 446-1060 tick inchiodati → circa
+  **1 messaggio ogni 60-90 tick**. Un canale che spamma smette di essere letto, quindi il rapporto è la
+  metrica giusta, non il totale.
+- **Errore di metodo mio, corretto**: il primo test cercava la stringa su **stdout**, ma `pushEvent` scrive in
+  `eventFeed` (letto dall'HUD) e non passa da stdout né dalla telemetria → il test dava "0 eventi" **in
+  qualunque caso**. Un test che non può fallire non è una verifica. Sostituito con un contatore
+  (`annunci_inchiodato`), misurabile headless.
+- **Nota di indirizzo**: percezione (A1), confidenza (A2) e soppressione (A3) funzionano nei numeri ma sono
+  quasi invisibili in gioco. Sommandone altri si otterrebbe un comportamento "diverso" di cui nessuno sa dire
+  il perché — e a quel punto un bug sarebbe indistinguibile da un sistema che lavora. La leggibilità va
+  trattata come parte della feature, non come rifinitura successiva.
+
+## 2026-08-02 (112) — A3: SOPPRESSIONE — il fuoco che non colpisce conta lo stesso (doc 40 Fase 2)
+
+Il salto "militare". Finora essere sotto tiro non cambiava nulla se non venivi colpito: una sparatoria era un
+duello a chi mira meglio. Ora un colpo che **manca** ma passa entro `SUPPRESSION_NEAR_MISS` (2.2 m) accumula
+soppressione, che decade da sé (`τ` = 2.5 s).
+- **Rilevamento a costo ~zero**: riusa il SEGMENTO del proiettile già calcolato in `CombatSystem` per
+  l'anti-tunneling (distanza punto-segmento), nel ramo "ha mancato" che prima faceva solo `continue`.
+- **TRE effetti**, perché un numero senza conseguenze sarebbe l'ennesimo dato inerte (lezione KI #25b):
+  · **si mira peggio** (`SUPPRESSION_ACC_PENALTY`) → il fuoco di soppressione diventa una tattica reale
+    invece che munizioni sprecate; · **ci si copre molto più volentieri** (`SUPPRESSION_COVER_BONUS`) → una
+  raffica fa abbassare la testa; · **chi è INCHIODATO non attraversa lo scoperto** per manovrare
+  (`SUPPRESSION_PINNED`) → è ciò che rende possibile "una squadra fissa, l'altra aggira".
+- **Il rischio era la taratura** (dal piano: *"tarare senza paralizzare le AI"*), quindi DUE contatori invece
+  di uno: il numero che conta non è `tick_soppressi` ma il **rapporto** con `tick_inchiodati`.
+- **Misurato** (`--sim-ticks 3000`): soppressi 2721-4076, inchiodati 446-1060 → **12-26%**, cioè la pressione
+  preme senza paralizzare. `manovre_avviate` 5-10 (non crollate), `fermi` **0**, eventi di combattimento
+  128 → **151**: il combattimento si è INTENSIFICATO, non bloccato. Taratura buona al primo tentativo.
+- Telemetria permanente `tick_soppressi`/`tick_inchiodati`. Build-verified (Release).
+- **Smoke test dovuto**: sparare vicino a un nemico senza colpirlo e vedere se si abbassa/perde mira; con una
+  squadra, verificare che i soppressi smettano di manovrare allo scoperto.
+
+## 2026-08-02 (111) — A2: CONFIDENZA sui contatti — un'informazione che invecchia (doc 40 Fase 1)
+
+Secondo passo del binario AI. Finora un contatto era un **fatto**: "il nemico è lì", che l'avessi visto un
+istante fa o sentito sparare dieci secondi prima, a qualunque distanza. Ora è un'**informazione con una
+qualità**, che decade: `c(t) = c₀·e^(−t/τ)` (τ = `CONTACT_CONFIDENCE_TAU`, 6 s).
+- **Sorgenti con qualità diversa**: la VISTA dà posizione e identità (confidenza 1.0), l'UDITO solo una
+  direzione approssimata (0.4). È ciò che rende l'udito utile **senza renderlo onnisciente**.
+- **La confidenza CAMBIA IL COMPORTAMENTO** (altrimenti sarebbe l'ennesimo dato inerte, lezione KI #25b):
+  sopra `CONTACT_CONFIDENCE_ENGAGE` → "so dov'è", ci si va per ingaggiare (comportamento storico); sotto →
+  "lì è successo qualcosa", il punto diventa una META DI PERLUSTRAZIONE (`searchX/Z`). È la differenza fra un
+  soldato che **indaga** e uno che rincorre un fantasma con assoluta certezza.
+- **Misurato** (`--sim-ticks 3000`, deterministico): entrambi i rami vivi — `contatti_certi` 790-2177,
+  `contatti_da_indagare` 307-1612. Dinamica sensata: nel primo report **53% investigazioni** (si sente
+  sparare e si va a vedere), poi prevale l'ingaggio quando il contatto visivo si consolida. `fermi` 0;
+  eventi di combattimento 116 → **128** (più unità che si muovono verso i rumori).
+- Telemetria permanente: `contatti_certi` / `contatti_da_indagare`. Build-verified (Release).
+- **Fase 1 della roadmap AI COMPLETA** (A1 percezione + A2 confidenza). Prossimo: **A3 soppressione**.
+
+## 2026-08-02 (110) — Creazione prefab: zona VISIBILE e selezione rifinibile con Shift+click
+
+Segnalazione utente: la creazione da zona usava un raggio **invisibile** — si doveva indovinare cosa sarebbe
+finito nell'asset — e mancava un modo per correggere la presa. Esattamente il "lavorare a tentativi" che
+questo ciclo di lavoro punta a eliminare.
+- **Zona visibile**: disco ciano sul terreno col raggio reale, e un **rombo sopra ogni elemento incluso** —
+  leggibile anche quando gli oggetti si sovrappongono.
+- **Rifinitura con Shift/Ctrl+click** (come nei file manager e nei software 3D): il raggio fa la presa
+  grossolana, il click aggiunge/toglie il singolo elemento. Al primo ritocco la selezione del raggio viene
+  **congelata** (si parte da ciò che si sta già vedendo, non da una lista vuota) e da lì comanda la lista
+  manuale; un pulsante "Torna al raggio" annulla i ritocchi.
+- **Centro CONGELATO all'apertura** del popup, non il focus corrente della telecamera: altrimenti la
+  selezione cambierebbe sotto gli occhi mentre si scrive il nome.
+- **Una sola verità**: `prefabZoneCollect` decide cosa entra ed è usata **sia** dall'anteprima nel viewport
+  **sia** dal salvataggio. Con due funzioni separate si vedrebbe evidenziata una cosa e se ne otterrebbe
+  un'altra — la divergenza che questo progetto paga sempre caro.
+- Uscita dalla modalità gestita anche quando il popup si chiude cliccando fuori (niente disco orfano).
+- Build-verified (Release), `--validate` 0 errori. **Smoke test dovuto**: aprire "Crea prefab da zona…",
+  regolare il raggio, rifinire con Shift+click, creare e verificare il contenuto dell'asset.
+
+## 2026-08-02 (109) — UN SOLO NOME per mappa + `AssetBrowser` adottato nel pilota (KI #84)
+
+Due interventi con lo stesso principio: **un'identità sola, uguale da qualunque parte la si guardi**.
+- **Map Editor, rename unificato** (richiesta utente): c'erano **due caselle di testo affiancate** con
+  semantiche diverse — una cambiava il *nome visualizzato* (campo `name`), l'altra faceva il *rename vero*
+  (file + cross-reference). Due modi di "cambiare nome" con effetti diversi sono una trappola, e occupavano
+  la toolbar in permanenza. Ora: **un pulsante "Rinomina…" + popup**, come Nuova mappa ed Elimina. Il rename
+  allinea filename, id e `name`; il campo `m_mapDisplayName` è stato **rimosso** (niente residuo che
+  ricrei la divergenza) e il save scrive `j["name"] = m_mapId`.
+- **KI #84 risolto (violazione ADR-001)**: `MapEditor::loadMaps` leggeva l'id **dal contenuto del file**
+  (`j.value("id", …)`) mentre il runtime usa il filename → un `id` stantio faceva mostrare all'elenco un nome
+  diverso da quello reale. Era **letteralmente KI #21**, il bug che ADR-001 doveva eliminare. Fix: una riga.
+- **`AssetBrowser` adottato in `VehicleEditor`** (prima adozione, ADR-049 R1): il modulo aveva "Nuovo veicolo"
+  ma **non** Duplica, Rinomina, Elimina — ora li ha tutti, con le regole applicate per costruzione. La
+  selezione locale si allinea **per ID** e non per indice: gli indici non sopravvivono a una creazione o a
+  un'eliminazione, l'id sì. Rimosso il vecchio blocco "Nuovo veicolo", ora ridondante.
+- **Build-verified** (Release, GFEngine + GFEditor, 0 errori) e `--validate`: **0 errori**, 4 mappe caricate,
+  prefab espansi (2 istanze → 6 box + 6 posizioni), salute tattica **0 problemi** su tutte le mappe.
+  *(La prima build era fallita con `LNK1104` perché l'editor era aperto — lock noto, CLAUDE.md.)*
+- **Smoke test dovuto**: Map Editor → "Rinomina…" cambia il nome ovunque (elenco, file, partita);
+  Vehicle Editor → Nuovo/Duplica/Rinomina/Elimina funzionano e la selezione resta coerente.
+
+## 2026-08-02 (108) — `AssetBrowser`: ciclo di vita di una definizione in un posto solo (ADR-049, R1)
+
+Secondo componente dello scheletro. Colma il buco maggiore dell'audit: **Elimina manca in 5 moduli su 7**,
+*Duplica* in 3, e ogni modulo si riscrive scansione della cartella e pulsanti.
+- **Crea · Duplica · Rinomina · Elimina** in `editor/include/framework/AssetBrowser.hpp` (header-only),
+  parametrizzato su cartella, titolo, categoria di rinomina e contenuto di default. Non conosce il CONTENUTO
+  delle definizioni: resta composizione (ADR-049), non un framework che impone la forma del modulo.
+- **Le regole del progetto diventano strutturali, non memoria**: id = filename stem (ADR-001, mai letto dal
+  contenuto — è l'errore di KI #21 e #84); rinominare passa dal COMANDO `renameDefinition` (ADR-010), mai
+  "salva con nome nuovo" che lascia orfani (KI #7); ogni scrittura da `saveJsonRMW`; duplicare aggiorna il
+  nome visualizzato (altrimenti near-duplicate); eliminare **chiede conferma** e dichiara ciò che NON fa (i
+  riferimenti altrui restano rotti, li segnala `--validate`).
+- **Ritrovamento che conferma la tesi dell'utente**: `getDataDir()` è duplicato come helper locale in **4
+  moduli**, e `DataPath.hpp` documenta che lo stesso problema era già esploso — *"le otto copie erano già
+  divergenti […] un editor che salva dove il gioco non legge"*. Il ciclo è documentato e **stava già
+  ricrescendo**: è la ragione per cui lo scheletro non è cosmesi.
+- **STATO ONESTO: il componente è compilato ma NON ancora adottato da nessun modulo** — quindi finché non lo
+  è, è **debito, non valore**. Adozione al primo modulo che si tocca (candidato: `VehicleEditor`, che è già
+  su `ModuleShell` e non ha *Elimina*), con il suo smoke test. Non l'ho forzata ora perché la riscrittura
+  della lista di un modulo GUI non è verificabile con `--sim` e il pilota `ModuleShell` attende ancora la
+  prova dell'utente: due cambi non verificati impilati sarebbero difficili da bisezionare.
+- Build-verified (Release, compile-check dedicato poi rimosso).
+
+## 2026-08-02 (107) — `ModuleShell`: scheletro di layout condiviso fra i moduli editor (ADR-049)
+
+Proposta dell'utente: *"creare uno scheletro comune dei moduli, così le funzioni condivise si costruiscono
+bene una volta; migliorarle vorrebbe dire migliorarle per tutti"*. Accolta — con una precisazione emersa
+dall'audit: **metà del lavoro era già fatto**. `FreeCameraViewport` (viewport 3D + gizmo sposta/ruota/scala)
+è già condiviso da 4 moduli, come `DefinitionRename`, `saveJsonRMW` e `UiWidgets`. Le UTILITY erano
+fattorizzate; mancava lo **scheletro** che le compone.
+- **`editor::ModuleShell`** (header-only, `editor/include/framework/`): layout *lista | contenuto |
+  proprietà* con **splitter esplicito**, clamp [180 px, metà finestra] e helper per il margine di scroll —
+  cioè le regole R5/R6 di doc 39 rese **strutturali** invece che disciplina da ricordare.
+- **COMPOSIZIONE, non ereditarietà** (ADR-049): non è una classe base da estendere ma un membro che il modulo
+  usa. I moduli sono strutturalmente diversi (viewport 3D con dieci tipi selezionabili / tabelle di numeri /
+  form): una gerarchia con virtual per ogni fase diventerebbe un framework da combattere, e imporrebbe di
+  riscrivere tutti e sette insieme. Decisivo perché **l'editor è GUI e non è verificabile con `--sim`**: la
+  migrazione dev'essere incrementale, un modulo alla volta col suo smoke test.
+- **Pilota: `VehicleEditor`** migrato. E la migrazione ha **trovato lo stesso bug del pannello** già corretto
+  nel Map Editor (`ChildFlags_ResizeX` su pannello ancorato a destra → una volta stretto non si riallarga):
+  era replicato lì e nessuno l'aveva notato. Conferma concreta della tesi dell'utente — *una funzione scritta
+  due volte è un bug scritto due volte*.
+- Build-verified (Release). **Smoke test dovuto**: aprire il Vehicle Editor, verificare lista/viewport/
+  proprietà e che il pannello destro si stringa **e si riallarghi**.
+- **Prossimo componente**: `AssetBrowser` (Crea/Duplica/Rinomina/Elimina in un posto solo) — il buco più
+  grande dell'audit: *Elimina* manca in **5 moduli su 7**.
+
+## 2026-08-02 (106) — Editor: creazione prefab + tre fix UI (feedback utente)
+
+Quattro segnalazioni dal primo uso del sistema prefab. La più importante era che **mancava del tutto il modo
+di CREARE un prefab**: si potevano solo piazzare asset scritti a mano nel JSON — sistema monco.
+- **"Crea prefab da zona"**: box e posizioni tattiche entro un raggio dal punto inquadrato diventano un asset
+  in coordinate locali (`data/prefabs/<id>.json`, id = filename stem ADR-001), subito piazzabile. Flusso
+  standard *costruisci in mappa → promuovi ad asset* (come Unity/Unreal). Di default **sostituisce gli
+  originali con un'istanza**: senza, resterebbero due copie — una "cotta" nella mappa e una dal prefab —
+  destinate a divergere. Alternativa scartata: un modulo-editor separato per i prefab, che avrebbe duplicato
+  metà Map Editor per costruire le stesse cose.
+- **Gizmo sui prefab**: mancava il ramo nel dispatch → selezionandone uno sparivano sposta/ruota/scala. Ora
+  sposta + ruota (yaw). **Scala esclusa deliberatamente**: scalare un'istanza deformerebbe le posizioni
+  tattiche che porta con sé, che sono dati tattici, non geometria.
+- **Pannello destro che non si riallargava**: usava `ImGuiChildFlags_ResizeX`, il cui grip sta sul bordo
+  DESTRO del child — che qui coincide col bordo della finestra: una volta stretto non c'era più nulla da
+  afferrare. Sostituito con uno **splitter esplicito** a sinistra + clamp [180 px, metà finestra], così non
+  può incastrarsi in uno stato irreversibile.
+- **Scroll della home tagliato**: le card usano coordinate ASSOLUTE (`SetCursorPos`), quindi il contenuto
+  finiva esattamente sul loro bordo inferiore. Aggiunto un margine sotto l'ultima riga.
+- Build-verified (Release). **Smoke test dovuto** su tutti e quattro.
+- **Causa comune, da affrontare a parte**: sono sintomi della stessa deriva segnalata dall'utente — *"le
+  stesse funzioni stanno in un modulo e non in un altro, alcune cose che dovrebbero essere uguali cambiano"*.
+  Serve un audit di coerenza dell'editor con **regole vincolanti** (doc 39), come già esistono per i dati
+  (dropdown dal registry, RMW, id = filename). Senza regole scritte la deriva riparte a ogni modulo nuovo.
+
+## 2026-08-02 (105) — Editor: piazzamento dei PREFAB (doc 41 B5) — il binario dati è chiuso
+
+Ultimo tassello del sistema prefab: finora vivevano solo nei dati (si potevano usare scrivendo il JSON a
+mano). Ora si piazzano dall'editor.
+- **Lista + combo + "+ Piazza"** (nasce sul focus del viewport) + rimozione; selezione `-4000-i`.
+- **Anteprima nel viewport** con la **STESSA trasformazione** dell'espansione del motore (rotazione attorno a
+  Y + traslazione) → ciò che si vede in editor è ciò che esisterà in partita. Tinta viola: è contenuto
+  DERIVATO, non box della mappa, e non si edita lì.
+- **Gizmo** per spostare l'istanza (il contenuto la segue) + slider di rotazione nel pannello, che mostra
+  anche quanti box/posizioni porta il prefab.
+- **Riferimento rotto VISIBILE**: marker rosso nel viewport e `!` in lista, invece di sparire in silenzio
+  (stesso principio del messaggio esplicito nel loader, ADR-018).
+- **Save: solo i RIFERIMENTI** (`prefabs: [{id,x,y,z,ry}]`). Box e posizioni derivati non finiscono mai nel
+  JSON della mappa: congelarli creerebbe una copia che diverge appena il prefab cambia (ADR-033/048).
+- **`DefinitionRegistry::loadPrefabs` resa pubblica**: l'editor carica i prefab col loader del RUNTIME invece
+  di un parser proprio — un secondo parser divergerebbe al primo campo aggiunto (stessa ragione per cui i
+  parser di box e posizioni sono condivisi, changelog 101).
+- **Attenzione al dispatch**: il ramo "settore" usa `m_selBox <= -2000` come catch-all e avrebbe catturato i
+  codici dei prefab; il pannello prefab va **prima**. (I codici di selezione dell'editor sono un range unico
+  e crescente: è una fragilità nota da tenere a mente quando se ne aggiungono.)
+- Build-verified (Release). **Smoke test manuale dovuto**: piazzare un prefab, spostarlo/ruotarlo, salvare,
+  riaprire; verificare che in partita compaiano collisione e posizioni tattiche attese.
+
+## 2026-08-02 (104) — Salute tattica: rumore ridotto e avvisi raggruppati (feedback playtest)
+
+Playtest utente del (103): *"funziona molto bene, ma alcuni avvisi non sono necessari — mi segna ridondanti
+due vantage sullo stesso punto ma in versi OPPOSTI; e sarebbe comodo raggruppare gli avvisi per tipo, con una
+tendina per chiudere quelli che non interessano."* Tutte e tre le osservazioni erano corrette.
+- **BUG della regola di ridondanza (falso positivo vero)**: confrontava solo la distanza, **ignorando il
+  `facing`**. Due posizioni sovrapposte con versi opposti — es. due `vantage` schiena a schiena su una
+  torretta — coprono archi opposti e sono due opzioni tattiche legittime. Ora sono ridondanti solo se
+  vicine **e** con fronti entro 45°. **Impatto molto maggiore del previsto**: Training Ground **53 → 19
+  avvisi (−64%)**, firebase 15 → 5. I falsi positivi erano la maggioranza degli avvisi.
+- **Raggruppamento per TIPO** con tendine richiudibili (`Kind` sul difetto, condiviso col gate): i gruppi con
+  PROBLEMI si aprono da soli, quelli di soli avvisi restano chiusi, le categorie vuote non compaiono. Così le
+  famiglie intenzionali per una data mappa (i settori di solo transito) si chiudono una volta e non
+  disturbano più — **senza disattivare la regola**, che resta viva se un giorno un settore importante resta
+  scoperto. Compromesso fra "niente rumore" e "niente segnali persi".
+- **Raffinata anche `NoCoverage`**, grazie a un difetto emerso sul prefab: *"non copre altre posizioni"* NON
+  basta a dire che una posizione è inutile — una di **prima linea** copre il terreno e l'avvicinamento, non
+  altri nodi. Il difetto vero è l'**ISOLAMENTO**: non copre nessuno **e** nessuno la batte (esposizione 0) →
+  fuori dalla rete tattica. Se è esposta, è nel gioco: avviso, non problema.
+- **Prefab `sandbag_nest` corretto (errore mio)**: il muretto frontale è a `z=-1.6` ma le posizioni avevano
+  `facing_deg: 0`, che punta a **+Z** → **davano le spalle al riparo**. Corretto a 180°. Nota: il gate ha
+  trovato un errore di authoring commesso da me su un asset che credevo scritto bene — ed è esattamente il
+  caso d'uso di ADR-048, perché un difetto sull'ASSET si moltiplica su ogni istanza.
+- Le mappe dell'utente non sono state toccate. Build-verified (Release, GFEngine + GFEditor).
+
+## 2026-07-27 (103) — SALUTE TATTICA: i difetti della mappa si leggono, non si cercano (doc 41 B4)
+
+I controlli tattici esistevano (esposizione ADR-033, visuale verticale changelog 97, grafo ADR-032) ma erano
+**sparsi**: per scoprire che una posizione era cieca o inutile bisognava selezionarla. Con 167 posizioni —
+e a maggior ragione con mappe profonde — è impraticabile. Ora un elenco unico dice **cosa non va**.
+- **Regole in UN SOLO POSTO**: `mini::analyzeTacticalHealth(const MapDef&)` in `ContentValidation`, che il
+  CMake compila in **entrambi** i binari ("STESSO gate del runtime, mai una copia", ADR-018). Le avevo
+  inizialmente scritte dentro l'editor: sarebbe stata l'ennesima **doppia verità** di questo progetto (la
+  stessa classe di errore del revert changelog 77 e della divergenza torre↔comandante del changelog 88).
+  Unica regola rimasta nell'editor, deliberatamente: la visuale verticale, i cui dati vivono solo lì.
+- **Cinque difetti**: posizione che non copre nessuno (grafo) · cieca verso le altre quote (KI #83) · molto
+  esposta ≥55% · ridondante (<2 m, stesso ruolo) · settore senza posizioni tattiche.
+- **Due consumatori**: pannello editor in cima alla lista, **chiuso di default** (mostra "Salute tattica: OK"
+  quando non c'è nulla) con voci **cliccabili** che selezionano l'elemento colpevole; e **`--validate`**
+  headless → utilizzabile in CI, senza aprire l'editor, e verificabile da me.
+- **Misurato e CALIBRATO sul dato**: la prima passata dava Training Ground 13 problemi/45 avvisi, ma **9 dei
+  13 erano le corsie di transito `SR`/`SS`** (importanza 0.5), dove è normale non avere posizioni. Severità
+  resa **proporzionale all'importanza autorata** (≥1.0 = problema, sotto = avviso "transito?") →
+  **5 problemi / 53 avvisi**. I 5 residui sono tutti azionabili: 4 `vantage` che non coprono nulla (coerenti
+  con KI #83) e il settore **Separatist Spawn con importanza 3.0 e nessuna posizione** — difetto vero: i
+  droidi nascono lì senza coperture. firebase 2/15, Prefab Test 2/0.
+  *Il punto non è il numero ma il rapporto segnale/rumore: un elenco con 9 falsi positivi su 13 si smette
+  di leggere, e uno strumento che non si legge non esiste.*
+- **Ritrovamento**: `Prefab Test` ha 2 problemi con sole 6 posizioni, tutte generate dal prefab → il prefab
+  `sandbag_nest` ha un difetto tattico proprio. È la dimostrazione del modello ADR-048 in entrambe le
+  direzioni: il significato si moltiplica per istanza, **e anche il difetto** — quindi va colto sull'ASSET.
+- Build-verified (Release, GFEngine + GFEditor). **Smoke test manuale dovuto**: aprire l'editor e verificare
+  che il pannello compaia e che cliccare una voce selezioni l'elemento.
+
+## 2026-07-27 (102) — Copertura dall'ALTO come dato derivato (doc 41 B3) + correzione della stima di scala
+
+Terzo passo del binario B. Il piano lo chiamava "indoor/outdoor"; implementandolo ho verificato che **quel
+raycast non misura l'interno**: misura se c'è **qualcosa sopra**. Un sottopasso, un balcone e una tettoia
+danno lo stesso risultato di una stanza chiusa.
+- **Nome deliberato `hasOverheadCover` / `hasOverhead`, NON `indoor`.** Chiamarlo `indoor` avrebbe creato un
+  falso amico: progettando i comportamenti da interno (distanze corte, granate, sgombero), il campo avrebbe
+  detto "interno" sotto un ponte all'aperto e l'AI avrebbe applicato tattiche da edificio in campo aperto —
+  un bug difficile da diagnosticare, nato da un nome. L'**interno vero richiede il rilevamento della
+  CHIUSURA** (pareti attorno), analisi diversa che resta a B8. Annotato nel codice e nell'header.
+- **Query pura** `worldintel::hasOverheadCover(map, x,y,z, probe)`: sonda verticale dalla testa (1.8 m) fino a
+  `OVERHEAD_PROBE_HEIGHT` (8 m). Partire dai piedi avrebbe intersecato il pavimento e dato "coperto" ovunque.
+- **Dato DERIVATO** calcolato in `buildTacticalLinks` insieme agli altri: vive e muore con la geometria, mai
+  autorato, mai salvato (ADR-033). Costo: un raycast per posizione, trascurabile.
+- **Con CONSUMATORI dal primo giorno**, applicando la lezione di KI #25b (un campo che nessuno legge è debito,
+  non valore): pannello posizione dell'editor ("Coperta dall'alto: sì/no", stessa funzione del runtime) e
+  conteggio per mappa nel log del registry.
+- **Verificato**: Training Ground **25/167** coperte (15% — bassa ma non nulla, coerente con una mappa aperta
+  con ponti); firebase 0/60 (tutta all'aperto); Prefab Test 0/6 (corretto). `--validate` 0 errori.
+- **Correzione di una stima**: il log ha dato il costo reale del bake — **167 posizioni → 7.9 ms** (60 → 0.43
+  ms). Il doc 41 stimava ~20 ms a 500 posizioni; la realtà è **~70 ms, ~3× peggio**. Soglia d'intervento per
+  la griglia spaziale **abbassata da ~400 a ~300 posizioni** (doc 41 §9 e 06_Todo aggiornati).
+
+## 2026-07-27 (101) — PREFAB tattici: il significato si autora per ASSET, non per istanza (ADR-047/048, doc 41 B1+B2)
+
+Primo passo del binario B (mondo tattico). Problema: Training Ground ha **167 posizioni piazzate a mano**;
+mappe profonde ne vorrebbero 1000+ → l'authoring per istanza non scala. La generazione automatica dalla
+geometria è già stata provata e rimossa (ADR-026). Terza via: **autorare una volta per asset**.
+- **`PrefabDef`** (`data/prefabs/<id>.json`, id = filename stem ADR-001): mesh visiva (solo visiva, ADR-047),
+  **proxy di collisione** in box (la verità fisica E tattica), **posizioni tattiche** in coordinate LOCALI, tag.
+- **`PrefabInstanceDef`** nella mappa (`"prefabs": [{id, x, y, z, ry}]`): la mappa **referenzia**, non duplica.
+- **Espansione al load**, con rotazione corretta di box e `facing_deg`, eseguita **PRIMA di
+  `buildTacticalLinks`** → le posizioni dei prefab partecipano a coperture/esposizione come tutte le altre.
+  I dati espansi sono **DERIVATI**: non tornano mai sul file della mappa, quindi aggiornare un prefab aggiorna
+  tutte le sue istanze al load successivo (stesso principio di ADR-033: non possono diventare stale).
+- **`TacticalPositionDef.fromPrefab`** (B2): distingue derivato da autorato. È ciò che permetterà di
+  rigenerare i prefab **senza cancellare** il lavoro manuale.
+- **Parser CONDIVISI** `parseGeometryBox`/`parseTacticalPosition` estratti dalle lambda di `loadMaps`: mappa e
+  prefab leggono lo **stesso schema**. Con due parser separati sarebbero divergiti al primo campo aggiunto —
+  è la stessa "doppia verità" che causò il revert del changelog 77.
+- **Riferimento rotto = messaggio esplicito** (non silenzio), coerente col gate ADR-018.
+- **Verificato** (`--validate`, Release): prefab `sandbag_nest` (3 box, 3 posizioni) × 2 istanze ruotate 0°/90°
+  → **6 box + 6 posizioni**; mappa di prova 7 box totali; **0 errori**. **Training Ground invariata**
+  (167 box, 167 posizioni) → nessuna regressione sulle mappe esistenti.
+- **Limite dichiarato**: l'editor **non conosce ancora i prefab** (UI = B5). Aprendo una mappa con prefab
+  l'editor non li mostra, ma **non li perde**: `saveJsonRMW` (ADR-010) preserva le chiavi che non possiede —
+  verificato leggendo l'implementazione.
+- Nessun binario Debug eseguibile in questo ambiente (ASan senza `clang_rt.asan_dynamic-x86_64.dll` sul PATH,
+  già noto in 06_Todo): le verifiche girano in **Release**.
+
+## 2026-07-27 (100) — PERCEZIONE Fase 1: campo visivo + udito (doc 40) — le AI smettono di essere onniscienti e sorde
+
+Prima fase del piano AI (doc 40). **`fov_deg` e `hearing_range` erano autorati in ogni profilo ma non
+raggiungevano mai l'AI** — difetto **già noto e tracciato in KI #25b dal 2026-07-10**, non una scoperta:
+era lì da due settimane e nessuno l'aveva chiuso, mentre l'AI restava onnisciente e sorda. Dettaglio — `hearingRange` compariva SOLO nel parser, `fovDeg` nel parser e
+nella Camera di rendering. `AiComponent` non aveva nemmeno i campi. Conseguenza in gioco: i soldati
+**vedevano a 360°** (arrivare alle spalle non valeva nulla) ed erano **sordi** (uno sparo non allertava
+nessuno, le battaglie non si propagavano).
+- **Percorso dei dati riparato**: `fovDeg`/`hearingRange` aggiunti ad `AiComponent` e copiati dal profilo
+  allo spawn (`ConquestMode`). Nessun nuovo authoring: i valori esistevano già.
+- **Campo visivo**, NON come taglio netto (darebbe il difetto "mi sta di fianco e non mi vede"): fuori dal
+  cono restano percepibili chi è **ravvicinato** (`PERCEPTION_PERIPHERAL_RADIUS` 6 m) e chi **sta sparando**
+  (`PERCEPTION_MUZZLE_REVEAL` 35 m) — il lampo/fragore rivela. Misurato: 2000-3100 bersagli/report scartati
+  perché fuori campo → il fianco e le spalle ORA contano.
+- **Udito event-driven**: nuova mailbox `World::sounds` (pattern doc 10, costo zero quando nessuno spara).
+  Emettono AI (`AiSystem`) e **giocatore** (`PlayerController`); consuma `AiSystem` generando un contatto
+  **impreciso** (posizione disturbata da `SOUND_CONTACT_SCATTER`: si sa da DOVE, non CHI) che alimenta la
+  ricerca già esistente. Riusa `SharedContact` (età, TTL, dedup) — nessun sistema parallelo.
+- **Correzione della semantica di `hearing_range`, guidata dalla misura**: preso come raggio assoluto, il
+  valore autorato 12 m rendeva l'udito **inerte** (si sente a 12 m ciò che si vede a 50) → `spari_uditi` 0-16
+  e battaglie che si spegnevano. Ora è una **sensibilità relativa** (`HEARING_REFERENCE`): raggio udibile =
+  forza dell'evento × (hearing_range / 12). I dati già autorati acquistano senso senza riscriverli.
+  Misurato dopo: `spari_uditi` **72-138** (×10), `contatti_vivi` fino a 154, `in_alert` fino a 11, `fermi` 0.
+- **Telemetria**: `fuori_campo_visivo` e `spari_uditi` come guardie permanenti (costo: due contatori).
+- **Effetto sul volume di fuoco**: eventi di combattimento per 3000 tick 155 → **116** (−25%). Atteso e
+  ritenuto corretto: i 155 erano il valore con AI **onniscienti**; togliendo la vista a 360° compaiono
+  ricerca, avvicinamento e sorpresa. **Ma è un cambio di FEEL e va giudicato giocando**: se le sparatorie
+  risultassero troppo rade, le leve sono `PERCEPTION_MUZZLE_REVEAL`, `SOUND_GUNSHOT_RADIUS` e `hearing_range`
+  dei profili.
+- Build-verified (Debug + Release); misure con `--sim-ticks 3000` (deterministico, changelog 99).
+  **Smoke test manuale da fare**: aggirare un nemico e verificare che non ti veda finché non entri nel cono;
+  sparare e vedere i nemici lontani orientarsi/accorrere.
+
+## 2026-07-27 (99) — `--sim-ticks N`: la simulazione diventa MISURABILE (verifiche deterministiche)
+
+Trovato misurando: il conteggio degli eventi di `--sim` **non era confrontabile**. La stessa identica build
+produce 211/215/224/224, perché `--sim` gira finché un timeout esterno lo interrompe → il numero di tick
+simulati dipende dal carico della macchina. Con ±10% di rumore, una piccola regressione è invisibile e una
+fluttuazione sembra una regressione: tutte le verifiche quantitative di questa sessione poggiavano su una base
+più debole di quanto dichiarato (corretto anche nel (95)).
+- **`--sim-ticks N`**: la sim esce dopo N **tick di simulazione** invece che a tempo (conta
+  `World::getTickCount()`, che avanza solo quando il mondo è simulato — i menu non lo muovono). Due run fanno
+  esattamente la stessa quantità di mondo.
+- **Verificato**: 3 run con `--sim-ticks 3000` → **155, 155, 155**. Determinismo perfetto: il rumore era
+  interamente dovuto alla durata variabile, non al gioco. Ora un confronto prima/dopo un refactor ha valore
+  probatorio; prima no.
+- Uso: `GFEngine.exe --sim-ticks 3000 --map "Training Ground"` (Release; le virgolette sulla mappa con spazi
+  sono obbligatorie, [[powershell-quote-args-with-spaces]]). `--sim` resta per l'osservazione a occhio.
+- Build-verified (Debug + Release). File: `main.cpp` (flag), `Application.hpp/.cpp` (parametro + uscita a fine
+  frame). Nessun effetto sul gioco normale (`simTicks = 0` = comportamento invariato).
+
+## 2026-07-27 (98) — Ordini a MEMBRI SPECIFICI: selezione dei compagni (ordini diversi a gruppi diversi)
+
+Ripresa del rework ordini sul filone "ordini rapidi precisi" ([[orders-design-vision]]): finora un ordine
+andava a TUTTA la squadra, tranne Revive/CoveringFire che puntavano un compagno. Ora il giocatore può
+**selezionare** i compagni e comandarli separatamente. Scelte di UX confermate dall'utente: selezione
+mirando il compagno; ambito invariato (tutti gli alleati restano la squadra — nessun refactor strutturale).
+- **`SquadOrderRequest.directedMember` → `directedMembers` (lista)**: era un singolo destinatario (bastava a
+  Revive/CoveringFire); ora è una lista, perché è ciò che abilita "ordini diversi a più membri". Filtro in
+  `SquadSystem`: lista vuota = tutta la squadra (comportamento storico), altrimenti solo i membri elencati.
+- **Gesto**: mirare un compagno VIVO + tasto ordini = **seleziona/deseleziona** (toggle, con toast). Poi lo
+  stesso tasto su un nemico → FocusFire, o su un punto → MoveTo/TakeCover, va **solo ai selezionati**. Anche la
+  **RUOTA** rispetta la selezione → si tengono due gruppi su posture diverse (es. #1-#2 in HOLD, #3 in ADVANCE).
+  Selezione vuota = tutto come prima.
+- **Conseguenza dichiarata**: quel gesto prima dava **CoveringFire**, che non è più raggiungibile dal tasto
+  rapido. Si ottiene selezionando il compagno e dandogli **HOLD** dalla ruota (ancora la posizione e ci
+  combatte). L'ordine resta implementato; se servirà un accesso diretto, va riesposto senza affollare la ruota
+  ([[ui-no-clipping-use-dropdowns]]).
+- **Robustezza**: la selezione si auto-pulisce ogni frame da entità invalide/non più in squadra/a terra — i
+  caduti respawnano come entità NUOVE, quindi una selezione stale avrebbe mandato ordini a fantasmi **in
+  silenzio**, col sintomo "gli ordini non funzionano". HUD: tag `[SEL n]` accanto allo stato squadra, così è
+  sempre chiaro se si sta comandando la squadra o un gruppo scelto.
+- Build-verified (Debug + Release). `--sim`: nessun crash e conteggio nella normale dispersione della misura
+  (211-224 sulla stessa build — il conteggio `[Combat]` NON è deterministico, vedi correzione nel (95)); la sim
+  non impartisce ordini del player, quindi serve solo a escludere che il cambio di mailbox abbia rotto la
+  squadra. **Smoke test manuale da fare**: selezionare 1-2 compagni, dare ordini diversi, verificare `[SEL n]`
+  e che i non selezionati restino liberi.
+
+## 2026-07-27 (97) — Editor: strumento "VISUALE VERTICALE" — l'authoring verticale non è più a tentativi (KI #83)
+
+Conseguenza diretta del (96): il combattimento cross-quota è limitato dalla GEOMETRIA, non dall'AI — ma finora
+l'unico modo di sapere se una posizione elevata "vedeva" davvero era provarla in partita. Ora si vede in editor.
+- **Dato derivato `m_vertSight` / `m_vertPairs`** (paralleli a `m_positions`, mai salvati): per ogni posizione,
+  quante posizioni a QUOTA DIVERSA vede, su quante ne esistono. Calcolato in `recomputeExposure()` — che già
+  costruiva il MapDef temporaneo — con la **stessa `worldintel::hasLineOfFire` del runtime** e lo stesso modello
+  di combattimento (origine OCCHI `COMBAT_EYE_HEIGHT`, bersaglio CORPO `AI_HALF_Y`, [[combat-los-eye-height]]):
+  nessuna doppia verità fra editor e gioco. Il filtro sul dislivello (`VERTICAL_ENGAGE_DY`) viene PRIMA della
+  LOS → si pagano solo le coppie cross-quota.
+- **Il denominatore conta**: "vede 0 su 0" (nessuna altra quota in giro) è irrilevante, "vede 0 su 24" è il
+  difetto. Senza `m_vertPairs` i due casi si confondevano.
+- **UI a tre livelli**, per trovare i problemi senza cercarli: riepilogo `Verticale: N/M cieche` sopra la lista
+  (stato di salute della mappa a colpo d'occhio) → prefisso `!` sulle voci di lista difettose → nel pannello
+  della posizione `Visuale verticale: X / Y` con colore e il rimedio suggerito (avvicinare al bordo, abbassare
+  il parapetto). Nel **viewport**: rombo rosso sospeso SOLO sulle posizioni cieche — il colore del corpo resta
+  quello del RUOLO, che non va perso.
+- Build-verified (Debug + Release) e **smoke test manuale CONFERMATO dall'utente (2026-07-27)**: il conteggio
+  "valide su totale" compare e **cambia spostando le posizioni in alto/in basso** → il dato reagisce davvero
+  alla geometria, l'authoring verticale non è più a tentativi. Ciclo di lavoro: sposti/abbassi → il numero
+  cambia subito in editor → la telemetria a funnel conferma poi in partita.
+
+## 2026-07-27 (96) — Verticalità: telemetria a funnel + verdetto (l'AI è corretta, è la mappa) — KI #83
+
+L'utente chiede se esista un modo per verificare ESATTAMENTE il combattimento cross-quota (i proiettili lenti
+riempivano lo schermo di tracce non attribuibili, e tre bug diversi danno lo stesso sintomo visivo).
+- **Funnel di verticalità PERMANENTE** nell'evento `tactical decisions` (costo ~zero, solo confronti):
+  `vert_candidati`/`tot_candidati` → `vert_acquisiti`/`tot_acquisizioni` → `vert_colpi`, più
+  `vert_tiro_bloccato`, `piano_colpi` (controllo) e `acq_tutti_bloccati`. Nuova costante
+  `VERTICAL_ENGAGE_DY` (1.5 m). Guardia riusabile dopo ogni modifica a mappa o codice.
+- **Verdetto misurato**: opportunità cross-quota 19-22%, acquisizioni 0-6%; ma **visibili = acquisiti 1:1** e
+  **`vert_tiro_bloccato` = 0 sempre** → l'AI ingaggia tutto ciò che vede e spara quando ingaggia: **nessun bug
+  di verticalità**. Il limite è la VISIBILITÀ (1-3% dei cross-quota visibile), causata dalla GEOMETRIA: le
+  piattaforme sono blocchi pieni 7.8×8.3×3.1 → vincolo di ~12 m orizzontali per vedere a terra, più le pareti
+  alte 3 m diffuse. LOS riletta: corretta. Dettaglio completo e leve di authoring in KI #83.
+- **Onestà metodologica**: due ipotesi mie sono state SMENTITE dalla misura prima di diventare fix — la
+  saturazione dei K candidati (con 8 nemici i candidati sono già tutti) e "a raggio piatto deve vedersi" (è il
+  contrario: un raggio piatto fatica di più a superare il proprio bordo). Registrate in KI #83.
+- Le misure diagnostiche costose (LOS extra per candidato, bucket per distanza) sono state **rimosse** dopo aver
+  stabilito la causa; resta solo il funnel a costo zero. Build-verified (Debug + Release), `--sim` senza
+  regressioni.
+
+## 2026-07-27 (95) — Split del monolite AiSystem: nasce AiCommandLayer (audit #7)
+
+Il debito più grosso emerso dall'audit (94): `AiSystem.cpp` = **2578 righe** con sensing, combattimento,
+manovra, comando, torre, ordini e movimento in un solo file, e una `update()` da **1740 righe**. Era il punto
+più a rischio per qualunque modifica futura. Separato in due unità di traduzione lungo una cucitura tematica.
+- **`AiCommandLayer.cpp` (843 righe)** — il "COSA si decide a livello di teatro": stato dei settori (ADR-034) e
+  peso tattico condiviso (88), **torre di controllo** dei cloni (doc 36) e **quadro tattico** torre-hub (93),
+  **direttive del Droide Tattico** (doc 32 v2) inclusa la loro ricostruzione periodica, selezione della
+  posizione per gli **ordini di postura** del player.
+- **`AiSystem.cpp` (1805 righe, −773)** — il "COME la singola unità esegue": sensing, ingaggio, manovra
+  (ADR-035), pattuglia, guinzagli, movimento, ciclo per-entità.
+- **`AiInternal.hpp`** — seam PRIVATO fra le due (in `src/ecs/systems/`, non esposto in `include/`): dichiara i
+  12 helper del command layer in `namespace mini::aicmd`. `AiSystem.cpp` fa `using namespace aicmd` → **i
+  chiamanti non cambiano di una riga**. Il blocco di decisione del comandante è diventato il metodo privato
+  `AiSystem::updateEnemyCommand(world, snap, dt)` (ritorna la deriva del comandante, che serve alla telemetria).
+- **Comportamento INVARIATO per costruzione**: spostamento **verbatim** (estrazione via `sed`, nessuna
+  riscrittura a mano), zero modifiche di logica. Taglio scelto su evidenza: le funzioni spostate **non** usano
+  la telemetria `g_tac` né le utility di movimento (`enterHunt`, `aiRand01`, `norm2D`…), quindi il confine è
+  netto e senza stato condiviso.
+- **Verificato**: baseline `--sim` PRIMA del refactor (206, 206) e DOPO ogni passo → 206. Build pulita Debug +
+  Release (GFEngine + GFEditor). CMakeLists aggiornato; `AiSystem.hpp` ora include `Entity.hpp` (serviva a
+  `EntityId` nella firma del nuovo metodo).
+  **CORREZIONE (2026-07-27, misurata dopo)**: il conteggio `[Combat]` **NON è deterministico** — la stessa
+  identica build produce 211/215/224/224, perché `--sim` gira a tempo (timeout) e il numero di tick simulati
+  dipende dal carico della macchina. I "206, 206" erano condizioni di carico simili, non determinismo: quindi
+  quel confronto **non dimostrava** l'invarianza come affermato qui. L'invarianza dello split resta fondata su
+  ciò che la garantisce davvero — spostamento **verbatim** (estrazione `sed`, zero modifiche di logica) e
+  confine senza stato condiviso (verificato: niente `g_tac`, niente utility di movimento). Per confronti
+  quantitativi futuri servono metriche indipendenti dalla durata (rapporti, `fermi`, assenza di crash) o una
+  run a TICK FISSI, che oggi non esiste.
+- **NON toccato (deliberato)**: il ciclo per-entità (~1200 righe) resta in `update()`. Spezzarlo richiede di
+  sciogliere decine di variabili locali condivise fra le fasi (bersagli SoA, `teamAlive`, `repositioning`,
+  `moveDX/DZ`…): è un refactor a sé, con un rapporto rischio/beneficio diverso. Registrato in 06_Todo.
+
 ## 2026-07-27 (94) — Audit post-torre-hub: fix occupancy + coerenza ruoli + costanti autorabili
 
 Esame profondo richiesto dall'utente dopo il blocco ordini/torre-hub. Findings prioritizzati (report completo

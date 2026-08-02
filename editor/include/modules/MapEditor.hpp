@@ -1,5 +1,6 @@
 #pragma once
 #include "viewport/FreeCameraViewport.hpp"
+#include "mini/game/data/DefinitionRegistry.hpp"   // prefab per il piazzamento (ADR-048)
 #include <string>
 #include <vector>
 #include <array>
@@ -34,7 +35,6 @@ private:
 
     std::string m_mapId;        // id mappa corrente (= filename stem, ADR-001)
     std::string m_mapJsonPath;  // percorso file JSON
-    char m_mapDisplayName[64] = "";  // campo `name`: nome MOSTRATO in partita/sandbox
 
     // Command post (ADR-009): autorati qui, letti dal runtime via MapDef.
     struct PostEntry {
@@ -73,6 +73,35 @@ private:
     std::vector<PostEntry>    m_posts;
     std::vector<PositionEntry> m_positions;   // ADR-030 (ex m_covers + m_tacticals)
     std::vector<float> m_exposure;            // ADR-033: derivata, parallela a m_positions
+    // VISUALE VERTICALE (KI #83): quante posizioni a QUOTA DIVERSA vede ciascuna
+    // posizione. Derivata come m_exposure (mai salvata, ricalcolata a ogni modifica) e
+    // calcolata con la STESSA `hasLineOfFire` del runtime → nessuna doppia verità.
+    // Serve perché il combattimento cross-quota è limitato dalla GEOMETRIA, non dall'AI:
+    // una posizione elevata "cieca" verso il basso non fa sparare nessuno, e senza
+    // questo numero lo si scopriva solo a tentativi in partita.
+    std::vector<int> m_vertSight;
+    // Denominatore: quante posizioni a quota diversa ESISTONO per quella posizione.
+    // "vede 0 su 0" è irrilevante (nessuna quota diversa in giro); "vede 0 su 24" è il
+    // difetto da correggere — senza il denominatore i due casi si confondono.
+    std::vector<int> m_vertPairs;
+    // Copertura dall'alto (doc 41 B3): derivata, parallela a m_positions. È "coperto
+    // dall'alto", NON "interno" (un sottopasso conta quanto un bunker): l'interno vero
+    // richiede il rilevamento della chiusura, che è un'altra analisi.
+    std::vector<int> m_overhead;
+
+    // ── SALUTE TATTICA della mappa (doc 41 B4) ───────────────────────────
+    // I controlli tattici esistevano già ma erano SPARSI: bisognava selezionare una
+    // posizione per volta per scoprire che era cieca o esposta. Con mappe da centinaia
+    // di elementi è impraticabile. Qui vengono aggregati in un elenco unico di DIFETTI,
+    // ognuno **cliccabile** (seleziona l'elemento colpevole) → si passa da "ispezionare"
+    // a "farsi dire cosa non va". Derivati come tutto il resto: mai salvati.
+    struct TacticalIssue {
+        int         sel;    // codice di selezione dell'elemento (m_selBox)
+        int         sev;    // 0 = avviso, 1 = problema
+        int         kind;   // categoria (TacticalDefect::Kind): raggruppa l'elenco
+        std::string text;
+    };
+    std::vector<TacticalIssue> m_issues;
     // Settori / Combat Areas (ADR-034): autorati, pochi, scelte di design.
     struct SectorEntry { std::string label="Settore"; float x=0, z=0;
                          float radius=12.0f; float importance=0.5f; };
@@ -81,6 +110,35 @@ private:
     std::vector<RouteEntry>   m_routes;
     std::vector<VehicleSpawnEntry> m_vehSpawns;
     std::vector<TargetEntry>  m_targets;
+    // ── PREFAB (ADR-048) ─────────────────────────────────────────────────
+    // La mappa REFERENZIA i prefab (id + trasformazione); l'espansione in box e
+    // posizioni tattiche la fa il motore al load. Qui si piazzano e si spostano; il
+    // viewport ne disegna l'anteprima leggendo il prefab dal registry — nessun
+    // secondo parser. Selezione: -4000-i.
+    struct PrefabInstEntry { std::string id; float x=0, y=0, z=0, ry=0; };
+    std::vector<PrefabInstEntry> m_prefabInsts;
+    std::vector<std::string>     m_prefabIds;     // per il combo di piazzamento
+    mini::DefinitionRegistry     m_prefabReg;     // solo i prefab (loadPrefabs)
+    int m_prefabPick = 0;                         // scelta corrente nel combo
+    // Creazione prefab DA ZONA: si costruisce il pezzo nella mappa (box + posizioni) e
+    // lo si "promuove" ad asset — il flusso standard (in Unity/Unreal: crea in scena →
+    // salva come prefab). Alternativa scartata: un modulo-editor separato per i prefab,
+    // che avrebbe duplicato mezzo Map Editor per costruire le stesse cose.
+    char  m_newPrefabId[64] = "";
+    float m_newPrefabRadius = 6.0f;
+    bool  m_newPrefabConsume = true;   // togliere dalla mappa gli elementi assorbiti
+    // Modalità SELEZIONE per la creazione: mentre è attiva il viewport mostra il raggio
+    // e evidenzia ciò che verrà preso, e Shift+click aggiunge/toglie singoli elementi.
+    // Un raggio invisibile costringeva a indovinare cosa si stesse selezionando.
+    bool  m_prefabZoneMode = false;
+    float m_prefabZoneX = 0.0f, m_prefabZoneZ = 0.0f;   // centro congelato all'apertura
+    std::vector<int> m_prefabPickBoxes;      // indici in m_boxes esclusi/inclusi a mano
+    std::vector<int> m_prefabPickPositions;  // idem su m_positions
+    bool  m_prefabPickManual = false;        // true = comanda la selezione manuale
+    // Elementi che finirebbero nel prefab ORA (raggio + ritocchi manuali).
+    void prefabZoneCollect(std::vector<int>& boxes, std::vector<int>& positions) const;
+    bool savePrefabFromZone(std::string& err);   // true = creato
+
     std::vector<std::string>       m_vehicleIds;   // dal registry (combo)
     std::vector<std::string>       m_commanderIds; // CommanderDef per il combo comandante (ADR-044)
 

@@ -1,5 +1,7 @@
 #include "mini/game/ai/WorldIntel.hpp"
 #include "mini/game/data/Definitions.hpp"
+#include "mini/core/GameConfig.hpp"   // OVERHEAD_PROBE_HEIGHT (doc 41 B3)
+#include "mini/game/ai/AiUtility.hpp"  // pesi delle decisioni tattiche (doc 40 A5)
 
 #include <cmath>
 #include <algorithm>
@@ -57,8 +59,9 @@ const TacticalPositionDef* bestCoverToward(const MapDef& map,
         // Punteggio (ADR-026): premia la PROTEZIONE, penalizza la distanza, e
         // (ADR-046/C3) EVITA le danger zone: una copertura dentro un'area
         // pericolosa autorata non è un buon riparo. Fa parlare cover ↔ danger.
-        const float score = c.protection - 0.5f * (d2 / maxDist2)
-                          - dangerAt(map, c.x, c.z);
+        const float score = c.protection * aiutility::kCover.protection
+                          - aiutility::kCover.distance * (d2 / maxDist2)
+                          - aiutility::kCover.danger * dangerAt(map, c.x, c.z);
         if (score > bestScore) { bestScore = score; best = &c; }
     }
     return best;
@@ -123,11 +126,26 @@ bool hasLineOfFire(const MapDef& map,
     return true;
 }
 
+bool hasOverheadCover(const MapDef& map, float x, float y, float z, float probeHeight)
+{
+    // Si parte SOPRA la testa (non dai piedi): partire dal suolo farebbe intersecare
+    // il pavimento su cui si sta e restituirebbe "coperto" ovunque.
+    const float from = y + 1.8f;
+    if (probeHeight <= from - y) return false;
+    return !hasLineOfFire(map, x, from, z, x, y + probeHeight, z);
+}
+
 void buildTacticalLinks(MapDef& map)
 {
     const size_t n = map.tacticalPositions.size();
     map.positionCovers.assign(n, {});
     if (n == 0) return;
+
+    // Copertura dall'alto (doc 41 B3): dato DERIVATO, calcolato qui insieme agli altri
+    // così vive e muore con la geometria — un raycast per posizione, costo trascurabile.
+    for (auto& t : map.tacticalPositions)
+        t.hasOverhead = hasOverheadCover(map, t.x, t.y, t.z,
+                                         config::OVERHEAD_PROBE_HEIGHT);
 
     // Altezza di riferimento per la linea di tiro: circa il petto di un'unità in
     // posizione. Non si usa la y del pavimento, o ogni muretto bloccherebbe tutto.
@@ -222,11 +240,11 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
         const float exposure = (i < map.positionExposure.size())
                              ? map.positionExposure[i] : 0.0f;
 
-        const float score = flankBonus * 1.5f          // aggirare è lo scopo
-                          + p.protection * 0.6f
-                          + arcPref * 0.4f              // orientamento (preferenza, non esclusione)
-                          + (1.0f - exposure) * 0.6f   // preferisci il coperto
-                          - 0.4f * (myD2 / maxDist2);  // ma non attraversare la mappa
+        const float score = flankBonus * aiutility::kFlank.flankBonus
+                          + p.protection * aiutility::kFlank.protection
+                          + arcPref * aiutility::kFlank.arc
+                          + (1.0f - exposure) * aiutility::kFlank.unexposed
+                          - aiutility::kFlank.distance * (myD2 / maxDist2);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
     return best;
@@ -260,8 +278,10 @@ const TacticalPositionDef* bestOverwatchForPosition(const MapDef& map,
         // Vicina, protetta, poco esposta: buona posizione da cui coprire l'avanzata.
         const float expo = (i < (int)map.positionExposure.size())
                          ? map.positionExposure[(size_t)i] : 0.0f;
-        const float score = p.protection * 2.0f + p.importance
-                          - std::sqrt(d2) * 0.08f - expo;
+        const float score = p.protection * aiutility::kOverwatch.protection
+                          + p.importance * aiutility::kOverwatch.importance
+                          - std::sqrt(d2) * aiutility::kOverwatch.distance
+                          - expo * aiutility::kOverwatch.exposure;
         if (score > bestScore) { bestScore = score; best = &p; if (outIdx) *outIdx = i; }
     }
     return best;
@@ -319,10 +339,10 @@ const TacticalPositionDef* bestFiringPosition(const MapDef& map,
         // Protezione + orientamento (preferenza) + IMPORTANZA autorata (l'autore
         // marca il buon terreno, anche elevato → ora conta anche in combattimento) −
         // distanza − pericolo (ADR-046/C3).
-        const float score = p.protection
-                          + arcPref * 0.5f
-                          + p.importance * 0.5f
-                          - 0.5f * (myD2 / maxDist2)
+        const float score = p.protection * aiutility::kFiring.protection
+                          + arcPref * aiutility::kFiring.arc
+                          + p.importance * aiutility::kFiring.importance
+                          - aiutility::kFiring.distance * (myD2 / maxDist2)
                           - dangerAt(map, p.x, p.z);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
@@ -359,8 +379,10 @@ const TacticalPositionDef* bestHoldPosition(const MapDef& map, float x, float z,
         const float dx = p.x - x, dz = p.z - z;
         const float d2 = dx * dx + dz * dz;
         // Protetta + importante, vicina, e fuori dal pericolo (ADR-046/C3).
-        const float score = p.protection + p.importance
-                          - std::sqrt(d2) * 0.05f - dangerAt(map, p.x, p.z);
+        const float score = p.protection * aiutility::kHold.protection
+                          + p.importance * aiutility::kHold.importance
+                          - std::sqrt(d2) * aiutility::kHold.distance
+                          - aiutility::kHold.danger * dangerAt(map, p.x, p.z);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
     return best;
@@ -385,8 +407,10 @@ const TacticalPositionDef* bestAdvantageInArea(const MapDef& map, float x, float
         const float d2 = dx * dx + dz * dz;
         // IMPORTANZA pesata (l'autore marca il buon terreno, anche elevato, con
         // importanza alta) + protezione, vicina, fuori dal pericolo (ADR-046/C3).
-        const float score = p.importance * 1.5f + p.protection
-                          - std::sqrt(d2) * 0.05f - dangerAt(map, p.x, p.z);
+        const float score = p.importance * aiutility::kAdvantage.importance
+                          + p.protection * aiutility::kAdvantage.protection
+                          - std::sqrt(d2) * aiutility::kAdvantage.distance
+                          - aiutility::kAdvantage.danger * dangerAt(map, p.x, p.z);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
     return best;

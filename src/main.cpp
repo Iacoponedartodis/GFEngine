@@ -17,6 +17,7 @@ int main(int argc, char* argv[])
     int  stressAiCount  = 0;   // --stress N: N AI per team nel sim (profiling)
     std::string missionId;     // --mission <id>: missione attiva (ADR-019)
     std::string classId;       // --class <id>: classe del giocatore (doc 14)
+    int  simTicks       = 0;   // --sim-ticks N: sim di durata FISSA (misure confrontabili)
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--direct-prematch") == 0)
@@ -36,6 +37,11 @@ int main(int argc, char* argv[])
             missionId = argv[++i];   // ADR-019: attiva una missione (test/debug)
         else if (std::strcmp(argv[i], "--class") == 0 && i + 1 < argc)
             classId = argv[++i];   // 14_ClassSystem: loadout confezionato
+        else if (std::strcmp(argv[i], "--sim-ticks") == 0 && i + 1 < argc)
+        {   // sim a durata FISSA in tick: misure confrontabili fra due run/build
+            sandbox = true; autoSim = true;
+            simTicks = std::atoi(argv[++i]);
+        }
         else if (std::strcmp(argv[i], "--validate") == 0)
             validateOnly = true;
     }
@@ -52,6 +58,20 @@ int main(int argc, char* argv[])
         mini::DefinitionRegistry registry;
         registry.loadAll(dataPath);
 
+        // Salute tattica delle mappe (doc 41 B4): stesse regole del pannello editor.
+        // Headless → utilizzabile in CI e senza aprire l'editor.
+        for (const auto& [mapId, map] : registry.maps())
+        {
+            const auto defects = mini::analyzeTacticalHealth(map);
+            if (defects.empty()) continue;
+            int problems = 0;
+            for (const auto& d : defects) if (d.severity == 1) ++problems;
+            std::cout << "[Tattica] " << mapId << ": " << problems << " problemi, "
+                      << (defects.size() - problems) << " avvisi\n";
+            for (const auto& d : defects)
+                std::cout << "          " << (d.severity == 1 ? "! " : "- ") << d.text << "\n";
+        }
+
         const mini::Diagnostics diags = mini::validateContent(registry, dataPath);
         const bool failed = mini::reportDiagnostics(diags, /*printToStdout=*/true);
         const int errors   = mini::countBy(diags, mini::telemetry::Level::Error);
@@ -66,6 +86,6 @@ int main(int argc, char* argv[])
 
     mini::Application app;
     app.run(directPreMatch, sandbox, autoSim, mapOverride, stressAiCount, missionId,
-            classId);
+            classId, simTicks);
     return 0;
 }

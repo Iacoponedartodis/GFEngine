@@ -150,7 +150,31 @@ void CombatSystem::update(World& world, float dt)
                 const float meshOff = mr ? mr->meshOffsetY : 0.0f;
                 result = testHit(bPrev, bPos, ePos, scale, et->ry, meshOff, hb);
             }
-            if (!result.hit) continue;
+            if (!result.hit)
+            {
+                // ── SOPPRESSIONE (doc 40 A3) ─────────────────────────────
+                // Il colpo ha MANCATO, ma se è passato vicino l'unità se ne accorge e
+                // reagisce: peggiora la mira e cerca riparo. È ciò che rende utile una
+                // raffica che non uccide — la differenza fra fuoco di soppressione e
+                // duello a chi mira meglio. Si riusa il segmento già calcolato per
+                // l'anti-tunneling: costo praticamente nullo.
+                if (auto* eai = world.getAi(eid))
+                {
+                    const glm::vec3 seg = bPos - bPrev;
+                    const float len2 = glm::dot(seg, seg);
+                    float t = (len2 > 1e-6f) ? glm::dot(ePos - bPrev, seg) / len2 : 0.0f;
+                    t = (t < 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
+                    const glm::vec3 closest = bPrev + seg * t;
+                    const glm::vec3 d = ePos - closest;
+                    if (glm::dot(d, d) < config::SUPPRESSION_NEAR_MISS
+                                       * config::SUPPRESSION_NEAR_MISS)
+                    {
+                        eai->suppression += config::SUPPRESSION_PER_SHOT;
+                        if (eai->suppression > 1.0f) eai->suppression = 1.0f;
+                    }
+                }
+                continue;
+            }
 
             const float dmg = bullet->damage * result.mult;
 

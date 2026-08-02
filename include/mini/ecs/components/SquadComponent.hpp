@@ -9,6 +9,7 @@
 
 #include "mini/ecs/Entity.hpp"
 #include <cstdint>
+#include <vector>
 
 namespace mini
 {
@@ -97,10 +98,12 @@ struct SquadOrderRequest
     OrderType  order   = OrderType::None;
     EntityId   targetEntity = 0;  // FocusFire (nemico) / Revive (compagno a terra)
     float      targetX = 0.0f, targetZ = 0.0f;   // MoveTo / TakeCover / CoveringFire
-    // Ordine DIRETTO a un singolo membro (0 = tutta la squadra). Serve ai comandi
-    // che puntano un COMPAGNO: CoveringFire (quel compagno copre) e Revive (quel
-    // compagno va a soccorrere). Senza, l'ordine si applicherebbe a tutti.
-    EntityId   directedMember = 0;
+    // Ordine DIRETTO a membri SPECIFICI (vuoto = tutta la squadra). Era un singolo
+    // `directedMember` (bastava a Revive/CoveringFire, che puntano un compagno); ora è
+    // una LISTA perché il giocatore può SELEZIONARE più compagni e dare a ciascun
+    // gruppo un ordine diverso — "più ordini diversi a più membri"
+    // ([[orders-design-vision]]). Un solo destinatario = lista con un elemento.
+    std::vector<EntityId> directedMembers;
 };
 
 } // namespace mini
