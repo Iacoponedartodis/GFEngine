@@ -216,6 +216,89 @@ void ObjectiveSystem::update(World& world, float dt)
         }
     }
 
+    // ── Funnel della MISSIONE (ADR-050, doc 42 buco O7) ──────────────────
+    // Gli eventi c'erano già, ma solo sui SALTI (attivato, completato, fallito):
+    // una missione che si impianta non produce nessun evento, quindi era
+    // invisibile per definizione — il caso che più conta è proprio quello in cui
+    // "non succede niente". Qui si fotografa lo STATO di ogni obiettivo con il
+    // suo progresso, a cadenza fissa. `attivi_senza_progresso` è la voce da
+    // guardare: un obiettivo attivo da minuti col progresso fermo è una missione
+    // bloccata, e prima si poteva scoprire solo giocandola.
+    if (world.getTickCount() % 600 == 1 && !m_objs.empty())
+    {
+        nlohmann::json arr = nlohmann::json::array();
+        int attivi = 0, fermi = 0;
+        for (const auto& r : m_objs)
+        {
+            if (!r.def) continue;
+            const ObjectiveDef& d = *r.def;
+            const char* st = r.state == State::Completed ? "completato"
+                           : r.state == State::Failed    ? "fallito"
+                           : r.state == State::Active    ? "attivo" : "inattivo";
+
+            // OGNI TIPO MISURA UNA COSA DIVERSA, e leggere il campo sbagliato
+            // produce un allarme falso. Primo tentativo: guardavo `progress` e
+            // `holdTime` per tutti — ma `CaptureZone` non li tocca affatto (legge
+            // il proprietario del post, ADR-009) e risultava "ferma da 40 s" mentre
+            // funzionava. Una guardia che mente è peggio di nessuna guardia.
+            std::string misura;      // testo leggibile, specifico del tipo
+            // Avanzamento NORMALIZZATO 0..1, oppure −1 = "questo tipo non
+            // accumula nulla, non ha senso chiedersi se è fermo". È la seconda
+            // metà della correzione: non basta MOSTRARE il dato giusto, anche la
+            // soglia d'allarme deve leggere quello giusto — altrimenti la riga
+            // dice "0%" e il contatore continua a mentire per conto suo.
+            float avanz = -1.0f;
+            switch (d.type)
+            {
+            case ObjectiveType::HoldAreaForDuration:
+                misura = std::to_string((int)r.holdTime) + "/"
+                       + std::to_string((int)d.holdSeconds) + " s di presenza";
+                avanz = d.holdSeconds > 0.0f ? r.holdTime / d.holdSeconds : 0.0f;
+                break;
+            case ObjectiveType::EliminateTarget:
+                misura = std::to_string(r.progress) + "/" + std::to_string(d.count)
+                       + " eliminazioni";
+                avanz = d.count > 0 ? (float)r.progress / (float)d.count : 0.0f;
+                break;
+            case ObjectiveType::CaptureZone:
+            case ObjectiveType::DefendZone:
+            {
+                // Il progresso vero sta nel command post, non nel Runtime.
+                int owner = 0; float prog = 0.0f; bool found = false;
+                for (const auto& cs : world.commandPostStates)
+                    if (cs.label == d.targetPost)
+                    { owner = cs.owner; prog = cs.progress01; found = true; break; }
+                misura = found ? ("post '" + d.targetPost + "' team " + std::to_string(owner)
+                                  + " al " + std::to_string((int)(prog * 100.0f)) + "%")
+                               : ("post '" + d.targetPost + "' NON TROVATO");
+                // Già nostro = obiettivo di fatto raggiunto; altrimenti conta la
+                // barra di cattura in corso.
+                if (found) avanz = (owner == d.actorTeam) ? 1.0f : prog;
+                break;
+            }
+            default:
+                misura = "istantaneo";   // ReachArea e simili: o è, o non è
+                break;
+            }
+
+            if (r.state == State::Active)
+            {
+                ++attivi;
+                // "Fermo" ha senso solo per chi ha un avanzamento misurabile.
+                if (avanz >= 0.0f && avanz <= 0.001f && r.elapsed > 30.0f) ++fermi;
+            }
+            arr.push_back({{"id", d.id}, {"stato", st},
+                           {"tier", d.tier == ObjectiveTier::Primary ? "primario"
+                                                                    : "secondario"},
+                           {"da_s", r.elapsed}, {"misura", misura},
+                           {"motivo_fallimento", r.failureReason ? r.failureReason : ""}});
+        }
+        telemetry::event(telemetry::Level::Info, "Objective", "stato missione",
+            {{"missione", m->id}, {"tempo_s", m_missionTime},
+             {"obiettivi", (int)m_objs.size()}, {"attivi", attivi},
+             {"attivi_senza_progresso", fermi}, {"dettaglio", arr}});
+    }
+
     // ── Regole di missione: DICHIARATE nel MissionDef, mai cablate ────────
     int nPrimary = 0, nPrimaryDone = 0, nPrimaryFailed = 0;
     for (const auto& r : m_objs)

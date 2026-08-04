@@ -72,8 +72,12 @@ glm::vec3 nudgeOutOfColliders(const glm::vec3& pos, const glm::vec3& half,
 // bersaglio stesso ha un collider. Una struttura colpibile bloccava la visuale
 // verso il proprio centro, quindi nessuna AI poteva "vederla" e ingaggiarla
 // (regressione introdotta dal collider di ADR-036, KI #70).
+// `outBlocker` (facoltativo): riceve l'entità che ha bloccato il segmento. Senza,
+// "l'AI non vede" resta una constatazione — con, diventa una domanda rispondibile
+// ("QUALE oggetto sta uccidendo le linee di tiro di questa mappa?", KI #86 causa 3).
+// Il primo bloccante trovato, non il più vicino: serve a classificare, non a mirare.
 bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
-                    EntityId ignore = 0);
+                    EntityId ignore = 0, EntityId* outBlocker = nullptr);
 
 } // namespace physics
 } // namespace mini

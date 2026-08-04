@@ -23,6 +23,17 @@ Molto comportamento (AI, nav, game mode, command post) si verifica SENZA input m
 3. Esempi: `navmesh built`/`sample path` (nav ok), `state change`/`stuck` (AI), `Ticket bleed`/
    `Capture update` (game mode), `[Combat] Colpito!` su stdout (combattimento attivo).
 4. Dump stato completo: F12 in gioco, o automatico a fine-partita/crash → `game_state.json`.
+5. **Scatola nera per-agente** (changelog 121) — quando il difetto è *comportamentale* ("alcune AI si
+   fermano", "non sparano"), gli aggregati **non bastano**: hanno già fuorviato due diagnosi di fila.
+   Il flusso è a tre passi, e va seguito in ordine:
+   1. leggi l'evento **`stalli per causa`** (sempre attivo): quanti episodi, per quale causa sospetta;
+   2. prendi l'**id** di un'unità dagli eventi `stallo` / `stallo finito` (quest'ultimo ha la durata reale);
+   3. ri-esegui con **`--trace-ai <id>`** (`-1` = tutte, rumoroso) e leggi la cronaca tick per tick:
+      stato, posizione, sguardo, bersaglio, evasivo, manovra, ruolo.
+
+   È così che è stata trovata la causa 4 di KI #86 — un'unità immobile 3 s con la manovra accesa si legge
+   come una riga di cronaca, mentre nell'aggregato spariva del tutto. **Regola generale: non aggregare
+   prima di aver guardato una singola unità.**
 - **Limite noto (10_ProjectMemory):** gli input sintetici NON raggiungono la finestra SDL
   headless → i bug di input INTERATTIVO (es. roll del giocatore, guida) si validano solo con un
   playtest reale + la telemetria del run dell'utente.

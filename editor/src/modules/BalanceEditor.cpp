@@ -520,12 +520,46 @@ void BalanceEditor::drawMapsTab()
         ImGui::TextDisabled("Lista VUOTA = automatico: tutte le definizioni registrate.");
         ImGui::Spacing();
 
+        // ── Cosa si può schierare: ENTITÀ-corpo **e CLASSI** ──────────────────
+        // ADR-023: un id di roster può essere un'entità-corpo O una CLASSE con
+        // `base_entity` — `classres::effectiveUnit` la risolve nel corpo con
+        // loadout e profilo AI della classe sovrapposti, e ogni consumatore la
+        // tratta come una normale classe su un'entità. Il runtime lo faceva già;
+        // qui il dropdown offriva solo `allies()`/`enemies()`, quindi la capacità
+        // esisteva ma **non era raggiungibile dall'editor**: con una sola entità
+        // alleata definita si poteva schierare solo il Clone Trooper standard, e
+        // un Marksman era impossibile da mettere in mappa (segnalato 2026-08-02).
+        // Il LATO della classe si deduce dal suo corpo: se `base_entity` è
+        // un'entità alleata, la classe è alleata. Nessun campo nuovo.
         std::vector<std::string> ids;
         if (isAllyList) { for (auto& [id, _] : m_registry.allies())  ids.push_back(id); }
         else            { for (auto& [id, _] : m_registry.enemies()) ids.push_back(id); }
+        const size_t nBodies = ids.size();   // le classi vengono dopo, raggruppate
+        for (auto& [cid, cdef] : m_registry.classes())
+        {
+            if (cdef.baseEntityId.empty()) continue;   // senza corpo non è schierabile
+            const bool bodyIsAlly = (m_registry.getAlly(cdef.baseEntityId) != nullptr);
+            if (bodyIsAlly == isAllyList) ids.push_back(cid);
+        }
 
         auto defOf = [&](const std::string& id) -> const mini::EnemyDef* {
-            return isAllyList ? m_registry.getAlly(id) : m_registry.getEnemy(id);
+            if (const auto* d = isAllyList ? m_registry.getAlly(id) : m_registry.getEnemy(id))
+                return d;
+            // È una classe: per colore/nome mostra il suo CORPO (il modello è quello).
+            auto it = m_registry.classes().find(id);
+            if (it == m_registry.classes().end()) return nullptr;
+            return isAllyList ? m_registry.getAlly(it->second.baseEntityId)
+                              : m_registry.getEnemy(it->second.baseEntityId);
+        };
+        // Etichetta: una classe va riconosciuta a colpo d'occhio, altrimenti
+        // "Clone Trooper [marksman]" sembra un doppione dell'entità base.
+        auto labelOf = [&](const std::string& id) -> std::string {
+            auto it = m_registry.classes().find(id);
+            if (it != m_registry.classes().end())
+                return (it->second.name.empty() ? id : it->second.name)
+                     + "  [classe: " + id + "]";
+            const auto* d = defOf(id);
+            return d ? (d->name + "  [" + id + "]") : id;
         };
 
         for (int i = 0; i < (int)types.size(); ++i)
@@ -538,10 +572,12 @@ void BalanceEditor::drawMapsTab()
             if (ImGui::BeginCombo("##slot",
                                   cur.empty() ? "-- seleziona --" : cur.c_str()))
             {
-                for (auto& eid : ids)
+                for (size_t k = 0; k < ids.size(); ++k)
                 {
-                    const auto* edef = defOf(eid);
-                    std::string label = edef ? (edef->name + "  [" + eid + "]") : eid;
+                    if (k == nBodies && nBodies < ids.size())
+                    { ImGui::Separator(); ImGui::TextDisabled("Classi (ADR-023)"); }
+                    const std::string& eid = ids[k];
+                    const std::string label = labelOf(eid);
                     bool sel = (cur == eid);
                     if (ImGui::Selectable(label.c_str(), sel)) types[i] = eid;
                     if (sel) ImGui::SetItemDefaultFocus();
@@ -743,6 +779,22 @@ void BalanceEditor::drawGameplayTab()
         ImGui::TextDisabled("Oltre il cap la caduta e' LETALE. 0 = mai a terra,\n"
                             "chi cade muore. Si azzera col respawn.");
     }
+
+    ImGui::Spacing();
+    ImGui::TextColored({0.85f,0.75f,0.45f,1.0f}, "Quando la squadra NON va a soccorrere");
+    ch |= editor::ui::sliderRow("Raggio minaccia (m)", g.squadRescueThreatRadius,
+                                0.f, 30.f, 0.5f, "%.0f m", 150.0f);
+    {
+        int mt = g.squadRescueMaxThreats;
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputInt("Nemici tollerati", &mt))
+        { g.squadRescueMaxThreats = (mt < 0) ? 0 : (mt > 20 ? 20 : mt); ch = true; }
+    }
+    ImGui::TextDisabled("Con PIU' nemici vivi di cosi' entro il raggio, il soccorso viene\n"
+                        "DIFFERITO (non annullato): il bleed-out continua a scorrere, quindi\n"
+                        "a volte l'uomo si perde. Serve a non far correre un soccorritore\n"
+                        "in mezzo a una sparatoria. Raggio 0 = nessun controllo (comportamento\n"
+                        "storico: si parte sempre).");
 
     if (ch) m_dirty = true;
     ImGui::TextDisabled("(Il degrado delle comunicazioni senza torre e' nel tab \"Comando\".)");

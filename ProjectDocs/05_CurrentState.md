@@ -1,5 +1,41 @@
 # 05 — Current State
 
+## 2026-08-04 — Fotografia dopo il blocco AI + osservabilità (changelog 100-131)
+Verificata contro il codice live durante l'audit di documentazione del 2026-08-04. Il documento era
+fermo al 2026-07-22 e non conosceva **nulla** di quanto segue: è la deriva più grande trovata
+nell'audit, ed è il motivo per cui questa sezione esiste.
+
+**AI — `src/ecs/systems/` è ora tre file, non uno.** `AiSystem.cpp` (come la singola unità esegue),
+`AiCommandLayer.cpp` (cosa decide il livello di comando: settori, torre, direttive, posizioni per
+gli ordini) e `AiTrace.cpp` (osservazione per-agente). Seam privato in `AiInternal.hpp`.
+- **Percezione completa** (A1-A2): cono visivo + fascia periferica + rivelazione dal lampo; udito
+  event-driven con sensibilità *relativa*; confidenza sui contatti con decadimento esponenziale
+  (sotto soglia il contatto diventa meta di perlustrazione, non bersaglio).
+- **Soppressione** (A3) e **ruoli di combattimento** (A4: sopprime / aggira / avanza, per saturazione
+  e affinità di profilo).
+- **Utility formalizzata** (A5): gli 8 bilanci di pesi vivono in `include/mini/game/ai/AiUtility.hpp`.
+  I valori sono ancora quelli storici — la *taratura* è lavoro aperto.
+- **Ingaggio** (KI #86, quattro cause corrette): punto di mira allineato fra acquisizione, tiro e
+  FocusFire (`+AI_HALF_Y*0.7`); la fase di hide non si congela più; la ricerca chiede al mondo una
+  posizione da cui la zona si vede; la manovra prosegue senza bersaglio.
+
+**Mondo tattico**: prefab (ADR-048) autorati per asset ed espansi al load; salute tattica nell'editor
+e nel gate `--validate`, incluso `UnmarkedCover`.
+
+**Editor**: scheletro comune `ModuleShell` + `AssetBrowser` (ADR-049); anteprima **arma in mano** nel
+Weapon Editor con la stessa formula del runtime (`WeaponHandPose.hpp`, una sola implementazione per
+tre consumatori); il roster di mappa accetta le **classi** oltre alle entità (ADR-023, KI #88).
+
+**Osservabilità (ADR-050, doc 42) — copertura completa su tutti i sistemi vivi.** Profiler sempre
+attivo con zone annidate; telemetria divisa per dominio (`perf`/`ai`/`combat`/`world`/`content`) con
+archivio `storico/`; verbosità a runtime (`--telemetry-verbose`); funnel di navigazione, di fuoco, di
+missione, di rendering; scatola nera per-agente (`--trace-ai <id>`); inventari di avvio e asset.
+Costo misurato: **0,01% del frame**.
+
+**Performance (KI #87, risolto come diagnosi)**: il collo di bottiglia è il **rendering**, non l'AI —
+scena 3D 95% del frame, simulazione 2,9%. Causa: 1,45 M vertici/frame, di cui due terzi dal mesh del
+B1 (161k vertici). Nessuna ottimizzazione ancora intrapresa: vedi doc 43.
+
 ## 2026-07-22 — Metadata↔AI: integrazione completata (audit doc 38 chiuso, ADR-045/046)
 Fotografia del **seam `mini::worldintel`** e di come l'AI (`AiSystem`) consuma i metadata di `MapDef`,
 dopo la chiusura dell'audit doc 38. Verificato contro il codice live; build 0/0, `--validate` 0/0.

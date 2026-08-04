@@ -27,6 +27,26 @@ public:
     bool     isDead     = false;
     float    respawnTimer = -1.0f;
 
+    // ── Traccia di SESSIONE GIOCATA (ADR-050, doc 42 buco O3) ────────────
+    // Tutte le mie misure vengono da simulazioni AI-vs-AI: del caso che conta
+    // davvero — una partita giocata — non avevo **nessun** dato. Non so quanto
+    // spara il giocatore, quanto si muove, quanto sta morto, quanti ordini dà.
+    // Senza, ogni conclusione sul bilanciamento vale per una battaglia fra bot.
+    // Contatori grezzi: l'aggregazione e la cadenza le decide chi li emette.
+    struct SessionStats
+    {
+        int   shots      = 0;    // colpi sparati dal giocatore
+        int   orders     = 0;    // ordini impartiti alla squadra
+        float distance   = 0.0f; // metri percorsi (solo XZ)
+        float timeAlive  = 0.0f; // secondi in piedi
+        float timeDead   = 0.0f; // secondi da morto/in respawn
+        float timeAds    = 0.0f; // secondi in mira
+    };
+    SessionStats session;
+private:
+    float m_lastX = 0.0f, m_lastZ = 0.0f;   // posizione al tick prima (distanza)
+public:
+
     // ── Stat base del personaggio (14_ClassSystem / KI #35) ──────────
     // Popolate da PlayerDef (data/characters/<id>.json) al load. I DEFAULT sono
     // esattamente i valori che il gioco usava quando erano costanti: senza dati,

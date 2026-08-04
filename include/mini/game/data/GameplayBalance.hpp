@@ -26,6 +26,15 @@ struct GameplayBalance
     float squadReviveHp          =  0.15f;  // frazione di HP max al risveglio
     float squadDownLethalHitFrac =  0.20f;  // colpo ≥ questa frazione = morte sul colpo
     int   squadMaxRevives        =  1;      // rianimazioni per vita, oltre = letale
+    // ── Quando NON si va a soccorrere (utente 2026-08-02) ───────────────
+    // "vanno a rianimare un alleato a terra buttandosi in mezzo alla mischia, e
+    // stanno lì a rianimare in mezzo a svariati nemici". Nessun esercito manda un
+    // uomo a recuperarne un altro sotto tiro incrociato: prima si bonifica, o si
+    // aspetta. Il soccorso viene DIFFERITO, non annullato — il bleed-out continua
+    // a scorrere, quindi qualche volta l'uomo si perde davvero. È il costo della
+    // scelta, ed è coerente con "degradare, non bloccare".
+    float squadRescueThreatRadius = 12.0f;  // m attorno al caduto in cui si contano i nemici
+    int   squadRescueMaxThreats   =  1;     // oltre questi nemici vivi, non si parte
 
     // ── Rete di comunicazione: quanto degrada senza torre (doc 34) ──────
     float commsLostRangeMult     =  0.5f;   // raggio di condivisione contatti
@@ -68,6 +77,8 @@ inline bool loadGameplayBalance(const std::string& path)
     b.squadReviveHp          = j.value("squad_revive_hp",            b.squadReviveHp);
     b.squadDownLethalHitFrac = j.value("squad_down_lethal_hit_frac", b.squadDownLethalHitFrac);
     b.squadMaxRevives        = j.value("squad_max_revives",          b.squadMaxRevives);
+    b.squadRescueThreatRadius = j.value("squad_rescue_threat_radius", b.squadRescueThreatRadius);
+    b.squadRescueMaxThreats   = j.value("squad_rescue_max_threats",   b.squadRescueMaxThreats);
     b.commsLostRangeMult     = j.value("comms_lost_range_mult",      b.commsLostRangeMult);
     b.commsLostShareDelay    = j.value("comms_lost_share_delay",     b.commsLostShareDelay);
     b.commsLostOrderMult     = j.value("comms_lost_order_mult",      b.commsLostOrderMult);
@@ -85,6 +96,8 @@ inline nlohmann::json gameplayBalanceToJson(const GameplayBalance& b)
         {"squad_revive_hp",            b.squadReviveHp},
         {"squad_down_lethal_hit_frac", b.squadDownLethalHitFrac},
         {"squad_max_revives",          b.squadMaxRevives},
+        {"squad_rescue_threat_radius", b.squadRescueThreatRadius},
+        {"squad_rescue_max_threats",   b.squadRescueMaxThreats},
         {"comms_lost_range_mult",      b.commsLostRangeMult},
         {"comms_lost_share_delay",     b.commsLostShareDelay},
         {"comms_lost_order_mult",      b.commsLostOrderMult},

@@ -56,12 +56,24 @@ bool reportDiagnostics(const Diagnostics& diags, bool printToStdout);
 // il MapDef temporaneo dell'editor.
 struct TacticalDefect
 {
-    enum class Target { Position, Sector };
+    enum class Target { Position, Sector, Geometry };
     // Categoria del difetto: serve a RAGGRUPPARE l'elenco per tipo, così chi autora
     // può chiudere in blocco le famiglie che nel suo caso sono intenzionali (es. i
     // settori di solo transito) senza perdere le altre. Richiesta utente 2026-08-02:
     // un elenco lungo e indifferenziato si smette di leggere.
-    enum class Kind { NoCoverage, BlindVertical, HighExposure, Redundant, EmptySector, Count };
+    // `UnmarkedCover` (KI #86 causa 3, 2026-08-02): un ostacolo che taglia le linee di
+    // tiro ma che nessuno ha marcato come elemento tattico ha il peggio dei due mondi —
+    // toglie il tiro come una copertura, ma nessuna AI sa usarlo: non ci si ripara
+    // dietro, non lo si aggira, non lo si sfrutta.
+    //
+    // NOTA DI CALIBRAZIONE, imparata sbagliando. Una misura a runtime aveva stimato il
+    // "57% di geometria muta" usando un raggio FISSO di 3 m dal CENTRO del bloccante:
+    // per un muro largo 7 m o un impalcato largo 31 m quella soglia è priva di senso, e
+    // marcava come mute proprio le coperture autorate ai bordi (misurate poi a 3,3-5,4 m).
+    // Il controllo qui è invece PROPORZIONATO alla taglia dell'oggetto — su Training
+    // Ground trova 4 ostacoli, non il 57%. Chi tocca questa soglia la scali con l'oggetto.
+    enum class Kind { NoCoverage, BlindVertical, HighExposure, Redundant, EmptySector,
+                      UnmarkedCover, Count };
     Target      target   = Target::Position;
     Kind        kind     = Kind::NoCoverage;
     int         index    = 0;      // indice in tacticalPositions / sectors

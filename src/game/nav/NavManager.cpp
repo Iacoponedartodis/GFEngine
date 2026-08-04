@@ -58,6 +58,10 @@ void NavManager::clear()
     if (m_crowd)   { dtFreeCrowd(m_crowd);        m_crowd = nullptr; }
     if (m_query)   { dtFreeNavMeshQuery(m_query); m_query = nullptr; }
     if (m_navMesh) { dtFreeNavMesh(m_navMesh);    m_navMesh = nullptr; }
+    // Cambio mappa: gli indici agente ripartono da zero e le vecchie mete non
+    // hanno più senso (sono coordinate di un'altra mappa).
+    m_lastRawTarget.clear();
+    m_lastRawValid.clear();
 }
 
 // Aggiunge i 12 triangoli (winding esterno) di un box ruotato attorno a Y a
@@ -289,6 +293,7 @@ bool NavManager::findPath(const glm::vec3& start, const glm::vec3& end,
                           std::vector<glm::vec3>& out) const
 {
     out.clear();
+    ++m_stats.pathQueries;
     if (!m_query) return false;
 
     dtQueryFilter filter;   // include flag !=0; DANGER caro (Phase C)
@@ -301,13 +306,13 @@ bool NavManager::findPath(const glm::vec3& start, const glm::vec3& end,
     float sPt[3], ePt[3];
     m_query->findNearestPoly(s, ext, &filter, &sRef, sPt);
     m_query->findNearestPoly(e, ext, &filter, &eRef, ePt);
-    if (!sRef || !eRef) return false;
+    if (!sRef || !eRef) { ++m_stats.pathNoPoly; return false; }
 
     dtPolyRef path[256];
     int npath = 0;
     if (dtStatusFailed(m_query->findPath(sRef, eRef, sPt, ePt, &filter,
                                          path, &npath, 256)) || npath == 0)
-        return false;
+    { ++m_stats.pathFailed; return false; }
 
     float   straight[256 * 3];
     unsigned char sflags[256];
@@ -374,6 +379,10 @@ int NavManager::addAgent(const glm::vec3& pos, float radius, float height,
 void NavManager::removeAgent(int idx)
 {
     if (m_crowd && idx >= 0) m_crowd->removeAgent(idx);
+    // Invalida la meta cachata: gli indici agente si RIUSANO, e senza questo il
+    // prossimo occupante erediterebbe la destinazione del morto — la sua prima
+    // richiesta verrebbe scartata come "identica" e resterebbe fermo.
+    if (idx >= 0 && idx < (int)m_lastRawValid.size()) m_lastRawValid[idx] = 0;
 }
 
 void NavManager::requestMoveTarget(int idx, const glm::vec3& target)
@@ -388,6 +397,37 @@ void NavManager::requestMoveTarget(int idx, const glm::vec3& target)
     //    "stuck" in Hunt/Search osservati in telemetria (feedback utente
     //    2026-07-20: "non usano i path in maniera fluida"). Ora si aggancia al
     //    punto camminabile più vicino e l'AI ci va comunque.
+    ++m_stats.moveRequests;
+
+    // 0) STESSA RICHIESTA GREZZA → esci subito, prima di qualunque query.
+    //    Misurato col funnel di navigazione (ADR-050): su 34.040 richieste in
+    //    6000 tick, **23.302 (68%)** venivano scartate al passo 2 come "stesso
+    //    target" — ma solo DOPO aver fatto fino a tre `findNearestPoly`, che è
+    //    una ricerca spaziale. Il controllo sul punto AGGANCIATO resta (serve
+    //    per i bersagli dentro un muro, vedi sotto): questo lo ANTICIPA nel caso
+    //    banale, quello in cui l'AI ri-chiede tick dopo tick la stessa identica
+    //    destinazione. Soglia stretta (5 cm): salta solo le ripetizioni vere.
+    //    NON basta "stessa richiesta": serve anche che l'agente abbia ANCORA un
+    //    bersaglio valido. Senza questa seconda condizione, un agente il cui
+    //    target decade (path invalidato, crowd ricostruito) non ne otterrebbe
+    //    mai più uno — la cache direbbe "già chiesto" per sempre e l'unità
+    //    resterebbe ferma. Primo tentativo senza: il combattimento è passato da
+    //    124 a 181 eventi, cioè un cambio di COMPORTAMENTO travestito da
+    //    ottimizzazione.
+    if (idx < (int)m_lastRawTarget.size() && m_lastRawValid[idx])
+    {
+        const dtCrowdAgent* cur = m_crowd->getAgent(idx);
+        const bool stillValid = cur && cur->active
+                             && cur->targetState == DT_CROWDAGENT_TARGET_VALID;
+        const glm::vec3 d = m_lastRawTarget[idx] - target;
+        if (stillValid && d.x * d.x + d.y * d.y + d.z * d.z < 0.05f * 0.05f)
+        { ++m_stats.moveSameTarget; return; }
+    }
+    if ((int)m_lastRawTarget.size() <= idx)
+    { m_lastRawTarget.resize(idx + 1); m_lastRawValid.resize(idx + 1, 0); }
+    m_lastRawTarget[idx] = target;
+    m_lastRawValid[idx]  = 1;
+
     const dtQueryFilter* filter = m_crowd->getFilter(0);
     const float t[3] = {target.x, target.y, target.z};
     dtPolyRef ref = 0;
@@ -395,12 +435,19 @@ void NavManager::requestMoveTarget(int idx, const glm::vec3& target)
     const float exts[3][3] = {{2.0f, 4.0f, 2.0f},
                               {6.0f, 8.0f, 6.0f},
                               {14.0f, 12.0f, 14.0f}};
+    int tier = 0;
     for (const auto& ex : exts)
     {
         m_crowd->getNavMeshQuery()->findNearestPoly(t, ex, filter, &ref, nearest);
         if (ref) break;
+        ++tier;
     }
-    if (!ref) return;   // davvero nulla di camminabile: niente da chiedere
+    // A QUALE tolleranza si è agganciato: livello 0 = il bersaglio era già
+    // camminabile; livello 2 = si è dovuto cercare a 14 m, cioè la decisione a
+    // monte puntava a un posto dove non si cammina. Senza questo numero, "l'unità
+    // non ci arriva" e "le ho chiesto una cosa impossibile" sono lo stesso sintomo.
+    if (!ref) { ++m_stats.moveOffMesh; return; }   // nulla di camminabile: scartata
+    if (tier < 3) ++m_stats.moveSnap[tier];
 
     // 2) Se il target AGGANCIATO è ~invariato NON ripianificare: chiamare
     //    requestMoveTarget ogni frame resetta il path e rende il moto a scatti.
@@ -412,7 +459,8 @@ void NavManager::requestMoveTarget(int idx, const glm::vec3& target)
     {
         const float dx = a->targetPos[0] - nearest[0];
         const float dz = a->targetPos[2] - nearest[2];
-        if (dx * dx + dz * dz < 0.5f * 0.5f) return;   // stesso target
+        if (dx * dx + dz * dz < 0.5f * 0.5f)
+        { ++m_stats.moveSameTarget; return; }   // stesso target: non ripianificare
     }
     m_crowd->requestMoveTarget(idx, ref, nearest);
 }
@@ -439,6 +487,23 @@ bool NavManager::agentPos(int idx, glm::vec3& out) const
     // quella del pavimento vero (il chiamante poi ci somma l'offset del centro).
     out = {a->npos[0], a->npos[1] - kCellHeight, a->npos[2]};
     return true;
+}
+
+bool NavManager::agentHasTarget(int idx) const
+{
+    if (!m_crowd || idx < 0) return false;
+    const dtCrowdAgent* a = m_crowd->getAgent(idx);
+    return a && a->active && a->targetState == DT_CROWDAGENT_TARGET_VALID;
+}
+
+float NavManager::agentSpeed(int idx) const
+{
+    if (!m_crowd || idx < 0) return 0.0f;
+    const dtCrowdAgent* a = m_crowd->getAgent(idx);
+    if (!a || !a->active) return 0.0f;
+    // Velocità EFFETTIVA (`vel`), non quella desiderata (`dvel`): la differenza
+    // fra le due è esattamente il caso "vuole andare ma non si muove".
+    return std::sqrt(a->vel[0] * a->vel[0] + a->vel[2] * a->vel[2]);
 }
 
 } // namespace mini

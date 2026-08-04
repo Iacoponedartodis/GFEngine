@@ -90,6 +90,44 @@ Prima di scrivere codice per un sistema nuovo (engine, editor, gameplay, AI, pip
    `MapDef.dangerZones` invece che a un futuro sistema AI dedicato), fermati: è quasi
    certamente un segnale che serve un nuovo sistema o un ADR, non un'estensione ad hoc.
 
+## 5-bis. Ogni sistema nasce con la sua OSSERVABILITÀ (non solo con l'authoring)
+
+Finora la regola era: chi costruisce un sistema costruisce anche gli strumenti per **autorarlo**.
+Manca la metà più importante per il lavoro dell'AI: gli strumenti per **osservare cosa sta
+realmente facendo**. Un sistema che non si può guardare in funzione non si può nemmeno
+diagnosticare, e ogni indagine ricomincia da ipotesi.
+
+**Un sistema non è finito finché non si può rispondere a "cosa sta facendo, adesso, questa
+singola entità, e perché".** Non serve solo all'utente: serve soprattutto a me. Senza, io
+ragiono su aggregati — e gli aggregati hanno già fuorviato tre diagnosi consecutive su KI #86
+(gli eventi di combattimento fra run divergenti, la classificazione dei bloccanti con soglia
+fissa, il "57% di geometria muta"). Ogni volta la risposta è arrivata solo quando ho potuto
+guardare **una** unità.
+
+Per ogni sistema nuovo, e prima di dichiararlo completo, servono tutti e tre:
+
+1. **Un contatore del SINTOMO, non dell'esito.** Misura direttamente il comportamento che
+   potrebbe rompersi (`evasivo_durata_max_s`, `stalli per causa`), non una conseguenza
+   lontana come "quanti colpi a segno". L'esito varia per divergenza fra run e non è
+   attribuibile a un cambio.
+2. **Un funnel con i suoi denominatori.** Dove muore il processo, e su quale base
+   (`occ_in_raggio → occ_nel_cono → occ_acquisito`, `gate_*`). Un numeratore senza
+   denominatore è un aneddoto.
+3. **Una via per scendere alla SINGOLA entità.** Un rilevatore che dice *quale* entità
+   guardare + una traccia che dice *cosa ha fatto tick per tick* (`--trace-ai <id>`,
+   `AiTrace.cpp`). Questo è il pezzo che manca quasi sempre ed è quello che chiude le indagini.
+
+Regole di igiene per questi strumenti:
+- **Non decidono nulla.** Nessun ramo di comportamento legge i dati di osservazione: se
+  succede, non è più un osservatore ma un sistema, e vale la §5.
+- **Lo stato di osservazione vive sul COMPONENTE**, non nel sistema — dentro un sistema
+  sopravvive a `initialize()` e va azzerato a mano (trappola già costata una regressione).
+- **Le guardie restano, le sonde no.** Un contatore permanente costa un incremento; una sonda
+  che costa una LOS o un'allocazione si toglie appena ha risposto, e si annota nel codice
+  quale risposta ha dato (così non la si rifà).
+- **Il gate `--validate` è osservabilità di authoring.** Se un dato può essere sbagliato in
+  silenzio, il gate deve dirlo — con l'azione concreta per correggerlo, non solo la diagnosi.
+
 ## 6. Testing e verifica
 
 Non esistono test automatici che bloccano le modifiche (12_TestingStrategy). Ogni modifica

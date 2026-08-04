@@ -28,6 +28,34 @@ namespace mini
 using hittest::segPointDistSq;
 using hittest::segmentInZone;
 
+// ── Funnel di COMBATTIMENTO (ADR-050, doc 42 buco O4) ────────────────────────
+// Fino a ieri la mia metrica di esito principale — quella su cui ho deciso metà
+// dell'indagine di KI #86 — era una **regex su stdout** (`[Combat] Colpito!`).
+// È l'anello più debole di ogni misura fatta finora: si rompe se qualcuno cambia
+// una stringa, non dice chi ha colpito chi, e soprattutto **non ha
+// denominatore** — "40 colpi a segno" non significa niente se non si sa se
+// erano 50 colpi sparati o 500.
+//
+// Qui il funnel è completo: sparati → impattati (a segno / sul terreno) → danno
+// → a terra → uccisi, per team. Il tasso di mancati è anche un segnale di
+// BILANCIAMENTO, non solo di correttezza: un'accuratezza che crolla dice che le
+// AI sparano da troppo lontano o attraverso il fumo delle proprie manovre.
+namespace
+{
+struct CombatStats
+{
+    int hits[3]   = {0,0,0};     // impatti su un'entità, per team che spara
+    int zoneHits[3] = {0,0,0};   // ...di cui su una zona hitbox (testa/arti)
+    int shieldAbsorb[3] = {0,0,0};
+    int kills[3]  = {0,0,0};
+    int downs[3]  = {0,0,0};     // messi a terra (non uccisi): squadra alleata
+    int wallHits  = 0;           // proiettili morti sulla geometria
+    int expired   = 0;           // proiettili spenti per lifetime: MANCATI puri
+    float damage[3] = {0,0,0};   // danno agli HP inflitto
+};
+CombatStats g_cs;
+} // namespace
+
 struct HitResult { bool hit = false; float mult = 1.0f; std::string zone; };
 
 static HitResult testHit(const glm::vec3& bulletPrev,
@@ -109,7 +137,10 @@ void CombatSystem::update(World& world, float dt)
         if (!bullet) continue;
 
         bullet->lifetime -= dt;
-        if (bullet->lifetime <= 0.0f) { toDestroy.push_back(bid); continue; }
+        // Spento per tempo = MANCATO puro: non ha toccato né bersaglio né muro.
+        // È la voce che dice "spara nel vuoto", distinta da "spara contro un muro".
+        if (bullet->lifetime <= 0.0f)
+        { ++g_cs.expired; toDestroy.push_back(bid); continue; }
 
         auto* bt = world.getTransform(bid);
         if (!bt) continue;
@@ -128,7 +159,17 @@ void CombatSystem::update(World& world, float dt)
             if (!team || team->teamId == bullet->ownerTeam) continue;
             auto* et = world.getTransform(eid);
             auto* eh = world.getHealth(eid);
-            if (!et || !eh || eh->current <= 0.0f) continue;
+            if (!et || !eh) continue;
+            // Un CADUTO ha `current == 0` ma **non** è morto: questo filtro lo
+            // rendeva intoccabile, e il commento poco sotto ("un colpo su un
+            // già-a-terra lo finisce") era falso da sempre. Ora il fuoco incrociato
+            // può davvero finirlo — nessuna AI lo sceglie come bersaglio (fix
+            // gemello in AiSystem), ma un colpo di passaggio conta.
+            {
+                const auto* sqd = world.getSquad(eid);
+                const bool downed = sqd && sqd->downed;
+                if (eh->current <= 0.0f && !downed) continue;
+            }
 
             // Pilota a bordo: intoccabile direttamente, spara al mezzo (R5)
             if (drivers.count(eid)) continue;
@@ -187,6 +228,8 @@ void CombatSystem::update(World& world, float dt)
                 sh->current -= absorbed;
                 toHp        -= absorbed;
                 sh->timer    = sh->regenDelay;
+                if (bullet->ownerTeam >= 1 && bullet->ownerTeam <= 2)
+                    g_cs.shieldAbsorb[bullet->ownerTeam] += (int)absorbed;   // O5
                 telemetry::logTrace("shield: entita' "
                     + std::to_string(eid) + " assorbe "
                     + std::to_string((int)absorbed) + " (resta "
@@ -205,6 +248,15 @@ void CombatSystem::update(World& world, float dt)
             // un alleato va a terra o muore sul posto (config::SQUAD_DOWN_LETHAL_HIT_FRAC).
             const float hpDamage = (eh->armor > 0.01f) ? (toHp / eh->armor) : toHp;
             eh->current -= hpDamage;
+
+            // Funnel O4: impatto attribuito al team che ha sparato.
+            if (bullet->ownerTeam >= 1 && bullet->ownerTeam <= 2)
+            {
+                const int ot = bullet->ownerTeam;
+                ++g_cs.hits[ot];
+                g_cs.damage[ot] += hpDamage;
+                if (!result.zone.empty() && result.zone != "glance") ++g_cs.zoneHits[ot];
+            }
 
             // Feedback HUD (hitmarker) SOLO per i colpi del giocatore —
             // non per quelli degli alleati AI (stesso team).
@@ -292,6 +344,8 @@ void CombatSystem::update(World& world, float dt)
                     telemetry::event(telemetry::Level::Info, "Squad", "member downed",
                                      {{"entity", (int)eid},
                                       {"bleedout", gameplay().squadBleedoutTime}});
+                    if (bullet->ownerTeam >= 1 && bullet->ownerTeam <= 2)
+                        ++g_cs.downs[bullet->ownerTeam];   // funnel O4
                     world.pushEvent("A TERRA #" + std::to_string(eid)
                         + " — rianimabile per " + std::to_string((int)gameplay().squadBleedoutTime) + "s");
                     break;   // niente morte/distruzione questo tick
@@ -299,6 +353,8 @@ void CombatSystem::update(World& world, float dt)
 
                 telemetry::logInfo("kill: entita' " + std::to_string(eid)
                     + " eliminata dal team " + std::to_string(bullet->ownerTeam));
+                if (bullet->ownerTeam >= 1 && bullet->ownerTeam <= 2)
+                    ++g_cs.kills[bullet->ownerTeam];   // funnel O4
                 std::cout << "[Combat] Eliminato!\n";
                 world.pushEvent("KILL #" + std::to_string(eid)
                     + " eliminata dal team " + std::to_string(bullet->ownerTeam));
@@ -335,9 +391,85 @@ void CombatSystem::update(World& world, float dt)
         //    Limite: se nello stesso tick c'è anche un bersaglio, vince il
         //    bersaglio (segmento ~0.9m: caso raro, accettato). ─────────────
         if (!hitSomething && !physics::hasLineOfSight(bPrev, bPos, world))
-            toDestroy.push_back(bid);
+        { ++g_cs.wallHits; toDestroy.push_back(bid); }
     }
     for (EntityId id : toDestroy) world.destroyEntity(id);
+
+    // ── Report del funnel (ADR-050 O4) ───────────────────────────────────
+    // Stessa cadenza dell'AI e della navigazione (600 tick): le tre letture si
+    // incrociano nel tempo, che è metà del loro valore — "in questa finestra le
+    // AI hanno acquisito poco E l'accuratezza è crollata" è una frase che si può
+    // scrivere solo se i tre battiti coincidono.
+    if (world.getTickCount() % 600 == 1)
+    {
+        nlohmann::json d;
+        for (int t = 1; t <= 2; ++t)
+        {
+            const std::string k = "team" + std::to_string(t);
+            nlohmann::json e;
+            e["sparati"]   = world.shotsFired[t];
+            e["a_segno"]   = g_cs.hits[t];
+            e["su_zona"]   = g_cs.zoneHits[t];   // testa/arti: qualità del colpo
+            e["danno"]     = g_cs.damage[t];
+            e["a_terra"]   = g_cs.downs[t];
+            e["uccisi"]    = g_cs.kills[t];
+            // L'accuratezza è il dato che mancava del tutto: senza denominatore
+            // "40 colpi a segno" non distingue un tiratore da uno che spreca.
+            e["accuratezza"] = world.shotsFired[t] > 0
+                             ? (double)g_cs.hits[t] / world.shotsFired[t] : 0.0;
+            d[k] = e;
+        }
+        d["su_geometria"] = g_cs.wallHits;   // fermati da un muro
+        d["spenti_nel_vuoto"] = g_cs.expired;  // mancati puri
+        d["scudo_assorbito"] = g_cs.shieldAbsorb[1] + g_cs.shieldAbsorb[2];
+        telemetry::event(telemetry::Level::Info, "Combat", "funnel di fuoco", d);
+
+        // ── ABILITY e VEICOLI (ADR-050, doc 42 buco O5) ──────────────────
+        // Due sistemi interi mai osservati: non sapevo nemmeno se le ability
+        // venissero usate. La lettura del codice dice che di ATTIVABILE a
+        // runtime c'è solo `roll` (un unico punto in AiSystem) — `shield` e
+        // `command` diventano componenti allo spawn e poi la loro `AbilityState`
+        // non la guarda più nessuno. Questi numeri servono a confermarlo e a
+        // rispondere alla domanda dell'utente: *cosa non funziona e aggiunge
+        // solo peso*. Uno stato che esiste, si porta dietro un cooldown e non
+        // viene mai attivato è esattamente quel peso.
+        {
+            int entConAbility = 0, statiTot = 0, statiAttivabili = 0, statiInCd = 0;
+            for (EntityId eid : world.getEntities())
+            {
+                const auto* ab = world.getAbilities(eid);
+                if (!ab || ab->states.empty()) continue;
+                ++entConAbility;
+                for (const auto& s : ab->states)
+                {
+                    ++statiTot;
+                    if (s.type == "roll") ++statiAttivabili;   // l'unico con un trigger
+                    if (s.cooldown > 0.0f) ++statiInCd;
+                }
+            }
+            int scudi = 0, veicoli = 0, veicoliGuidati = 0;
+            float scudoCarica = 0.0f;
+            for (EntityId eid : world.getEntities())
+            {
+                if (const auto* sh = world.getShield(eid); sh && sh->max > 0.0f)
+                { ++scudi; scudoCarica += sh->current; }
+                if (const auto* vc = world.getVehicle(eid))
+                { ++veicoli; if (vc->driver != 0) ++veicoliGuidati; }
+            }
+            nlohmann::json a;
+            a["entita_con_ability"] = entConAbility;
+            a["stati_totali"]       = statiTot;
+            a["stati_attivabili"]   = statiAttivabili;   // se 0, il sistema è inerte
+            a["stati_in_cooldown"]  = statiInCd;         // se 0 con attivabili>0: mai usate
+            a["scudi"]              = scudi;
+            a["scudo_carica"]       = scudoCarica;
+            a["veicoli"]            = veicoli;
+            a["veicoli_guidati"]    = veicoliGuidati;
+            telemetry::event(telemetry::Level::Info, "Combat", "ability e veicoli", a);
+        }
+        g_cs = CombatStats{};
+        world.shotsFired[1] = world.shotsFired[2] = 0;
+    }
 }
 
 } // namespace mini

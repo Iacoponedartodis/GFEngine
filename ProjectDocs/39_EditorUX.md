@@ -193,7 +193,7 @@ dall'utente, 2026-08-02) è raccoglierle in componenti condivisi:
 | `FreeCameraViewport` | viewport 3D + gizmo sposta/ruota/scala | ✅ **già esisteva**, usato da 4 moduli |
 | `DefinitionRename` · `saveJsonRMW` · `UiWidgets` | R2, R3, widget | ✅ già esistevano |
 | **`ModuleShell`** | R5 (splitter + clamp), R6 (scroll), layout a 3 pannelli | ✅ fatto (changelog 107), pilota `VehicleEditor` |
-| **`AssetBrowser`** | R1 (Crea/Duplica/Rinomina/Elimina) | ⚠️ costruito (changelog 108) ma **non ancora adottato** → finché non lo è, è debito |
+| **`AssetBrowser`** | R1 (Crea/Duplica/Rinomina/Elimina) | ✅ costruito (108) e **adottato** da `VehicleEditor`. Per i moduli con lista propria il solo *Elimina* arriva dal comando condiviso `editor::rename::deleteDefinition` (changelog 134) — stessa regola, senza riscrivere la loro UI |
 
 **Regola di adozione**: un modulo si migra **quando lo si tocca per un motivo funzionale**, mai "per
 allineamento". Motivo: l'editor è GUI e non è verificabile con `--sim`; sette migrazioni insieme non sarebbero
@@ -207,7 +207,7 @@ scritto due volte.
 
 | Priorità | Intervento | Costo |
 |---|---|---|
-| **Alta** | **R1**: aggiungere *Elimina* ai 5 moduli che non ce l'hanno (con conferma esplicita) | Medio |
+| ~~Alta~~ | ~~**R1**: aggiungere *Elimina* ai 5 moduli che non ce l'hanno~~ **✅ FATTO 2026-08-04** (changelog 134): Class, Entity e Weapon via comando condiviso; Vehicle via `AssetBrowser`; Map e Mission l'avevano già. Balance non gestisce definizioni, quindi non si applica | — |
 | **Alta** | **R5**: splitter esplicito nei moduli senza ridimensionamento (Class, Mission) | Basso |
 | Media | **R1**: *Duplica* in Balance, Class, Weapon | Basso |
 | Media | **R9**: portare i difetti in loco anche negli altri moduli | Medio |

@@ -108,6 +108,29 @@ void SquadSystem::update(World& world, float dt)
 
     std::vector<EntityId> bledOut;   // a terra senza soccorso in tempo → morte
 
+    // Quanti nemici VIVI attorno a un punto. Il soccorso è l'unica decisione della
+    // squadra che manda deliberatamente un uomo in un posto preciso: senza questo
+    // conteggio lo mandava lì anche se il posto era il centro di una sparatoria
+    // (segnalato dall'utente 2026-08-02). Nessuna query esistente serviva: `dangerAt`
+    // legge le danger zone AUTORATE, non i nemici vivi.
+    auto threatsAround = [&](float px, float pz, float radius) -> int
+    {
+        const float r2 = radius * radius;
+        int n = 0;
+        for (EntityId o : world.getEntities())
+        {
+            const auto* otm = world.getTeam(o);
+            if (!otm || otm->teamId != 2) continue;      // solo avversari
+            const auto* ohp = world.getHealth(o);
+            if (!ohp || ohp->current <= 0.0f) continue;  // e solo vivi
+            const auto* otr = world.getTransform(o);
+            if (!otr) continue;
+            const float dx = otr->x - px, dz = otr->z - pz;
+            if (dx * dx + dz * dz <= r2) ++n;
+        }
+        return n;
+    };
+
     for (EntityId e : world.getEntities())
     {
         auto* sq = world.getSquad(e);
@@ -118,6 +141,22 @@ void SquadSystem::update(World& world, float dt)
         // ── A TERRA (Phase C): non esegue ordini; o viene rianimato, o muore ──
         if (sq->downed)
         {
+            // ── IL BLEED-OUT SCORRE SEMPRE (correzione 2026-08-04) ────────────
+            // Prima il timer viveva nel ramo `else`, cioè scorreva **solo se non
+            // c'era un soccorritore vicino**: bastava che qualcuno arrivasse a
+            // portata perché il caduto diventasse immortale. Misurato: un clone
+            // a terra **34,5 s** con bleed-out configurato a 10 (soccorritore che
+            // entrava e usciva dal raggio: il progresso si azzerava ogni volta, ma
+            // l'orologio restava fermo), e un altro morto a 12,2 s invece di 10.
+            //
+            // Toglieva alla meccanica la sua unica tensione — la CORSA fra chi
+            // soccorre e il tempo — e rendeva insensata la taratura del valore:
+            // abbassare `squad_bleedout_time` non cambiava nulla nei casi in cui
+            // qualcuno accorreva. Rende anche VERA l'affermazione scritta in
+            // changelog 122 sul soccorso differito ("il bleed-out continua a
+            // scorrere, quindi a volte l'uomo si perde"), che allora era falsa.
+            sq->bleedoutRemaining -= dt;
+
             if (reviverNearby(world, e, m_leader, tr->x, tr->z))
             {
                 sq->reviveProgress += dt;
@@ -139,12 +178,14 @@ void SquadSystem::update(World& world, float dt)
                 }
             }
             else
-            {
                 sq->reviveProgress = 0.0f;   // interrotto: riparte da capo
-                sq->bleedoutRemaining -= dt;
-                if (sq->bleedoutRemaining <= 0.0f)
-                    bledOut.push_back(e);
-            }
+
+            // La morte si valuta DOPO la rianimazione: se la canalizzazione si è
+            // completata in questo stesso tick, l'uomo è già in piedi e il
+            // controllo non lo riguarda più. Ordine inverso = si moriva sul
+            // fotogramma della salvezza.
+            if (sq->downed && sq->bleedoutRemaining <= 0.0f)
+                bledOut.push_back(e);
             continue;   // un'unità a terra non riceve/esegue ordini
         }
 
@@ -317,6 +358,28 @@ void SquadSystem::update(World& world, float dt)
                 sq->order = OrderType::None;
                 break;
             }
+            // La zona può scaldarsi MENTRE si è in viaggio: senza questo controllo
+            // il soccorritore continuava fino in mezzo ai nemici, perché la
+            // valutazione avveniva solo al dispaccio. Si annulla solo se non si è
+            // ancora arrivati — chi è già accanto al caduto sta rianimando, e
+            // interromperlo lì butterebbe via il progresso e l'uomo.
+            {
+                const auto* rtr = world.getTransform(e);
+                const float rr = gameplay().squadReviveRadius;
+                const bool arrived = rtr
+                    && (rtr->x - dt2->x) * (rtr->x - dt2->x)
+                     + (rtr->z - dt2->z) * (rtr->z - dt2->z) <= rr * rr;
+                if (!arrived
+                    && threatsAround(dt2->x, dt2->z, gameplay().squadRescueThreatRadius)
+                       > gameplay().squadRescueMaxThreats)
+                {
+                    sq->state = OrderState::Failed;
+                    sq->failureReason = "zona troppo calda per il soccorso";
+                    emitOrder("order failed", e, *sq, telemetry::Level::Info);
+                    sq->order = OrderType::None;
+                    break;
+                }
+            }
             sq->targetX = dt2->x;   // insegue il compagno a terra
             sq->targetZ = dt2->z;
             break;
@@ -328,7 +391,6 @@ void SquadSystem::update(World& world, float dt)
             break;   // resta Active finché non viene sostituito
         }
     }
-
     // ── Auto-soccorso (Phase C): il membro libero più vicino va a rianimare ──
     // È ciò che rende la squadra una RISORSA che si autoprotegge: un compagno a
     // terra non viene abbandonato. Assegna un solo soccorritore per caduto (gli
@@ -350,6 +412,30 @@ void SquadSystem::update(World& world, float dt)
             { served = true; break; }
         }
         if (served) continue;
+
+        // ── L'AREA È TENIBILE? ────────────────────────────────────────────────
+        // Prima si dispacciava sempre il più vicino, senza guardare cosa ci fosse
+        // attorno al caduto: da qui il "si buttano in mezzo alla mischia e stanno
+        // lì a rianimare in mezzo a svariati nemici". Nessun esercito recupera un
+        // uomo sotto tiro incrociato — prima si bonifica. Il soccorso è DIFFERITO,
+        // non annullato: il bleed-out continua a scorrere e qualche volta l'uomo si
+        // perde davvero. È il costo della scelta, non un blocco.
+        const int threats = threatsAround(dtr->x, dtr->z,
+                                          gameplay().squadRescueThreatRadius);
+        if (threats > gameplay().squadRescueMaxThreats)
+        {
+            // Si annuncia UNA volta per caduto: il giocatore deve sapere PERCHÉ
+            // nessuno sta andando, altrimenti sembra che la squadra lo ignori.
+            if (auto* dsqm = world.getSquad(d); dsqm && !dsqm->rescueHeldSaid)
+            {
+                dsqm->rescueHeldSaid = true;
+                world.pushEvent("Zona troppo calda: soccorso in attesa");
+                telemetry::event(telemetry::Level::Info, "Squad", "soccorso differito",
+                                 {{"caduto", d}, {"nemici_vicini", threats}});
+            }
+            continue;
+        }
+        if (auto* dsqm = world.getSquad(d)) dsqm->rescueHeldSaid = false;
 
         // Soccorritore = membro libero (Follow/idle, mai su ordine giocatore) più vicino.
         EntityId best = 0; float bestD2 = 1e30f;

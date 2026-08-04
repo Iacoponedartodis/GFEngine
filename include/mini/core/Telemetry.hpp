@@ -40,9 +40,60 @@ void logError(const std::string& msg);
 // il flush li gestisce spdlog; ERROR/FATAL forzano il flush immediato su disco.
 enum class Level { Trace, Debug, Info, Warn, Error, Fatal };
 
+// ── FLUSSI SEPARATI (2026-08-03) ──────────────────────────────────────────
+// Un solo `session_latest.jsonl` mescolava tutto: in una sessione giocata di
+// pochi minuti sono 1943 righe e 658 KB in cui il profilo (29 righe) e gli stalli
+// (348) annegano fra 1043 cambi di stato dell'AI. Peggio: il file si tronca a
+// ogni avvio, quindi confrontare due prove significa perderne una.
+//
+// Ogni evento va nel flusso del suo dominio, in un FILE suo. La regola è per
+// `system`, decisa in un posto solo (`streamFor`), così un sistema nuovo che
+// non è mappato finisce in `session` e si vede subito che manca — invece di
+// sparire in un file gigante.
+//
+// `session_latest.jsonl` resta e riceve **tutto**: è l'indice cronologico che
+// serve a correlare fra domini (è così che si è visto che il rallentamento
+// seguiva i cambi mappa). I file per dominio servono ad analizzare *dentro* un
+// dominio senza filtrare 2000 righe ogni volta.
+enum class Stream
+{
+    Session,   // tutto (indice cronologico, sempre scritto)
+    Perf,      // profilo, memoria, inventario di avvio
+    Ai,        // decisioni tattiche, stalli, tracce per-agente
+    Combat,    // colpi, danni, uccisioni, squadra
+    World,     // game mode, obiettivi, command post, navmesh
+    Content    // registry, validazione, risoluzione classi/armi
+};
+
 void event(Level level, const char* system, const std::string& msg,
            const nlohmann::json& data);
 void event(Level level, const char* system, const std::string& msg);
+
+// Nome del file (senza cartella) del flusso — usato dai tool di analisi.
+const char* streamFile(Stream s);
+
+// ── Verbosità: LA leva giusta, e non è il tipo di build ───────────────────
+// Domanda dell'utente (2026-08-03): *"per non distruggere le prestazioni,
+// limitiamo certe cose alla build Debug?"*. La risposta, misurata: **no**, e per
+// due motivi.
+//
+// 1. **Non costa.** In una sim da 3000 tick la zona `telemetria` pesa una
+//    frazione trascurabile del frame: il volume è un problema di LEGGIBILITÀ
+//    (un evento legacy occupava il 39% del file), non di prestazioni.
+// 2. **Debug è il posto sbagliato.** I bug che contano si presentano quando si
+//    GIOCA, e si gioca in Release. Un'osservabilità che vive in Debug non c'è
+//    mai quando il problema si presenta — è lo stesso motivo per cui il profiler
+//    è sempre acceso. Su questo progetto, poi, la build Debug è di fatto
+//    inutilizzabile (ASan senza la sua DLL).
+//
+// La leva è quindi **runtime, non compile-time**:
+//   · `Info` (default, anche in Release) — aggregati e guardie: profilo, funnel,
+//     stalli, decisioni tattiche. Periodici, quindi ~gratis, e sono ciò che leggo.
+//   · `Debug` (`--telemetry-verbose`) — per-evento e per-entità: cambi di stato,
+//     tracce d'agente. Si accendono quando si indaga.
+// Sotto soglia si esce PRIMA di serializzare: un evento spento costa un confronto.
+void setMinLevel(Level l);
+Level minLevel();
 void flushEvents();   // forza la scrittura del buffer JSONL (es. a fine frame)
 
 // ── Frame counter (per correlare log/input/dump) ──────────────────────────

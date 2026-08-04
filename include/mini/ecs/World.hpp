@@ -137,6 +137,16 @@ public:
     };
     CombatFeedback combatFeedback;
 
+    // ── Colpi SPARATI, per team (ADR-050, doc 42 buco O4) ────────────────
+    // Il numeratore del funnel di combattimento vive qui e non in CombatSystem
+    // perché i proiettili nascono ALTROVE — in `AiSystem` e in
+    // `PlayerController` — mentre gli impatti li vede solo CombatSystem. Senza
+    // questo contatore il funnel partirebbe dagli impatti, cioè non avrebbe
+    // denominatore: "40 colpi a segno" non dice nulla senza sapere se erano 50
+    // colpi sparati o 500. Accumulato, letto e azzerato dal report periodico.
+    // Indice = team (1/2); [0] inutilizzato.
+    int shotsFired[3] = {0, 0, 0};
+
     // ── Entità eliminate in QUESTO tick (mailbox) ────────────────────────
     //    CombatSystem distrugge l'entità nello stesso update in cui la uccide:
     //    chi gira dopo (Squad/Ai) non può più interrogarla — getHealth() dà

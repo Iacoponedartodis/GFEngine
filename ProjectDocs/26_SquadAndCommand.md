@@ -116,6 +116,40 @@ davvero misurato — vedi 07_Changelog per i numeri.
 - [x] **Le perdite hanno peso** (Phase C, 2026-07-17): un membro va a terra invece di morire; la
       squadra lo soccorre o lo perde. Verificato in `--sim` (down→revive→bleed-out, tutti e tre).
 
+### Phase D (FUTURA) — il soccorso diventa una MANOVRA di squadra, non una corsa singola
+> Visione dell'utente, 2026-08-04. Scritta qui perché KI #92 ha reso evidente che l'attuale
+> "manda il più vicino e spera" non regge quando il bleed-out scorre davvero: **la risposta non è
+> tarare i numeri all'infinito, è cambiare il comportamento**. Nessuna riga di codice: è la
+> direzione, non il piano.
+
+**Il presupposto sta a monte.** Con AI perfezionate, la prima difesa è **non cadere in una zona
+aperta e contesa**: uso maggiore delle coperture, meno attraversamenti allo scoperto. Un ferito in
+un posto recuperabile è un problema di soccorso; un ferito in mezzo alla piazza è già perso, e la
+soluzione è non finirci.
+
+**Il soccorso si VALUTA, e poi si ORGANIZZA.** I compagni vivi devono chiedersi se sia
+effettivamente possibile soccorrere — e se sì, coordinarsi **in più di uno**:
+- chi **rianima** (immobile e vulnerabile per la canalizzazione);
+- chi dà **fuoco di copertura** su chi minaccia il punto;
+- oppure, se conviene, **ripulire prima la zona** e recuperare in sicurezza.
+È il caso d'uso naturale per i ruoli di combattimento (A4) e per la torre: non serve un sistema
+nuovo, serve che il soccorso diventi un *obiettivo* che il livello di comando sa comporre.
+
+**Con il CLONE MEDICO la meccanica cambia forma** (classe futura, ADR-022/023):
+- i cloni **normali** non rianimano più: **trascinano** il ferito dietro una copertura e al massimo
+  danno una **semi-rianimazione** che *rallenta* il bleed-out — non lo azzera — e **chiamano un
+  medico**. Coerente con [[structures-degrade-not-block]]: si degrada un processo, non lo si spegne.
+- la rianimazione piena resta al **medico**, che diventa una risorsa scarsa e un bersaglio di valore.
+
+**Il caduto è un bersaglio.** Un uomo a terra può essere **finito dai nemici**, non solo morire di
+bleed-out — con **priorità molto più bassa** di chi è ancora in piedi (sparare a un inerme mentre
+qualcuno ti spara addosso è stupido, e l'AI non deve farlo). Oggi il colpo su un già-a-terra lo
+uccide, ma nessuna AI lo *sceglie* come bersaglio: manca il termine di priorità, non la meccanica.
+
+**Conseguenza sulla taratura di oggi**: i valori di KI #92 sono un tampone per il presente. Quando
+esisterà Phase D, `squad_bleedout_time` tornerà a essere un tempo *fisiologico* invece di una leva
+per compensare comportamenti assenti.
+
 ### Phase C — FATTA 2026-07-17 (stato "a terra" + rianimazione)
 Incapacitazione non letale: un membro della squadra alleata, invece di morire, va **a terra** con
 una finestra di bleed-out. Dà peso alle perdite — la squadra è una risorsa, non comparse.

@@ -1,5 +1,6 @@
 #include "mini/core/Application.hpp"
 #include "mini/core/Telemetry.hpp"
+#include "mini/core/Profiler.hpp"   // ADR-050: dove finisce il tempo del frame
 #include "mini/core/Audio.hpp"
 #include "mini/core/Clock.hpp"
 #include "mini/core/GameConfig.hpp"
@@ -104,6 +105,20 @@ std::string getDataPath()
 namespace mini
 {
 
+// Funnel di rendering (ADR-050 / doc 42 buco O2). Azzerato a ogni finestra di
+// profilo: i valori si leggono come "per frame". `scenes` > 1 significa che la
+// scena è disegnata più volte (split-screen), e raddoppia tutto il resto — senza
+// questo campo il conteggio delle draw call sarebbe inspiegabilmente doppio.
+struct RenderStat { long long scenes = 0, considered = 0, drawn = 0, attachments = 0;
+                    // I VERTICI sono il numero che conta davvero con il rendering
+                    // client-side-array (ADR-003): senza VBO i dati risalgono alla
+                    // GPU a ogni draw call, quindi il costo è proporzionale ai
+                    // vertici SPEDITI per frame, non alle chiamate. "230 draw call"
+                    // e "230 draw call da 161k vertici l'una" si ottimizzano in
+                    // modi opposti, e senza questo campo sono indistinguibili.
+                    long long verts = 0; };
+static RenderStat g_renderStat;
+
 void Application::initialize()
 { std::cout << "[Application] Inizializzazione GFEngine..." << std::endl; m_running = true; }
 void Application::shutdown()
@@ -147,7 +162,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     // Usa percorso assoluto basato sull'exe, non CWD
     DefinitionRegistry registry;
     const std::string dataPath = getDataPath();
+    const auto bootT0 = std::chrono::steady_clock::now();
     registry.loadAll(dataPath);
+    const auto bootT1 = std::chrono::steady_clock::now();
 
     // Bilanciamento globale data-driven (ADR-043): sovrascrive i default coi
     // valori autorati. File assente → default = vecchie costanti (invariato).
@@ -164,6 +181,33 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         + std::to_string(registry.enemies().size()) + " nemici, "
         + std::to_string(registry.allies().size()) + " alleati, "
         + std::to_string(registry.maps().size()) + " mappe");
+
+    // ── INVENTARIO DI AVVIO (ADR-050) ───────────────────────────────────
+    // "Cosa succede quando lo avvio" era una domanda senza risposta: il log
+    // testuale elencava quattro conteggi su dodici tipi di definizione, e nulla
+    // sui COSTI. Un evento strutturato invece serve a due cose concrete: capire
+    // di che dimensione è davvero il contenuto (una mappa con 169 posizioni
+    // tattiche e 167 box non è la stessa cosa di una con 12), e accorgersi
+    // quando il caricamento inizia a pesare — prima che diventi un'attesa.
+    telemetry::event(telemetry::Level::Info, "Engine", "inventario avvio",
+        {{"ms_registry", std::chrono::duration<double, std::milli>(bootT1 - bootT0).count()},
+         {"armi",        (int)registry.weapons().size()},
+         {"nemici",      (int)registry.enemies().size()},
+         {"alleati",     (int)registry.allies().size()},
+         {"classi",      (int)registry.classes().size()},
+         {"profili_ai",  (int)registry.aiProfiles().size()},
+         {"abilita",     (int)registry.abilities().size()},
+         {"mappe",       (int)registry.maps().size()},
+         {"mappe_dettaglio", [&]{
+             nlohmann::json arr = nlohmann::json::array();
+             for (const auto& [mid, m] : registry.maps())
+                 arr.push_back({{"id", mid},
+                                {"box", (int)m.geometry.size()},
+                                {"posizioni", (int)m.tacticalPositions.size()},
+                                {"settori", (int)m.sectors.size()},
+                                {"route", (int)m.patrolRoutes.size()},
+                                {"prefab", (int)m.prefabs.size()}});
+             return arr; }()}});
 
     // ── Gate di validazione contenuti (ADR-018, doc 24) ──────────────
     // Gira DOPO loadAll(), sullo stesso registry, con le STESSE regole di
@@ -572,6 +616,36 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         world.objectiveDefs = mission ? &registry : nullptr;
         worldReady = true;
 
+        // ── INVENTARIO ASSET (ADR-050, doc 42 buco O6) ───────────────────
+        // Del rendering sapevo quante draw call emetto (O2) ma nulla su COSA
+        // disegno: quante mesh, quanto pesano, quali sono le più grosse. È la
+        // differenza fra "230 draw call" e "230 draw call di cui una da 90k
+        // vertici" — due situazioni che si ottimizzano in modi opposti. I dati
+        // ci sono già nel MeshCache: mancava solo qualcuno che li guardasse.
+        {
+            std::size_t totVerts = 0, totBytes = 0;
+            std::vector<std::pair<std::string, int>> perMesh;
+            perMesh.reserve(meshCache.size());
+            for (const auto& [path, m] : meshCache)
+            {
+                if (!m) continue;
+                const int vc = m->getVertexCount();
+                totVerts += (std::size_t)vc;
+                totBytes += m->getVertexData().size() * sizeof(float);
+                perMesh.emplace_back(path, vc);
+            }
+            std::sort(perMesh.begin(), perMesh.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+            nlohmann::json top = nlohmann::json::array();
+            for (std::size_t i = 0; i < perMesh.size() && i < 8; ++i)
+                top.push_back({{"mesh", perMesh[i].first}, {"vertici", perMesh[i].second}});
+            telemetry::event(telemetry::Level::Info, "Engine", "inventario asset",
+                {{"mesh_caricate", (int)meshCache.size()},
+                 {"vertici_totali", (long long)totVerts},
+                 {"memoria_vertici_mb", (double)totBytes / (1024.0 * 1024.0)},
+                 {"piu_pesanti", top}});
+        }
+
         // NavMesh (ADR-017 Phase A): costruito dai box collider della mappa;
         // validato via telemetria JSONL. NON muove ancora l'AI (Phase B).
         if (const MapDef* nm = registry.getMap(currentSettings.mapId))
@@ -907,13 +981,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         // inesistente. Con i valori di mappa la sim rispecchia la partita vera.
         if (autoSim)
         {
-            if (const MapDef* md = registry.getMap(currentSettings.mapId))
+            // `--stress N` VINCE sui conteggi della mappa: è un override esplicito
+            // dell'operatore per profilare a scala. Prima non era così — questo
+            // blocco sovrascriveva ciò che `--stress` aveva appena impostato, e
+            // siccome `--stress` implica `--sim`, il flag era **inerte da sempre**:
+            // 10 o 100 AI richieste davano identiche 12 unità in campo. Trovato col
+            // profiler (ADR-050): il costo non cambiava di un microsecondo al
+            // variare di N, che per un test di scalabilità è impossibile.
+            if (stressAiCount <= 0)
             {
-                if (md->allyCount  > 0) sbMenu.allyCount  = md->allyCount;
-                if (md->enemyCount > 0) sbMenu.enemyCount = md->enemyCount;
-                std::cout << "[Sim] forze dalla mappa: " << sbMenu.allyCount
-                          << " alleati vs " << sbMenu.enemyCount << " nemici\n";
+                if (const MapDef* md = registry.getMap(currentSettings.mapId))
+                {
+                    if (md->allyCount  > 0) sbMenu.allyCount  = md->allyCount;
+                    if (md->enemyCount > 0) sbMenu.enemyCount = md->enemyCount;
+                    std::cout << "[Sim] forze dalla mappa: " << sbMenu.allyCount
+                              << " alleati vs " << sbMenu.enemyCount << " nemici\n";
+                }
             }
+            else
+                std::cout << "[Stress] override: " << sbMenu.allyCount
+                          << " per team (i conteggi di mappa sono ignorati)\n";
             startSimulation();
         }
     }
@@ -968,6 +1055,9 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
     // ═════════════════════════════════════════════════════════════════
     while (m_running && window.isOpen())
     {
+        // Zona radice: è il DENOMINATORE di tutte le altre (ADR-050). Senza,
+        // "ai: 7 ms" non dice se è il 60% del frame o il 6%.
+        GF_PROFILE_ZONE("frame");
         telemetry::beginFrame();
         stateChanged = false;
         input.update();
@@ -1399,9 +1489,14 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         if (state == GameState::Playing)
         {
             accumulator += frameDt * timeScale;
+            // La simulazione può fare PIÙ passi per frame (accumulatore a passo
+            // fisso): la zona sta fuori dal while, così il numero misurato è
+            // "quanto costa la simulazione in questo frame" — che è la domanda
+            // vera. Il conteggio dei passi lo dà `chiamate` sulle zone interne.
+            GF_PROFILE_ZONE("simulazione");
             while (accumulator >= SIMULATION_STEP)
             {
-                mode->update(world, fixedDt);
+                { profiler::Zone zm("gamemode"); mode->update(world, fixedDt); }
                 // Stati dei command post → mailbox, FRA il mode (che li aggiorna)
                 // e i sistemi (che li leggono): ObjectiveSystem vede lo stato di
                 // QUESTO tick, non di quello prima. È ciò che permette a
@@ -1412,7 +1507,35 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 if (const CommandPosts* cps = mode->commandPosts())
                     for (const auto& s : cps->status())
                         world.commandPostStates.push_back({s.label, s.owner, s.progress01});
-                world.tick(fixedDt);
+                { profiler::Zone zw("mondo"); world.tick(fixedDt); }
+
+                // ── Traccia di SESSIONE GIOCATA (ADR-050, doc 42 buco O3) ────
+                // Ogni misura che ho fatto finora viene da simulazioni AI-vs-AI:
+                // del caso che conta davvero — una partita giocata — non avevo
+                // NESSUN dato. Stessa cadenza di AI/nav/combat (600 tick), così
+                // le quattro letture si incrociano: "il giocatore era morto in
+                // quella finestra" spiega da solo un crollo dell'accuratezza di
+                // squadra, ma solo se le due righe sono allineate nel tempo.
+                if (world.getTickCount() % 600 == 1)
+                {
+                    const auto* php = world.getHealth(world.playerEntity);
+                    const auto* ptr = world.getTransform(world.playerEntity);
+                    nlohmann::json d;
+                    d["vivo"]        = !player.isDead;
+                    d["hp"]          = php ? php->current : 0.0f;
+                    if (ptr) d["pos"] = { ptr->x, ptr->y, ptr->z };
+                    d["colpi"]       = player.session.shots;
+                    d["ordini"]      = player.session.orders;
+                    d["metri"]       = player.session.distance;
+                    d["s_vivo"]      = player.session.timeAlive;
+                    d["s_morto"]     = player.session.timeDead;
+                    d["s_in_mira"]   = player.session.timeAds;
+                    d["arma"]        = player.weapon().name;
+                    d["uccisioni"]   = world.missionStats.playerKills;
+                    d["morti"]       = world.missionStats.playerDeaths;
+                    d["alleati_persi"] = world.missionStats.alliesLost;
+                    telemetry::event(telemetry::Level::Info, "Player", "sessione", d);
+                }
                 accumulator -= SIMULATION_STEP;
             }
 
@@ -2160,18 +2283,34 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         else endDumpState = GameState::Playing;
 
         // ── 6. RENDER ────────────────────────────────────────────────
+        // Zona separata dalla simulazione: senza, un calo di FPS non si può
+        // attribuire ("più AI" e "più roba da disegnare" crescono insieme).
+        GF_PROFILE_ZONE("render");
         renderer.beginFrame();
 
         if (worldReady && state == GameState::Playing)
         {
+            // Scena 3D: la zona sta sulla LAMBDA, non attorno alle chiamate, così
+            // in split-screen (`scenes` = 2) il costo si somma da sé e il campo
+            // `chiamate` dice quante volte è stata disegnata.
             auto drawScene = [&](const Camera& viewCam)
             {
                 ZoneScopedN("render.drawScene");   // ADR-015 (equiv. Application::render)
+                GF_PROFILE_ZONE("render.scena");   // ADR-050: quota nel JSONL
+                // Funnel di rendering (ADR-050, buco O2): entità considerate →
+                // disegnate → draw call emesse. Senza, "render 91 ms" non si può
+                // attribuire a NIENTE: non so nemmeno se disegno 20 oggetti o 2000.
+                // Il funnel dice anche quanto costa l'arma in mano, che raddoppia
+                // le draw call per unità.
+                ++g_renderStat.scenes;
                 for (EntityId id : world.getEntities())
                 {
+                    ++g_renderStat.considered;
                     const auto* tr = world.getTransform(id);
                     const auto* mr = world.getMeshRenderer(id);
                     if (!tr || !mr || !mr->visible || !mr->mesh) continue;
+                    ++g_renderStat.drawn;
+                    g_renderStat.verts += mr->mesh->getVertexCount();
                     // meshOffsetY sposta verticalmente la mesh rispetto al centro
                     // fisico dell'entità (es. per appoggiare i piedi a terra).
                     glm::mat4 model = toModelMatrix(*tr);
@@ -2194,9 +2333,13 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
 
                     // Arma in mano (o altro modello agganciato)
                     if (mr->attachMesh)
+                    {
+                        ++g_renderStat.attachments;
+                        g_renderStat.verts += mr->attachMesh->getVertexCount();
                         renderer.drawMeshFrom(viewCam, *mr->attachMesh, mr->texture,
                                               model * mr->attachLocal,
                                               {0.55f, 0.55f, 0.58f});
+                    }
                 }
             };
 
@@ -2265,6 +2408,12 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
             }
         }
 
+        // Tutto ciò che segue è INTERFACCIA (menu, HUD, overlay): zona a sé
+        // dentro `render` per completare O2. Senza, "render 9 ms" resta un blocco
+        // unico e non si può sapere se a costare è la scena 3D o la UI — che è
+        // proprio la scelta di ottimizzazione da fare, e con la UI in ImGui non è
+        // affatto scontata.
+        GF_PROFILE_ZONE("render.ui");
         if (state == GameState::Launcher)
             launcher.render();
         else if (state == GameState::MainMenu)
@@ -2307,11 +2456,36 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 sbMenu.render();
         }
 
-        renderer.endFrame();
+        // ATTESA DEL VSYNC, non lavoro. `endFrame()` fa lo swap, che si blocca
+        // fino al vblank: senza separarla, "render = 97% del frame" è vera e
+        // completamente fuorviante — manderebbe a ottimizzare un renderer che
+        // sta solo aspettando. Distinguere lavoro da attesa è metà del valore di
+        // un profiler.
+        { profiler::Zone zs("attesa_vsync"); renderer.endFrame(); }
 
         // Fine frame renderizzato (dopo lo swap in endFrame → SDL_GL_SwapWindow):
         // delimita il frame per Tracy. No-op se il profiler è disabilitato.
         FrameMark;
+
+        // Profilo nella telemetria (ADR-050): ogni ~5 s a 60 Hz. Cadenza a
+        // FRAME e non a tick di simulazione, perché copre anche il rendering e
+        // i frame in cui la simulazione non gira (menu, pausa).
+        profiler::calibrate();   // lavoro FISSO: distingue macchina lenta da codice lento
+        profiler::endFrame();
+        if (profiler::windowFrames() >= 300)
+        {
+            const int f = std::max(1, profiler::windowFrames());
+            telemetry::event(telemetry::Level::Info, "Perf", "rendering",
+                {{"scene_per_frame",  (double)g_renderStat.scenes / f},
+                 {"entita_esaminate", (double)g_renderStat.considered / f},
+                 {"mesh_disegnate",   (double)g_renderStat.drawn / f},
+                 {"agganci_disegnati",(double)g_renderStat.attachments / f},
+                 {"draw_call",        (double)(g_renderStat.drawn
+                                             + g_renderStat.attachments) / f},
+                 {"vertici_per_frame", (double)g_renderStat.verts / f}});
+            g_renderStat = {};
+            profiler::report();
+        }
 
         // Frame-cap di sicurezza SOLO se la VSync è spenta (swap interval 0):
         // senza pacing GPU il loop girerebbe a migliaia di FPS. Sleep IBRIDO

@@ -1003,8 +1003,12 @@ void MapEditor::recomputeExposure()
     m_issues.clear();
     for (const auto& d : mini::analyzeTacticalHealth(tmp))
     {
-        const int sel = (d.target == mini::TacticalDefect::Target::Position)
-                      ? (-1000 - d.index) : (-2000 - d.index);
+        // Codice di selezione per banda: geometria = indice diretto in `m_boxes`
+        // (tmp.geometry è costruito da lì, stesso ordine), posizioni −1000, settori −2000.
+        const int sel =
+              (d.target == mini::TacticalDefect::Target::Position) ? (-1000 - d.index)
+            : (d.target == mini::TacticalDefect::Target::Geometry) ? d.index
+            :                                                        (-2000 - d.index);
         m_issues.push_back({sel, d.severity, (int)d.kind, d.text});
     }
     // Difetto specifico dell'EDITOR: la visuale verticale è un dato che vive qui

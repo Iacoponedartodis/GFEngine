@@ -24,6 +24,37 @@
 
 namespace mini
 {
+
+// Nome leggibile dello stato AI. Definito in AiSystem.cpp, usato anche da AiTrace.cpp.
+const char* aiStateName(AiState s);
+
+// ── aitrace — la SCATOLA NERA per-agente (KI #86) ───────────────────────────
+// Perché esiste: due diagnosi di fila su questo bug sono state fuorviate da metriche
+// AGGREGATE (eventi di combattimento fra run divergenti, e una classificazione con
+// soglia fissa). L'utente ha chiesto la cosa giusta: poter *vedere* il comportamento
+// della singola AI. Qui non si aggrega — si osserva un agente per volta e si registra
+// PERCHÉ ha fatto quello che ha fatto.
+namespace aitrace
+{
+
+// Ferma da quanti secondi conta come STALLO, e quanto può muoversi restando "ferma".
+// 3 s è oltre qualunque fase autorata (hide_duration_max = 1.8 s): sotto è vita
+// normale, sopra è un'AI che ha smesso di combattere.
+constexpr float STALL_SECONDS = 3.0f;
+constexpr float STALL_RADIUS  = 0.6f;
+
+// `--trace-ai <id>`: registra ogni decisione di QUELL'unità, tick per tick.
+// 0 = spento (default). -1 = tutte (rumoroso: solo per sim brevi).
+void setTraceEntity(int entityId);
+
+// Da chiamare una volta per AI viva, a fine del suo aggiornamento.
+void observe(World& world, EntityId e, float dt, unsigned long long tick);
+
+// Riepilogo della finestra + azzeramento. Sullo stesso battito della telemetria AI.
+void flush();
+
+} // namespace aitrace
+
 namespace aicmd
 {
 

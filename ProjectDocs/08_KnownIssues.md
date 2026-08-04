@@ -1,5 +1,145 @@
 # 08 — Known Issues
 
+## 93. Il caduto era INVULNERABILE **e** calamita d'attenzione per i nemici — ✅ CORRETTO 2026-08-04 (changelog 137)
+- **Osservazione dell'utente** (simulazione con molti più droidi che cloni): *"quando erano già tutti
+  morti rimaneva un clone a terra che non moriva, attorno al quale giravano i droidi, che gli
+  sparavano anche"*. Già visto altre volte — è una delle cose che gli avevano fatto sospettare che
+  il bleed-out fosse rotto.
+- **Erano DUE bug che si alimentavano a vicenda**:
+  1. `CombatSystem` scartava come bersaglio chi ha `current <= 0`, ma un caduto ha esattamente
+     `current == 0` → **intoccabile**. Il commento nel codice affermava il contrario ("un colpo su un
+     già-a-terra lo finisce"): era falso da sempre.
+  2. La lista bersagli di `AiSystem` **non filtrava gli HP** → il caduto restava un bersaglio a pieno
+     titolo, quindi le AI lo *sceglievano* e ci sparavano addosso.
+- **Effetto combinato**: un bersaglio inerme, invulnerabile e attraente — la peggiore calamita
+  d'attenzione possibile. I nemici si inchiodavano su di lui ignorando la battaglia.
+- **Corretto**: nessuna AI sceglie più un caduto (non è una minaccia), ma il **fuoco incrociato può
+  finirlo**. È la lettura minima di *"priorità molto minore rispetto a chi è in piedi"* (doc 26
+  Phase D); la priorità graduata vera arriverà con quel lavoro.
+- **Verificato**: 8 caduti → 4 morti di bleed-out, **4 finiti dal fuoco**, **0 caduti ancora vivi a
+  fine simulazione**. Il bleed-out stesso funziona (KI #91): morti a ~10,0 s esatti.
+
+## 91. Bleed-out: il timer si FERMAVA se un soccorritore era vicino — ✅ CORRETTO 2026-08-04 (changelog 135)
+- **Sospetto dell'utente**, confermato dai dati: *"è da un po' che ho il dubbio che il bleed-out e la
+  rianimazione non funzionino come dovrebbero"*.
+- **Misurato**: un clone è rimasto a terra **34,5 s** con `squad_bleedout_time` = **10 s**; un altro
+  è morto a **12,2 s** invece di 10.
+- **Causa**: il decremento viveva nel ramo `else`, cioè scorreva **solo in assenza di un
+  soccorritore vicino**. Bastava che qualcuno arrivasse a portata perché il caduto diventasse
+  **immortale**; se il soccorritore entrava e usciva dal raggio, il progresso di rianimazione si
+  azzerava ogni volta ma l'orologio restava fermo.
+- **Conseguenze del difetto**: toglieva alla meccanica la sua unica tensione — la **corsa** fra chi
+  soccorre e il tempo — e rendeva **insensata la taratura**: abbassare il tempo di bleed-out non
+  cambiava nulla proprio nei casi in cui qualcuno accorreva. *L'utente ha tarato quel valore mentre
+  la meccanica era rotta: va ri-scelto ora.*
+- **Corretto**: il bleed-out scorre **sempre** mentre si è a terra; la rianimazione accumula in
+  parallelo. La morte si valuta **dopo** la rianimazione, così una canalizzazione completata nello
+  stesso tick salva l'uomo invece di ucciderlo sul fotogramma della salvezza. Verificato: **10,0 s
+  esatti**, uguali al valore configurato.
+
+## 92. Bilanciamento: con il bleed-out funzionante, la rianimazione è quasi impossibile (2026-08-04)
+Non è un bug: è un'**interazione fra due funzionalità entrambe difendibili**, resa visibile dalla
+correzione di KI #91. Serve una decisione di design dell'utente, non una mia.
+
+Misurato su una caduta reale (`--sim-ticks 12000`):
+
+| | |
+|---|---|
+| caduto a | t=14,1 s |
+| soccorso **differito** perché la zona è contesa (changelog 122) | **8,9 s persi** |
+| soccorritore dispacciato a | t=23,0 s |
+| finestra rimasta | **1,1 s** per arrivare **e** canalizzare **4,5 s** |
+| esito | morto a t=24,0 s |
+
+Con `squad_bleedout_time` = 10 s la rianimazione è **aritmeticamente impossibile** ogni volta che
+l'area è contesa — cioè quasi sempre, perché è lì che si cade. Zero rianimazioni in 12.000 tick.
+
+**La risposta vera non è tarare**: doc 26 Phase D (visione utente 2026-08-04) descrive il soccorso
+come MANOVRA di squadra — valutare se è possibile, coprire chi rianima, o ripulire prima la zona; e
+col clone medico i normali trascineranno il ferito dietro una copertura con una semi-rianimazione
+che RALLENTA il bleed-out. I valori qui sotto sono un tampone per il presente.
+
+**Leve, tutte già nel BalanceEditor** (nessuna toccata da me: è una scelta di gioco):
+1. **Alzare `squad_bleedout_time`** (es. 20-25 s) → dà spazio a "aspetta che la zona si liberi, poi
+   recupera". È la leva che rende il differimento sensato invece che fatale.
+2. **Ammorbidire il differimento**: `squad_rescue_max_threats` 1 → 2-3, o
+   `squad_rescue_threat_radius` 10 → 6 m. I soccorritori accettano più rischio.
+3. **Abbassare `squad_revive_time`** (4,5 s) → meno tensione, meno realistico.
+4. `squad_rescue_threat_radius` = 0 disattiva del tutto il differimento (comportamento pre-122).
+
+## 87. Performance: "il numero massimo di AI senza lag sta calando" — ✅ CAUSA TROVATA 2026-08-04 (changelog 131)
+Aperta il 2026-08-02, **non rispondibile** per due giorni perché non esisteva alcuna misura di
+costo. Chiusa dal profiler + funnel di rendering + inventario asset (ADR-050).
+
+**La causa non è l'AI.** Ripartizione del frame misurata:
+
+| zona | ms | quota |
+|---|---|---|
+| frame | 40,6 | 100% |
+| render | 39,3 | 97% |
+| **↳ render.scena** (disegno 3D) | **38,6** | **95,1%** |
+| ↳ render.ui | 0,7 | 1,7% |
+| simulazione (AI + crowd + tutto) | **1,17** | **2,9%** |
+
+**La causa è il VOLUME DI VERTICI**: **1.447.949 vertici per frame** su 205 draw call, cioè
+~1,5 GB/s di dati spediti alla GPU. Con il rendering client-side-array (ADR-003, workaround
+deliberato per il driver Intel) **non ci sono VBO**: i vertici risalgono alla scheda a **ogni**
+draw call, quindi il costo è proporzionale ai vertici spediti per frame, non alle chiamate.
+
+**E il colpevole è un asset**, non il motore. Inventario: 9 mesh, 337.626 vertici totali, di cui
+**161.304 nel solo `star_wars_b1_battle_droid.glb`** — dieci volte il Clone Trooper (15.627). Con
+~6 droidi in campo, il B1 da solo vale i **due terzi** di tutto il traffico di vertici.
+
+**Perché "il massimo di AI cala": ogni droide aggiunto costa 161k vertici per frame.** Il conto è
+lineare e brutale, e non ha niente a che vedere con la complessità dell'AI.
+
+**Direzioni, in ordine di rapporto valore/rischio** (nessuna ancora intrapresa):
+1. **Decimare il mesh del B1** (contenuto): un fante di sfondo non ha bisogno di 161k vertici.
+   È il guadagno più grande al costo più basso e non tocca il motore.
+2. **Frustum culling**: oggi **non esiste** — misurato 205 disegnate su 206 esaminate, si disegna
+   tutto anche fuori campo.
+3. **LOD** per distanza.
+4. Rivedere ADR-003 (VBO): **ultima risorsa** — è un workaround intenzionale per il driver Intel,
+   e la regola di progetto dice di non toccarlo senza una giustificazione legata a quel driver.
+
+## 90. Missione `firebase_alpha`: l'obiettivo primario non avanza MAI — il post Alpha non viene mai conteso (2026-08-04)
+- **Trovato dal funnel di missione** (O7, changelog 130) al primo utilizzo — prima era invisibile per
+  costruzione: gli eventi esistenti scattano solo sui SALTI (attivato/completato/fallito), quindi una
+  missione che si impianta **non produce alcun evento**.
+- **Evidenza**: `--sim-ticks 9000 --map firebase --mission firebase_alpha` → per **150 secondi**
+  `capture_alpha` resta *attivo, post 'Alpha' team 0 al 0%*, e `hold_alpha` non si attiva mai
+  (dipende dal primo). Riproducibile a ogni run.
+- **NON è la cattura a essere rotta**: sulla stessa mappa e nella stessa run ci sono 15 eventi
+  `CommandPost`, con contese su **Bravo** e **Charlie**. È **solo Alpha** a non essere mai raggiunto.
+- **Ipotesi da verificare** (non ancora indagata: è lavoro di gameplay/contenuto, non di telemetria):
+  Alpha è fuori dai settori che il comando considera, o non ha route che ci passano, o è il post di
+  partenza di un lato e nessuno ha motivo di andarci. Il funnel dice *che* non avanza, non *perché*.
+- **Impatto**: la missione è di fatto incompletabile in simulazione. Da verificare se lo è anche
+  giocando (il giocatore può andarci a piedi, quindi probabilmente no — ed è esattamente il motivo
+  per cui il difetto è sopravvissuto).
+
+## 88. Editor: nel roster di mappa si potevano schierare solo le entità-corpo, non le CLASSI — ✅ RISOLTO 2026-08-02 (changelog 122)
+- **Sintomo (utente)**: *"nel balance editor, sezione map, non mi fa aggiungere che il clone standard;
+  volevo aggiungere il marksman a Training Ground"*.
+- **Causa**: **non** era una limitazione dei dati. ADR-023 prevede che un id di roster sia un'entità **o
+  una classe** con `base_entity`, `classres::effectiveUnit` la risolve e `--validate` la accetta da sempre.
+  Era il dropdown del BalanceEditor a popolarsi solo da `allies()`/`enemies()`.
+- **Prova del disallineamento**: `ally_types` di Training Ground conteneva già `Heavy Trooper`, che **è una
+  classe** — mostrata ma non riproducibile dalla UI.
+- **Lezione trasferibile**: quando una capacità è definita da un ADR, il dropdown dell'editor va popolato
+  con **tutto** ciò che l'ADR ammette. Un combo che offre un sottoinsieme è una capacità che di fatto non
+  esiste. Vale per ogni dropdown-dal-registry (regola CLAUDE.md §2).
+
+## 89. "Le AI ignorano i nemici vicinissimi" — NON è un bug di targeting (misurato 2026-08-02)
+- **Misura**: al momento del tiro, il **15%** dei colpi ha un nemico più vicino del bersaglio entro 10 m —
+  ma **0%** di quei nemici era colpibile. Erano tutti dietro copertura. L'acquisizione prende per
+  costruzione il più vicino **con LOS**.
+- **Quindi è un problema di LEGGIBILITÀ**: dalla telecamera un nemico a 8 m dietro un muretto sembra "lì".
+  Se un giorno infastidisce ancora, il rimedio è di **presentazione** (far capire chi è coperto), non di
+  percezione: allargare il FOV ucciderebbe il valore dell'aggiramento per risolvere un problema che non c'è.
+- **Non riaprire senza una nuova misura**: la diagnostica è stata rimossa dopo la risposta, ma si
+  ricostruisce in dieci righe al gate di fuoco (vedi changelog 122).
+
 ## 86. AI che non sparano pur avendo nemici davanti — DUE CAUSE STRUTTURALI TROVATE E CORRETTE, la terza resta aperta (2026-08-02, changelog 118)
 
 **L'ipotesi principale del punto 86-orig qui sotto — "FOV senza scandaglio" — è SMENTITA dalla misura.**
@@ -31,12 +171,31 @@ prometteva *"il fuoco resta autonomo"*. A/B controllato sul sintomo:
 
 È la spiegazione letterale del sintomo riportato: *"si piazzano dietro una copertura e restano lì"*.
 
-**Causa 3 — APERTA: il 61-72% di perdita fra "nel cono" e "con LOS".** `acq_tutti_bloccati` coincide
-esattamente con quella perdita: tutti i K candidati più vicini bloccati. **Non** è saturazione dei K (K=8 ≥
-nemici vivi per lato) — è geometria reale. Da decidere se sia fisiologico per uno sparatutto a coperture o
-se manchi una reazione: oggi un'AI senza LOS **non manovra per procurarselo**. Prossimo passo prima di
-toccare codice: distinguere "coperto da una cover autorata" (corretto: c'è un contro-gioco) da "coperto da
-geometria muta" (difetto di mappa → 41_TacticalWorldData/B7).
+**Causa 3 — APERTA, ma NON è un difetto di mappa: il 61-72% di perdita fra "nel cono" e "con LOS".**
+`acq_tutti_bloccati` coincide esattamente con quella perdita: tutti i K candidati più vicini bloccati.
+**Non** è saturazione dei K (K=8 ≥ nemici vivi per lato) — è geometria reale.
+
+*Indagine 2026-08-02 e sua correzione.* Una prima misura a runtime classificava il bloccante come "autorato"
+o "muto" con un raggio **fisso** di 3 m dal suo CENTRO, e concludeva **"57% geometria muta"**. **Il numero è
+sbagliato**: per oggetti larghi 7-31 m le coperture autorate stanno ai BORDI, e infatti i tre bloccanti
+principali (impalcato del ponte 1277 blocchi, muro nord 1182, blocco centrale 597) hanno posizioni tattiche
+a **3,3-5,4 m** — tutte contate come assenti. Il controllo statico proporzionato alla taglia dell'oggetto
+(`UnmarkedCover`, ora nell'editor e nel gate `--validate`) trova su Training Ground **4** ostacoli non
+marcati, pannelli sottili agli angoli. **La mappa è autorata bene: la geometria muta non spiega la perdita.**
+
+*Quindi la perdita è in gran parte FISIOLOGICA* — è uno sparatutto a coperture, i bersagli stanno dietro
+coperture messe apposta.
+
+**Correzione a una mia affermazione (2026-08-02).** Avevo scritto qui che *"un'unità senza LOS non fa nulla
+per procurarsela"*. **Falso**: `enterHunt` pesa già quattro opzioni d'approccio — assalto diretto,
+aggiramento, **posizione di tiro** (`bestFiringPosition`, che verifica la linea) e punto dominante. Il buco
+era altrove e più preciso: **la RICERCA**. `pickSearchPoint` sceglieva un punto **uniformemente casuale** in
+24×24 m attorno all'ultimo contatto — l'unica decisione dell'AI che ignorava del tutto il mondo tattico
+(169 posizioni autorate, grafo delle coperture, settori). Cercare da un punto senza linea di vista è cercare
+senza poter trovare. **Corretto** (changelog 120): la ricerca chiede al mondo una posizione da cui quella
+zona si VEDE, con centro jitterato per non far convergere tutti sullo stesso punto, e fallback documentato
+al comportamento casuale se il mondo non offre nulla. Misurato: **76%** delle ricerche ora usa il mondo,
+acquisizione 28% → 32% del cono.
 
 **Nota di metodo.** Gli eventi di combattimento aggregati **non** decidono questo bug: fra due run la
 simulazione diverge e la differenza non è attribuibile (un primo tentativo di fix, che azzerava anche
@@ -44,9 +203,47 @@ simulazione diverge e la differenza non è attribuibile (un primo tentativo di f
 è stata presa su un contatore che misura **il sintomo**, non l'esito. Volume di combattimento finale
 240 → 236: invariato entro la divergenza.
 
+**Causa 4 — la MANOVRA si fermava alla perdita del contatto (CORRETTA, changelog 121).** Trovata con la
+scatola nera per-agente (`AiTrace.cpp`), guardando UNA unità invece di un aggregato: ingaggia, perde il
+contatto 12 tick dopo, e resta immobile ~3 s con `repositionActive` acceso, posizione **e sguardo**
+congelati. Tutta la manovra viveva dentro il ramo `Alert && nearest != 0`, e **non esisteva alcun ramo di
+movimento per "Alert senza bersaglio"**. Ora la manovra prosegue senza bersaglio (è uno spostamento verso un
+posto) e senza bersaglio si guarda dove si va. Misurato: **stalli 41 → 13**, tempo perso 122 → 46 s-AI,
+combattimento 233 → 281.
+
+> **Lo schema si è ripetuto tre volte** (fase di hide, fuoco durante la manovra, manovra stessa): *stato che
+> avanza solo dentro un ramo condizionato al bersaglio*. Chi tocca `AiSystem` lo cerchi per primo: ogni
+> timer o flag il cui aggiornamento sta dentro `if (... && nearest != 0)` è un candidato congelamento,
+> perché il contatto si perde nel 61-72% dei casi.
+
 **Guardie permanenti**: `occ_in_raggio`/`occ_nel_cono`/`occ_acquisito`, `gate_*`,
-`evasivo_congelato_tick`, `evasivo_durata_max_s`. Quest'ultima deve restare ≤ `hide_duration_max`: se
-risale, il congelamento è tornato.
+`evasivo_congelato_tick`, `evasivo_durata_max_s` (deve restare ≤ `hide_duration_max`), `ricerca_tattica` vs
+`ricerca_a_caso`, e l'evento **`stalli per causa`** con il suo `stallo finito` (durata reale per unità).
+
+**Strumento**: `--trace-ai <id>` accende la scatola nera su una singola unità (`-1` = tutte). Il flusso
+d'indagine è: leggi `stalli per causa` → prendi l'id dall'evento `stallo` → ri-esegui con `--trace-ai <id>`
+→ leggi la cronaca tick per tick. È così che è stata trovata la causa 4.
+
+**Causa 5 — "Alert senza bersaglio" non aveva un ramo di movimento (CORRETTA, changelog 133).**
+Il fix di 121 copriva solo chi stava manovrando. Senza manovra, un'unità che perde il contatto resta
+in Alert per `alertTimer` (3 s) e cade fuori da tutte le condizioni della catena di movimento:
+immobile, sguardo congelato. Ora il ramo Hunt accetta anche `Alert && nearest == 0 && hasLastKnown`,
+a velocità ridotta; le transizioni di stato restano di chi è in Hunt (per non scavalcare `enterHunt`,
+dove si sceglie l'approccio).
+
+**Bilancio finale dell'indagine**:
+
+| | episodi | tempo perso | più lungo |
+|---|---|---|---|
+| inizio | **41** | ~122 s-AI | **26,6 s** |
+| dopo cause 1-4 | 13-18 | ~46 s-AI | 16,3 s |
+| **ora (cause 1-5)** | **3** | **9 s-AI** | **3,0 s** = la soglia di rilevamento |
+
+**Nota sul rilevatore**: escludeva a torto gli alleati **a terra**, che per definizione non si
+muovono e non sparano — generava un falso episodio da 33,5 s per ogni caduto. Corretto in 133.
+
+**Stato: chiuso come indagine.** Restano 3 episodi da 3,0 s esatti, cioè al limite di ciò che conta
+come stallo. Se il playtest mostrasse ancora pause evidenti, il flusso per riaprirlo è in doc 12 §5.
 
 ## 86-orig. (storico) AI che non sparano — ipotesi "regressione del FOV" (CRITICO, 2026-08-02) — SMENTITA
 - **Sintomo (utente, osservato col rallentatore)**: *"moltissimi bot, sia cloni che droidi, spesso si fermano

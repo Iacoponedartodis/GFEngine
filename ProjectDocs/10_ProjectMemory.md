@@ -1,5 +1,15 @@
 # 10 — Project Memory (durable, code-verified facts)
 
+## Contesto di macchina (dichiarato dall'utente 2026-08-04)
+- **Il PC di sviluppo attuale è molto vecchio e verrà sostituito a breve.** Conseguenza per ogni
+  misura di performance: i **numeri assoluti** (millisecondi, fps) sono specifici di questa
+  macchina e vanno **ri-misurati** sull'hardware nuovo; i **rapporti** (chi domina il frame, quanti
+  vertici per unità) restano validi. Non progettare l'architettura attorno ai limiti di una
+  macchina in uscita — ma un mesh da 161k vertici per un fante resta sbagliato ovunque.
+- **La build è deliberatamente ottimizzata per questa macchina.** La compatibilità universale su
+  Windows è un obiettivo **successivo e separato**, ed è quello — non la performance — il momento
+  in cui ADR-003 (client-side arrays, workaround per il driver Intel) andrà riaperto.
+
 ## Canonical conventions
 - **id = filename stem** for every definition type (weapon, enemy, ally, ai profile, hitbox
   profile, map, ability, character). In-file `id`/`profile_id` is redundant/deprecated.

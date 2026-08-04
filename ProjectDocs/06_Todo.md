@@ -1,15 +1,94 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ⚠ PUNTO DELLA SITUAZIONE — 2026-08-02 (aggiornato dopo changelog 116-123)
+
+Gli ultimi giri hanno chiuso molto ma lasciato aperte cose di tre tipi diversi. **Non confonderli**:
+il primo tipo costa minuti all'utente, il secondo è lavoro mio, il terzo è una decisione di design.
+
+### A. Verifiche manuali dovute (solo l'utente può farle — io non vedo lo schermo)
+Accumulo di changelog 108-123. In ordine di rischio:
+1. **Tarare `hand_scale`** di DC-15X, DC-17, T-21 con la nuova anteprima in mano (123). Il gate le segnala.
+2. **Rallentatore sulle AI**: restano ~13-17 episodi di stallo per sim; verificare se si notano ancora (121).
+3. **Soccorso differito** (122): verificare che *"Zona troppo calda"* compaia quando serve e che la squadra
+   non abbandoni sistematicamente i caduti — le soglie sono nel BalanceEditor.
+4. **Marksman schierato** dall'editor: si comporta da tiratore? (122)
+5. Smoke test arretrati dei moduli editor migrati a `ModuleShell` (109-115) e del sistema prefab (104-107).
+
+### B. Debito tecnico aperto (mio)
+- ▶ **OSSERVABILITÀ (ADR-050, doc 42)** — binario nuovo, in corso.
+  ✅ profiler + inventario avvio (124) · ✅ flussi separati + storico (125) · ✅ verbosità a runtime
+  (126) · ✅ **O1 crowd/nav** (127) · ✅ O2 *parziale*: funnel draw call (125).
+  ✅ **O4 combat strutturato** + ✅ **O3 sessione giocata** (128).
+  ✅ **O5 ability/veicoli** + ✅ **O7 missioni** (129-130).
+  ✅ **O2 completo** + ✅ **O6 asset** (131) — **copertura ADR-050 COMPLETA su tutti i sistemi vivi**.
+  Resta solo l'attribuzione per ARMA nel funnel di fuoco (serve un id sul proiettile).
+- ✅ **KI #87 — performance: CAUSA TROVATA** (131). Non è l'AI (2,9% del frame): è il **volume di
+  vertici** — 1,45 M/frame, di cui due terzi dal solo mesh del B1 (**161.304 vertici**, dieci volte
+  il Clone Trooper). Col rendering client-side-array (ADR-003) i vertici risalgono alla GPU a ogni
+  draw call, quindi ogni droide in più costa 161k vertici/frame.
+  - ▶ **Prossimo lavoro di ottimizzazione**, in ordine di valore/rischio: **(1) decimare il mesh del
+    B1** — contenuto, non motore, guadagno massimo e rischio minimo · **(2) frustum culling**, che
+    oggi **non esiste** (205 disegnate su 206 esaminate) · (3) LOD per distanza · (4) VBO, **ultima
+    risorsa**: ADR-003 è un workaround deliberato per il driver Intel.
+- **KI #85** — testi ancora tagliati in alcuni punti dell'editor.
+- **Regole editor** (doc 39): R1 *Elimina* manca in 5 moduli su 7, R5 splitter in Class/Mission. Si applicano
+  quando si tocca il modulo.
+- **ADR-050 non retroattivo**: navigazione, game mode, missioni, ability e veicoli **non hanno
+  osservabilità**. Si strumentano quando li si tocca.
+- **Sonde temporanee**: nessuna lasciata accesa (verificato 2026-08-02).
+
+### B-bis. RENDERING — nuovo binario, causa misurata (doc 43, KI #87)
+Il collo di bottiglia del gioco. **Zero righe di codice scritte**: scope in doc 43.
+- ▶ **R1 LOD degli asset** — *dipende dall'utente (Blender)*: mesh semplificate, con un livello
+  "bot/lontano" molto leggero. Guadagno massimo, rischio minimo, non tocca il motore. Il B1 a 161k
+  vertici vale da solo due terzi del traffico.
+- ▶ **R2 frustum culling** — oggi **non esiste** (205 disegnate su 206 esaminate). Lavoro mio.
+  La guardia è già pronta: `entita_esaminate` vs `mesh_disegnate` nel funnel di rendering.
+- ⏸ **R3 soglia di distanza + LOD a scaglioni** (dopo R1: serve avere i livelli).
+- ⏸ **R4 simulazione a distanza (AI LOD)** — **non è performance oggi** (la simulazione è il 2,9%
+  del frame): è scalabilità futura per mappe grandi. Solo se il profilo lo giustifica.
+- ❌ **VBO / riapertura ADR-003**: fuori scope. Si riapre per **compatibilità universale Windows**,
+  non per performance, e **sull'hardware nuovo** (il workaround è per il driver di questo PC).
+
+### C. Decisioni di design aperte (servono all'utente, non implementarle d'istinto)
+- ▶ **A5 taratura curve** (doc 40 §6): i pesi sono in `AiUtility.hpp`. **Sbloccata**: KI #86 è chiuso
+  (stalli 41 → 3). È il lavoro in corso.
+- ⏸ **Soccorso come MANOVRA di squadra — doc 26 Phase D** (visione utente 2026-08-04): non cadere in
+  zone aperte e contese; valutare se il recupero è possibile; coordinarsi in più di uno (chi rianima,
+  chi copre) o ripulire prima la zona. Col **clone medico**: i normali *trascinano* il ferito dietro
+  una copertura + *semi-rianimazione che rallenta* il bleed-out, e chiamano il medico. Il caduto
+  diventa bersaglio a **priorità molto bassa**. *I valori di KI #92 sono un tampone fino ad allora.*
+- **Ri-valutazione dell'approccio durante Hunt**: oggi si sceglie una volta all'ingresso. Solo se un
+  playtest lo mostra.
+- **A6 obiettivi nel decisore**, A7 repertorio azioni, A8-A10 BT/HTN/GOAP: invariati, in coda.
+- **B6 pipeline Blender**, B7 chokepoint, B8 stanze, B9 cover distruttibili: binario mondo, fermo da 104.
+- **Pose/animazioni**: bloccate su richiesta dell'utente (attende PC + Blender). Il muzzle interim e il
+  fix dei muretti bassi restano band-aid da rimuovere quando si sbloccano.
+
+### Cosa NON è aperto (chiuso e misurato, non riaprire senza nuovi dati)
+KI #86 cause 1-4 (mira disallineata, hide congelato, ricerca a caso, manovra congelata) · KI #88 (classi nel
+roster) · KI #89 ("ignorano i vicini": misurato 0%, è leggibilità) · A1-A5.
+
 ## ★ PIANO DIRETTORE AI + MONDO TATTICO (doc 40 + doc 41, dal 2026-07-27)
 Due binari **paralleli e indipendenti**: l'AI può migliorare senza attendere la pipeline dati, e viceversa.
 Ordine dentro ogni binario, non fra binari. Ogni voce è verificabile (`--sim-ticks`, `--validate`, telemetria).
 
 > **P0 in corso — KI #86 (ingaggio).** Due cause strutturali trovate e corrette (changelog 118): punto di
 > mira dell'acquisizione disallineato dal gate di fuoco (**13,2%** delle acquisizioni), e fase di hide che
-> si congelava fino a **26,6 s** con il fuoco bloccato. **Resta la causa 3**: il 61-72% di perdita fra
-> "nemico nel cono" e "LOS ok". Prossimo passo *diagnostico*, non di codice: distinguere il bloccato da una
-> **cover autorata** (fisiologico, ha un contro-gioco) dal bloccato da **geometria muta** (difetto di mappa
-> → B7). Solo dopo si decide se serve una reazione ("non ho LOS → me la procuro"), che oggi non esiste.
+> si congelava fino a **26,6 s** con il fuoco bloccato. **Causa 3 diagnosticata** (changelog 119): il
+> 61-72% di perdita in LOS **non** è geometria muta — il controllo statico `UnmarkedCover` trova 4 soli
+> ostacoli non marcati su Training Ground, e i tre grandi bloccanti hanno coperture autorate a 3,3-5,4 m.
+> La perdita è in gran parte fisiologica per uno sparatutto a coperture. Il buco sul lato AI **non** era
+> l'approccio (`enterHunt` pesa già una posizione di tiro) ma la **RICERCA**: punto uniformemente casuale,
+> l'unica decisione che ignorava il mondo tattico. **Corretta** (changelog 120): 76% delle ricerche ora
+> chiede al mondo una posizione da cui la zona si vede; acquisizione 28% → 32% del cono.
+> **Causa 4 corretta** (changelog 121): la manovra si fermava alla perdita del contatto — non esisteva un
+> ramo di movimento per "Alert senza bersaglio". Trovata con la nuova **scatola nera per-agente**
+> (`AiTrace.cpp` + `--trace-ai <id>`). Stalli **41 → 13**, tempo perso 122 → 46 s-AI, combattimento
+> 233 → **281**. **Residuo**: 13 episodi, 8 senza causa evidente — il tetto attuale, da guardare col
+> microscopio quando servirà.
+> **Resta da decidere**: se serva una ri-valutazione dell'approccio *durante* Hunt (oggi si sceglie una
+> volta sola all'ingresso). Da fare solo se un playtest lo mostra — non d'istinto.
 
 ### Binario A — AI (doc 40)
 - ✅ **A1 Percezione: FOV + udito** (changelog 100). Misurato: fuori-campo 2000-3100/report, spari uditi

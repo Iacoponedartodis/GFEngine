@@ -319,6 +319,28 @@ void ClassEditor::drawProps()
             reload();
         }
     }
+    // ── Elimina (doc 39 R1) ──────────────────────────────────────────────────
+    // Comando condiviso, non una copia locale: la stessa funzione che usano
+    // Weapon ed Entity Editor. Una classe eliminata può lasciare rotti i roster
+    // di mappa che la schieravano (ADR-023) — lo dice il popup e lo trova
+    // `--validate`; ripulirli in automatico cancellerebbe scelte dell'autore.
+    ImGui::SameLine();
+    if (ImGui::Button("Elimina")) ImGui::OpenPopup("##cdel");
+    if (ImGui::BeginPopup("##cdel"))
+    {
+        ImGui::Text("Eliminare la classe '%s'?", e.id.c_str());
+        ImGui::TextDisabled("Il file viene cancellato. Se e' schierata nel roster di");
+        ImGui::TextDisabled("qualche mappa, il riferimento resta rotto (--validate lo segnala).");
+        if (ImGui::Button("Elimina", {110, 0}))
+        {
+            renameErr = rename::deleteDefinition(dataDir(), rename::Category::Class, e.id);
+            ImGui::CloseCurrentPopup();
+            if (renameErr.empty()) { m_status = "Eliminata"; reload(); }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Annulla", {110, 0})) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (!renameErr.empty())
         ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());
 }

@@ -360,9 +360,10 @@ static bool rayBlockedByAABB(const glm::vec3& o, const glm::vec3& d,
 }
 
 bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
-                    EntityId ignore)
+                    EntityId ignore, EntityId* outBlocker)
 {
     const glm::vec3 dir = to - from;
+    if (outBlocker) *outBlocker = 0;
 
     // Solo i collider vicini al segmento (inviluppo XZ del raggio) via indice.
     const glm::vec3 segMin{std::min(from.x, to.x), 0.0f, std::min(from.z, to.z)};
@@ -407,7 +408,9 @@ bool hasLineOfSight(const glm::vec3& from, const glm::vec3& to, World& world,
             o.z > bMin.z && o.z < bMax.z)
             return false;
 
-        return rayBlockedByAABB(o, d, bMin, bMax);
+        if (!rayBlockedByAABB(o, d, bMin, bMax)) return false;
+        if (outBlocker) *outBlocker = it.id;
+        return true;
     });
     return !blocked;
 }

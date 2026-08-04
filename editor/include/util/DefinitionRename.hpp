@@ -39,4 +39,24 @@ std::string renameDefinition(const std::string& dataDir, Category cat,
                              const std::string& oldId, const std::string& newId,
                              int* outUpdatedRefs = nullptr);
 
+// ── ELIMINA (doc 39 regola R1) ───────────────────────────────────────────────
+// L'audit di coerenza dell'editor ha misurato che *Elimina* mancava in 5 moduli
+// su 7: si poteva creare e rinominare una definizione ma non toglierla, e l'unico
+// modo era cancellare il file a mano fuori dall'editor. Sta qui, accanto a
+// `renameDefinition`, perché è lo **stesso dominio**: entrambi manipolano il file
+// che PORTA l'id (ADR-001), e tenerli separati significherebbe due idee diverse
+// di dove vivano le definizioni.
+//
+// COSA NON FA, dichiarato: **non** ripulisce i cross-reference. È deliberato — un
+// riferimento rotto lo segnala `--validate` con il file e il campo, mentre una
+// pulizia automatica cancellerebbe in silenzio scelte dell'autore (un roster che
+// perde una riga senza dirlo). La rinomina li aggiorna perché lì l'intento è
+// "questa cosa ora si chiama così"; qui l'intento è "questa cosa non c'è più", e
+// cosa farne altrove è una decisione di chi autora.
+//
+// Ritorna "" se ok, altrimenti il messaggio d'errore. `outPath` (opzionale):
+// il percorso del file rimosso, per il messaggio di conferma.
+std::string deleteDefinition(const std::string& dataDir, Category cat,
+                             const std::string& id, std::string* outPath = nullptr);
+
 } // namespace editor::rename

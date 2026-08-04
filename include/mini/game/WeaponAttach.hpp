@@ -11,6 +11,7 @@
 #include "mini/game/game_modes/IGameMode.hpp"   // MeshCache
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/ClassResolve.hpp"           // ADR-022: la classe vince
+#include "mini/game/WeaponHandPose.hpp"          // LA formula della posa, condivisa con gli editor
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -71,31 +72,16 @@ inline Resolved resolve(const DefinitionRegistry* registry,
     const glm::vec3 off = wPose
         ? glm::vec3(wd->handOffset[0], wd->handOffset[1], wd->handOffset[2])
         : glm::vec3(disp.offset[0], disp.offset[1], disp.offset[2]);
-    const glm::vec3 grip {wd->gripAttach[0], wd->gripAttach[1], wd->gripAttach[2]};
-
-    glm::mat4 R = glm::rotate(glm::mat4(1.0f), glm::radians(poseRot[1]), {0,1,0})
-                * glm::rotate(glm::mat4(1.0f), glm::radians(poseRot[0]), {1,0,0})
-                * glm::rotate(glm::mat4(1.0f), glm::radians(poseRot[2]), {0,0,1});
-
-    // La matrice local viene composta con la trasformazione del PERSONAGGIO
-    // (che include la sua mesh_scale): l'arma NON deve ereditarla, altrimenti
-    // su modelli scalati (es. clone 0.011) diventa microscopica. Compensa.
-    const float charScale = (def->meshScale > 0.0001f) ? def->meshScale : 1.0f;
-    const float effScale  = poseScale / charScale;
-
-    // Correzione canonica dell'arma (mesh_rot_x/y del WeaponDef): stessa
-    // orientazione base che il Weapon Editor applica al modello grezzo
-    // (rotY * rotX). La POSA in mano resta in weapon_display.rot.
-    // DEVE combaciare con EntityEditor::updateWeaponTransform (anteprima).
-    const glm::mat4 baseFix =
-          glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotY), {0,1,0})
-        * glm::rotate(glm::mat4(1.0f), glm::radians(wd->meshRotX), {1,0,0});
-
-    out.local = glm::translate(glm::mat4(1.0f), hand + off)
-              * R
-              * glm::scale(glm::mat4(1.0f), glm::vec3(effScale))
-              * baseFix
-              * glm::translate(glm::mat4(1.0f), -grip);
+    HandPose p;
+    p.hand      = hand;
+    p.offset    = off;
+    p.rot       = poseRot;
+    p.grip      = {wd->gripAttach[0], wd->gripAttach[1], wd->gripAttach[2]};
+    p.scale     = poseScale;
+    p.charScale = def->meshScale;
+    p.baseRotX  = wd->meshRotX;
+    p.baseRotY  = wd->meshRotY;
+    out.local   = handLocal(p);   // formula condivisa: vedi HandPose sopra
     return out;
 }
 

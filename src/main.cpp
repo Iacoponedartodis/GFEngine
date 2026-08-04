@@ -2,6 +2,7 @@
 #include "mini/core/Telemetry.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/data/ContentValidation.hpp"
+#include "mini/ecs/systems/AiSystem.hpp"   // --trace-ai: scatola nera per-agente
 
 #include <cstring>
 #include <cstdlib>
@@ -18,6 +19,8 @@ int main(int argc, char* argv[])
     std::string missionId;     // --mission <id>: missione attiva (ADR-019)
     std::string classId;       // --class <id>: classe del giocatore (doc 14)
     int  simTicks       = 0;   // --sim-ticks N: sim di durata FISSA (misure confrontabili)
+    int  traceAi        = 0;   // --trace-ai <id>: scatola nera per-agente (-1 = tutte)
+    bool verboseTelemetry = false;   // --telemetry-verbose: abbassa la soglia a Debug
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--direct-prematch") == 0)
@@ -42,6 +45,10 @@ int main(int argc, char* argv[])
             sandbox = true; autoSim = true;
             simTicks = std::atoi(argv[++i]);
         }
+        else if (std::strcmp(argv[i], "--trace-ai") == 0 && i + 1 < argc)
+            traceAi = std::atoi(argv[++i]);   // KI #86: osserva UNA unità, tick per tick
+        else if (std::strcmp(argv[i], "--telemetry-verbose") == 0)
+            verboseTelemetry = true;   // eventi per-evento/per-entità (Debug level)
         else if (std::strcmp(argv[i], "--validate") == 0)
             validateOnly = true;
     }
@@ -83,6 +90,15 @@ int main(int argc, char* argv[])
         mini::telemetry::flushEvents();
         return failed ? 1 : 0;
     }
+
+    // Scatola nera per-agente (KI #86): si accende PRIMA di costruire il mondo, così
+    // la prima unità che si ferma è già osservata.
+    // La traccia per-agente emette a livello Debug: chiederla implica alzarne la
+    // verbosità, altrimenti `--trace-ai` sarebbe silenzioso — un flag che non fa
+    // nulla è il difetto che abbiamo appena scoperto in `--stress`.
+    if (verboseTelemetry || traceAi != 0)
+        mini::telemetry::setMinLevel(mini::telemetry::Level::Debug);
+    mini::AiSystem::setTraceEntity(traceAi);
 
     mini::Application app;
     app.run(directPreMatch, sandbox, autoSim, mapOverride, stressAiCount, missionId,

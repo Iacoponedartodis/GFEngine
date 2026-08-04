@@ -3,6 +3,8 @@
 #include "mini/ecs/Components.hpp"
 #include "mini/game/nav/NavManager.hpp"
 #include "mini/core/GameConfig.hpp"
+#include "mini/core/Telemetry.hpp"   // ADR-050: funnel della navigazione
+#include <nlohmann/json.hpp>
 
 #include <glm/glm.hpp>
 #include <cmath>
@@ -102,6 +104,44 @@ void CrowdSystem::update(World& world, float dt)
             tr->x = vb.x + (lx * vb.co + lz * vb.si);      // local → world
             tr->z = vb.z + (-lx * vb.si + lz * vb.co);
         }
+    }
+
+    // ── Funnel della NAVIGAZIONE (ADR-050, doc 42 buco O1) ───────────────
+    // Qui c'erano ZERO eventi: il secondo costo della simulazione, che scala
+    // peggio dell'AI, era completamente invisibile — e con esso la causa
+    // residua degli stalli ("l'unità non ci arriva"). Cadenza allineata al
+    // battito dell'AI (600 tick) così le due letture si incrociano nel tempo.
+    if (world.getTickCount() % 600 == 1)
+    {
+        const auto& s = nav->stats();
+        // Stato degli AGENTI adesso: quanti hanno un bersaglio valido e quanti
+        // si muovono davvero. È la differenza fra "non gli ho chiesto nulla",
+        // "gliel'ho chiesto e non può" e "può e sta andando" — tre cause
+        // diverse dello stesso sintomo visibile (un'unità ferma).
+        int agenti = 0, conMeta = 0, inMoto = 0;
+        for (EntityId e : world.getEntities())
+        {
+            const auto* ai = world.getAi(e);
+            if (!ai || ai->crowdAgentIdx < 0) continue;
+            ++agenti;
+            if (nav->agentHasTarget(ai->crowdAgentIdx)) ++conMeta;
+            if (nav->agentSpeed(ai->crowdAgentIdx) > 0.15f) ++inMoto;
+        }
+        nlohmann::json d;
+        d["agenti"]   = agenti;
+        d["con_meta"] = conMeta;
+        d["in_moto"]  = inMoto;
+        d["richieste_moto"]  = s.moveRequests;
+        d["agganci_2m"]      = s.moveSnap[0];   // il bersaglio era camminabile
+        d["agganci_6m"]      = s.moveSnap[1];
+        d["agganci_14m"]     = s.moveSnap[2];   // decisione a monte sospetta
+        d["fuori_navmesh"]   = s.moveOffMesh;   // richiesta SCARTATA in silenzio
+        d["stessa_meta"]     = s.moveSameTarget;
+        d["query_path"]      = s.pathQueries;
+        d["path_fuori_mesh"] = s.pathNoPoly;
+        d["path_falliti"]    = s.pathFailed;
+        telemetry::event(telemetry::Level::Info, "Nav", "navigazione", d);
+        nav->resetStats();
     }
 }
 

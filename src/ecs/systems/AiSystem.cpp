@@ -124,6 +124,13 @@ struct TacticalStats
     // hide_duration_max = 1.8 s, una fase oltre 3 s è un bug per definizione.
     int evadeStuckTicks = 0;   // tick-AI con fase evasiva oltre 3 s
     float evadeMaxSec = 0.0f;  // la fase evasiva più lunga osservata nella finestra
+    // La RICERCA usa il mondo o tira a caso? (KI #86 causa 3) Se il fallback dominasse,
+    // la mappa non offre posizioni che vedano le zone dove si perde il contatto — è un
+    // difetto di autoring, non di AI, e va letto lì invece che dedotto dal comportamento.
+    int searchTactical = 0, searchRandom = 0;
+    // ABILITY (O5): quante volte si attiva davvero l'unica ability con un trigger
+    // a runtime. Se resta 0 con entità che la portano, è peso morto misurato.
+    int rollUsed = 0;
     int gateCooldown = 0;    // cadenza di tiro (atteso alto)
     int gateOverheat = 0;    // arma surriscaldata
     int gateLos = 0;         // LOS ri-verificata al tiro: fallita (bersaglio coperto)
@@ -171,7 +178,9 @@ static float aiRandRange(float lo, float hi)
 }
 
 // Nome leggibile dello stato AI per la telemetria (ADR-016, 06_Todo #1).
-static const char* aiStateName(AiState s)
+// Non più `static`: lo usa anche AiTrace.cpp (dichiarato in AiInternal.hpp) — due
+// tabelle di nomi divergerebbero al primo stato nuovo.
+const char* aiStateName(AiState s)
 {
     switch (s) {
         case AiState::Patrol: return "Patrol";
@@ -356,6 +365,36 @@ static void pickSearchPoint(AiComponent& ai, float x, float z, const MapDef* map
 {
     const float cx = ai.hasLastKnown ? ai.lastKnownX : x;
     const float cz = ai.hasLastKnown ? ai.lastKnownZ : z;
+
+    // ── PRIMA CHIEDI AL MONDO (KI #86 causa 3) ────────────────────────────────
+    // Questa era l'unica decisione dell'AI che ignorava del tutto il mondo tattico:
+    // un punto UNIFORMEMENTE CASUALE in 24×24 m, su una mappa con 169 posizioni
+    // autorate e il grafo delle coperture. Un soldato che ha perso il contatto non
+    // vaga a caso: si porta in un punto **da cui quella zona si VEDE**, e guarda.
+    // Ed è la risposta giusta al collo di bottiglia misurato — la LOS, non il FOV:
+    // cercare da un punto senza linea di vista è cercare senza poter trovare.
+    //
+    // `bestFiringPosition` verifica davvero la linea (oltre a settore e gittata), che
+    // è il motivo per cui si usa questa e non una copertura qualsiasi. Il centro è
+    // JITTERATO: senza, tutte le unità e tutti i tentativi successivi ricadrebbero
+    // sulla stessa "migliore" posizione — la ricerca smetterebbe di essere una ricerca.
+    if (map)
+    {
+        const float jx = cx + (aiRand01() - 0.5f) * 16.0f;
+        const float jz = cz + (aiRand01() - 0.5f) * 16.0f;
+        const float jy = mapquery::groundHeightAt(map, jx, jz) + 0.5f;
+        if (const TacticalPositionDef* p =
+                worldintel::bestFiringPosition(*map, x, z, jx, jy, jz, 22.0f))
+        {
+            ai.searchX = p->x; ai.searchZ = p->z;
+            ++g_tac.searchTactical;
+            return;
+        }
+    }
+    // FALLBACK documentato: il mondo non offre nulla che veda quella zona (mappa
+    // povera di posizioni, o zona non coperta da nessuna). Meglio guardarsi intorno
+    // a caso che restare fermi — è il comportamento storico, conservato apposta.
+    ++g_tac.searchRandom;
     float sx = cx + (aiRand01() - 0.5f) * 24.0f;
     float sz = cz + (aiRand01() - 0.5f) * 24.0f;
 
@@ -569,6 +608,9 @@ void AiSystem::update(World& world, float dt)
              {"evasivo_fermo",      g_tac.evadingFrozen},
              {"evasivo_congelato_tick", g_tac.evadeStuckTicks},   // fase hide oltre 3 s
              {"evasivo_durata_max_s",   g_tac.evadeMaxSec},
+             {"ricerca_tattica",  g_tac.searchTactical},   // ha chiesto al mondo
+             {"ricerca_a_caso",   g_tac.searchRandom},     // fallback: il mondo non offriva nulla
+             {"roll_attivati",    g_tac.rollUsed},        // O5: ability effettivamente usate
              {"gate_cooldown",  g_tac.gateCooldown},  // atteso alto (cadenza di tiro)
              {"gate_surriscaldato", g_tac.gateOverheat},
              {"gate_los_tiro",  g_tac.gateLos},       // coperto al momento del tiro
@@ -606,6 +648,7 @@ void AiSystem::update(World& world, float dt)
                                  {{"n", (int)dm->sectors.size()}, {"settori", secArr}});
             }
 
+        aitrace::flush();   // stalli per causa, stesso battito
         g_tac.reset();
     }
 
@@ -635,6 +678,19 @@ void AiSystem::update(World& world, float dt)
         if (isStructure(e)) continue;
         const auto* et = world.getTransform(e);
         if (!et) continue;   // senza transform non può essere un bersaglio valido
+        // UN CADUTO NON È UNA MINACCIA (2026-08-04). Questa lista non filtrava gli
+        // HP, quindi un alleato a terra (hp 0) restava un bersaglio a pieno titolo:
+        // i droidi lo acquisivano e gli sparavano addosso — mentre `CombatSystem`
+        // scartava i proiettili su chi ha `current <= 0`, cioè non potevano
+        // colpirlo. Risultato osservato dall'utente: nemici che girano attorno a un
+        // caduto invulnerabile sparandogli all'infinito, ignorando la battaglia.
+        // Un bersaglio inerme che non si può nemmeno colpire è la peggiore
+        // calamita d'attenzione possibile.
+        // Il fuoco INCROCIATO può ancora finirlo (fix gemello in CombatSystem): a
+        // cambiare è solo che nessuno lo SCEGLIE. È la lettura minima di "priorità
+        // molto minore rispetto a chi è in piedi" (doc 26 Phase D); una priorità
+        // graduata vera arriverà con quel lavoro.
+        if (const auto* sqd = world.getSquad(e); sqd && sqd->downed) continue;
         const glm::vec3 p = {et->x, et->y, et->z};
         if (tm->teamId == 1)      { team1Tgts.push_back(e); team1Pos.push_back(p); }
         else if (tm->teamId == 2) { team2Tgts.push_back(e); team2Pos.push_back(p); }
@@ -781,6 +837,12 @@ void AiSystem::update(World& world, float dt)
         auto* et   = world.getTransform(e);
         auto* team = world.getTeam(e);
         if (!et || !team) continue;
+
+        // SCATOLA NERA (AiTrace, KI #86): osserva l'esito del tick PRECEDENTE. Sta in
+        // testa al ciclo di proposito — il corpo sotto è pieno di `continue` (gate di
+        // fuoco, stati, guardie) e in coda verrebbe saltata proprio per le unità che
+        // interessa osservare: quelle che non arrivano a sparare.
+        aitrace::observe(world, e, dt, tick);
 
         // SOPPRESSIONE (A3): decade da sé — l'unità "riprende fiato" quando smette di
         // arrivarle addosso. Senza decadimento resterebbe inchiodata per sempre.
@@ -1015,6 +1077,14 @@ void AiSystem::update(World& world, float dt)
             for (int j = 0; j < kn; ++j)
                 if (std::fabs(tgtPos[kIdx[j]].y - ePos.y) > config::VERTICAL_ENGAGE_DY)
                     ++g_tac.vertCand;
+            // Indagine 2026-08-02 (KI #86 causa 3): qui c'era la classificazione del
+            // BLOCCANTE (una LOS extra + una mappa per-entità su ogni acquisizione
+            // fallita). Ha dato la sua risposta ed è stata tolta. Ha anche mostrato il
+            // LIMITE della misura a runtime: la classificazione "autorato vs muto" usava
+            // un raggio fisso dal centro del bloccante, senza senso per un impalcato
+            // largo 31 m → la stessa domanda si risponde meglio a costo ZERO nell'editor
+            // (`UnmarkedCover`), dove la geometria si conosce per intero.
+            // Resta l'out-param `outBlocker` in `hasLineOfSight`: gratis se inutilizzato.
             if (kn > 0 && nearest == 0) ++g_tac.acqAllBlocked;
             if (nearest != 0)
             {
@@ -1299,12 +1369,25 @@ void AiSystem::update(World& world, float dt)
 
         if (!ai->stationary)
         {
-            if (ai->state == AiState::Alert && nearest != 0)
+            // LA MANOVRA NON HA BISOGNO DI UN BERSAGLIO (KI #86, changelog 121).
+            // Osservato con la scatola nera su una singola unità: ingaggia al tick
+            // 2838, PERDE il contatto al 2850 — e resta immobile fino al 2988, con
+            // `repositionActive` acceso, posizione e sguardo congelati. Causa: tutta
+            // la manovra viveva dentro il ramo `Alert && nearest != 0`, quindi al
+            // primo LOS che si rompe (e si rompe nel 61-72% dei casi) lo spostamento
+            // si fermava, il suo timer smetteva di scorrere e non c'era NESSUN altro
+            // ramo di movimento per "Alert senza bersaglio" → ~3 s di paralisi, fino
+            // a che `alertTimer` scadeva e `enterHunt` ripuliva il flag.
+            //
+            // È la TERZA volta che affiora lo stesso schema (la fase di hide, il
+            // fuoco durante la manovra, ora la manovra stessa): stato che avanza solo
+            // dentro un ramo condizionato al bersaglio. Qui si risolve alla radice —
+            // una manovra è uno spostamento verso un POSTO, e perdere di vista il
+            // nemico non annulla il terreno che si voleva prendere. Si continua, si
+            // arriva, e proprio lì si ha la migliore probabilità di ri-acquisire.
+            if (ai->state == AiState::Alert && ai->repositionActive)
             {
-                // Ingaggio diretto: strafing + avanzamento
-                const auto* tt = world.getTransform(nearest);
-                if (!tt) { nearest = 0; }
-                else if (ai->repositionActive)
+                const auto* tt = (nearest != 0) ? world.getTransform(nearest) : nullptr;
                 {
                     // ── MANOVRA IN CORSO (ADR-035) ───────────────────────
                     // Si percorre la strada verso la posizione scelta CONTINUANDO
@@ -1338,8 +1421,20 @@ void AiSystem::update(World& world, float dt)
                         orderTravel = true;   // pathfinding, non steering
                     }
                     // Il facing resta sul bersaglio: si spara mentre ci si sposta.
-                    et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+                    // Senza bersaglio si guarda dove si VA — e non è un ripiego: era
+                    // lo sguardo congelato a rendere l'unità cieca proprio mentre
+                    // attraversava terreno nuovo (il campo visivo segue il facing).
+                    if (tt)
+                        et->ry = std::atan2(tt->x - et->x, tt->z - et->z) * (180.0f / PI);
+                    else if (moveSpeed > 0.0f)
+                        et->ry = std::atan2(moveDX, moveDZ) * (180.0f / PI);
                 }
+            }
+            else if (ai->state == AiState::Alert && nearest != 0)
+            {
+                // Ingaggio diretto sul posto: strafing + avanzamento.
+                const auto* tt = world.getTransform(nearest);
+                if (!tt) { nearest = 0; }
                 else
                 {
                     float advX = tt->x - et->x, advZ = tt->z - et->z;
@@ -1393,6 +1488,7 @@ void AiSystem::update(World& world, float dt)
                                                     ? s.param1 : 9.0f;
                                     ai->rollVX = perpX * spd;
                                     ai->rollVZ = perpZ * spd;
+                                    ++g_tac.rollUsed;   // O5: attivazioni reali
                                     world.pushEvent("ROLL #" + std::to_string(e));
                                     telemetry::logTrace("roll: entita' "
                                         + std::to_string(e));
@@ -1576,7 +1672,25 @@ void AiSystem::update(World& world, float dt)
                     }
                 }
             }
-            else if (ai->state == AiState::Hunt && ai->hasLastKnown)
+            // ANCHE "Alert senza bersaglio" si muove verso l'ultima posizione nota
+            // (KI #86 residuo, changelog 133). Osservato con la scatola nera su una
+            // singola unità: immobile dal tick 1128 al 1206 — sguardo congelato —
+            // e ripartita **nell'istante esatto** in cui è passata a Hunt. Causa:
+            // perso il contatto, l'AI resta in Alert per `alertTimer` (3 s) e in
+            // quello stato non esiste alcun ramo di movimento: cade fuori da tutte
+            // le condizioni della catena e non fa nulla.
+            //
+            // In 121 avevo corretto solo il sotto-caso "stava manovrando"; questo è
+            // lo stesso difetto senza manovra. La pausa prima di lanciarsi
+            // all'inseguimento è voluta (`alertTimer` = esitazione), ma **esitare
+            // non è pietrificarsi**: un soldato che perde di vista il nemico non
+            // resta fermo tre secondi a fissare il vuoto, si muove verso l'ultimo
+            // punto noto. Lo stato resta Alert, quindi allo scadere `enterHunt`
+            // sceglie comunque il suo approccio: cambia solo che nel frattempo
+            // l'unità è viva.
+            else if ((ai->state == AiState::Hunt
+                      || (ai->state == AiState::Alert && nearest == 0))
+                     && ai->hasLastKnown)
             {
                 // Va verso l'ultima posizione nota (o, se sta fiancheggiando,
                 // prima verso il punto laterale scelto in enterHunt).
@@ -1587,6 +1701,13 @@ void AiSystem::update(World& world, float dt)
                 float dist = norm2D(moveDX, moveDZ);
                 moveDist = dist;
 
+                // Le TRANSIZIONI di stato restano di chi è davvero in Hunt. Un'unità
+                // in Alert che arriva sull'ultimo punto noto non deve saltare a
+                // Search da qui: `alertTimer` sta già per portarla in Hunt tramite
+                // `enterHunt`, che è il posto in cui si SCEGLIE l'approccio (diretto,
+                // aggiramento, posizione di tiro, terreno dominante). Scavalcarlo
+                // butterebbe via quella decisione per guadagnare mezzo secondo.
+                const bool inHunt = (ai->state == AiState::Hunt);
                 if (ai->flankActive && (dist < 1.5f || isStuck))
                 {
                     // Punto di fiancheggiamento raggiunto (o irraggiungibile):
@@ -1594,22 +1715,27 @@ void AiSystem::update(World& world, float dt)
                     ai->flankActive = false;
                     ai->stuckTimer = 0;
                 }
-                else if (dist < 1.0f)
+                else if (dist < 1.0f && inHunt)
                 {
                     // Raggiunto lastKnown: passa a Search
                     ai->state = AiState::Search;
                     pickSearchPoint(*ai, et->x, et->z, world.activeMap);
                 }
-                else if (isStuck)
+                else if (isStuck && inHunt)
                 {
                     // Bloccato verso lastKnown: prova Search da un altro punto
                     ai->state = AiState::Search;
                     pickSearchPoint(*ai, et->x, et->z, world.activeMap);
                     ai->stuckTimer = 0;
                 }
-                else
+                else if (dist >= 1.0f)
                 {
-                    moveSpeed = ai->seekSpeed;
+                    // In Alert si avanza con più CAUTELA: il contatto è appena
+                    // andato perso, non è un inseguimento deciso. Guardare dove si
+                    // va conta doppio qui — il campo visivo segue il facing, e uno
+                    // sguardo congelato rendeva l'unità cieca proprio mentre
+                    // attraversava il terreno dove il nemico è sparito.
+                    moveSpeed = inHunt ? ai->seekSpeed : ai->seekSpeed * 0.6f;
                     et->ry = std::atan2(moveDX, moveDZ) * (180.0f / PI);
                 }
             }
@@ -2084,7 +2210,13 @@ void AiSystem::update(World& world, float dt)
                   d["target_pos"] = { tt2->x, tt2->y, tt2->z }; }
             else if (ai->hasLastKnown)
                 d["target_pos"] = { ai->lastKnownX, 0.0f, ai->lastKnownZ };
-            telemetry::event(telemetry::Level::Info, "AI", "state change", d);
+            // DECLASSATO a Debug (2026-08-03). Misurato: era il **39% del file**
+            // di telemetria (743 righe su una sim da 3000 tick) e non è mai
+            // servito a nessuna diagnosi — la storia di un agente la racconta
+            // meglio `--trace-ai`, e gli stati aggregati stanno in "tactical
+            // decisions". Resta disponibile con `--telemetry-verbose`: il punto
+            // non è togliere informazione, è non affogare quella che si legge.
+            telemetry::event(telemetry::Level::Debug, "AI", "state change", d);
         }
 
         // ── Sparo (solo in Alert con LOS, mai in fase evasiva) ───────
@@ -2135,6 +2267,14 @@ void AiSystem::update(World& world, float dt)
         if (!physics::hasLineOfSight(eyePos, {tt->x, aimY, tt->z}, world, nearest))
         { ++g_tac.gateLos; if (vertEngage) ++g_tac.vertFireBlocked; continue; }
         ++g_tac.gateFired;
+        ai->obsFired = true;   // scatola nera: in questa finestra ha combattuto
+        // Indagine 2026-08-02 ("sparano a qualcuno ignorando i nemici vicinissimi"):
+        // qui si contavano i tiri con un nemico PIÙ VICINO del bersaglio, e se quel
+        // nemico fosse colpibile. Risposta netta: 15% dei tiri hanno un nemico più
+        // vicino entro 10 m, ma **0%** di quei nemici era colpibile — erano tutti
+        // dietro copertura. La selezione del bersaglio è corretta (prende il più
+        // vicino con LOS, per costruzione); il difetto percepito è di LETTURA, non di
+        // targeting. Diagnostica rimossa: costava una LOS extra per colpo.
         if (vertEngage) ++g_tac.vertShot; else ++g_tac.flatShot;
         float dx = tt->x-eyePos.x, dy = aimY-eyePos.y, dz = tt->z-eyePos.z;
         float len = std::sqrt(dx*dx + dy*dy + dz*dz);
@@ -2180,6 +2320,7 @@ void AiSystem::update(World& world, float dt)
         world.addVelocity(b, {dx*inv, dy*inv, dz*inv});
         world.addTeam(b, {myTeam});
         world.addBullet(b, {ai->bulletDamage, ai->bulletLifetime, myTeam});
+        if (myTeam >= 1 && myTeam <= 2) ++world.shotsFired[myTeam];   // denominatore del funnel (O4)
         // Lo sparo FA RUMORE (doc 40): chiunque abbia orecchie nel raggio se ne accorge.
         // È il meccanismo che propaga una battaglia invece di lasciarla locale.
         world.sounds.push_back({et->x, et->z, config::SOUND_GUNSHOT_RADIUS, myTeam, e});

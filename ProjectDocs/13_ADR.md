@@ -18,6 +18,16 @@ One entry per structural decision. Newest last.
 ## ADR-003 — Client-side vertex arrays (no VAO/VBO)
 - **Decision:** Keep OpenGL 3.3 Compatibility Profile with client-side arrays as an Intel-driver
   workaround. Status: **in force** (do not migrate without a concrete driver justification).
+- **Aggiornamento 2026-08-04 (misura + decisione dell'utente).** Il profiler ha quantificato il
+  prezzo di questa scelta: senza VBO i vertici risalgono alla GPU a **ogni** draw call, quindi il
+  costo del frame segue i **vertici spediti** (misurati: 1,45 M/frame, scena 3D al 95% del frame —
+  KI #87). Non è un argomento per migrare *adesso*: la causa dominante è un **asset** da 161k
+  vertici, non il metodo di upload, e si affronta prima quella (doc 43, R1).
+  **Decisione esplicita dell'utente**: per ora va bene che la build sia ottimizzata per **questa**
+  macchina; la **compatibilità universale su Windows** è un obiettivo successivo e separato, ed è
+  quello — non la performance — il momento in cui questo ADR andrà riaperto. L'utente ha inoltre
+  dichiarato che il PC attuale verrà sostituito a breve: qualunque riapertura di ADR-003 va decisa
+  **sull'hardware nuovo**, perché il workaround esiste per il driver di quello vecchio.
 
 ## ADR-004 — Map is data-driven via MapDef.geometry (2026-07-03)
 - **Decision:** Map collision/visual geometry lives in `MapDef.geometry` (authored in MapEditor),
@@ -894,6 +904,12 @@ in **tutto** il GDD (`grep`), non solo nel suo capitolo.
 > **Raffina la metà NPC di ADR-022.** Non la sostituisce: ADR-022 stabilisce *cosa* è una classe
 > (professione, non preset d'armi; una def usata in due modi). Questo ADR stabilisce *come si
 > istanzia*: chi porta il **corpo** e chi la **professione**, e come i roster referenziano le unità.
+>
+> **Nota 2026-08-02 (KI #88).** Runtime e gate `--validate` rispettavano questo ADR dal primo giorno, ma il
+> **dropdown del roster nel BalanceEditor elencava solo le entità-corpo**: per oltre due settimane l'unico
+> alleato schierabile è stato il Clone Trooper, e le classi (Marksman, Heavy Trooper) erano di fatto
+> irraggiungibili. Un ADR non è "in force" finché ogni **dropdown che lo espone** offre tutto ciò che
+> ammette — un combo che mostra un sottoinsieme è una capacità che non esiste.
 
 ### Context — la distinzione che manca
 Chiarimento dell'utente (2026-07-19), intento autoritativo che rifinisce il modello:
@@ -1044,7 +1060,7 @@ mano, preservato da RMW); ingaggio "solo-se-attaccato" vero; ordini più ricchi;
 
 ---
 
-## ADR-025 — World Intelligence Layer: seam di query + Fase 0 dei metadata tattici (Proposed, 2026-07-20)
+## ADR-025 — World Intelligence Layer: seam di query + Fase 0 dei metadata tattici (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Prima fase del piano doc 33** (World Tactical Intelligence). Filosofia: *"AI semplici in un mondo
 > intelligente"* ([[world-tactical-intelligence]]). Fase 0 = fondamenta a basso rischio che abilitano
@@ -1103,7 +1119,7 @@ gizmo. Prossimo: Fase 1 (Cover Intelligence) — doc 33.
 
 ---
 
-## ADR-026 — Cover Intelligence: copertura come dato tattico + auto-generazione (Proposed, 2026-07-20)
+## ADR-026 — Cover Intelligence: copertura come dato tattico + auto-generazione (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Fase 1 del piano doc 33.** La copertura smette di essere "posizione+fronte+altezza" e diventa un
 > dato tattico che permette a un'AI semplice di scegliere bene ("protegge ma limita la visuale").
@@ -1158,7 +1174,7 @@ il salvataggio. Prossimo: Fase 2 (Tactical Points) — doc 33.
 
 ---
 
-## ADR-027 — Tactical Points: punti d'interesse tattici autorabili (Proposed, 2026-07-20)
+## ADR-027 — Tactical Points: punti d'interesse tattici autorabili (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Fase 2 del piano doc 33.** La mappa può esprimere **posizioni tatticamente rilevanti** oltre alle
 > coperture: punti sopraelevati, difensivi, di osservazione, strettoie. È il dato che gli strati
@@ -1211,7 +1227,7 @@ ricaricare. Consumo AI = Fase 4/5 (documentato). Prossimo: Fase 3 (rete di navig
 
 ---
 
-## ADR-028 — Le pattuglie seguono la ROUTE, non un segmento (Fase 3a) (Proposed, 2026-07-20)
+## ADR-028 — Le pattuglie seguono la ROUTE, non un segmento (Fase 3a) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Fase 3 del piano doc 33, primo incremento.** Il pezzo con valore immediato e osservabile:
 > oggi le route autorate sono in gran parte **sprecate**. Gli altri elementi della Fase 3 (filtri
@@ -1267,7 +1283,7 @@ stato poi rivisto (§4) e l'obiettivo in Advance reso individuale (ADR-029/giro 
 
 ---
 
-## ADR-035 — Manovra in combattimento: l'AI si riposiziona invece di stare ferma (Proposed, 2026-07-20)
+## ADR-035 — Manovra in combattimento: l'AI si riposiziona invece di stare ferma (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Prima fase AI**, dopo il completamento dei metadata. È il consumo che mancava: le query esistono,
 > sono economiche, ma nessuno le usava *durante* lo scontro.
@@ -1328,7 +1344,7 @@ attiva), **`stuck` 1** (le manovre non creano ingorghi), 0 errori.
 
 ---
 
-## ADR-034 — Settori (Combat Areas): il livello su cui ragiona il comandante (M5) (Proposed, 2026-07-20)
+## ADR-034 — Settori (Combat Areas): il livello su cui ragiona il comandante (M5) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Chiude il percorso metadata** (doc 33 §5-bis) e lo ricollega all'obiettivo iniziale: dare al
 > Droide Tattico qualcosa su cui ragionare davvero.
@@ -1385,7 +1401,7 @@ invariato** (firebase non ne ha ancora: vanno autorati per vederne l'effetto).
 
 ---
 
-## ADR-033 — Esposizione derivata e aggiramento: le corsie senza autorarle (Proposed, 2026-07-20)
+## ADR-033 — Esposizione derivata e aggiramento: le corsie senza autorarle (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > Chiude il pezzo "corsie di avvicinamento / aggirare restando coperti" (doc 33 §5-bis) **senza**
 > introdurre un nuovo tipo di dato da autorare a mano.
@@ -1440,7 +1456,7 @@ funzione del runtime** (regola in un posto solo, niente duplicazione). Build 0/0
 
 ---
 
-## ADR-032 — Rete tattica: linea di tiro reale + grafo "chi copre chi" (M3+M4) (Proposed, 2026-07-20)
+## ADR-032 — Rete tattica: linea di tiro reale + grafo "chi copre chi" (M3+M4) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **M3 e M4 vengono fatti INSIEME**, per la stessa ragione che ha portato a unificare prima (ADR-030):
 > il grafo dei link e il precalcolo della visibilità sono **la stessa computazione**. Farli separati
@@ -1501,7 +1517,7 @@ visualizzazione dei link in editor → follow-up; corsie di avvicinamento → in
 
 ---
 
-## ADR-031 — Settore di tiro: la copertura diventa una posizione di combattimento (M1) (Proposed, 2026-07-20)
+## ADR-031 — Settore di tiro: la copertura diventa una posizione di combattimento (M1) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Il cambio che rende le coperture offensive** (doc 33 §5-bis, M1). Costruito su ADR-030, quindi il
 > campo nasce una volta sola sulla posizione tattica unificata.
@@ -1561,7 +1577,7 @@ salvare e ricaricare. Prossimo: M3 (link fra posizioni + corsie di avvicinamento
 
 ---
 
-## ADR-030 — Una sola "posizione tattica": unificazione cover ↔ tactical point (M2) (Proposed, 2026-07-20)
+## ADR-030 — Una sola "posizione tattica": unificazione cover ↔ tactical point (M2) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > **Primo incremento del completamento metadata** (doc 33 §5-bis). Scelta dell'utente: **unificare
 > prima**, poi aggiungere il settore di tiro (M1) — così il campo nuovo nasce una volta sola e la rete
@@ -1621,7 +1637,7 @@ verificare la lista unica con le coperture migrate, salvare e ricaricare.
 
 ---
 
-## ADR-029 — Approccio tattico all'ingaggio + personalità individuale (Proposed, 2026-07-20)
+## ADR-029 — Approccio tattico all'ingaggio + personalità individuale (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > Primo passo **costruttivo** verso "AI più intelligenti" (dopo aver rimosso ciò che *impediva*
 > l'indipendenza, giro 24). Vale per **entrambe le fazioni**: è lo stesso sistema, non due
@@ -1681,7 +1697,7 @@ partita**: naturalezza e varietà degli approcci; le leve sono i profili nel Bal
 
 ---
 
-## ADR-036 — Le strutture strategiche sono oggetti SOLIDI, autorati e per fazione (Proposed, 2026-07-20)
+## ADR-036 — Le strutture strategiche sono oggetti SOLIDI, autorati e per fazione (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 > Retro-documenta la decisione presa nel changelog (33). Il numero era già citato in memoria e nei
 > documenti: senza questo ADR restava un riferimento senza contenuto.
@@ -1737,7 +1753,7 @@ torre di team 1, verificarne in partita collisione e appartenenza.
 
 ---
 
-## ADR-037 — Lo stato privo di ordini: le truppe sono indipendenti per default (Proposed, 2026-07-20)
+## ADR-037 — Lo stato privo di ordini: le truppe sono indipendenti per default (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 ### Context
 `SquadSystem` imponeva un default: **chi non ha un ordine attivo riceve `Follow` sul leader**. Non
@@ -1799,7 +1815,7 @@ ignora"; ruota di comando a 4 settori (SEGUI impartisce, LIBERI revoca); il toas
 
 ---
 
-## ADR-038 — La torre di comunicazione degrada, non spegne (doc 34) (Proposed, 2026-07-20)
+## ADR-038 — La torre di comunicazione degrada, non spegne (doc 34) (Accepted — in force, stato corretto nell'audit 2026-08-04; proposto 2026-07-20)
 
 ### Context
 Direttiva dell'utente: *"le torri di comunicazione se distrutte non devono bloccare i rinforzi, però
@@ -1878,7 +1894,7 @@ da lontano e arrivano dove il nemico era, droidi che insistono su un ordine vecc
 
 ---
 
-## ADR-039 — Le strutture sono un fatto tattico autorabile (doc 35) (Proposed, 2026-07-20)
+## ADR-039 — Le strutture sono un fatto tattico autorabile (doc 35) (Accepted — in force, implementato e verificato 2026-08-04; 2026-07-20)
 
 ### Context
 KI #70: in `--sim` una torre da 300 HP **non veniva mai distrutta**, nemmeno piazzata dentro lo spawn
@@ -1949,7 +1965,7 @@ dell'utente, non ingegneria.
 
 ---
 
-## ADR-040 — La torre di controllo SEGNALA, il comandante ORDINA (doc 36) (Proposed, 2026-07-21)
+## ADR-040 — La torre di controllo SEGNALA, il comandante ORDINA (doc 36) (Accepted — in force, implementato e verificato 2026-08-04; 2026-07-21)
 
 ### Context
 Direttiva dell'utente: la torre di controllo dei cloni *"si ferma ad un livello più basso per
@@ -2009,7 +2025,7 @@ decorrelata dal bias.
 
 ---
 
-## ADR-041 — Il Droide Tattico è un'entità a sé, non una classe (Proposed, 2026-07-21)
+## ADR-041 — Il Droide Tattico è un'entità a sé, non una classe (SUPERSEDED da ADR-044, 2026-07-21)
 
 > **Piano, non ancora implementato.** Nasce dalla direttiva dell'utente (2026-07-21) e da tre
 > osservazioni convergenti: il Droide Tattico è al tempo stesso una **truppa**, un **bersaglio** e un
@@ -2085,7 +2101,7 @@ BalanceEditor che autora i CommanderDef (dropdown corpo/arma/AI, abilità, hp/ti
 
 ---
 
-## ADR-042 — Comando nemico v2: più fronti insieme, stance per-settore (doc 32) (Proposed, 2026-07-21)
+## ADR-042 — Comando nemico v2: più fronti insieme, stance per-settore (doc 32) (Accepted — in force, implementato e verificato 2026-08-04; 2026-07-21)
 
 > Realizza la "Direzione v2" del doc 32, su direttiva dell'utente: il Droide Tattico deve essere
 > coerente con ciò che è in Star Wars — **analizza la situazione, imposta priorità e impartisce ordini,
@@ -2383,7 +2399,7 @@ porta con sé un **proxy di collisione** composto da box.
 
 ---
 
-## ADR-048 — Il significato tattico si autora per ASSET, non per ISTANZA (prefab) (Proposed, 2026-07-27)
+## ADR-048 — Il significato tattico si autora per ASSET, non per ISTANZA (prefab) (Accepted — in force, implementato e verificato 2026-08-04; 2026-07-27)
 
 ### Context
 Training Ground ha **167 posizioni tattiche piazzate a mano**. Le mappe "profonde" previste dal GDD ne
@@ -2413,7 +2429,7 @@ sono **autorate** (salvate). La distinzione è esplicita nel campo `source`.
 
 ---
 
-## ADR-049 — Scheletro comune dei moduli editor: COMPOSIZIONE, non ereditarietà (Proposed, 2026-08-02)
+## ADR-049 — Scheletro comune dei moduli editor: COMPOSIZIONE, non ereditarietà (Accepted — in force, implementato e verificato 2026-08-04; 2026-08-02)
 
 ### Context
 L'editor cresce col progetto ed è già a 7 moduli / ~7400 righe (MapEditor da solo 2787). L'audit di coerenza
@@ -2451,3 +2467,59 @@ imporrebbe di riscrivere tutti e sette insieme. I componenti si adottano **uno a
 
 ### Status
 **Proposed.** Diventa Accepted quando `ModuleShell` sarà adottato dal modulo pilota e verificato a mano.
+
+## ADR-050 — Ogni sistema nasce con la sua OSSERVABILITÀ, pensata per l'agente AI (Accepted — in force, 2026-08-02)
+
+### Context
+Il progetto aveva già la regola "chi costruisce un sistema costruisce l'authoring". Mancava la
+metà che serve a **diagnosticare**: nessuna regola imponeva strumenti per vedere cosa un sistema
+sta realmente facendo mentre gira.
+
+Il costo si è visto su KI #86. **Tre diagnosi consecutive sono state fuorviate da metriche
+aggregate**:
+1. gli eventi di combattimento confrontati fra run che divergono (un fix corretto sembrava
+   peggiorare del 17%, uno sbagliato sembrava migliorare);
+2. la classificazione dei bloccanti con una soglia fissa di 3 m dal centro di oggetti larghi
+   fino a 31 m → il falso "57% di geometria muta";
+3. l'ipotesi "FOV senza scandaglio", smentita dal funnel (il campo visivo costa il 5-8%).
+
+Ogni volta la risposta è arrivata **solo** guardando una singola unità: la scatola nera
+(`AiTrace.cpp`) ha trovato in un colpo un difetto che tre giri di aggregati avevano mancato —
+un'unità immobile 3 s con la manovra accesa, leggibile come una riga di cronaca.
+
+Il punto non è la comodità dell'utente. **L'osservabilità è il canale sensoriale dell'agente
+AI su questo codice.** L'agente non vede lo schermo, non sente il "feel", non nota che un
+fucile è piccolo: tutto ciò che non è strumentato, per lui non esiste — e viene sostituito da
+ipotesi plausibili e sbagliate.
+
+### Decision
+Un sistema non è completo finché non risponde a *"cosa sta facendo, adesso, questa singola
+entità, e perché"*. Servono tre livelli, non uno:
+
+| livello | domanda | esempio |
+|---|---|---|
+| **Sintomo** | il comportamento è rotto? | `evasivo_durata_max_s`, `stalli per causa` |
+| **Funnel** | dove muore il processo, su quale base? | `occ_in_raggio → occ_nel_cono → occ_acquisito`, `gate_*` |
+| **Singola entità** | cosa ha fatto, tick per tick? | evento `stallo` (chi guardare) + `--trace-ai <id>` (cosa ha fatto) |
+
+Vincoli:
+- **L'osservatore non decide.** Nessun ramo di comportamento legge i dati di osservazione; se
+  li leggesse sarebbe un sistema, e varrebbe la regola sui sistemi nuovi (CLAUDE.md §5).
+- **Lo stato di osservazione sta sul COMPONENTE**, non nel sistema (sopravviverebbe a
+  `initialize()`).
+- **Guardie permanenti vs sonde temporanee**: la guardia costa un incremento e resta; la sonda
+  costa un raycast o un'allocazione, si rimuove appena ha risposto, e nel codice resta scritto
+  **quale risposta ha dato** — così nessuno la rifà.
+- **Misura il sintomo, non l'esito**, e per confronti fra varianti calcola entrambe nella
+  STESSA run: fra run diverse la simulazione diverge e la differenza non è attribuibile.
+- **`--validate` è l'osservabilità dell'authoring**: se un dato può essere sbagliato in
+  silenzio, il gate lo dice, con l'azione concreta per correggerlo.
+
+### Consequences
+- Costo reale in righe di codice e in tempo per ogni sistema nuovo. Accettato: il conto già
+  pagato in diagnosi sbagliate è più alto.
+- **Verifica del rispetto**: se per rispondere a una domanda su un sistema devo aggiungere
+  strumentazione *dopo*, quel sistema è stato consegnato incompleto.
+- Non retroattivo su tutto: i sistemi esistenti si strumentano quando li si tocca. Oggi
+  l'AI è coperta (funnel + scatola nera); **non lo sono** navigazione, game mode, missioni,
+  ability e veicoli.

@@ -2,6 +2,7 @@
 #include "mini/ecs/ISystem.hpp"
 
 #include <tracy/Tracy.hpp>   // ADR-015: no-op se USE_TRACY_PROFILER=OFF
+#include "mini/core/Profiler.hpp"   // ADR-050: dove finisce il tempo
 #include <algorithm>
 #include <iostream>
 #include <limits>
@@ -36,7 +37,19 @@ void World::initialize()
 }
 
 void World::tick(float dt)
-{ ZoneScoped; ++m_tickCount; for (auto& s : m_systems) s->update(*this, dt); }
+{
+    ZoneScoped;
+    ++m_tickCount;
+    // Ogni sistema è una zona (ADR-050): "il frame costa 12 ms" non dice cosa
+    // ottimizzare, "ai 7,1 ms / crowd 3,4 / il resto sotto 0,3" sì. Il costo è
+    // due letture d'orologio per sistema per tick.
+    GF_PROFILE_ZONE("world.tick");
+    for (auto& s : m_systems)
+    {
+        profiler::Zone z(s->name());
+        s->update(*this, dt);
+    }
+}
 
 void World::registerSystem(std::unique_ptr<ISystem> s)
 { if (s) m_systems.push_back(std::move(s)); }

@@ -1,6 +1,7 @@
 #pragma once
 #include "viewport/FreeCameraViewport.hpp"
 #include "util/RigReader.hpp"
+#include "mini/game/data/DefinitionRegistry.hpp"   // anteprima in mano: entità + attach point
 #include <string>
 #include <vector>
 #include <array>
@@ -78,6 +79,24 @@ private:
 
     // Vista corrente: false = arma, true = proiettile
     bool m_showProjectileMesh = false;
+
+    // ── Anteprima IN MANO (2026-08-02) ────────────────────────────────────
+    // La posa in mano si tarava alla cieca: si scriveva `hand_scale` qui e la si
+    // guardava nell'Entity Editor, o peggio avviando una partita. Con la scala
+    // che compensa la dimensione NATIVA del mesh — 0.0015 per l'E-5C, 80 per lo
+    // Z-6 — indovinarla senza vederla non è realistico: il DC-15X è rimasto
+    // senza `hand_scale` e in partita appariva minuscolo. Qui si carica un
+    // PERSONAGGIO come modello principale e l'arma come attachment, con la
+    // stessa formula del runtime (`weaponattach::handLocal`): si trascina lo
+    // slider e si vede.
+    bool m_handPreview = false;
+    int  m_handUnit    = 0;                 // indice in m_handUnits
+    std::vector<std::string> m_handUnits;   // entità con un mesh (alleati + nemici)
+    // Serve solo all'anteprima: mesh, scala e attach point del personaggio.
+    // Ricaricato all'accensione dell'anteprima, non tenuto in sync di continuo.
+    mini::DefinitionRegistry m_handRegistry;
+    void refreshHandUnits();
+    void updateHandPreview();
 
     // Attach points in editing
     std::unordered_map<std::string, AttachPointEntry> m_attachPoints;

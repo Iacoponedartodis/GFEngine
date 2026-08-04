@@ -314,11 +314,12 @@ di utilità, e dare loro **curve dichiarate e tarabili** invece di coefficienti 
 > `include/mini/game/ai/AiUtility.hpp` — 8 bilanci (`kCover`, `kFlank`, `kOverwatch`, `kFiring`, `kHold`,
 > `kAdvantage`, `kPicture`, `kSector`) commentati per *intento*, con i valori **esattamente** quelli
 > preesistenti: refactor a comportamento invariato, verificato con `--sim-ticks` (128 = baseline).
-> **Manca il secondo passo**: le *curve* (risposte non lineari, normalizzazione esplicita degli input) e la
-> taratura verso i valori raccomandati qui sotto. È deliberatamente separato — cambiare i pesi insieme al
-> refactor avrebbe reso ogni differenza non attribuibile, e va comunque fatto **dopo** KI #86: tarare
-> l'utility mentre l'ingaggio ha un bug significa ottimizzare il sintomo sbagliato.
-
+> **Secondo passo FATTO e in gran parte NEGATIVO** (changelog 136): le curve raccomandate qui sotto
+> sono state implementate e misurate con A/B. Il **valore del terreno concavo è stato RIFIUTATO** —
+> più acquisizioni ma meno colpi a segno (265 → 211 eventi), e attenua il segnale dell.AUTORE, che è
+> il modello del progetto. Il **rischio convesso è adottato ma inerte** (tocca aggiramento e
+> overwatch: 5 occorrenze in 6000 tick). Le raccomandazioni sotto restano come teoria, con questa
+> misura accanto.
 Curve raccomandate (tutte normalizzate 0..1, componibili per prodotto pesato):
 ```
 Minaccia          f(d) = 1 / (1 + (d/d₀)²)            iperbolica: crolla con la distanza

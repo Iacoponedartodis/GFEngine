@@ -243,7 +243,7 @@ const TacticalPositionDef* bestFlankingPosition(const MapDef& map,
         const float score = flankBonus * aiutility::kFlank.flankBonus
                           + p.protection * aiutility::kFlank.protection
                           + arcPref * aiutility::kFlank.arc
-                          + (1.0f - exposure) * aiutility::kFlank.unexposed
+                          + (1.0f - aiutility::riskPenalty(exposure)) * aiutility::kFlank.unexposed
                           - aiutility::kFlank.distance * (myD2 / maxDist2);
         if (score > bestScore) { bestScore = score; best = &p; }
     }
@@ -281,7 +281,7 @@ const TacticalPositionDef* bestOverwatchForPosition(const MapDef& map,
         const float score = p.protection * aiutility::kOverwatch.protection
                           + p.importance * aiutility::kOverwatch.importance
                           - std::sqrt(d2) * aiutility::kOverwatch.distance
-                          - expo * aiutility::kOverwatch.exposure;
+                          - aiutility::riskPenalty(expo) * aiutility::kOverwatch.exposure;
         if (score > bestScore) { bestScore = score; best = &p; if (outIdx) *outIdx = i; }
     }
     return best;

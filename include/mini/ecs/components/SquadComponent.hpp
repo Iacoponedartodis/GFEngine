@@ -76,6 +76,10 @@ struct SquadComponent
     bool  downed            = false;
     float bleedoutRemaining = 0.0f;   // secondi prima della morte definitiva
     float reviveProgress    = 0.0f;   // 0..SQUAD_REVIVE_TIME mentre un vivo è vicino
+    // Soccorso DIFFERITO perché la zona è troppo calda: annuncia una volta sola.
+    // Vive qui e non nel sistema di proposito — lo stato dentro un sistema
+    // sopravvive a `initialize()` e andrebbe azzerato a mano; qui muore col caduto.
+    bool  rescueHeldSaid    = false;
     // Quante volte questa VITA è già stata rianimata. Esaurito il cap, la prossima
     // caduta è letale: un uomo non si rialza all'infinito (bilanciamento — la
     // rianimazione restava troppo efficace anche coi tempi/HP corretti). Si azzera

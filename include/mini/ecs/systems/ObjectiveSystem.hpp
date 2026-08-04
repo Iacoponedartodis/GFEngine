@@ -21,6 +21,7 @@ class ObjectiveSystem : public ISystem
 {
 public:
     void update(World& world, float dt) override;
+    const char* name() const override { return "objective"; }
 
     // Esito della missione secondo le regole DICHIARATE nel MissionDef.
     enum class Outcome { Ongoing, Success, Failure };

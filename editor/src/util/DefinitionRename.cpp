@@ -225,4 +225,32 @@ std::string renameDefinition(const std::string& dataDir, Category cat,
     return "";
 }
 
+// ── deleteDefinition (doc 39 R1) ─────────────────────────────────────────────
+std::string deleteDefinition(const std::string& dataDir, Category cat,
+                             const std::string& id, std::string* outPath)
+{
+    if (id.empty()) return "nessuna definizione selezionata";
+
+    namespace fs = std::filesystem;
+    const fs::path file = fs::path(dataDir) / subdirOf(cat) / (id + ".json");
+    std::error_code ec;
+    if (!fs::exists(file, ec))
+        return "file non trovato: " + file.string();
+
+    // Il `.bak` che accompagna la definizione se ne va con lei: lasciarlo
+    // significherebbe che un "ripristina" futuro resusciti un id che l'autore ha
+    // tolto — e nel frattempo i `.bak` orfani si accumulano in `data/`.
+    const fs::path bak = fs::path(file.string() + ".bak");
+    if (fs::exists(bak, ec)) fs::remove(bak, ec);
+
+    if (!fs::remove(file, ec))
+        return "impossibile eliminare: " + ec.message();
+
+    if (outPath) *outPath = file.string();
+    std::cout << "[Editor] eliminata '" << id << "' (" << subdirOf(cat)
+              << "). I riferimenti da altri file NON sono stati toccati: "
+                 "usa --validate per trovarli.\n";
+    return "";
+}
+
 } // namespace editor::rename

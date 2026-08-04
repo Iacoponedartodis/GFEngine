@@ -123,6 +123,14 @@ float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, i
     const int mine = (myTeam == 1) ? st.allies : st.enemies;
     const int foe  = (myTeam == 1) ? st.enemies : st.allies;
     const int foeTeam = (myTeam == 1) ? 2 : 1;
+    // NOTA: l'importanza del SETTORE resta LINEARE, di proposito. La curva concava
+    // (doc 40 §6) descrive il "valore del terreno", cioè l'importanza di una
+    // POSIZIONE tattica. Applicandola anche qui, la prima prova ha spostato le
+    // priorità strategiche: i droidi si sono distribuiti diversamente e
+    // `hold_su_posizione` è passato da 360 a **0** in una sola run — un
+    // comportamento sparito per un cambio che doveva riguardare tutt'altro livello.
+    // Un settore è una dichiarazione del designer sull'intero fronte: comprimerla
+    // è una decisione strategica a sé, non un effetto collaterale della taratura.
     float w = sec.importance * aiutility::kSector.importance;  // valore intrinseco (baseline)
     w += st.pressure * aiutility::kSector.pressure;      // CONTESO: c'è battaglia → forte richiamo
     if (foe > mine)                                     // in MINORANZA → rinforza (urgente)

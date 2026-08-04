@@ -2,6 +2,758 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-04 (137) — Il caduto era invulnerabile E calamita d'attenzione (KI #93)
+
+Segnalazione dell'utente da una simulazione con molti più droidi che cloni: *"rimaneva un clone a
+terra che non moriva, attorno al quale giravano i droidi, che gli sparavano anche"*. Erano **due
+bug che si alimentavano a vicenda**, e insieme spiegano la scena esattamente.
+
+1. **`CombatSystem` non poteva colpirlo.** Il filtro bersagli scartava chi ha `current <= 0`, e un
+   caduto ha esattamente `current == 0`. Il commento nel codice affermava il contrario — *"un colpo
+   su un già-a-terra lo finisce"* — ed era **falso da sempre**.
+2. **`AiSystem` lo sceglieva.** La lista bersagli **non filtrava gli HP**: un caduto restava un
+   bersaglio a pieno titolo, quindi i droidi lo acquisivano e ci sparavano.
+
+Un bersaglio inerme, invulnerabile **e** attraente: la peggiore calamita d'attenzione possibile —
+i nemici si inchiodavano su di lui ignorando la battaglia.
+
+**Corretto in tandem**: nessuna AI sceglie più un caduto (non è una minaccia), ma il **fuoco
+incrociato può finirlo**. È la lettura minima di *"priorità molto minore rispetto a chi è in piedi"*
+(doc 26 Phase D, visione dell'utente); la priorità graduata vera arriverà con quel lavoro.
+
+**Verificato**: 8 caduti → 4 morti di bleed-out (a ~10,0 s esatti, KI #91 tiene), **4 finiti dal
+fuoco**, **0 caduti ancora vivi a fine simulazione**. Il sintomo riportato non si riproduce più.
+Eventi di combattimento 265 → 215: atteso e voluto — le AI non sprecano più raffiche su un bersaglio
+che non potevano colpire.
+
+## 2026-08-04 (136) — A5 taratura: la curva raccomandata da doc 40 §6 è stata PROVATA e RIFIUTATA
+
+Ultimo pezzo di A5. Doc 40 §6 raccomandava curve di risposta non lineari al posto dei termini
+lineari: valore del terreno concavo (`imp^0.7`), rischio convesso (`exp^1.5`), prossimità iperbolica.
+Implementate come funzioni dichiarate in `AiUtility.hpp` e **misurate**, invece di adottate perché
+scritte in un documento.
+
+### Valore del terreno concavo: rifiutato
+
+A/B sullo stesso binario, `--sim-ticks 6000`:
+
+| metrica | lineare | `^0.85` | `^0.7` |
+|---|---|---|---|
+| acquisizioni | 2362 (29% del cono) | 3272 (37%) | 3298 (37%) |
+| colpi sparati | 379 | 440 | 415 |
+| **eventi di combattimento** | **265** | 222 | 211 |
+
+Più acquisizioni e più colpi, ma **meno colpi a segno**: comprimendo l'importanza le unità scelgono
+posizioni più vicine e peggiori, sparano di più e colpiscono di meno. E soprattutto va **contro il
+modello del progetto**: l'importanza è la dichiarazione tattica dell'**autore** (ADR-030/033), il
+segnale con cui un mondo intelligente guida AI semplici — attenuarlo sposta la decisione dal
+designer alla formula. **Ripristinato il lineare** (verificato: 265 eventi, identico al baseline).
+
+Un errore lungo la strada, utile da registrare: al primo tentativo avevo applicato la curva anche
+all'importanza dei **settori**, e `hold_su_posizione` è crollato da 360 a **0**. Stavo per attribuirlo
+alla curva — ma `cmd_tieni` era **1** già nel baseline: quei 360 vengono da **una singola direttiva
+rara** che persiste per molti tick. Un evento raro non è una metrica; per poco non rifiutavo la
+curva per la ragione sbagliata (l'ho rifiutata poi per quella giusta, l'accuratezza).
+
+### Rischio convesso: adottato, ma è INERTE oggi
+
+Misurato da solo: **265 eventi, acquisizioni e colpi identici al lineare** — cifra per cifra. Tocca
+solo `bestFlankingPosition` e `bestOverwatchForPosition`, che in 6000 tick capitano **5 volte**.
+Tenuto perché è la forma giusta e costa zero, ma il valore di quella riga oggi è **sapere che è
+inerte** invece di crederla efficace: conterà quando l'aggiramento sarà frequente.
+
+### Cosa resta di A5
+
+La formalizzazione (117) e l'ispettore (116) restano il guadagno vero: i pesi sono visibili,
+discutibili e in un posto solo. La *taratura* ha prodotto un risultato negativo — ed è un risultato,
+non un fallimento: ora sappiamo che la raccomandazione teorica del documento non regge alla misura,
+e la prossima volta non la si rifà. Le funzioni restano in `AiUtility.hpp` documentate con i numeri,
+come **record e non come trappola**.
+
+## 2026-08-04 (135) — Il bleed-out si FERMAVA con un soccorritore vicino (il dubbio dell'utente era fondato)
+
+L'utente ha chiesto se un clone fosse davvero rimasto a terra 33 secondi, dicendo di sospettare da
+tempo che bleed-out e rianimazione non funzionassero come sulla carta. **Aveva ragione**, e la
+telemetria l'ha quantificato in due minuti: entità 253 **a terra 34,5 s** con
+`squad_bleedout_time` = **10 s**; entità 14 morta a **12,2 s** invece di 10.
+
+**Causa**: il decremento del timer viveva nel ramo `else`, cioè scorreva **solo se NON c'era un
+soccorritore vicino**. Bastava che qualcuno arrivasse a portata perché il caduto diventasse
+**immortale**; con un soccorritore che entrava e usciva dal raggio, il progresso di rianimazione si
+azzerava a ogni uscita ma l'orologio restava fermo.
+
+Il difetto toglieva alla meccanica la sua unica tensione — la **corsa** fra chi soccorre e il tempo —
+e rendeva **insensata la taratura**: abbassare il valore non cambiava nulla proprio nei casi in cui
+qualcuno accorreva. *L'utente ha tarato quel numero mentre la meccanica era rotta.* Rende anche vera
+un'affermazione che avevo scritto in changelog 122 sul soccorso differito ("il bleed-out continua a
+scorrere, quindi a volte l'uomo si perde"), che allora era **falsa**.
+
+**Corretto**: il bleed-out scorre sempre; la rianimazione accumula in parallelo. La morte si valuta
+**dopo** la rianimazione — altrimenti una canalizzazione completata nello stesso tick uccideva l'uomo
+sul fotogramma della salvezza. Verificato: **10,0 s esatti**.
+
+### E la correzione fa emergere una domanda di bilanciamento (KI #92)
+
+Con il timer che finalmente scorre, il **differimento del soccorso** (122) e il bleed-out si
+sommano: caduto a t=14,1 → soccorso differito **8,9 s** perché la zona è contesa → dispacciato a
+t=23,0 → restano **1,1 s** per arrivare *e* canalizzare **4,5 s** → morto a t=24,0. **Zero
+rianimazioni in 12.000 tick**: in area contesa è aritmeticamente impossibile.
+
+Non ho toccato i valori: sono scelte di gioco e stanno nel BalanceEditor. Leve e numeri in KI #92 —
+la più sensata è alzare `squad_bleedout_time` (10 → 20-25 s), che è ciò che rende il differimento
+una scelta tattica invece di una condanna.
+
+## 2026-08-04 (134) — Regola R1 chiusa: *Elimina* c'è in tutti i moduli che gestiscono definizioni
+
+Arretrato di doc 39: *Elimina* mancava in **5 moduli su 7**. Si poteva creare e rinominare una
+definizione ma non toglierla, e l'unico modo era cancellare il file fuori dall'editor — cioè
+scavalcando le regole del progetto.
+
+Nuovo comando condiviso **`editor::rename::deleteDefinition`**, accanto a `renameDefinition` perché
+è lo **stesso dominio**: entrambi manipolano il file che *porta* l'id (ADR-001), e separarli avrebbe
+significato due idee diverse di dove vivano le definizioni. Agganciato a Class, Entity e Weapon
+Editor con conferma esplicita; Vehicle lo ha già via `AssetBrowser`; Map e Mission l'avevano.
+Balance non gestisce definizioni, quindi non si applica. **Copertura completa.**
+
+**Cosa NON fa, dichiarato nel popup e nel codice**: non ripulisce i cross-reference. È deliberato —
+un riferimento rotto lo segnala `--validate` col file e il campo, mentre una pulizia automatica
+cancellerebbe **in silenzio** scelte dell'autore (un roster che perde una riga senza dirlo). La
+rinomina li aggiorna perché lì l'intento è *"ora si chiama così"*; qui è *"non c'è più"*, e cosa
+farne altrove è una decisione di chi autora. Il `.bak` che accompagna la definizione se ne va con
+lei, altrimenti un ripristino futuro resusciterebbe un id tolto apposta.
+
+**Build-verified.** **Smoke test dovuto**: eliminare una definizione di prova in ciascuno dei tre
+moduli e verificare che la lista si rigeneri e la selezione resti sensata.
+
+## 2026-08-04 (133) — KI #86 residuo CHIUSO: stalli 18 → 3, e un falso positivo del mio strumento
+
+Ripreso il filo lasciato prima della telemetria, usando la scatola nera costruita apposta. Flusso a
+tre passi come da doc 12: leggi `stalli per causa` → prendi un id → `--trace-ai <id>`.
+
+**Causa 5 — "Alert senza bersaglio" non aveva ANCORA un ramo di movimento.** La traccia di una
+singola unità lo mostra come una riga di cronaca: immobile dal tick **1128 al 1206**, sguardo
+congelato a −154°, e ripartita **nell'istante esatto** in cui è passata a Hunt. In changelog 121
+avevo corretto solo il sotto-caso "stava manovrando"; questo è lo stesso difetto **senza** manovra —
+perso il contatto, l'unità resta in Alert per `alertTimer` (3 s) e in quello stato cade fuori da
+tutte le condizioni della catena di movimento.
+
+Corretto estendendo il ramo Hunt a `Alert && nearest == 0 && hasLastKnown`. La pausa prima
+dell'inseguimento è voluta (`alertTimer` = esitazione), ma **esitare non è pietrificarsi**: ora
+l'unità avanza verso l'ultimo punto noto, a velocità ridotta perché il contatto è appena andato
+perso. Le **transizioni di stato restano di chi è in Hunt**: un'unità in Alert che arriva sul punto
+non salta a Search da qui, altrimenti scavalcherebbe `enterHunt`, che è dove si sceglie l'approccio.
+
+**E un falso positivo del rilevatore, che valeva l'episodio più lungo mai registrato.** Dopo il fix
+restava uno stallo da **33,5 s**: era l'entità 253, un alleato **messo a terra** al frame 699. Un
+caduto non può muoversi né sparare *per definizione* — il rilevatore lo contava per tutta la
+finestra di bleed-out più rianimazione. Escluso: lo stato "a terra" ha già la sua telemetria
+(`member downed`, `soccorso differito`), duplicarlo come anomalia era solo rumore. **Seconda volta
+in due giorni** che una guardia leggeva il dato sbagliato (la prima fu il funnel di missione).
+
+### Il bilancio dell'intera indagine KI #86
+
+| | episodi | tempo perso | più lungo |
+|---|---|---|---|
+| all'inizio (changelog 121) | **41** | ~122 s-AI | **26,6 s** |
+| dopo mira + hide + manovra | 13-18 | ~46 s-AI | 16,3 s |
+| **ora** | **3** | **9 s-AI** | **3,0 s** |
+
+3,0 s è **esattamente la soglia di rilevamento**: nessun episodio la supera più.
+
+**Nuovo riferimento per `--sim-ticks`: 3000 tick → 146 eventi** (era 124), ripetibile 146/146. Il
+vecchio 124 **non è più valido e non è una regressione**: il fix cambia deliberatamente il
+comportamento — le unità si muovono invece di restare ferme — quindi la traiettoria della
+simulazione è un'altra. A 6000 tick il totale resta 211: a seconda della finestra il combattimento
+sale o resta pari, che è il comportamento atteso di un sistema caotico e il motivo per cui la
+decisione è stata presa sul contatore degli **stalli**, non su questo numero.
+
+## 2026-08-04 (132) — Audit della documentazione: sei ADR erano fermi a "Proposed" da settimane
+
+Passata di coerenza su ProjectDocs, verificata **contro il codice** e non a memoria. Tre difetti
+reali, tutti della stessa famiglia — documenti che descrivevano un progetto più giovane di quello
+che esiste:
+
+**Venti ADR con lo stato sbagliato — e il mio primo passaggio ne aveva trovati solo sei.** Avevo
+guardato la coda dell'elenco e concluso; poi la verifica finale ha mostrato altri **sedici**
+`Proposed`. Correggo l'errore dicendolo: *un audit che guarda solo la fine della lista non è un
+audit*.
+
+Metodo di verifica, per non ripetere il giudizio a occhio: quante volte ogni ADR è **citato nel
+codice**. `ADR-025` (WorldIntel) 4 file, `ADR-030`/`031`/`033`/`034` 7 file ciascuno, `ADR-032` 5,
+fino a `ADR-039` (strutture) 9 file. Tutti implementati e misurati da settimane → portati ad
+**Accepted — in force**: 025-038 più 039, 040, 042, 048, 049.
+`ADR-041` (Droide Tattico come entità) era *Proposed* ma **superato** da ADR-044 → `SUPERSEDED`.
+
+Restano *Proposed* **solo due**, ed entrambi correttamente: `ADR-021` (save di carriera, **0**
+citazioni nel codice) e `ADR-047` (pipeline Blender, non implementata).
+
+**`05_CurrentState` era fermo al 22 luglio.** Non conosceva le fasi AI A1-A5, lo split di `AiSystem`
+in tre file, i prefab, `ModuleShell`, l'anteprima arma in mano, le classi nel roster, **né l'intero
+livello di osservabilità**. Aggiunta una fotografia al 2026-08-04, verificata contro il codice.
+
+**Le direzioni sul rendering non erano scritte da nessuna parte.** Nuovo **doc 43 —
+`43_RenderScalability.md`** (Planned Feature, zero righe di codice): LOD degli asset, frustum
+culling, soglia di distanza, simulazione a distanza; e cosa è **fuori scope**, cioè il passaggio a
+VBO. `ADR-003` aggiornato con la decisione dell'utente — la build resta ottimizzata per questa
+macchina, la compatibilità universale su Windows è un obiettivo **successivo e separato**, ed è
+quello il momento in cui l'ADR andrà riaperto.
+
+**Vincolo di macchina registrato** in `10_ProjectMemory`: il PC attuale è vecchio e verrà sostituito
+a breve. I **numeri assoluti** delle misure di performance valgono solo qui e vanno ri-misurati; i
+**rapporti** restano validi. Non si progetta l'architettura attorno ai limiti di una macchina in
+uscita — ma 161k vertici per un fante restano sbagliati su qualunque hardware.
+
+## 2026-08-04 (131) — O2 + O6: la mappa dei punti ciechi è CHIUSA, e KI #87 ha una risposta
+
+Ultimi due buchi di doc 42, e insieme danno la risposta alla domanda aperta da due giorni.
+
+**O2 completo** — il render era una zona unica: aggiunte `render.scena` (disegno 3D) e `render.ui`
+(menu/HUD), più il conteggio dei **vertici spediti per frame**. Quest'ultimo è il numero che conta
+davvero con il rendering client-side-array (ADR-003): senza VBO i dati risalgono alla GPU a **ogni**
+draw call, quindi il costo segue i vertici, non le chiamate. "230 draw call" e "230 draw call da
+161k vertici l'una" si ottimizzano in modi opposti, e senza questo campo erano indistinguibili.
+
+**O6 asset** — inventario delle mesh al caricamento: quante, quanti vertici, quanta memoria, e le
+otto più pesanti.
+
+### La risposta a KI #87
+
+| zona | ms | quota |
+|---|---|---|
+| frame | 40,6 | 100% |
+| **render.scena** | **38,6** | **95,1%** |
+| render.ui | 0,7 | 1,7% |
+| **simulazione** (AI + crowd + tutto) | **1,17** | **2,9%** |
+
+**1.447.949 vertici per frame** su 205 draw call ≈ **1,5 GB/s** verso la GPU. E l'inventario dice
+di chi è la colpa: 337.626 vertici totali caricati, di cui **161.304 nel solo B1 Battle Droid** —
+**dieci volte** il Clone Trooper (15.627). Con ~6 droidi in campo, il B1 vale da solo i **due terzi**
+del traffico.
+
+**Quindi "il massimo di AI cala" perché ogni droide aggiunto costa 161k vertici per frame.** Lineare
+e brutale, e senza alcun rapporto con la complessità dell'AI — che pesa il 2,9% del frame. Per due
+giorni abbiamo sospettato il sistema sbagliato, e nessuno dei due poteva saperlo: **non esisteva la
+misura**. È esattamente la tesi di ADR-050.
+
+Il rimedio più grande è di **contenuto** (decimare il B1), non di motore. Secondo: il **frustum
+culling non esiste** — 205 disegnate su 206 esaminate, si disegna tutto anche fuori campo.
+Direzioni e rischi in KI #87; nessuna intrapresa, perché la telemetria era la richiesta.
+
+**Copertura ADR-050 completa**: O1 nav · O2 render · O3 sessione · O4 combat · O5 ability/veicoli ·
+O6 asset · O7 missioni. Resta solo l'attribuzione per ARMA nel funnel di fuoco (serve un id sul
+proiettile).
+
+## 2026-08-04 (130) — O7: il funnel di MISSIONE, che trova un difetto al primo utilizzo
+
+Gli eventi sugli obiettivi c'erano già, ma scattano solo sui **salti** (attivato / completato /
+fallito). Conseguenza: una missione che **si impianta** non produce alcun evento — il caso che più
+conta, quello in cui "non succede niente", era invisibile per costruzione.
+
+Nuovo `Objective/stato missione` a cadenza fissa: per ogni obiettivo stato, tier, da quanti secondi
+è attivo, il **motivo del fallimento** se fallito, e una **misura specifica del suo tipo**. Più il
+contatore `attivi_senza_progresso`.
+
+**Due correzioni durante la costruzione, e la seconda è la lezione.** La prima versione leggeva
+`progress` e `holdTime` per tutti i tipi: ma `CaptureZone` non li tocca affatto (il progresso vive
+nel command post, ADR-009), quindi segnalava come "ferma da 40 s" una missione che funzionava.
+Corretto il testo mostrato... e non bastava: **anche la soglia d'allarme leggeva i campi sbagliati**,
+quindi la riga diceva "0%" e il contatore continuava a mentire per conto suo. Ora ogni tipo produce
+un avanzamento normalizzato 0..1 (o −1 = "non accumula nulla, non ha senso chiedersi se è fermo"), e
+sia la misura sia l'allarme leggono quello. *Una guardia che mente è peggio di nessuna guardia.*
+
+**E poi ha trovato un difetto vero** (KI #90): `firebase_alpha` non avanza **mai**. Per 150 secondi
+di simulazione `capture_alpha` resta *attivo, post 'Alpha' team 0 al 0%*, e `hold_alpha` non si
+attiva nemmeno perché dipende dal primo. **Non è la cattura a essere rotta**: nella stessa run ci
+sono 15 eventi `CommandPost` con contese su Bravo e Charlie — è **solo Alpha** che nessuno raggiunge
+mai. Il funnel dice *che* non avanza; il *perché* è lavoro di gameplay, annotato in KI #90.
+
+## 2026-08-04 (129) — O5: ability e veicoli escono dal buio (e NON sono peso morto)
+
+Due sistemi interi mai osservati. La lettura del codice dava un sospetto forte: in tutto il
+progetto esiste **un solo punto di attivazione** di un'ability a runtime — `roll`, in `AiSystem` —
+mentre `shield` e `command` vengono convertiti in componenti **allo spawn** e la loro
+`AbilityState` non la guarda più nessuno. Sembrava il caso da manuale della domanda dell'utente:
+*"cosa non funziona e aggiunge solo peso"*.
+
+**La misura lo smentisce, ed è il motivo per cui si misura.** In una sim da 6000 tick:
+
+| | valore |
+|---|---|
+| entità con ability / stati totali | 7 / 7 |
+| stati **attivabili** a runtime | 7 |
+| **roll attivati** | **48** |
+| scudi attivi | 2 |
+| **danno assorbito dagli scudi** | **339** |
+| veicoli presenti / guidati | 1 / **0** |
+
+Il roll parte 48 volte e gli scudi assorbono 339 danni: il sistema **lavora**. Quello che *non*
+lavora è il veicolo — presente in mappa, mai guidato in tutta la simulazione: costa collider,
+push-out del crowd e draw call per un'entità che nessuno usa. Non lo tocco (le AI non hanno ancora
+un comportamento di guida, doc 19 Fase B), ma ora è un fatto misurato invece che un'impressione.
+
+Nuovi eventi: `Combat/ability e veicoli` (entità con ability, stati totali/attivabili/in cooldown,
+scudi e carica, veicoli e quanti guidati) + `roll_attivati` nel battito dell'AI + `scudo_assorbito`
+nel funnel di fuoco. **`stati_attivabili` è la guardia che conta**: se un giorno va a zero mentre
+delle entità portano ability, il sistema è diventato inerte e lo si vede subito.
+
+## 2026-08-04 (128) — O4: il COMBATTIMENTO smette di essere una regex su stdout
+
+Fino a ieri la mia metrica di esito principale — quella su cui ho deciso metà dell'indagine di
+KI #86 — era **una regex su stdout**: `[Combat] Colpito!`. Si rompe se qualcuno cambia una stringa,
+non dice chi ha colpito chi, e soprattutto **non ha denominatore**: "40 colpi a segno" non
+significa nulla se non si sa se erano 50 colpi sparati o 500. Era l'anello più debole di ogni
+misura fatta finora, ed è quello che ho chiuso.
+
+**Nuovo funnel `Combat/funnel di fuoco`**, per team: sparati → a segno (di cui su zona hitbox) →
+danno → a terra → uccisi, più i proiettili fermati dalla **geometria** e quelli **spenti nel
+vuoto**. Il denominatore (`shotsFired`) vive in `World` perché i proiettili nascono in `AiSystem` e
+`PlayerController` mentre gli impatti li vede solo `CombatSystem`: senza, il funnel partirebbe a
+metà. Cadenza allineata a AI e navigazione (600 tick) — i tre battiti coincidono, ed è metà del
+loro valore: *"in questa finestra hanno acquisito poco **e** l'accuratezza è crollata"* è una frase
+che si può scrivere solo se le letture sono sincrone.
+
+**Lo strumento si valida da sé**: 193 a segno + 235 sulla geometria + 1 spento = **429 = i colpi
+sparati**. Il funnel chiude esattamente, quindi non perde eventi per strada.
+
+### Primi numeri, e sono già rivelatori
+
+| team | sparati | a segno | su zona | danno | uccisi |
+|---|---|---|---|---|---|
+| 1 (cloni) | 245 | 129 (**52,7%**) | 22 | 1.733 | **16** |
+| 2 (droidi) | 184 | 64 (**34,8%**) | 9 | 702 | **2** |
+
+**Asimmetria enorme e mai vista prima**: i cloni colpiscono una volta e mezza più spesso e fanno
+**otto volte** le uccisioni. Parte è di design (i droidi sono cattivi tiratori), ma il divario in
+uccisioni è molto più grande di quello in accuratezza — cioè non è spiegato dalla sola mira. Da
+indagare quando si tornerà al bilanciamento; prima non era nemmeno una domanda formulabile.
+
+**Il 55% di tutti i colpi finisce sulla geometria** (235 su 429). Il gate di fuoco verifica la LOS
+prima di sparare, quindi questi sono colpi partiti su linea libera e finiti in una copertura: è la
+dispersione dell'arma che li porta lì. Realistico, ma dice anche che oltre metà del volume di fuoco
+lavora sulla copertura del bersaglio invece che sul bersaglio.
+
+*Nota*: il vecchio conteggio a regex dava 211, il funnel 193 impatti. Le due cifre non coincidevano
+perché lo stdout mescolava impatti, uccisioni e danni alle strutture in un unico prefisso — la
+prova che la metrica era approssimativa oltre che fragile.
+
+### O3 — la SESSIONE GIOCATA, che finora non esisteva nei dati
+
+Nuovo evento `Player/sessione`, stessa cadenza degli altri tre: vivo/hp/posizione, colpi sparati,
+ordini impartiti, metri percorsi, secondi vivo / morto / in mira, arma, uccisioni, alleati persi.
+Le quattro letture (AI, navigazione, combattimento, giocatore) ora **coincidono nel tempo**, ed è
+metà del loro valore: *"il giocatore era morto in quella finestra"* spiega da solo un crollo
+dell'accuratezza di squadra, ma solo se le righe sono allineate.
+
+**In `--sim` esce tutto a zero** — colpi 0, metri 0, secondi 0 — perché il giocatore è un
+osservatore che non spara e non si muove. Non è un difetto: è la **conferma che lo strumento
+distingue una simulazione da una partita**, che è precisamente la distinzione che mancava a ogni
+conclusione di bilanciamento presa finora su battaglie fra soli bot.
+
+**Verifica**: `--sim-ticks 3000` → 124 eventi, invariato. `--validate` pulito.
+**Da verificare a mano**: giocare qualche minuto e controllare che `combat.jsonl` contenga righe
+`sessione` con valori sensati (metri, colpi, tempo in mira).
+
+## 2026-08-03 (127) — O1: la NAVIGAZIONE esce dal buio, e trova subito il 60% di query inutili
+
+Chiuso il buco O1 di doc 42: `CrowdSystem` e `NavManager` avevano **zero eventi**, pur essendo il
+secondo costo della simulazione e la causa residua sospettata degli stalli.
+
+**Nuovo funnel `Nav/navigazione`**: richieste di movimento → a quale tolleranza si sono agganciate
+al navmesh (2 m / 6 m / 14 m) → scartate perché fuori mesh; più le query di path e i loro
+fallimenti; più lo stato degli agenti adesso (`agenti` / `con_meta` / `in_moto`). Quest'ultima
+terna è la distinzione che mancava fra le tre cause dello stesso sintomo visibile — un'unità ferma:
+*nessuno le ha chiesto di muoversi*, *glielo si è chiesto ma non c'è percorso*, *si sta muovendo e
+il problema è altrove*.
+
+### Un'ipotesi in meno e un'ottimizzazione in più
+
+**Le mete dell'AI sono tutte camminabili**: 100% agganciate alla prima tolleranza, **zero** scartate,
+zero path falliti. L'ipotesi "l'AI chiede di andare dove non si può camminare" — che sarebbe stata
+la spiegazione naturale degli stalli residui — **è smentita**. Il problema non è lì.
+
+**Ma il funnel ha mostrato altro**: su 34.040 richieste in 6000 tick, **23.302 (68%)** venivano
+scartate come "stesso bersaglio" — *dopo* aver già fatto fino a tre `findNearestPoly`, che sono
+ricerche spaziali. L'uscita anticipata esisteva, ma era posizionata dopo il lavoro che doveva
+evitare. Aggiunto un confronto sulla richiesta **grezza** (5 cm) prima di qualunque query:
+**query spaziali 100% → 40%**.
+
+**Una trappola evitata, e come.** La prima versione confrontava solo la richiesta: sbagliata, perché
+un agente il cui bersaglio decade non ne otterrebbe **mai più** uno — la cache direbbe "già chiesto"
+per sempre. La condizione corretta è "stessa richiesta **e** l'agente ha ancora un bersaglio
+valido". Stessa attenzione sull'invalidazione: gli indici agente si riusano, quindi la cache si
+azzera in `removeAgent` e in `clear`, altrimenti il prossimo occupante eredita la meta del morto e
+resta fermo.
+
+**Verifica**: `--sim-ticks 3000` → **124 eventi, identico al baseline**. Le richieste di movimento
+sono **34.040 prima e dopo**: stesso numero di decisioni, quindi la traiettoria non è cambiata.
+*Onestà sul guadagno*: le query eliminate sono reali e misurate, ma il **costo del crowd non è
+calato in modo misurabile** (0,11 → 0,13 ms, dentro il rumore fra finestre). `findNearestPoly` a
+2 m è evidentemente economico rispetto al resto del crowd: il guadagno è in operazioni, non ancora
+in millisecondi, e conterà a scala maggiore. Non lo vendo come una vittoria di performance.
+
+*Nota di metodo*: per un attimo ho creduto a una regressione (combat 124 → 211) — stavo confrontando
+una run da 3000 tick con una da 6000. A parità di lunghezza: 124 = 124.
+
+## 2026-08-03 (126) — Il mistero del rallentamento ha una spiegazione semplice + verbosità a runtime
+
+### Il degrado a ~100 ms: era l'EDITOR
+
+L'utente ha chiarito di aver lanciato l'engine **dal GFEditor**, quindi con due processi attivi in
+contemporanea — l'editor renderizza il suo viewport di continuo. Questo spiega esattamente ciò che
+i tempi da soli non potevano spiegare: **render, simulazione e crowd rallentati tutti dello stesso
+fattore ~10x**, e una finestra con **zero AI** e render a 85,8 ms. Non era il renderer: era il
+processo che girava con metà macchina.
+
+**Nel regime pulito il gioco sta a 16,7 ms con 6-8 ms di margine.** La conclusione operativa su
+KI #87 cambia di segno: allo stato attuale **non c'è un problema di performance**, e la zona
+`taratura_cpu` (changelog 125) serve ora a confermarlo alla prossima sessione — se sale insieme al
+resto, contesa; se resta piatta, siamo noi.
+
+*Nota di metodo*: ho scritto in 125 che dai soli tempi non si poteva concludere, invece di
+attribuire al renderer. Era la scelta giusta — la causa vera non era nemmeno nell'elenco dei
+sospetti.
+
+### Quanto costa osservare — misurato, non stimato
+
+Alla domanda *"limitiamo la telemetria pesante alla build Debug?"* ho risposto con una misura, non
+con un'opinione: il costo della telemetria è ora esso stesso una zona di profilo.
+
+| modalità | `session_latest` | costo | quota del frame |
+|---|---|---|---|
+| normale | **43 KB** | 0,0025 ms/frame | **0,01%** |
+| `--telemetry-verbose` | 64 KB | 0,0161 ms/frame | 0,05% |
+
+**La build Debug è la leva sbagliata**, per due motivi. *Non costa*: un centesimo di percento. E
+*Debug è il posto sbagliato* — i bug che contano si presentano giocando, e si gioca in Release;
+un'osservabilità che vive in Debug non c'è mai quando il problema si presenta (qui, per giunta, la
+build Debug è inutilizzabile per via di ASan).
+
+Il problema era di **leggibilità**: `AI/state change` da solo occupava il **39% del file** — 743
+righe che non sono mai servite a una diagnosi, perché la storia di un agente la racconta meglio
+`--trace-ai`. Declassato a `Debug`: **467 KB → 43 KB, −91%**, senza perdere nulla di ciò che leggo.
+
+**La leva è la verbosità a runtime**: `Info` sempre acceso (aggregati e guardie), `Debug` con
+`--telemetry-verbose` (o implicito con `--trace-ai`, altrimenti quel flag sarebbe silenzioso — lo
+stesso difetto appena scoperto in `--stress`). Un evento sotto soglia esce **prima di
+serializzare**: costa un confronto. È questo che ci permette di spingere molto più in là sulla
+precisione senza pagarla quando è spenta.
+
+## 2026-08-03 (125) — Prima sessione GIOCATA letta + telemetria organizzata in flussi
+
+### Cosa dice la sessione dell'utente
+
+29 finestre di profilo su una partita vera. **Due regimi nettissimi**:
+
+| regime | frame | render (lavoro) | attesa vsync | simulazione |
+|---|---|---|---|---|
+| sano (finestre 9-24) | **16,7 ms** | 7-10 ms | 6-8 ms | 0,8-2,4 ms |
+| degradato (3-7, 25-29) | **91-107 ms** | 86-102 ms | ~0,5 ms | 2-10 ms |
+
+Nel regime sano il gioco è **agganciato ai 60 FPS con 6-8 ms di margine**: non c'è alcun problema
+di performance. Nel degradato il frame è a ~10 FPS.
+
+**L'ipotesi facile è sbagliata, e va detto.** Sembrava "scala col numero di AI" (40 AI → 103 ms;
+11 AI → 16,7 ms), ma due fatti la smontano: (a) nella finestra 29 ci sono **zero AI** e il render
+costa comunque **85,8 ms**; (b) render, simulazione e crowd rallentano **tutti dello stesso fattore
+~10x**. Un fattore comune su sottosistemi indipendenti non è "il renderer è lento": è il processo
+che gira più piano — throttling, contesa con un altro processo, stato del driver. Dai soli tempi
+**non si distingue**, e concludere sarebbe stato inventare.
+
+### Quindi ho costruito lo strumento che distingue
+
+**Zona `taratura_cpu`**: una quantità **fissa** di lavoro puramente CPU (~10 µs), misurata ogni
+frame. Se il suo costo sale insieme al resto → è la macchina. Se resta piatto mentre il render
+esplode → è il nostro codice. Costa 10 µs e senza di essa le misure di performance restano ambigue
+per sempre.
+
+**Funnel di rendering** (buco O2): entità esaminate → disegnate → draw call. Prima misura:
+**206 esaminate, 205 disegnate, 230 draw call/frame** a ~30 AI. Il rapporto 205/206 dice una cosa
+sola e importante: **non esiste alcun culling** — si disegna tutto, sempre, visibile o no.
+
+### Telemetria organizzata in flussi (richiesta dell'utente)
+
+Un solo `session_latest.jsonl` erano **1943 righe / 658 KB** per pochi minuti di gioco, in cui il
+profilo (29 righe) annegava fra 1043 cambi di stato dell'AI — e si troncava a ogni avvio, quindi
+"fare un po' di prove diverse" significava conservarne una. Ora: `perf.jsonl`, `ai.jsonl`,
+`combat.jsonl`, `world.jsonl`, `content.jsonl`, più `session_latest.jsonl` che riceve **tutto** come
+indice cronologico (serve a correlare fra domini: è così che si è visto il legame coi cambi mappa).
+La regola d'instradamento sta in **un posto solo**; un `system` non mappato resta fuori dai file di
+dominio, così un sistema nuovo senza flusso **si nota**. All'avvio la sessione precedente va in
+`storico/<data-ora>/` col suo `game_state.json`: nessuna prova si perde più.
+
+**Cosa serve ora**: rigioca fino a rivedere il rallentamento e mandami `perf.jsonl`. Se
+`taratura_cpu` sale con tutto il resto → è la macchina (e cerchiamo cosa contende). Se resta piatta
+→ è il nostro render, e il primo sospetto è già identificato: zero culling su 230 draw call.
+
+## 2026-08-03 (124) — Audit dei punti ciechi + PROFILER: la prima misura di costo mai fatta
+
+Applicazione di ADR-050 su tutto il progetto, su richiesta dell'utente: *"capire quante cose non
+puoi vedere"*. Nuovo **doc 42_Observability** con la mappa completa. Sintesi dell'audit, contata sul
+codice: `MovementSystem`, `CrowdSystem`, `NavManager`, `Collision`, `DefinitionRegistry`,
+`PlayerController` e **tutti i 13 file di `render/`** hanno **zero** telemetria; e in tutto il motore
+esistevano **4 zone Tracy**. Nessuna misura di costo da nessuna parte — motivo per cui KI #87
+("il numero massimo di AI sta calando") era una domanda *non rispondibile*, non "difficile".
+
+**Nuovo `core/Profiler`**: zone annidate, sempre attive, report periodico nel JSONL con ms/frame,
+ms di picco, quota del frame e chiamate. Copre `frame ⊃ render ⊃ attesa_vsync` e
+`frame ⊃ simulazione ⊃ mondo ⊃ world.tick ⊃ {ai, crowd, combat, squad, movement, objective}`.
+Non sostituisce Tracy (ADR-015): Tracy è una GUI che io non posso aprire né confrontare in uno
+script — questo produce numeri nello stesso flusso di tutto il resto. Costo: due letture d'orologio
+per zona. Più un evento **`inventario avvio`**: registry in 30 ms, e la dimensione reale di ogni
+mappa (Training Ground: 167 box, **169 posizioni tattiche**, 23 settori, 22 route).
+
+### Tre cose trovate il primo giorno
+
+**`--stress N` era INERTE, da sempre.** Impostava i conteggi e il blocco `--sim` li sovrascriveva
+con quelli della mappa — e `--stress` implica `--sim`. Richieste da 10 o da 100 AI davano identiche
+**12 unità**. L'ho notato perché il costo non cambiava di un microsecondo al variare di N, che per
+un test di scalabilità è impossibile. **Ogni profilazione "a scala" fatta finora non misurava
+nulla.** Corretto: l'override esplicito dell'operatore vince sui conteggi di mappa.
+
+**`attesa_vsync` va separata dal render.** Il primo risultato diceva "render = 97% del frame":
+vero e completamente fuorviante — 7,3 ms su 16,7 sono attesa del vblank, non lavoro. Senza quella
+separazione la conclusione sarebbe stata "ottimizzare il renderer", su un renderer che aspetta.
+
+**C'è un transitorio di riscaldamento enorme**: prima finestra da 300 frame a **87 ms/frame**,
+convergenza a ~16,7 entro la quinta. Al primo tentativo di test di scalabilità ho confrontato run a
+maturità diversa e ottenuto il risultato assurdo che il costo *scendeva* all'aumentare delle AI.
+Regola scritta in doc 42: `--sim-ticks ≥ 4200`, si legge **l'ultima** finestra.
+
+### Il primo dato su KI #87
+
+| AI vive | simulazione | ai | crowd |
+|---|---|---|---|
+| 9 | 0,73 ms | 0,16 | 0,25 |
+| 18 | 0,81 ms | 0,26 | 0,36 |
+| 31 | 1,66 ms | 0,39 | **1,05** |
+| 36 | 1,51 ms | 0,38 | 0,93 |
+
+A 36 AI l'**intera simulazione costa 1,5 ms** su un frame da 17-30 ms: il collo di bottiglia **non
+è la simulazione**. E dentro la simulazione il `crowd` cresce più in fretta dell'AI (×4,2 di costo
+per ×3,4 di unità, contro ×2,4). **Provvisorio**: le misure di render in headless variano fra 7 e
+20 ms tra run, quindi la prova decisiva è una sessione giocata vera — ma ora basta giocare, il
+profilo si scrive da solo nel JSONL.
+
+**Da verificare a mano**: gioca una partita normale di qualche minuto e mandami il JSONL, così leggo
+il profilo del caso che conta davvero invece che di una sim.
+
+## 2026-08-02 (123) — ADR-050 (osservabilità obbligatoria) + la posa in mano si tara guardandola
+
+### La regola nuova: ogni sistema nasce con la sua osservabilità (ADR-050, CLAUDE.md §5-bis)
+
+Richiesta dell'utente: accanto agli strumenti di *authoring* servono strumenti di **osservazione
+profonda**, pensati **soprattutto per l'agente AI**. La motivazione è documentata e misurata: su KI #86
+**tre diagnosi consecutive** sono state fuorviate da metriche aggregate, e ogni volta la risposta è
+arrivata solo guardando **una** unità. L'osservabilità non è comodità: è il canale sensoriale
+dell'agente — ciò che non è strumentato viene rimpiazzato da ipotesi plausibili e sbagliate.
+
+Tre livelli obbligatori prima di dichiarare completo un sistema: **sintomo** (non esito), **funnel con
+denominatori**, **discesa alla singola entità**. Più le regole d'igiene: l'osservatore non decide, il suo
+stato vive sul componente, le sonde costose si tolgono lasciando scritto quale risposta hanno dato, e
+`--validate` è l'osservabilità dell'authoring. Copertura attuale: l'AI è strumentata; **navigazione, game
+mode, missioni, ability e veicoli non lo sono**.
+
+### Il DC-15X minuscolo in mano: tre difetti in fila
+
+- **Causa immediata**: `DC-15X` non ha `hand_scale` (KI #49 sposta la posa in mano sull'ARMA). Senza,
+  ricade sul `weapon_display` del corpo, tarato per il DC-15A → 0.4 su un mesh di dimensione nativa
+  diversa. La dispersione dei valori spiega perché non può essere ereditata: 0.0015 (E-5C), 0.4 (DC-15A),
+  1.2 (E5), **80** (Z-6) — quattro ordini di grandezza.
+- **Perché non era stato preso dal gate**: il controllo `hand_scale` esisteva già, ma **solo sulle
+  ENTITÀ**. Il caso in cui la posa sbaglia è precisamente *la CLASSE che cambia l'arma*, che non era
+  coperto. Esteso alle classi (primaria e secondaria): il gate ora segnala **DC-15X, DC-17, T-21**, con
+  l'azione concreta per correggerli.
+- **Perché non si poteva correggere**: la posa si scriveva nel Weapon Editor e si guardava nell'Entity
+  Editor. Con una scala che compensa la dimensione nativa del mesh, tararla senza vederla non è
+  realistico. **Nuova anteprima "in mano" nel Weapon Editor**: carica un CORPO a scelta come modello
+  principale e l'arma come attachment, slider live, scala **logaritmica** (con un drag lineare da 1.0 non
+  si arriva mai a 0.0015). Se la posa non è autorata mostra il fallback che userebbe il runtime, con
+  avviso — l'anteprima deve far vedere anche il problema, non solo la soluzione.
+
+**E una copia chiusa mentre c'ero.** La formula della posa esisteva due volte — runtime ed Entity Editor —
+allineate da un commento *"DEVE combaciare con..."*. Un commento non è un vincolo, e un'anteprima che
+diverge dal gioco è peggio di nessuna anteprima: mostra una cosa e ne salva un'altra. Estratta in
+`include/mini/game/WeaponHandPose.hpp` (solo glm, nessun peso di runtime), ora ha **tre consumatori e una
+implementazione**.
+
+**Da verificare a mano**: tarare DC-15X, DC-17 e T-21 con la nuova anteprima e controllare in partita che
+combaci (l'anteprima usa la stessa funzione del runtime, ma non l'ho vista a schermo).
+
+## 2026-08-02 (122) — Soccorso sotto tiro, e le CLASSI schierabili dall'editor
+
+Due segnalazioni dal playtest, di natura molto diversa.
+
+### 1. "Si buttano a sparare a qualcuno ignorando i nemici vicinissimi" — MISURATO, non è un bug
+
+Prima di toccare la percezione l'ho quantificato: al momento del tiro, quanti nemici erano **più vicini**
+del bersaglio scelto, e quel nemico era **colpibile**? Risultato: il **15%** dei tiri ha un nemico più
+vicino entro 10 m, ma **0%** di quei nemici era colpibile — erano *tutti* dietro copertura. L'acquisizione
+prende per costruzione il più vicino con LOS, e sta facendo la cosa giusta.
+
+**È un problema di LETTURA, non di targeting**: dalla telecamera un nemico a 8 m dietro un muretto sembra
+"lì", mentre l'unità genuinamente non può colpirlo. Nessun cambiamento al FOV — che sarebbe stato il fix
+sbagliato per il problema sbagliato, e avrebbe ucciso il valore dell'aggiramento. Diagnostica rimossa dopo
+la risposta.
+
+### 2. "Vanno a rianimare buttandosi in mezzo alla mischia" — difetto vero, corretto
+
+Questo sì. L'auto-soccorso dispacciava il compagno libero più vicino **senza guardare cosa ci fosse attorno
+al caduto**: nessuna query esistente serviva allo scopo, perché `dangerAt` legge le danger zone *autorate*,
+non i nemici vivi. Il soccorso è l'unica decisione della squadra che manda deliberatamente un uomo in un
+punto preciso, ed era l'unica presa alla cieca.
+
+- **Prima di partire** si contano i nemici vivi entro `squad_rescue_threat_radius` (12 m): oltre
+  `squad_rescue_max_threats` (1) il soccorso è **DIFFERITO**, non annullato — il bleed-out continua a
+  scorrere, quindi a volte l'uomo si perde davvero. È il costo della scelta, coerente con
+  [[structures-degrade-not-block]]: si degrada una capacità, non la si spegne.
+- **Durante il viaggio** la zona può scaldarsi: ora si annulla la corsa invece di arrivare in mezzo. Chi è
+  **già accanto** al caduto non viene interrotto — buttare via canalizzazione e uomo sarebbe peggio.
+- Si annuncia UNA volta per caduto (*"Zona troppo calda: soccorso in attesa"*): senza, sembra che la squadra
+  ignori il compagno. Il flag vive sul `SquadComponent` del caduto, non nel sistema — la trappola
+  [[systems-survive-world-initialize]].
+- Entrambe le soglie sono **data-driven** (`data/config/gameplay.json`, ADR-043) **e esposte nel
+  BalanceEditor**: `Raggio minaccia` = 0 disattiva il controllo e ripristina il comportamento storico.
+
+Misurato (`--sim-ticks 6000`): 4 caduti, **5 soccorsi differiti** (con 2-4 nemici entro 12 m: esattamente i
+casi descritti), 2 rianimazioni completate. Il meccanismo differisce quando è caldo e parte quando si
+sgombra — non affama le rianimazioni. Eventi di combattimento 281 → 251: **conseguenza attesa** della
+scelta (meno recuperi → meno fucili in campo), non una regressione.
+
+### 3. Editor: si poteva schierare solo l'unità base — le CLASSI erano irraggiungibili
+
+Segnalato provando ad aggiungere il Marksman a Training Ground. **ADR-023 prevede già** che un id di roster
+sia un'entità-corpo **o una CLASSE** con `base_entity` (`classres::effectiveUnit` la risolve), e il gate
+`--validate` lo accetta da sempre con la stessa regola. Era il **dropdown** del BalanceEditor a offrire solo
+`allies()`/`enemies()`: con una sola entità alleata definita, l'unico schierabile era il Clone Trooper.
+Prova del disallineamento: `ally_types` di Training Ground conteneva già `Heavy Trooper`, **che è una
+classe** — visibile ma non riproducibile dalla UI.
+
+Ora il combo elenca anche le classi, raggruppate sotto un separatore e marcate `[classe: id]`, con il lato
+(alleato/nemico) dedotto dal `base_entity` — la stessa regola già usata dalla validazione, non una seconda
+copia. Verificato end-to-end aggiungendo `marksman` al roster: spawn corretto, `--validate` pulito, mappa
+poi ripristinata (l'ordine del roster è la sequenza di spawn: è una scelta di design dell'autore).
+
+**Da verificare a mano**: che il Marksman schierato dall'editor si comporti da tiratore in partita.
+
+## 2026-08-02 (121) — SCATOLA NERA per-agente, e il terzo "stato che avanza solo col bersaglio"
+
+Richiesta dell'utente dopo il playtest (*"c'è un miglioramento ma non così evidente, alcune AI ogni tanto
+rimangono comunque ferme"*): **poter vedere precisamente il comportamento delle singole AI**. È la correzione
+giusta al metodo — le due diagnosi precedenti erano state fuorviate proprio da metriche aggregate.
+
+**Nuovo `src/ecs/systems/AiTrace.cpp`** (terzo file del seam AiInternal, dopo lo split del monolite):
+- **Rilevatore di stallo, sempre attivo, costo ~zero.** Un'AI in contesto di combattimento che per 3 s non
+  si sposta (< 0,6 m) e non spara non è vita normale: è il sintomo. Alla soglia si registra UN evento con
+  **tutto** il contesto decisionale (stato, bersaglio, evasivo + residuo di hide, manovra + distanza dalla
+  meta, presidio, segnale torre, route, ruolo, soppressione, stuck, ultimo noto, ordine) e una **causa
+  sospetta** attribuita dai flag. A fine episodio un secondo evento con la **durata vera** — senza, l'evento
+  di soglia riporta sempre ~3 s e "il più lungo 29 s" resta un numero che non si può incrociare con nessuna
+  unità. Aggregato per causa a ogni battito.
+- **Traccia per-agente `--trace-ai <id>`** (spenta di default, `-1` = tutte): ogni decisione di quell'unità,
+  campionata all'intervallo di sensing. È il microscopio da puntare **dopo** che il rilevatore ha detto quale
+  unità guardare.
+- Lo stato di osservazione vive in `AiComponent`, non nel sistema: la memoria di progetto ricorda che lo
+  stato dentro un sistema sopravvive a `initialize()`; dentro il componente muore con l'entità, quindi una
+  partita nuova non eredita stalli della vecchia. **Non decide nulla**: nessun ramo di comportamento lo legge.
+
+**Cosa ha trovato, al primo colpo.** 41 episodi di stallo, il 63% **senza alcun flag che li spiegasse**.
+Puntando la traccia su una singola unità (id 414) il bug si legge come una riga di cronaca: ingaggia al tick
+2838 → **perde il contatto al 2850** → resta immobile fino al 2988, `repositionActive` acceso, posizione **e
+sguardo** congelati.
+
+**Causa: tutta la manovra viveva dentro il ramo `Alert && nearest != 0`.** Al primo LOS che si rompe — e si
+rompe nel 61-72% dei casi (changelog 119) — lo spostamento si fermava, il suo timer smetteva di scorrere, e
+**non esisteva alcun ramo di movimento per "Alert senza bersaglio"**: paralisi totale per ~3 s, fino alla
+scadenza di `alertTimer` che portava a `enterHunt` e ripuliva il flag. Lo sguardo congelato peggiorava tutto:
+il campo visivo segue il facing, quindi l'unità era anche cieca.
+
+**È la TERZA istanza dello stesso schema** (fase di hide, changelog 118; fuoco durante la manovra, 118; ora
+la manovra stessa): *stato che avanza solo dentro un ramo condizionato al bersaglio*. Risolto alla radice —
+la manovra è uno spostamento verso un **posto**, e perdere di vista il nemico non annulla il terreno che si
+voleva prendere: ora prosegue, arriva, e proprio lì ha la migliore probabilità di ri-acquisire. Senza
+bersaglio si guarda dove si va.
+
+**Misurato** (`--sim-ticks 6000`, ripetibile 281/281):
+
+| | prima | dopo |
+|---|---|---|
+| episodi di stallo | 41 | **13** (−68%) |
+| di cui senza causa evidente | 26 | **8** (−69%) |
+| tempo-AI perso fermo | ~122 s | **46 s** (−62%) |
+| acquisizione (% del cono) | 32% | **36%** |
+| eventi di combattimento | 233 | **281** (+21%) |
+
+Il combattimento sale **insieme** al sintomo: è la prima volta in questa indagine che i due si muovono nella
+stessa direzione, e per questo il +21% è credibile invece che deriva di traiettoria.
+
+**Restano 13 episodi** (8 senza causa evidente): il tetto residuo, da guardare col microscopio quando
+tornerà utile. **Da verificare a mano**: col rallentatore, se le pause residue sono ancora percepibili.
+
+## 2026-08-02 (120) — La RICERCA smette di tirare a caso: l'unica decisione che ignorava il mondo tattico
+
+Cercando dove l'AI potesse "procurarsi una LOS" ho **smentito una mia affermazione del changelog 119**:
+avevo scritto che un'unità senza LOS non fa nulla per ottenerla. Falso — `enterHunt` pesa già quattro
+opzioni d'approccio (assalto diretto, aggiramento, **posizione di tiro** verificata con la linea, punto
+dominante), pesate dal profilo e decorrelate dal `bias`. Quel pezzo funziona.
+
+**Il buco era nella RICERCA, ed era netto.** `pickSearchPoint` sceglieva un punto **uniformemente casuale**
+in 24×24 m attorno all'ultimo contatto: su una mappa con **169 posizioni autorate**, il grafo delle
+coperture e i settori, era l'unica decisione dell'AI che ignorava per intero il mondo tattico. Ed è la
+decisione peggiore da lasciare al caso proprio alla luce di quanto misurato in 118-119: il collo di
+bottiglia è la **LOS**, non il campo visivo — e cercare da un punto che non vede la zona è cercare senza
+poter trovare.
+
+Ora la ricerca **chiede al mondo**: `bestFiringPosition` verso l'ultimo contatto (verifica linea, settore e
+gittata — è il motivo per cui si usa questa e non una copertura qualsiasi). Il centro è **jitterato** di
+±8 m: senza, tutte le unità e tutti i tentativi successivi ricadrebbero sulla stessa "migliore" posizione e
+la ricerca smetterebbe di essere una ricerca. **Fallback conservato** al punto casuale quando il mondo non
+offre nulla che veda quella zona — mappa povera di posizioni, o zona non coperta.
+
+**Misurato** (`--sim-ticks 6000`, Training Ground): **76%** delle ricerche usa il mondo, 24% cade nel
+fallback; acquisizione **28% → 32%** dei nemici nel cono; `fermi` 0, congelamenti 0, hide max 1,8 s.
+Eventi di combattimento 236 → 233, cioè invariato entro la divergenza — e coerentemente col metodo fissato
+in 118, **non è su quel numero che si decide**.
+
+Nuove guardie permanenti `ricerca_tattica` / `ricerca_a_caso`: se un giorno il fallback dominasse, il
+difetto sarebbe di **autoring** (la mappa non ha posizioni che vedano le zone contese), non di AI — e si
+legge subito lì invece di dedurlo dal comportamento.
+
+**Da verificare a mano**: col rallentatore, che le unità che perdono il contatto si portino su posizioni
+sensate invece di vagare.
+
+## 2026-08-02 (119) — KI #86 causa 3: NON è la mappa. E un mio numero sbagliato, corretto
+
+Restava da capire dove muore il 61-72% delle occasioni fra "nemico nel cono" e "LOS ok". Ho aggiunto un
+out-param facoltativo `outBlocker` a `physics::hasLineOfSight` (gratis se inutilizzato) e classificato i
+bloccanti a runtime. **Il primo risultato era sbagliato e va detto**: usavo un raggio **fisso** di 3 m dal
+CENTRO del bloccante per decidere se fosse "geometria autorata" o "muta", e concludevo **57% muta**. Per un
+muro largo 7 m — figuriamoci l'impalcato del ponte, largo 31 m — quella soglia non ha senso: le coperture
+autorate stanno ai BORDI. Verificato sui dati della mappa: i tre bloccanti principali (impalcato 1277
+blocchi, muro nord 1182, blocco centrale 597) hanno posizioni tattiche a **3,3-5,4 m**. Tutte contate come
+assenti. **Il 57% era un artefatto del metodo, non una proprietà della mappa.**
+
+**Lo stesso controllo, fatto bene, sta nell'editor.** Nuovo difetto `UnmarkedCover` in
+`analyzeTacticalHealth` (quindi anche nel gate `--validate`): un box con collider che taglia davvero un tiro
+al busto (mezza altezza ≥ 0.45 m, pianta ≥ 1.5 m) e **senza** posizione tattica entro `mezza pianta + 2,5 m`
+— soglia **proporzionata all'oggetto**, che è la lezione dell'errore qui sopra. Gli impalcati orizzontali
+sono esclusi: sono pavimenti, li giudica `BlindVertical`. Cliccabile come gli altri avvisi (nuova banda di
+selezione `Target::Geometry` → indice diretto del box). Su **Training Ground: 4 ostacoli**, pannelli sottili
+agli angoli, tutti severità 0. **La mappa è autorata bene.**
+
+**Conclusione — la causa 3 non è un difetto di mappa, ed è in gran parte fisiologica**: è uno sparatutto a
+coperture, i bersagli stanno dietro coperture messe apposta. **Il buco vero è sul lato AI**: un'unità senza
+LOS oggi non fa **nulla** per procurarsela — la manovra (ADR-035) si valuta solo quando si HA già un
+bersaglio. Diventa la voce **A6-bis "manovra per acquisire"**, da decidere come design prima che come codice:
+è esattamente il tipo di aggiunta che, fatta d'istinto, produce AI che si espongono a caso.
+
+La diagnostica a runtime è stata rimossa (costava una LOS extra e una mappa per-entità su ogni acquisizione
+fallita, con KI #87 aperto). Resta `outBlocker`, che non costa nulla, e il controllo statico, che costa zero
+a runtime perché gira in fase di autoring.
+
+**Verificato**: build Release pulita; `--validate` esegue il nuovo controllo (0 problemi, 23 avvisi su
+Training Ground). **Da verificare a mano**: che gli avvisi di geometria siano cliccabili e selezionino il
+box giusto nel Map Editor.
+
 ## 2026-08-02 (118) — KI #86: il funnel d'ingaggio, e due difetti che a occhio si confondevano
 
 L'utente riportava *"è estremamente comune vedere AI che stanno davanti a dei nemici senza sparare"* e

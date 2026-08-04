@@ -15,6 +15,7 @@ class CrowdSystem : public ISystem
 {
 public:
     void update(World& world, float dt) override;
+    const char* name() const override { return "crowd"; }
 
 private:
     std::vector<EntityId> m_agentEntity;   // idx agente → entità (per il reap)

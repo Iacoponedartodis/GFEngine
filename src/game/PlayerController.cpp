@@ -122,6 +122,22 @@ static void applyTpsCamera(Camera& cam, const glm::vec3& playerPos,
 void PlayerController::updateMovement(Camera& cam, const InputManager& input,
                                        World& world, float elapsed)
 {
+    // Traccia di sessione (O3): tempo e distanza si accumulano SEMPRE, anche da
+    // morti — "quanto tempo il giocatore passa a terra" è parte di come va una
+    // partita, e sparirebbe se contassi solo da vivo.
+    if (isDead) session.timeDead += elapsed;
+    else
+    {
+        session.timeAlive += elapsed;
+        if (isAiming) session.timeAds += elapsed;
+        if (const auto* ptr = world.getTransform(entity))
+        {
+            const float dx = ptr->x - m_lastX, dz = ptr->z - m_lastZ;
+            const float d = std::sqrt(dx * dx + dz * dz);
+            if (d < 5.0f) session.distance += d;   // scarta i salti da respawn
+            m_lastX = ptr->x; m_lastZ = ptr->z;
+        }
+    }
     if (isDead) return;
 
     using namespace config;
@@ -427,6 +443,8 @@ bool PlayerController::updateShooting(World& world, Camera& cam, const InputMana
     });
     world.addTeam(b, {1});
     world.addBullet(b, {w.bulletDamage, life, 1, /*fromPlayer=*/true});
+    ++world.shotsFired[1];   // il giocatore è team 1 (funnel di combattimento, O4)
+    ++session.shots;         // traccia di sessione (O3)
     // Anche il GIOCATORE fa rumore sparando (doc 40): i nemici devono accorrere verso
     // di lui: senza questo, aprire il fuoco non ha conseguenze tattiche.
     world.sounds.push_back({org.x, org.z, config::SOUND_GUNSHOT_RADIUS, 1,

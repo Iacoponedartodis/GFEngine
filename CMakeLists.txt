@@ -210,6 +210,7 @@ add_executable(GFEngine
     src/game/data/ContentValidation.cpp
     src/ecs/systems/AiSystem.cpp
     src/ecs/systems/AiCommandLayer.cpp
+    src/ecs/systems/AiTrace.cpp
     src/ecs/systems/CrowdSystem.cpp
     src/game/game_modes/ConquestMode.cpp
     src/game/game_modes/SandboxMode.cpp
@@ -219,6 +220,7 @@ add_executable(GFEngine
     src/game/nav/NavManager.cpp
     src/game/ai/WorldIntel.cpp
     src/core/Telemetry.cpp
+    src/core/Profiler.cpp
     src/game/PlayerController.cpp
     src/game/data/DefinitionRegistry.cpp
     src/render/OptionsMenu.cpp
@@ -274,6 +276,7 @@ add_executable(GFEditor
     editor/src/modules/MissionEditor.cpp
     editor/src/modules/ClassEditor.cpp
     src/core/Telemetry.cpp
+    src/core/Profiler.cpp
     src/game/data/DefinitionRegistry.cpp
     src/game/data/ContentValidation.cpp   # ADR-018: STESSO gate del runtime, mai una copia
     src/game/ai/WorldIntel.cpp            # ADR-032: il loader costruisce il grafo dei link

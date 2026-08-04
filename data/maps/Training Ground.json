@@ -2,7 +2,8 @@
     "ally_count": 6,
     "ally_types": [
         "Clone Trooper",
-        "Heavy Trooper"
+        "Heavy Trooper",
+        "marksman"
     ],
     "command_posts": [
         {

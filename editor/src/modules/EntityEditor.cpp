@@ -6,6 +6,7 @@
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
 #include "mini/game/ClassResolve.hpp"   // ADR-022: la regola "la classe vince", non una copia
+#include "mini/game/WeaponHandPose.hpp"  // LA formula della posa in mano: una sola, condivisa col runtime
 #include <imgui.h>
 #include <nlohmann/json.hpp>
 #include <SDL2/SDL.h>
@@ -461,30 +462,21 @@ void EntityEditor::updateWeaponTransform()
     glm::mat4 M = glm::rotate(glm::mat4(1.0f), glm::radians(m_rotX), {1,0,0})
                 * glm::scale(glm::mat4(1.0f), {m_scale, m_scale, m_scale});
 
-    glm::mat4 R = glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponRot.y), {0,1,0})
-                * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponRot.x), {1,0,0})
-                * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponRot.z), {0,0,1});
+    // La posa la calcola `weaponattach::handLocal`, LA STESSA funzione del
+    // runtime: qui c'era una copia della formula, allineata solo da un commento
+    // ("DEVE combaciare con..."). Un'anteprima che diverge dal gioco è peggio di
+    // nessuna anteprima — mostra una cosa e ne salva un'altra.
+    mini::weaponattach::HandPose p;
+    p.hand      = hand;
+    p.offset    = m_weaponOffset;
+    p.rot       = m_weaponRot;
+    p.grip      = m_weaponGrip;
+    p.scale     = m_weaponScale;
+    p.charScale = m_scale;
+    p.baseRotX  = m_weaponBaseRotX;
+    p.baseRotY  = m_weaponBaseRotY;
 
-    // L'arma non deve ereditare la scala del personaggio (M include m_scale):
-    // compensa, identico a WeaponAttach::resolve nel runtime.
-    const float charScale = (m_scale > 0.0001f) ? m_scale : 1.0f;
-    const float effScale  = m_weaponScale / charScale;
-
-    // Correzione canonica dell'arma (mesh_rot_x/y del WeaponDef) — IDENTICA
-    // a WeaponAttach::resolve nel runtime, altrimenti l'anteprima non combacia
-    // col gioco.
-    const glm::mat4 baseFix =
-          glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponBaseRotY), {0,1,0})
-        * glm::rotate(glm::mat4(1.0f), glm::radians(m_weaponBaseRotX), {1,0,0});
-
-    // Porta il grip dell'arma sulla mano, poi applica rotazione/scala/offset.
-    glm::mat4 local = glm::translate(glm::mat4(1.0f), hand + m_weaponOffset)
-                    * R
-                    * glm::scale(glm::mat4(1.0f), glm::vec3(effScale))
-                    * baseFix
-                    * glm::translate(glm::mat4(1.0f), -m_weaponGrip);
-
-    m_viewport.setAttachmentModel(abs, M * local);
+    m_viewport.setAttachmentModel(abs, M * mini::weaponattach::handLocal(p));
 }
 
 void EntityEditor::syncViewportMarkers()
@@ -891,6 +883,33 @@ void EntityEditor::draw()
                         m_pendingSelectId = renameBuf;
                         renameBuf[0] = '\0';
                     }
+                }
+                // ── Elimina (doc 39 R1) ──────────────────────────────────
+                // Un'entità-corpo è il riferimento più citato di tutti (roster
+                // di mappa, `base_entity` delle classi): il popup lo dice, e
+                // `--validate` trova cosa resta rotto. Comando condiviso.
+                ImGui::SameLine();
+                if (ImGui::Button("Elimina")) ImGui::OpenPopup("##edel");
+                if (ImGui::BeginPopup("##edel"))
+                {
+                    ImGui::Text("Eliminare '%s'?", e.id.c_str());
+                    ImGui::TextDisabled("Il file viene cancellato. Roster di mappa e classi che");
+                    ImGui::TextDisabled("la usano come base_entity resteranno rotti (--validate).");
+                    if (ImGui::Button("Elimina", {110, 0}))
+                    {
+                        renameErr = editor::rename::deleteDefinition(
+                            getDataDir(),
+                            e.isAlly ? editor::rename::Category::Ally
+                                     : editor::rename::Category::Enemy,
+                            e.id);
+                        ImGui::CloseCurrentPopup();
+                        // Reload deferito come per la rinomina: lo stack ImGui
+                        // deve restare intatto fino a fine frame.
+                        if (renameErr.empty()) m_pendingSelectId.clear();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Annulla", {110, 0})) ImGui::CloseCurrentPopup();
+                    ImGui::EndPopup();
                 }
                 if (!renameErr.empty())
                     ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());

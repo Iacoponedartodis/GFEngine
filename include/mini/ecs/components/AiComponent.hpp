@@ -132,6 +132,18 @@ struct AiComponent
     // è un CONGELAMENTO per definizione, e questo lo rende misurabile invece che
     // giudicabile a occhio (gli eventi di combattimento aggregati non lo vedono).
     float evadeElapsed = 0.0f;
+
+    // ── Scatola nera (AiTrace, KI #86) ──────────────────────────────────────
+    // Stato dell'OSSERVAZIONE, non del comportamento: nessuna decisione lo legge.
+    // Vive qui e non in un sistema di proposito — la memoria di progetto
+    // [[systems-survive-world-initialize]] ricorda che lo stato dentro un sistema
+    // sopravvive a `initialize()` e va azzerato a mano; dentro il componente muore
+    // con l'entità, quindi una partita nuova non può ereditare stalli della vecchia.
+    float obsX = 0.0f, obsZ = 0.0f;  // posizione a inizio finestra d'osservazione
+    float obsTimer  = 0.0f;          // durata della finestra corrente
+    float stallSec  = 0.0f;          // da quanti secondi è ferma senza combattere
+    bool  obsFired  = false;         // ha sparato in questa finestra?
+    bool  stallSeen = false;         // stallo già segnalato (un evento per episodio)
     bool  flankActive = false;  // sta raggiungendo il punto di fiancheggiamento
     float flankX = 0.0f, flankZ = 0.0f;
 

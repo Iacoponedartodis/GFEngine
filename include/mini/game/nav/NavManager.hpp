@@ -80,7 +80,43 @@ public:
     // Posizione corrente dell'agente (dal crowd). false se idx non valido.
     bool agentPos(int idx, glm::vec3& out) const;
 
+    // Osservazione (ADR-050): l'agente ha una meta valida? a che velocità va?
+    // Servono a distinguere le tre cause di "un'unità è ferma": nessuno le ha
+    // chiesto di muoversi, glielo si è chiesto ma non c'è percorso, oppure si
+    // sta muovendo e il problema è altrove.
+    bool  agentHasTarget(int idx) const;
+    float agentSpeed(int idx) const;
+
+    // ── Funnel della NAVIGAZIONE (ADR-050, doc 42 buco O1) ───────────────
+    // Prima qui c'erano ZERO eventi: non sapevo quante richieste di movimento
+    // fallissero, né perché. Ed è il punto in cui muoiono gli ordini che l'AI
+    // crede di aver dato — `requestMoveTarget` può scartare in SILENZIO.
+    //
+    // `snapTier` è il dato più informativo: a quale tolleranza il bersaglio si è
+    // agganciato al navmesh. Livello 0 = era già camminabile. Livello 2 (14 m!)
+    // significa che l'AI ha chiesto di andare in un punto lontanissimo da
+    // qualunque superficie percorribile — cioè una decisione presa a monte è
+    // sbagliata, non è la navigazione a essere lenta. Distinzione che senza
+    // questo contatore è indistinguibile da "l'unità è incastrata".
+    struct Stats
+    {
+        int pathQueries = 0;     // findPath() chiamate
+        int pathNoPoly  = 0;     // ...fallite: start o fine fuori dal navmesh
+        int pathFailed  = 0;     // ...fallite: nessun corridoio trovato
+        int moveRequests = 0;    // requestMoveTarget() chiamate
+        int moveSnap[3] = {0,0,0};  // agganciate a tolleranza 2 m / 6 m / 14 m
+        int moveOffMesh = 0;     // scartate: nulla di camminabile nemmeno a 14 m
+        int moveSameTarget = 0;  // ignorate: stesso bersaglio (niente ripianificazione)
+    };
+    const Stats& stats() const { return m_stats; }
+    void resetStats() { m_stats = Stats{}; }
+
 private:
+    mutable Stats   m_stats;     // `mutable`: findPath è const ma va contata
+    // Ultima destinazione GREZZA chiesta per agente: evita di rifare la ricerca
+    // spaziale quando la richiesta è identica (68% dei casi, misurato).
+    std::vector<glm::vec3>   m_lastRawTarget;
+    std::vector<unsigned char> m_lastRawValid;
     dtNavMesh*      m_navMesh   = nullptr;
     dtNavMeshQuery* m_query     = nullptr;
     dtCrowd*        m_crowd     = nullptr;

@@ -6,6 +6,7 @@
 #include "util/UiWidgets.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+#include "mini/game/WeaponHandPose.hpp"   // LA formula della posa: una sola, condivisa col runtime
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -266,6 +267,82 @@ void WeaponEditor::reloadPreview()
     m_viewport.loadModel(abs, m_rotX, m_scale, m_rotY);
 }
 
+// ── Anteprima IN MANO ─────────────────────────────────────────────────────────
+// Il modello principale del viewport diventa il PERSONAGGIO e l'arma passa ad
+// attachment, posizionata da `weaponattach::handLocal` — la stessa funzione che
+// usa il runtime. Non è un'approssimazione "abbastanza simile": se divergesse,
+// l'anteprima direbbe una bugia proprio sul valore che si sta tarando.
+
+void WeaponEditor::refreshHandUnits()
+{
+    m_handUnits.clear();
+    m_handRegistry.loadAll(editor::datapath::root());
+    for (const auto& [id, def] : m_handRegistry.allies())
+        if (!def.meshPath.empty()) m_handUnits.push_back(id);
+    for (const auto& [id, def] : m_handRegistry.enemies())
+        if (!def.meshPath.empty()) m_handUnits.push_back(id);
+    if (m_handUnit >= (int)m_handUnits.size()) m_handUnit = 0;
+}
+
+void WeaponEditor::updateHandPreview()
+{
+    if (!m_handPreview || m_sel < 0 || m_sel >= (int)m_weapons.size()
+        || m_handUnits.empty())
+        return;
+
+    const auto& w = m_weapons[m_sel];
+    const mini::EnemyDef* unit = m_handRegistry.getAlly(m_handUnits[m_handUnit]);
+    if (!unit) unit = m_handRegistry.getEnemy(m_handUnits[m_handUnit]);
+    if (!unit) return;
+
+    // Personaggio come modello principale.
+    const std::string unitAbs = resolveMesh(unit->meshPath);
+    if (unitAbs.empty()) { m_viewport.clearModel(); return; }
+    m_viewport.loadModel(unitAbs, unit->meshRotX, unit->meshScale, unit->meshRotY);
+
+    const std::string wAbs = resolveMesh(w.meshPath);
+    if (wAbs.empty()) { m_viewport.clearAttachmentModel(); return; }
+
+    // Mano: l'attach point del PERSONAGGIO (l'unica parte della posa che dipende
+    // da chi impugna). Si prova quello dichiarato dall'arma, poi "right_hand".
+    glm::vec3 hand{0.0f};
+    auto ap = unit->attachPoints.find(unit->weaponDisplay.hand);
+    if (ap == unit->attachPoints.end()) ap = unit->attachPoints.find("right_hand");
+    if (ap != unit->attachPoints.end())
+        hand = {ap->second[0], ap->second[1], ap->second[2]};
+
+    // Se la posa NON è autorata sull'arma si mostra il fallback che userebbe il
+    // runtime (weapon_display dell'entità): l'anteprima deve far vedere anche il
+    // problema, non solo la soluzione — è esattamente il caso del DC-15X.
+    const bool authored = w.handScale > 0.0f;
+    mini::weaponattach::HandPose p;
+    p.hand      = hand;
+    p.scale     = authored ? w.handScale : unit->weaponDisplay.scale;
+    p.rot       = authored ? glm::vec3{w.handRot[0], w.handRot[1], w.handRot[2]}
+                           : glm::vec3{unit->weaponDisplay.rot[0],
+                                       unit->weaponDisplay.rot[1],
+                                       unit->weaponDisplay.rot[2]};
+    p.offset    = authored ? glm::vec3{w.handOffset[0], w.handOffset[1], w.handOffset[2]}
+                           : glm::vec3{unit->weaponDisplay.offset[0],
+                                       unit->weaponDisplay.offset[1],
+                                       unit->weaponDisplay.offset[2]};
+    // Grip: `right_hand` ha la precedenza su `grip`, come al caricamento (riga ~141).
+    {
+        auto g = w.attachPoints.find("right_hand");
+        if (g == w.attachPoints.end()) g = w.attachPoints.find("grip");
+        if (g != w.attachPoints.end())
+            p.grip = {g->second.x, g->second.y, g->second.z};
+    }
+    p.charScale = unit->meshScale;
+    p.baseRotX  = w.meshRotX;
+    p.baseRotY  = w.meshRotY;
+
+    const glm::mat4 M =
+          glm::rotate(glm::mat4(1.0f), glm::radians(unit->meshRotX), {1,0,0})
+        * glm::scale(glm::mat4(1.0f), glm::vec3(unit->meshScale));
+    m_viewport.setAttachmentModel(wAbs, M * mini::weaponattach::handLocal(p));
+}
+
 // ── loadRigJoints ─────────────────────────────────────────────────────────────
 
 void WeaponEditor::loadRigJoints()
@@ -502,6 +579,34 @@ void WeaponEditor::drawMeshTab(float panelW)
                 return; // lista rigenerata: chiudi il frame corrente
             }
         }
+        // ── Elimina (doc 39 R1) ──────────────────────────────────────────
+        // Mancava: si poteva creare e rinominare un'arma ma non toglierla, e
+        // l'unico modo era cancellare il file fuori dall'editor. Comando
+        // condiviso (`editor::rename::deleteDefinition`), non una copia locale.
+        ImGui::SameLine();
+        if (ImGui::Button("Elimina")) ImGui::OpenPopup("##wdel");
+        if (ImGui::BeginPopup("##wdel"))
+        {
+            ImGui::Text("Eliminare l'arma '%s'?", w.id.c_str());
+            ImGui::TextDisabled("Il file viene cancellato. I riferimenti da entita'/classi");
+            ImGui::TextDisabled("resteranno rotti: --validate li segnala.");
+            if (ImGui::Button("Elimina", {110, 0}))
+            {
+                renameErr = editor::rename::deleteDefinition(
+                    getDataDir(), editor::rename::Category::Weapon, w.id);
+                ImGui::CloseCurrentPopup();
+                if (renameErr.empty())
+                {
+                    ImGui::EndPopup();
+                    loadWeapons();
+                    if (!m_weapons.empty()) selectWeapon(0); else m_sel = -1;
+                    return;   // lista rigenerata: chiudi il frame corrente
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Annulla", {110, 0})) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
         if (!renameErr.empty())
             ImGui::TextColored({1.f,0.4f,0.4f,1.f}, "%s", renameErr.c_str());
     }
@@ -645,6 +750,39 @@ void WeaponEditor::drawMeshTab(float panelW)
     ImGui::SeparatorText("Posa in mano (vale per ogni unita')");
     {
         auto& w2 = m_weapons[m_sel];
+
+        // ── Anteprima IN MANO: si tara guardando, non a memoria ───────────
+        // La scala compensa la dimensione NATIVA del mesh e varia di quattro
+        // ordini di grandezza fra le armi (0.0015 → 80): indovinarla senza
+        // vederla non è realistico, ed è il motivo per cui il DC-15X è rimasto
+        // senza posa e in partita appariva minuscolo.
+        if (ImGui::Checkbox("Anteprima in mano", &m_handPreview))
+        {
+            if (m_handPreview) { refreshHandUnits(); updateHandPreview(); }
+            else               { m_viewport.clearAttachmentModel(); reloadPreview(); }
+        }
+        if (m_handPreview && !m_handUnits.empty())
+        {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(200.0f);
+            if (ImGui::BeginCombo("##handunit", m_handUnits[m_handUnit].c_str()))
+            {
+                for (int u = 0; u < (int)m_handUnits.size(); ++u)
+                {
+                    const bool s = (u == m_handUnit);
+                    if (ImGui::Selectable(m_handUnits[u].c_str(), s))
+                    { m_handUnit = u; updateHandPreview(); }
+                    if (s) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (w2.handScale <= 0.0f)
+                ImGui::TextColored({1.f,0.6f,0.3f,1.f},
+                    "Posa NON autorata: stai vedendo il fallback dell'entita'.");
+        }
+        else if (m_handPreview)
+            ImGui::TextDisabled("Nessuna entita' con mesh in data/allies o data/enemies.");
+
         bool authored = w2.handScale > 0.0f;
         if (ImGui::Checkbox("Posa definita da quest'arma", &authored))
         {
@@ -652,18 +790,24 @@ void WeaponEditor::drawMeshTab(float panelW)
             // unità). Disattivando: torna al fallback legacy weapon_display.
             w2.handScale = authored ? (w2.handScale > 0.0f ? w2.handScale : 1.0f) : 0.0f;
             m_dirty = true;
+            updateHandPreview();
         }
         if (w2.handScale > 0.0f)
         {
-            if (editor::ui::dragRow("Scala in mano", w2.handScale, 0.01f, 0.02f, 200.0f, "%.3f"))
-                m_dirty = true;
-            if (ImGui::DragFloat3("Rotazione in mano", w2.handRot.data(), 1.0f, -180.0f, 180.0f, "%.0f"))
-                m_dirty = true;
-            if (ImGui::DragFloat3("Offset in mano", w2.handOffset.data(), 0.005f, -1.0f, 1.0f, "%.3f"))
-                m_dirty = true;
+            bool poseChanged = false;
+            // Scala LOGARITMICA: fra 0.0015 (E-5C) e 80 (Z-6) ci sono quattro
+            // ordini di grandezza — con un drag lineare non si arriva mai al
+            // valore giusto partendo da 1.0.
+            poseChanged |= ImGui::DragFloat("Scala in mano", &w2.handScale, 0.01f,
+                                            0.0005f, 200.0f, "%.4f",
+                                            ImGuiSliderFlags_Logarithmic);
+            poseChanged |= ImGui::DragFloat3("Rotazione in mano", w2.handRot.data(),
+                                             1.0f, -180.0f, 180.0f, "%.0f");
+            poseChanged |= ImGui::DragFloat3("Offset in mano", w2.handOffset.data(),
+                                             0.005f, -1.0f, 1.0f, "%.3f");
+            if (poseChanged) { m_dirty = true; updateHandPreview(); }
             ImGui::TextDisabled("La scala compensa la dimensione NATIVA del mesh:\n"
-                                "es. Z-6 ~80, DC-15A ~0.4. L'anteprima e' nell'Entity\n"
-                                "Editor (arma in mano su un'unita').");
+                                "es. Z-6 ~80, DC-15A ~0.4, E-5C ~0.0015.");
         }
         else
             ImGui::TextDisabled("Non autorata: le unita' usano il loro weapon_display\n"

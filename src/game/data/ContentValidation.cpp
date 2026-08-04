@@ -635,6 +635,26 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         else
             checkRef(d, reg.weapons(), c.primaryWeaponId, f, "arma primaria");
         checkRef(d, reg.weapons(),   c.secondaryWeaponId, f, "arma secondaria");
+        // POSA IN MANO dell'arma di CLASSE (KI #49 / KI #90, 2026-08-02).
+        // Il controllo gemello esiste già sulle ENTITÀ, ma non copriva le classi —
+        // ed è proprio lì che serve: il caso in cui la posa sbaglia è **la classe
+        // che cambia l'arma**. Il Marksman equipaggia il DC-15X, che non aveva
+        // `hand_scale`: ricadeva sul `weapon_display` del corpo, tarato per il
+        // DC-15A → fucile minuscolo in mano, e nessun avviso da nessuna parte.
+        for (const char* which : {"primaria", "secondaria"})
+        {
+            const std::string& wid = (which[0] == 'p') ? c.primaryWeaponId
+                                                       : c.secondaryWeaponId;
+            if (wid.empty()) continue;
+            const WeaponDef* wpn = reg.getWeapon(wid);
+            if (wpn && wpn->handScale <= 0.0f)
+                add(d, L::Warn, "Content", f,
+                    "l'arma " + std::string(which) + " '" + wid + "' non ha una posa "
+                    "in mano autorata (hand_scale) → si usa il weapon_display del "
+                    "CORPO, tarato per un'altra arma: in mano esce a scala sbagliata",
+                    "Weapon Editor → l'arma → 'Posa in mano': attiva 'Anteprima in "
+                    "mano', scegli il corpo e tara la scala guardandola.");
+        }
         // Il profilo AI e' cio' che rende la classe una PROFESSIONE (ADR-022):
         // un riferimento rotto qui la degrada a pacchetto di armi in silenzio.
         checkRef(d, reg.aiProfiles(), c.aiProfileId, f, "profilo AI");
@@ -733,6 +753,7 @@ const char* tacticalDefectKindName(TacticalDefect::Kind k)
         case TacticalDefect::Kind::HighExposure:  return "Molto esposte";
         case TacticalDefect::Kind::Redundant:     return "Ridondanti";
         case TacticalDefect::Kind::EmptySector:   return "Settori senza posizioni";
+        case TacticalDefect::Kind::UnmarkedCover: return "Ostacoli che tagliano il tiro ma non sono coperture";
         default:                                   return "Altro";
     }
 }
@@ -822,6 +843,57 @@ std::vector<TacticalDefect> analyzeTacticalHealth(const MapDef& map)
             out.push_back({TacticalDefect::Target::Sector, TacticalDefect::Kind::EmptySector, (int)s, matters ? 1 : 0, buf});
         }
     }
+    // 5) OSTACOLO CHE TAGLIA IL TIRO MA NON È UNA COPERTURA (KI #86 causa 3).
+    //    Un muro non autorato ha il peggio dei due mondi: toglie le linee di tiro come
+    //    una copertura, ma nessuna AI sa usarlo — non ci si ripara dietro, non lo si
+    //    aggira, non lo si sfrutta. Il combattimento si spegne senza che sia colpa di
+    //    nessun sistema, e a occhio non si distingue da un bug dell'AI.
+    //
+    //    LA SOGLIA VA SCALATA CON L'OGGETTO, e questo è costato un errore: una prima
+    //    misura a runtime usava un raggio FISSO di 3 m dal CENTRO del bloccante e
+    //    concludeva "57% geometria muta". Falso: per un muro largo 7 m o un impalcato
+    //    largo 31 m le coperture autorate stanno ai BORDI (misurate a 3,3-5,4 m dal
+    //    centro) e venivano contate come assenti. Con la soglia proporzionata, Training
+    //    Ground ha 4 ostacoli non marcati — non il 57%.
+    //
+    //    CALIBRAZIONE (un elenco rumoroso si smette di leggere — lezione dei settori
+    //    di transito qui sopra): si considerano SOLO i box che bloccano davvero un tiro
+    //    al busto, cioè che salgono oltre ~0.9 m dal proprio appoggio E hanno una
+    //    pianta di almeno 1.5 m. Un paletto o un gradino non entrano. Gli impalcati
+    //    orizzontali (`sy` piccolo) sono esclusi: sono pavimenti/tettoie, li giudica
+    //    `BlindVertical`, non questo.
+    {
+        // Raggio entro cui una posizione autorata "spiega" l'ostacolo: la sua mezza
+        // pianta più 2.5 m — la distanza a cui si sta effettivamente dietro un muro.
+        int reported = 0;
+        for (size_t g = 0; g < map.geometry.size(); ++g)
+        {
+            const auto& b = map.geometry[g];
+            if (!b.collider) continue;
+            const float hx = b.sx * 0.5f, hy = b.sy * 0.5f, hz = b.sz * 0.5f;
+            if (hy < 0.45f) continue;                       // troppo basso per tagliare un tiro
+            if (hx < 0.75f && hz < 0.75f) continue;         // paletto/dettaglio: non è copertura
+            const float reach = std::max(hx, hz) + 2.5f;
+            bool explained = false;
+            for (const auto& p : map.tacticalPositions)
+            {
+                const float dx = p.x - b.x, dz = p.z - b.z;
+                if (dx*dx + dz*dz <= reach * reach) { explained = true; break; }
+            }
+            if (explained) continue;
+            // Severità: 1 solo per gli ostacoli GROSSI (≥ 4 m di lato), che tagliano
+            // interi corridoi di tiro. Gli altri restano avvisi da valutare.
+            const bool major = (hx >= 2.0f || hz >= 2.0f);
+            std::snprintf(buf, sizeof(buf),
+                          "[geometria %d] ostacolo %.1f×%.1f×%.1f a (%.0f, %.0f): taglia il tiro, "
+                          "nessuna copertura autorata entro %.0f m",
+                          (int)g + 1, b.sx, b.sy, b.sz, b.x, b.z, reach);
+            out.push_back({TacticalDefect::Target::Geometry, TacticalDefect::Kind::UnmarkedCover,
+                           (int)g, major ? 1 : 0, buf});
+            if (++reported >= 40) break;   // oltre, l'elenco non si legge: sistemane un po'
+        }
+    }
+
     std::stable_sort(out.begin(), out.end(),
         [](const TacticalDefect& a, const TacticalDefect& b) { return a.severity > b.severity; });
     return out;

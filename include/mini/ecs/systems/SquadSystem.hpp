@@ -20,6 +20,7 @@ class SquadSystem : public ISystem
 {
 public:
     void update(World& world, float dt) override;
+    const char* name() const override { return "squad"; }
 
 private:
     void formAlliedSquad(World& world);

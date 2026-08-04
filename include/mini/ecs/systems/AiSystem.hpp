@@ -13,6 +13,12 @@ class AiSystem : public ISystem
 {
 public:
     void update(World& world, float dt) override;
+    const char* name() const override { return "ai"; }
+
+    // `--trace-ai <id>`: accende la scatola nera per-agente (AiTrace.cpp). 0 = spenta
+    // (default), -1 = tutte le unità. Qui perché main/Application non possono
+    // includere l'header privato `src/ecs/systems/AiInternal.hpp`.
+    static void setTraceEntity(int entityId);
 
     static constexpr float k_bulletSpeed = 8.0f;
     static constexpr float k_bulletDmg   = 20.0f;
