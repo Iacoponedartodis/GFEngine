@@ -73,7 +73,18 @@ struct TacticalDefect
     // Il controllo qui è invece PROPORZIONATO alla taglia dell'oggetto — su Training
     // Ground trova 4 ostacoli, non il 57%. Chi tocca questa soglia la scali con l'oggetto.
     enum class Kind { NoCoverage, BlindVertical, HighExposure, Redundant, EmptySector,
-                      UnmarkedCover, Count };
+                      UnmarkedCover,
+                      // `UnreachablePoint` nasce da un bug reale costato mezza
+                      // giornata (KI #90): il post "Alpha" di firebase sta su una
+                      // piattaforma alta **1,0 m**, mentre il navmesh scala al
+                      // massimo `STEP_HEIGHT` = 0,55 m. Detour ci passa INTORNO,
+                      // quindi nessuna unità a terra può salirci: la missione che
+                      // chiedeva di catturarlo era **incompletabile**, e non c'era
+                      // modo di accorgersene se non guardando le AI orbitare.
+                      // Un punto che il gioco CHIEDE di raggiungere e che la
+                      // navigazione non può raggiungere è un difetto di mappa.
+                      UnreachablePoint,
+                      Count };
     Target      target   = Target::Position;
     Kind        kind     = Kind::NoCoverage;
     int         index    = 0;      // indice in tacticalPositions / sectors

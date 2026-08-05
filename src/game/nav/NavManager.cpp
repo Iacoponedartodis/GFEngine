@@ -3,6 +3,7 @@
 #include "mini/game/data/Definitions.hpp"   // MapDef, MapGeometryBox
 #include "mini/game/MapQuery.hpp"            // groundHeightAt (base delle strutture)
 #include "mini/core/GameConfig.hpp"          // STEP_HEIGHT, PLAYER_HALF
+#include "mini/game/MapMetrics.hpp"          // taglia agente: sorgente unica (doc 47 §4)
 
 #include <Recast.h>
 #include <DetourNavMesh.h>
@@ -31,8 +32,19 @@ namespace
 constexpr float kCellSize    = 0.20f;   // voxel XZ (m)
 constexpr float kCellHeight  = 0.10f;   // voxel Y (m): fine → superficie navmesh
                                         // vicina al pavimento reale (piedi a terra)
-constexpr float kAgentHeight = 1.80f;   // altezza agente (m)
-constexpr float kAgentRadius = config::AI_HALF_X;  // 0.40m
+// Altezza agente (m). Era 1,80 — cioè **più bassa dei modelli**: misurati dalle
+// hitbox, il clone è alto 1,98 m e il B1 2,03 m. Il navmesh dichiarava percorribile
+// un sottopasso da 1,85 m in cui la testa dell'unità sarebbe passata dentro il
+// soffitto. 2,10 copre entrambi con un margine, e su Training Ground costa
+// 4 poligoni su 1047 (misurato 2026-08-05): raggiungibilità degli obiettivi e
+// posizioni irraggiungibili identiche.
+// NB: le METRICHE DI MAPPA (doc 47 §4) restano dimensionate su un "gigante di
+// riferimento" da 2,40 m, che è più alto di questa costante di proposito: il margine
+// deve stare nella GEOMETRIA (cara da rifare), non qui (una riga da cambiare).
+// Il VALORE vive in `mapmetrics`: lo legge anche il gate, che deve sapere quanta
+// altezza libera serve per starci in piedi. Due copie = due verità sullo stesso mondo.
+constexpr float kAgentHeight = mapmetrics::AGENT_HEIGHT;
+constexpr float kAgentRadius = mapmetrics::AGENT_RADIUS;  // 0.40m
 constexpr float kAgentClimb  = config::STEP_HEIGHT; // 0.55m — scalino max
 constexpr float kAgentSlope  = 45.0f;   // pendenza max walkable (gradi)
 

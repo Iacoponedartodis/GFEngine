@@ -1837,14 +1837,20 @@ void AiSystem::update(World& world, float dt)
                             // una sola fazione, quindi non c'è conflitto col ramo clone.)
                             ai->allySigTimer -= dt;
                             const float rdx = et->x - ai->allySigX, rdz = et->z - ai->allySigZ;
-                            const bool reached = ai->allySigValid && (rdx*rdx + rdz*rdz < 3.0f*3.0f);
+                            // "Arrivato" deve valere anche in QUOTA: senza, chi sta sotto
+                            // una piattaforma a 2 m in pianta si crede arrivato e molla
+                            // il waypoint senza mai salire le scale (misurato su firebase).
+                            const float rdy = et->y - ai->allySigY;
+                            const bool reached = ai->allySigValid
+                                              && (rdx*rdx + rdz*rdz < 3.0f*3.0f)
+                                              && std::fabs(rdy) < config::STEP_HEIGHT * 2.0f;
                             if (ai->allySigValid && !reached && ai->allySigTimer > 0.0f)
                             { wx = ai->allySigX; wz = ai->allySigZ; haveTarget = true; }
                             else
                             {
                                 // Obiettivo del fronte: un post da catturare, o un punto
                                 // sull'anello (diverso per bias → non si ammassano).
-                                float tx = 0.0f, tz = 0.0f;
+                                float tx = 0.0f, tz = 0.0f, ty = 0.0f;   // ty: quota del waypoint (arrivo 3D)
                                 bool got = nearestCapturablePost(world, et->x, et->z, 2,
                                                                  tx, tz, d->x, d->z, d->radius);
                                 if (!got) got = nearestCapturablePost(world, et->x, et->z, 2, tx, tz);
@@ -1870,8 +1876,8 @@ void AiSystem::update(World& world, float dt)
                                 if (adv && (!world.nav || !world.nav->crowdReady()
                                             || world.nav->isReachable({et->x, et->y, et->z},
                                                                       {adv->x, adv->y, adv->z})))
-                                { tx = adv->x; tz = adv->z; }
-                                ai->allySigX = tx; ai->allySigZ = tz;
+                                { tx = adv->x; tz = adv->z; ty = adv->y; }
+                                ai->allySigX = tx; ai->allySigZ = tz; ai->allySigY = ty;
                                 ai->allySigValid = true; ai->allySigTimer = config::ALLYSIG_COMMIT_TIME;
                                 wx = tx; wz = tz; haveTarget = true;
                             }
@@ -1887,7 +1893,19 @@ void AiSystem::update(World& world, float dt)
                         }
                         // Hold senza posizione / nessuna direttiva → pattuglia.
                     }
-                    else if (team->teamId == 1 && world.allyIntel.active)   // cloni: torre (doc 36)
+                    // Cloni: torre di controllo (doc 36) **oppure** obiettivo di
+                    // missione (A6). La condizione era il solo `allyIntel.active`, e
+                    // senza torre l'intero ramo era irraggiungibile: su firebase i
+                    // cloni restavano in pattuglia e il post richiesto dalla
+                    // missione non veniva preso MAI (KI #90). La torre degrada
+                    // l'INTEL tattica; l'obiettivo di missione è un'altra cosa — è
+                    // ciò che alla squadra è stato detto prima di schierarsi, e non
+                    // dipende da un'antenna.
+                    else if (team->teamId == 1
+                             && (world.allyIntel.active || [&] {
+                                    for (const auto& ao : world.activeObjectives)
+                                        if (ao.actorTeam == 1) return true;
+                                    return false; }()))
                     {
                         // La torre SEGNALA (non ordina): il clone sceglie un segnale
                         // decorrelato dal bias e vi si muove. Ora vale anche per i
@@ -1900,7 +1918,12 @@ void AiSystem::update(World& world, float dt)
                         // raggiungibilità (~1 ogni 4 s per clone, non a ogni tick).
                         ai->allySigTimer -= dt;
                         const float rdx = et->x - ai->allySigX, rdz = et->z - ai->allySigZ;
-                        const bool reached = ai->allySigValid && (rdx*rdx + rdz*rdz < 3.0f*3.0f);
+                        // Stesso controllo in quota del ramo sopra: un waypoint su
+                        // una piattaforma non è raggiunto stando a terra sotto di essa.
+                        const float rdy = et->y - ai->allySigY;
+                        const bool reached = ai->allySigValid
+                                          && (rdx*rdx + rdz*rdz < 3.0f*3.0f)
+                                          && std::fabs(rdy) < config::STEP_HEIGHT * 2.0f;
                         if (ai->allySigValid && !reached && ai->allySigTimer > 0.0f)
                         {
                             wx = ai->allySigX; wz = ai->allySigZ; haveTarget = true;
@@ -1914,10 +1937,28 @@ void AiSystem::update(World& world, float dt)
                         else
                         {
                             float sx = 0.0f, sz = 0.0f, srad = 8.0f;
-                            if (pickAllySignal(world, ai->bias, et->x, et->z, sx, sz, srad))
+                            bool sigIsObjective = false;
+                            if (pickAllySignal(world, ai->bias, et->x, et->z, sx, sz, srad,
+                                               &sigIsObjective))
                             {
-                                // Default: centro del settore (a terra → raggiungibile).
-                                float tx = sx, tz = sz;
+                                // ── OCCUPARE ≠ CATTURARE (A6) ────────────────
+                                // Misurato: con il solo bias sul settore i cloni
+                                // convergevano su Alpha (tutti fra 7,7 e 16,4 m) ma
+                                // **nessuno entrava nei 6 m** del post — perché
+                                // `bestOrderPosition` li manda su posizioni tattiche
+                                // VICINE, che è la lettura giusta per un segnale
+                                // della torre ("stai qui tatticamente") e sbagliata
+                                // per un obiettivo di cattura ("stai SU questo").
+                                //
+                                // Divisione del compito col `bias`, l'idioma già in
+                                // uso ovunque per decorrelare: una parte va sul
+                                // punto, il resto prende posizione attorno e copre.
+                                // Mandarli tutti sul punto sarebbe il "branco" che
+                                // abbiamo già revertato una volta (changelog 77).
+                                const bool ontoPoint = sigIsObjective && ai->bias < 0.5f;
+
+                                // Default: centro del segnale (a terra → raggiungibile).
+                                float tx = sx, tz = sz, ty = 0.0f;   // ty: quota del waypoint (arrivo 3D)
                                 // Miglior terreno del fronte (vantage/cover/defensive per
                                 // importanza, incluse le ELEVATE) — ma SOLO se davvero
                                 // RAGGIUNGIBILE: niente isole (scale troppo ripide) o
@@ -1929,21 +1970,26 @@ void AiSystem::update(World& world, float dt)
                                 // per-clone. Premia le posizioni che BATTONO un nemico ora →
                                 // niente punti ciechi; la claimed evita l'ammasso.
                                 int aidx = -1; bool claimedPos = false;
-                                const TacticalPositionDef* adv = bestOrderPosition(
-                                    world, et->x, et->z, sx, sz, srad, 0, sx, sz, &aidx);
+                                // `ontoPoint`: chi ha il compito di PRENDERE il punto
+                                // non cerca una posizione tattica — il centro del
+                                // segnale (il post) è già la sua meta, e `tx/tz` lo
+                                // sono già. Gli altri coprono dai dintorni.
+                                const TacticalPositionDef* adv = ontoPoint ? nullptr
+                                    : bestOrderPosition(
+                                        world, et->x, et->z, sx, sz, srad, 0, sx, sz, &aidx);
                                 if (adv && (!world.nav || !world.nav->crowdReady()
                                             || world.nav->isReachable({et->x, et->y, et->z},
                                                                       {adv->x, adv->y, adv->z})))
-                                { tx = adv->x; tz = adv->z;
+                                { tx = adv->x; tz = adv->z; ty = adv->y;
                                   if (aidx >= 0 && aidx < (int)world.allyTac.claimed.size())
                                       { world.allyTac.claimed[aidx] = 1; claimedPos = true; } }
-                                else
+                                else if (!ontoPoint)
                                 {
                                     float px, pz;   // niente posizione raggiungibile → il post del fronte
                                     if (nearestCapturablePost(world, et->x, et->z, 1, px, pz, sx, sz, srad))
                                     { tx = px; tz = pz; }
                                 }
-                                ai->allySigX = tx; ai->allySigZ = tz;
+                                ai->allySigX = tx; ai->allySigZ = tz; ai->allySigY = ty;
                                 // Indice rivendicato: serve a RI-RIVENDICARLO durante il
                                 // commitment (sotto), così la posizione resta "occupata" per
                                 // i compagni e la squadra non si ammassa (fix audit #1).
@@ -2155,9 +2201,22 @@ void AiSystem::update(World& world, float dt)
                 // moveDist). Con la destinazione vera Detour pianifica un path e
                 // aggira gli ostacoli; col vecchio +moveDX puntava a 1 m e spingeva
                 // dritto contro i muri.
-                nv.requestMoveTarget(ai->crowdAgentIdx,
-                                     {et->x + moveDX * moveDist, et->y,
-                                      et->z + moveDZ * moveDist});
+            {
+                // LA DESTINAZIONE PORTA LA SUA QUOTA (2026-08-04). Qui si passava
+                // `et->y`, cioè l'altezza di CHI CAMMINA: `findNearestPoly` cercava
+                // il poligono più vicino a quella quota, quindi puntando un posto
+                // su una piattaforma agganciava il **pavimento sotto** invece del
+                // ripiano sopra. L'unità ci andava a terra credendo di aver
+                // obbedito — misurato: quota 0,60 costante per 9000 tick mentre
+                // l'obiettivo stava a 1,0. È il motivo per cui un ordine MoveTo
+                // funzionava (lì la quota arriva col punto) e l'iniziativa no.
+                const float dstX = et->x + moveDX * moveDist;
+                const float dstZ = et->z + moveDZ * moveDist;
+                const float dstY = world.activeMap
+                                 ? mapquery::groundHeightAt(world.activeMap, dstX, dstZ)
+                                 : et->y;
+                nv.requestMoveTarget(ai->crowdAgentIdx, {dstX, dstY, dstZ});
+            }
             else
                 nv.requestMoveVelocity(ai->crowdAgentIdx, {0.0f, 0.0f, 0.0f});
         }

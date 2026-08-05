@@ -152,6 +152,19 @@ struct SectorW {
     float enemyHeld  = 0.6f;    // terreno in mano al nemico → riprenderlo
     float opportunity= 0.4f;    // valore alto e poco difeso → sfruttarlo
     float holdBonus  = 0.5f;    // difendere un obiettivo conteso (solo comandante)
+    // ── OBIETTIVO DI MISSIONE nel settore (A6) ──────────────────────────
+    // Prima l'AI era cieca alle missioni: un settore che conteneva l'obiettivo
+    // valeva quanto un altro, e su firebase nessuno andava MAI al post richiesto
+    // (KI #90). Questi due pesi sono la voce che mancava.
+    //
+    // La taratura è il punto delicato. Troppo basso e resta cieca; troppo alto e
+    // diventa un branco che corre tutto sullo stesso punto ignorando la battaglia
+    // — il difetto degli ordini già revertati (changelog 77, "unità senza
+    // bersaglio l'81% del tempo"). 1.5 mette un obiettivo primario alla pari di
+    // una contesa piena (`pressure` 1.0 × peso 2.0 = 2.0) senza superarla: la
+    // missione ORIENTA, la battaglia continua a comandare.
+    float objectivePrimary   = 1.5f;
+    float objectiveSecondary = 0.6f;
 };
 
 inline constexpr CoverW           kCover{};

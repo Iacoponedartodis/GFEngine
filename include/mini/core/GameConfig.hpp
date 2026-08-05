@@ -144,6 +144,17 @@ constexpr float HEARING_REFERENCE            = 12.0f;
 // misura la copertura dall'alto, NON "interno": un sottopasso la dà come un bunker.
 // L'interno vero richiede la CHIUSURA (pareti attorno), che è un'analisi diversa.
 constexpr float OVERHEAD_PROBE_HEIGHT        = 8.0f;   // m
+
+// ── Distanza oltre cui l'ARMA IN MANO non si disegna (doc 43 R3) ────────────
+// Misurato (changelog 139): le armi sono il **24% dei vertici per frame** —
+// 376k su 1,54 M — perché i loro mesh vanno da 6k a 57k vertici e se ne disegna
+// uno per unità. Oltre questa distanza l'arma occupa pochi pixel: toglierla non
+// si nota, e con il rendering client-side-array (ADR-003) ogni vertice non
+// spedito è tempo guadagnato.
+// È il primo LOD del progetto, e volutamente il più conservativo: non tocca il
+// CORPO — un soldato che sparisce è un difetto di gioco, un'arma che sparisce a
+// 35 m è un dettaglio. Alzarla disattiva di fatto la soglia.
+constexpr float WEAPON_DRAW_DISTANCE         = 35.0f;  // m
 // ── CONFIDENZA sui contatti (doc 40, Fase A2) ──────────────────────────────
 // Un contatto non è un fatto: è un'informazione che INVECCHIA. Decade come
 // c(t) = c0 · e^(−t/τ). Sopra `ENGAGE` l'unità lo tratta come un nemico da ingaggiare

@@ -1,5 +1,74 @@
 # 08 — Known Issues
 
+## 96. Training Ground: posizioni tattiche con la QUOTA sbagliata — ⚠ **RIDIMENSIONATO il 2026-08-05**
+- **Prima versione (sbagliata)**: *"8 posizioni su 169 sono irraggiungibili"*. Il numero veniva da una
+  sonda che **contava anche i percorsi PARZIALI** di Detour come riusciti e poi misurava la distanza
+  d'arrivo: due errori che si sommavano. Corretta la sonda (usa `NavManager::isReachable`, che già
+  esisteva), il conto reale è **1 su 169**.
+- **Irraggiungibile davvero: 1.** `observation` #166 a (0,02 · **3,28** · −38,19), nella zona di
+  spawn droidi: sta **0,69 m sopra** il "Droid CT Floor" (ripiano a 2,59) e a ridosso di
+  "Droid CT Wall 2" (3,63) — cioè a mezz'aria contro un muro.
+- **Difetto reale sulle altre 8** (`chokepoint` #2-5, `cover` #44-47): **non** sono irraggiungibili,
+  ma sono autorate a `y` fra **1,55 e 1,77** in mezzo all'aria sotto i ponti (impalcato a 3,34, suolo
+  molto più in basso). L'unità ci arriva — sta **sotto** — ma il grafo tattico (`positionCovers`,
+  esposizione, visuale verticale) è calcolato con la LOS da quella quota: **descrive un punto di
+  vista che nessuno occupa**. È un difetto più insidioso di un'irraggiungibilità, perché non si
+  manifesta come "l'AI non ci va" ma come decisioni prese su una visibilità che non esiste.
+- **Da fare (utente, contenuto)**: portare la `y` alla quota su cui l'unità sta davvero. Non l'ho
+  toccato: è contenuto.
+- **Lezione**: una sonda nuova va confrontata con la capacità che già esiste prima di fidarsene.
+  `isReachable` era lì da mesi e faceva il controllo giusto.
+
+## 95-bis. Il GATE mentiva più della mappa: 9 dei 13 problemi di Training Ground erano falsi allarmi — ✅ CORRETTO 2026-08-05 (changelog 147)
+- Rimisurato: Training Ground passa da **13 problemi a 4**, e le scale che il gate dichiarava
+  inesistenti **c'erano già** ("Stair 1-4" per i Big Box, "CT stair 10-11" per il Droid CT Floor).
+- Tre difetti del gate, tutti corretti:
+  1. **slab sepolti**: una scalinata si costruisce impilando slab, e il gate segnalava anche quelli
+     sotto (10 falsi allarmi). Ora si chiede se c'è **altezza per starci in piedi** (1,80 m),
+     campionando la superficie invece di guardare il solo centro;
+  2. **pedate strette**: il gradino da cui si sale doveva essere largo 1,2 m come un pavimento, così
+     le pedate da 0,8 m — del tutto normali — non contavano. Ora la soglia per il **gradino** è 0,6 m;
+  3. **post in quota**: `[post Aplha]` era dichiarato incatturabile perché il controllo accettava
+     solo `top ≤ STEP_HEIGHT`, cioè **puniva ogni obiettivo sopraelevato** anche con le scale
+     funzionanti. Ora un ripiano è calpestabile se è al suolo **o** ha un gradino adiacente.
+- **Conseguenza su KI #94**: il post `Aplha` **non è incatturabile** — misurato `found:true`,
+  detour 1,07, arrivo a 10 cm. Resta valido il solo refuso nel nome.
+- **Lezione**: un gate che grida al lupo su 9 casi su 13 nasconde i 4 veri. La verifica che ha
+  chiuso la questione non è stata leggere i dati, ma **chiedere al navmesh** (sonda nuova).
+
+## 95. Le mappe non hanno GRADINI: le piattaforme sono isole del navmesh (2026-08-04, changelog 143)
+- **Causa vera** del "le AI non salgono" (KI #90). Su `firebase`, elencati tutti i 22 box: **non
+  esiste un solo gradino**. Il salto dal pavimento (top 0,10) a qualunque piattaforma (top 1,00) è
+  **0,90 m** contro uno `STEP_HEIGHT` di **0,55** → il navmesh non le collega e **nessuna unità
+  potrà mai salirci**, con qualunque AI.
+- **Le scale esistono nel modello VISIVO, non nei box.** È il divario contro cui mette in guardia
+  ADR-047: la verità tattica sono i box, il mesh è decorazione. Un giocatore vede le scale e si
+  aspetta che funzionino; la navigazione non le vede affatto.
+- **Guardia aggiunta** (`UnreachablePoint` sulla geometria): segnala **11** ripiani senza accesso su
+  firebase e **13** su Training Ground.
+- **Da fare (utente, contenuto)**: aggiungere box-gradino (rise ≤ 0,55 m) dove ci sono le scale
+  visive, oppure abbassare i dislivelli. In alternativa alzare `STEP_HEIGHT`, ma 0,90 m non è un
+  gradino: è un salto, e cambierebbe il movimento ovunque.
+- **Nota**: i muretti attorno alla piattaforma centrale di firebase (4 box, ripiano a 2,00 m) sono
+  **ancora nel file**, benché l.utente li ricordasse rimossi.
+
+## 94. Training Ground: il post `Aplha` — ⚠ **SMENTITO il 2026-08-05** (era un falso allarme del gate, vedi #95-bis); resta il refuso nel nome
+- **Trovato dalla nuova guardia `UnreachablePoint`** (changelog 141) al primo utilizzo, su una mappa
+  usata da settimane per ogni misura.
+- **Difetto**: nel raggio di cattura (4,0 m) del post **non esiste alcun punto calpestabile** — tutto
+  il disco sta su ripiani oltre lo scalino massimo del navmesh (0,55 m). Nessuna unità a terra può
+  prenderlo, mai.
+- **E l'etichetta è `Aplha`**, non `Alpha`: un refuso che nessun gate poteva cogliere, perché il
+  nome di un post è testo libero. Se una missione lo referenziasse come "Alpha" il riferimento
+  sarebbe rotto in silenzio.
+- **Da fare (utente)**: correggere la sola **etichetta** nel Map Editor. Non l'ho toccata: è
+  contenuto, e il nome potrebbe essere intenzionale.
+- ⚠ **La parte "incatturabile" è FALSA e va letta come storico.** Misurato il 2026-08-05 con la
+  sonda di raggiungibilità: dallo spawn al post `Aplha` il navmesh trova un percorso di **40,2 m
+  contro 37,4 in linea d'aria (detour 1,07)**, con arrivo a **10 cm** dal bersaglio. La geometria
+  non ha alcun problema: era il controllo a essere sbagliato (#95-bis). L'utente lo aveva detto
+  (*"in realtà ci possono andare in alpha e anche catturarlo"*) e aveva ragione lui.
+
 ## 93. Il caduto era INVULNERABILE **e** calamita d'attenzione per i nemici — ✅ CORRETTO 2026-08-04 (changelog 137)
 - **Osservazione dell'utente** (simulazione con molti più droidi che cloni): *"quando erano già tutti
   morti rimaneva un clone a terra che non moriva, attorno al quale giravano i droidi, che gli
@@ -102,7 +171,35 @@ lineare e brutale, e non ha niente a che vedere con la complessità dell'AI.
 4. Rivedere ADR-003 (VBO): **ultima risorsa** — è un workaround intenzionale per il driver Intel,
    e la regola di progetto dice di non toccarlo senza una giustificazione legata a quel driver.
 
-## 90. Missione `firebase_alpha`: l'obiettivo primario non avanza MAI — il post Alpha non viene mai conteso (2026-08-04)
+## 90. Missione `firebase_alpha` non avanza — CAUSA: VERTICALITÀ nell.AI (aggiornato 2026-08-04, changelog 142)
+> **La diagnosi "è la geometria" era SBAGLIATA.** L.utente ha corretto: i muretti sulle zone rialzate
+> non ci sono più da tempo, ad Alpha ci si arriva e lo si cattura, e con un ordine **MoveTo** le
+> unità ci vanno. Avevo concluso leggendo il MapDef senza verificare il comportamento reale.
+>
+> **Causa vera**: le unità non capiscono di dover salire dalle scale. Misurato con `--trace-ai`:
+> quota **0,60 costante per 9000 tick**, distanza da Alpha oscillante fra 7,5 e 20 m — vagano a
+> terra. Due difetti in fila:
+> 1. **CORRETTO (142)**: il test di "arrivato" al waypoint era 2D (`rdx²+rdz²`), quindi chi stava
+>    SOTTO una piattaforma si credeva arrivato e mollava. Ora include la quota.
+> 2. **APERTO**: `requestMoveTarget` passa la quota dell.AGENTE come Y della destinazione, quindi
+>    il navmesh aggancia il pavimento sotto la piattaforma invece del ripiano sopra. È il prossimo
+>    passo; verifica pronta: la quota del clone deve superare 1,0.
+
+## 90-storico-2. (superata) "è la GEOMETRIA, non l.AI" — diagnosi del changelog 141
+- **Diagnosi finale** (scatola nera, `--trace-ai`): il clone **orbita** attorno ad Alpha a raggio
+  costante (8,2 → 9,9 m) senza avvicinarsi. Ad Alpha c.è una **piattaforma 10×10 alta 1,0 m** con
+  **muretti a ±6 m**; il navmesh scala fino a `STEP_HEIGHT` = **0,55 m**, quindi ci passa INTORNO.
+  Dentro il perimetro resta una fascia di 1 m che l.erosione del navmesh (raggio agente 0,4 m)
+  cancella. **Il post è irraggiungibile a piedi: l.AI faceva la cosa giusta.**
+- **Corretto a monte** (changelog 140): l.AI non era comunque in grado di *sapere* dell.obiettivo —
+  ora lo sa, e senza quelle cuciture i cloni non si sarebbero nemmeno avvicinati.
+- **Resta da fare, ed è dell.utente**: la mappa. Abbassare la piattaforma a ≤0,55 m, aggiungere un
+  gradino intermedio, allargare la fascia interna, o spostare il post. È una scelta di design.
+- **Nuova guardia** `UnreachablePoint` in `--validate` e nel pannello Salute Tattica. Limite
+  dichiarato: vede "c.è terreno", non "quel terreno è connesso" — per Alpha serve un controllo a
+  livello di navmesh (`isReachable`), prossimo passo.
+
+## 90-orig. (storico) Missione `firebase_alpha`: l.obiettivo primario non avanza MAI — il post Alpha non viene mai conteso (2026-08-04)
 - **Trovato dal funnel di missione** (O7, changelog 130) al primo utilizzo — prima era invisibile per
   costruzione: gli eventi esistenti scattano solo sui SALTI (attivato/completato/fallito), quindi una
   missione che si impianta **non produce alcun evento**.
@@ -114,6 +211,15 @@ lineare e brutale, e non ha niente a che vedere con la complessità dell'AI.
 - **Ipotesi da verificare** (non ancora indagata: è lavoro di gameplay/contenuto, non di telemetria):
   Alpha è fuori dai settori che il comando considera, o non ha route che ci passano, o è il post di
   partenza di un lato e nessuno ha motivo di andarci. Il funnel dice *che* non avanza, non *perché*.
+- **AGGIORNAMENTO 2026-08-04 (changelog 140, A6 parte 1)**: la causa a monte è **trovata e corretta**
+  — l.AI era completamente cieca alle missioni (zero riferimenti a `activeMission` nel livello AI).
+  Ora gli obiettivi sono pubblicati in una mailbox, entrano nel peso del settore, e raggiungono i
+  cloni anche **senza torre**. Comportamento cambiato e misurato: `su_route` 10 → **0**, i cloni
+  lasciano le pattuglie e convergono su Alpha.
+  **MA la cattura non avviene ancora**: si fermano in un anello a **7,2-15,7 m** da un post di
+  raggio **6 m**. Mancano gli ultimi due metri. Sospetti, in ordine: separazione del crowd (dieci
+  agenti sullo stesso punto), guinzaglio al leader, soglia d.arrivo nel movimento. **Prossimo passo:
+  `--trace-ai` su un singolo clone** — lo strumento esiste e non è ancora stato puntato qui.
 - **Impatto**: la missione è di fatto incompletabile in simulazione. Da verificare se lo è anche
   giocando (il giocatore può andarci a piedi, quindi probabilmente no — ed è esattamente il motivo
   per cui il difetto è sopravvissuto).

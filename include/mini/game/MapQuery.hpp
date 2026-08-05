@@ -10,19 +10,34 @@
 namespace mini::mapquery
 {
 
-// Altezza del suolo calpestabile in (x,z): il top più alto tra i collider
-// "bassi" (top <= maxWalkableTop) che coprono quel punto. Esclude muri e
-// strutture alte. Fallback 0 se nessun collider copre il punto.
+// Altezza del suolo calpestabile in (x,z): il top più alto fra i collider su cui
+// si può STARE che coprono quel punto. Fallback 0 se nessuno lo copre.
+//
+// ── PERCHÉ IL CRITERIO È LA PIANTA E NON L'ALTEZZA (2026-08-04) ──────────────
+// Prima un box contava come suolo solo se il suo ripiano stava sotto **1,6 m**,
+// per escludere i muri. Ma l'altezza non distingue un muro da un pavimento: su
+// `firebase` le piattaforme laterali stanno a **2,5 m** e per tutto il gioco
+// **non erano suolo** — l'utente lo descriveva come *"le superfici camminabili
+// non vengono riconosciute"*, e da lì nascevano quote di mira sbagliate, punti
+// di ricerca a terra sotto una piattaforma e spawn alla quota errata.
+//
+// A distinguerli è la **pianta**: un muro è sottile (0,5 m), un pavimento è largo
+// abbastanza da starci sopra. Con l'agente largo ~0,8 m, la soglia di 1,2 m
+// scarta muretti e casse e accetta piattaforme e ballatoi — a **qualunque quota**.
+// `maxWalkableTop` resta per i chiamanti che vogliono davvero solo il piano terra.
 inline float groundHeightAt(const MapDef* map, float x, float z,
-                            float maxWalkableTop = 1.6f)
+                            float maxWalkableTop = 1e9f)
 {
     if (!map) return 0.0f;
+    constexpr float kMinFootprint = 1.2f;   // lato minimo per poterci stare sopra
     float best = 0.0f;
     for (const auto& b : map->geometry)
     {
         if (!b.collider) continue;
         const float top = b.y + b.sy * 0.5f;
-        if (top > maxWalkableTop) continue;      // muro/struttura, non suolo
+        if (top > maxWalkableTop) continue;
+        // Troppo stretto per essere un pavimento: è un muro, un parapetto, un palo.
+        if (b.sx < kMinFootprint || b.sz < kMinFootprint) continue;
         if (std::abs(x - b.x) > b.sx * 0.5f) continue;
         if (std::abs(z - b.z) > b.sz * 0.5f) continue;
         if (top > best) best = top;

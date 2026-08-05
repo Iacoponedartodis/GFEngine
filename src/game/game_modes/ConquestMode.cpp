@@ -625,7 +625,11 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
                          const DefinitionRegistry* registry,
                          const MeshCache* meshCache)
 {
-    std::cout << "[ConquestMode] Firebase — caricamento...\n";
+    // Il log dice QUALE mappa: la stringa era hardcoded a "Firebase" e mentiva su
+    // ogni altra mappa (visto il 2026-08-04 caricando Training Ground). Un log che
+    // nomina la cosa sbagliata è peggio di nessun log: fa diagnosticare la mappa
+    // sbagliata.
+    std::cout << "[ConquestMode] Caricamento mappa '" << m_mapId << "'...\n";
     world.initialize();
     m_mesh      = mesh;
     m_tex       = tex;

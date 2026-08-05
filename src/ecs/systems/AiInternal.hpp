@@ -70,7 +70,8 @@ void updateSectorStates(World& world, const std::vector<EntityId>& snap);
 
 // Peso tattico di un settore per `myTeam` — analisi CONDIVISA da torre di controllo
 // e Droide Tattico (changelog 88): una sola formula, non possono divergere.
-float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, int myTeam);
+float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, int myTeam,
+                           const World* world = nullptr);
 
 // Torre di controllo dei cloni (doc 36, ADR-040): pubblica SEGNALI, non ordini.
 void updateAllyIntel(World& world);
@@ -84,7 +85,8 @@ bool nearestEnemyNear(const World& world, int myTeam, float x, float z,
 // `bias`, con saturazione (KI #73) → i cloni si distribuiscono.
 bool pickAllySignal(const World& world, float bias,
                     float fromX, float fromZ,
-                    float& outX, float& outZ, float& outRadius);
+                    float& outX, float& outZ, float& outRadius,
+                    bool* outIsObjective = nullptr);
 
 // Quale FRONTE segue QUESTO droide (doc 32 v2): peso × prossimità (changelog 86).
 const World::EnemyCommand::Directive*

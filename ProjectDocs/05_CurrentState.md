@@ -1,5 +1,61 @@
 # 05 — Current State
 
+## 2026-08-05 — Map building: STRUMENTI COMPLETI, G1-G7 (changelog 147-158)
+
+**Cosa esiste ORA che prima non esisteva.**
+
+- **`include/mini/game/MapMetrics.hpp`** — le misure normative con cui si costruisce una mappa
+  (alzata 0,20 · pedata 0,30 · corridoio 2,4 · porta 1,8 × 2,8 · soffitto 2,8 · muro 3,2 ·
+  copertura 1,0/1,7). Sorgente **unica** per gate, editor e navmesh. Dimensionate su un **gigante di
+  riferimento 2,40 × 1,20 m**: il margine per unità future sta nella geometria, non nelle costanti.
+- **`include/mini/game/MapStructures.hpp` + `StructureDef`** (ADR-053) — **otto primitive** come
+  **ricette**: scala, rampa, muro, **muro con apertura** (porta o finestra, col parapetto che è
+  copertura vera), **stanza (guscio)**, piattaforma-con-accessi, **passerella**, **linea di
+  coperture**. Il **vano scala** esiste nel codice ma NON è consegnato: su sei torri di prova tre
+  non sono percorribili (changelog 158). Si salvano i parametri (`"structures"` nel JSON), i box si
+  rigenerano al load. Una sola `expand()` per registry ed editor.
+- **`MapGeometryBox.type`** — `floor`/`wall`/`platform`/`cover`/`decoration` finalmente letto dal
+  runtime; il gate non segnala più i muri come ripiani irraggiungibili.
+- **Map Editor: UNDO/REDO** (snapshot, profondità 64, Ctrl+Z/Y), pannello e dropdown per le
+  primitive, anteprima dei box derivati nel viewport, **gizmo sposta/ruota/scala sulle strutture**
+  (agisce sui parametri del tipo, quindi i gradini non si rompono), **eliminazione degli asset
+  prefab** con conferma, e selezione prefab mostrata **colorando i box** invece che con un rombo.
+- **Sonde di raggiungibilità** (`objective reachability`, `posizioni irraggiungibili`): misura
+  deterministica della verticalità, indipendente dalla run. Usano **`NavManager::isReachable`** —
+  `findPath` da solo conta anche i percorsi **parziali** di Detour e dichiara raggiungibile un'isola.
+- **`kAgentHeight` 1,80 → 2,10 m**: era più basso dei modelli reali (1,98 e 2,03).
+
+- **Selezione multipla** (G3): insieme di codici con un primario. **Ctrl+click** aggiunge/toglie,
+  **Ctrl+A** è un interruttore seleziona-tutto/deseleziona. Sposta, ruota, elimina e duplica agiscono
+  sul **gruppo** — la rotazione fa **orbitare attorno al baricentro**, non girare ogni pezzo su sé
+  stesso; la scala resta al singolo (su un gruppo misto un raggio e un'altezza non si scalano allo
+  stesso modo). La catena codice→elemento, duplicata **quattro volte**, è estratta in
+  `applyMove` / `codePosition` / `codeYaw`.
+- **Serie, filtri di vista, figura di scala, righello** (G6): `Serie...` fa N copie della selezione
+  con offset **progressivo** (la i-esima a i × offset) più un passo di rotazione; `Vista` nasconde
+  per tipo e **sopra una quota**, con un asterisco sul pulsante quando qualcosa è nascosto; due
+  sagome di riferimento (l'unità di oggi a 2,0 m e il **gigante** 2,40 × 1,20) ancorate dove le
+  piazzi; con **due** elementi selezionati il pannello misura la distanza e, se il dislivello supera
+  lo scalino, dice quanti gradini servono.
+- **I `loadX` del registry sono IDEMPOTENTI**: ognuno azzera il proprio contenitore, quindi
+  ricaricare una categoria rispecchia davvero il disco (prima sommava, e un asset cancellato
+  sopravviveva in memoria fino al riavvio).
+
+- **Validazione dal vivo** (G7): i box difettosi si colorano nel viewport (rosso = problema, ambra =
+  avviso) **mentre si costruisce**, dalla **stessa `analyzeTacticalHealth`** del gate `--validate`;
+  contatore di salute sempre visibile in toolbar. I controlli su **navmesh** restano al motore
+  (l'editor non linka Recast, ADR-002) e sono coperti dalle sonde di raggiungibilità.
+- **Vista in SEZIONE**: il taglio in quota seziona davvero la geometria — sopra sparisce, a cavallo
+  si tronca al piano — con slider sul range vero della mappa e Ctrl+click per il valore esatto.
+
+**Stato misurato di Training Ground**: 71,3 × 92,4 m, 167 box, 1.043 poligoni navmesh,
+`--validate` **0 problemi**, tutti e 5 i command post raggiungibili, **1/169 posizioni tattiche
+irraggiungibile** (KI #96 — più 8 autorate a quota sbagliata: contenuto da correggere).
+
+**Non ancora fatto** (doc 47): **G8**, la riparazione di Training Ground con i nuovi strumenti.
+
+---
+
 ## 2026-08-04 — Fotografia dopo il blocco AI + osservabilità (changelog 100-131)
 Verificata contro il codice live durante l'audit di documentazione del 2026-08-04. Il documento era
 fermo al 2026-07-22 e non conosceva **nulla** di quanto segue: è la deriva più grande trovata

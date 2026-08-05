@@ -30,6 +30,7 @@ void World::initialize()
     enemyCommand = {};
     allyIntel    = {};
     sectorStates.clear();
+    activeObjectives.clear();   // A6: mailbox per-partita, come sectorStates
     strategicTargets.clear();
     activeMission = nullptr;   // mailbox missione (ADR-019)
     objectiveDefs = nullptr;

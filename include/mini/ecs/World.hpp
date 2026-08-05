@@ -367,6 +367,32 @@ public:
     };
     std::vector<SectorState> sectorStates;
 
+    // ── OBIETTIVI DI MISSIONE ATTIVI (A6, doc 40 Cucitura 2) ─────────────
+    // Fino al 2026-08-04 l'AI era **completamente cieca alle missioni**: zero
+    // riferimenti a `activeMission`/`objectiveDefs` in tutto il livello AI. Il
+    // comandante ordinava i fronti per solo peso tattico (contesa, minoranza,
+    // possesso) e l'obiettivo non entrava nel calcolo. Effetto misurato (KI #90):
+    // la missione chiedeva di prendere il post "Alpha", che sta in un settore di
+    // importanza 0,5 — la più bassa — quindi nessuno ci andava **mai**, per
+    // sempre, e la missione era incompletabile in simulazione.
+    //
+    // Mailbox, non lettura diretta: `ObjectiveSystem` la scrive, l'AI la legge.
+    // È lo stesso idioma di `sectorStates`/`allyIntel`, e serve a impedire che il
+    // livello AI si accoppi al framework missioni — che vive sopra di lui.
+    //
+    // È un BIAS, non un comando (ADR-020): entra come un termine in più nel peso
+    // del settore. Un obiettivo che *impone* la meta produrrebbe un branco che
+    // corre tutto sullo stesso punto ignorando la battaglia — è esattamente il
+    // difetto degli ordini già revertati nel changelog 77.
+    struct ActiveObjective
+    {
+        float x = 0.0f, z = 0.0f;    // dove (per CaptureZone/DefendZone = il post)
+        float radius = 5.0f;
+        int   actorTeam = 1;         // chi deve eseguirlo: gli altri lo ignorano
+        bool  primary = true;        // primario pesa più di un secondario
+    };
+    std::vector<ActiveObjective> activeObjectives;
+
     struct EnemyCommand
     {
         // v2 (ADR-042 / doc 32): il comandante gestisce PIÙ FRONTI insieme. Non un

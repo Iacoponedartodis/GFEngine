@@ -118,7 +118,8 @@ void updateSectorStates(World& world, const std::vector<EntityId>& snap)
 // (riprendere) e opportunità (valore poco difeso → sfruttare). `allies`=team1,
 // `enemies`=team2 ([[AiSystem.cpp:318]]). Il comandante ci aggiunge fuori il bonus di
 // stance (hold conteso) e i casi speciali (collasso). Non tocca la stance: solo il peso.
-float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, int myTeam)
+float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, int myTeam,
+                           const World* world)
 {
     const int mine = (myTeam == 1) ? st.allies : st.enemies;
     const int foe  = (myTeam == 1) ? st.enemies : st.allies;
@@ -139,6 +140,26 @@ float sectorTacticalWeight(const SectorDef& sec, const World::SectorState& st, i
         w += aiutility::kSector.enemyHeld;
     if (sec.importance > 0.5f && foe <= 1 && st.controllingTeam != myTeam)
         w += aiutility::kSector.opportunity;            // valore poco difeso → sfruttarlo
+
+    // ── OBIETTIVO DI MISSIONE dentro il settore (A6) ─────────────────────
+    // La voce che mancava: prima di oggi la missione non entrava in questa
+    // formula, quindi un settore che conteneva l'obiettivo valeva come ogni
+    // altro. Su firebase il post richiesto sta in un settore di importanza 0,5 —
+    // la più bassa — e nessuno ci andava mai (KI #90).
+    // Conta solo per la squadra che DEVE eseguirlo: l'altra fazione non ha motivo
+    // di sapere cosa chiede la missione del giocatore.
+    if (world)
+        for (const auto& ao : world->activeObjectives)
+        {
+            if (ao.actorTeam != myTeam) continue;
+            const float dx = ao.x - sec.x, dz = ao.z - sec.z;
+            // "Dentro il settore" con tolleranza del raggio dell'obiettivo: un
+            // post sul bordo appartiene comunque a quel fronte.
+            const float reach = sec.radius + ao.radius;
+            if (dx * dx + dz * dz > reach * reach) continue;
+            w += ao.primary ? aiutility::kSector.objectivePrimary
+                            : aiutility::kSector.objectiveSecondary;
+        }
     return w;
 }
 
@@ -174,7 +195,7 @@ void updateAllyIntel(World& world)
             // criteri leggibili — così i cloni si distribuiscono da soli dove
             // serve. [[control-tower-informs-not-orders]] Analisi CONDIVISA col
             // droide tattico (sectorTacticalWeight) → i due lati non divergono.
-            sig.weight = sectorTacticalWeight(sec, st, 1);
+            sig.weight = sectorTacticalWeight(sec, st, 1, &world);
             sig.label = sec.label;
             world.allyIntel.signals.push_back(sig);
         }
@@ -245,10 +266,45 @@ bool nearestEnemyNear(const World& world, int myTeam, float x, float z,
 // un comando unico con un altro nome — esattamente ciò che la torre NON deve fare.
 bool pickAllySignal(const World& world, float bias,
                            float fromX, float fromZ,
-                           float& outX, float& outZ, float& outRadius)
+                           float& outX, float& outZ, float& outRadius,
+                           bool* outIsObjective)
 {
+    if (outIsObjective) *outIsObjective = false;
     const auto& sigs = world.allyIntel.signals;
-    if (sigs.empty()) return false;
+
+    // ── L'OBIETTIVO DI MISSIONE non passa dalla torre (A6) ──────────────────
+    // Senza torre `allyIntel` è vuoto e i cloni tornano puramente autonomi —
+    // giusto per l'INTEL tattica, che è ciò che la torre degrada (doc 36). Ma un
+    // obiettivo di missione **non è intel**: è quello che alla squadra è stato
+    // detto prima di schierarsi, e deve arrivare comunque. Senza questo ramo,
+    // su firebase (nessuna torre) il bias sul peso del settore non aveva alcun
+    // canale per raggiungere i cloni: il post richiesto restava a 0% per sempre
+    // e la missione era incompletabile (KI #90).
+    //
+    // Resta un SEGNALE, non un ordine: dice *dove conta stare*, e il clone
+    // decide da sé se e come andarci — l'agente resta sovrano (ADR-020).
+    // Precedenza al segnale della torre quando c'è: quella è informazione
+    // aggiornata sulla battaglia, questa è l'intento della missione.
+    if (sigs.empty())
+    {
+        const World::ActiveObjective* best = nullptr;
+        float bestD2 = 1e18f;
+        for (const auto& ao : world.activeObjectives)
+        {
+            if (ao.actorTeam != 1) continue;   // solo gli obiettivi dei cloni
+            const float dx = ao.x - fromX, dz = ao.z - fromZ;
+            const float d2 = dx * dx + dz * dz;
+            // I primari vengono prima: un secondario si prende solo se non c'è
+            // un primario attivo, altrimenti la squadra si sparpaglia sui
+            // "sarebbe bello" mentre il "serve" resta scoperto.
+            const float rank = ao.primary ? 0.0f : 1e9f;
+            if (d2 + rank < bestD2) { bestD2 = d2 + rank; best = &ao; }
+        }
+        if (!best) return false;
+        outX = best->x; outZ = best->z; outRadius = best->radius;
+        if (outIsObjective) *outIsObjective = true;
+        return true;
+    }
 
     // 1) Se sono GIÀ dentro un segnale, ci resto: stabilità contro l'oscillazione
     //    (senza, un segnale saturo verrebbe abbandonato → si svuota → tutti
@@ -488,7 +544,7 @@ void selectOrderWaypoint(World& world, AiComponent& ai, float dt,
             const World::SectorState st = (s < world.sectorStates.size())
                                         ? world.sectorStates[s] : World::SectorState{};
             if (st.allies == 0 && st.enemies == 0) continue;   // solo settori ATTIVI/contesi
-            const float w = sectorTacticalWeight(map.sectors[s], st, 1);
+            const float w = sectorTacticalWeight(map.sectors[s], st, 1, &world);
             if (w > bestW) { bestW = w; bx = map.sectors[s].x; bz = map.sectors[s].z; got = true; }
         }
         ai.allySigX = bx; ai.allySigZ = bz; ai.allySigValid = true;
@@ -763,7 +819,7 @@ float AiSystem::updateEnemyCommand(World& world, const std::vector<EntityId>& sn
                     // vista dei droidi) + il bonus di stance specifico del comandante:
                     // difendere un obiettivo conteso conta. Prima questi termini erano
                     // duplicati inline e derivavano dalla torre (riallineati a mano, 85).
-                    d.weight = sectorTacticalWeight(sec, st, 2)
+                    d.weight = sectorTacticalWeight(sec, st, 2, &world)
                              + (holdIt ? aiutility::kSector.holdBonus : 0.0f);
                 }
                 dirs.push_back(d);

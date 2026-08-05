@@ -171,6 +171,15 @@ struct AiComponent
     // indietro — segnalato dall'utente; i droidi non lo fanno perché le loro
     // direttive sono stabili). [[control-tower-informs-not-orders]]
     float allySigX = 0.0f, allySigZ = 0.0f;   // WAYPOINT impegnato (già raggiungibile)
+    // QUOTA del waypoint. Serviva e mancava: il test di "arrivato" era puramente
+    // orizzontale (`rdx² + rdz² < 3²`), quindi un clone fermo **sotto** una
+    // piattaforma, a 2 m in pianta dal punto, risultava arrivato — mollava il
+    // segnale e ripartiva senza essere mai salito. Su una mappa con dislivelli
+    // (firebase: piattaforme a 1,0 e 2,5 m, raggiungibili solo dalle scale) questo
+    // trasformava ogni obiettivo in quota in un giro a vuoto perpetuo, misurato:
+    // quota costante 0,60 per 6000 tick e distanza oscillante fra 8 e 20 m.
+    // Stessa famiglia del punto di mira di KI #86: un'assunzione 2D in un mondo 3D.
+    float allySigY = 0.0f;
     bool  allySigValid = false;
     float allySigTimer = 0.0f;                 // re-eval periodico: bounda il findPath
     // Indice della POSIZIONE tattica rivendicata (ordini del player, occupancy): il

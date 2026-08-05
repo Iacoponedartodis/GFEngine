@@ -2,6 +2,1042 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-05 (158) — Il vano scala: cinque difetti veri trovati, e la decisione di NON consegnarlo
+
+L'utente ha segnalato che la scala con pianerottolo *"non sarebbe funzionale"*: la seconda rampa
+messa **di profilo** contro il pianerottolo, senza spazio per salire il primo gradino, e soprattutto
+**non componibile** — *"non sembrano comode da combinare per ottenere le scale interne di una torre"*.
+Aveva ragione su entrambi i punti, e il secondo era quello importante.
+
+### Riprogettata come VANO SCALA
+Non "due rampanti" ma **quante rampe servono**, dentro una pianta che **non cambia con l'altezza** —
+è ciò che serve per una torre. Due corsie affiancate, rampe pari in salita su una e dispari in
+discesa sull'altra, pianerottoli quadrati che coprono entrambe.
+
+### Cinque difetti veri, trovati misurando
+Ognuno reale, ognuno **insufficiente da solo**:
+1. il pianerottolo deve coprire **entrambe** le corsie (2w), o l'erosione del navmesh le stacca di
+   0,80 m — la salita si fermava alla prima rampa;
+2. ma **non** deve essere profondo il doppio all'indietro: seppelliva gli ultimi gradini della rampa
+   in arrivo sotto il proprio ripiano, creando un salto di 0,60 m;
+3. le rampe vanno lasciate **sospese**: renderle piene dal suolo faceva sì che la rampa di ritorno
+   murasse il pianerottolo da cui parte;
+4. il muro d'anima va **solo fra le rampe**, mai dentro i pianerottoli — lì si attraversa da una
+   corsia all'altra, e un muro che li taglia chiude proprio il passaggio;
+5. la corsia vuole larghezza da **corridoio (2,40)**, non da scala (1,60): misurato, una torre a tre
+   rampe da 1,60 si interrompe alla terza, la stessa a 2,40 arriva in cima.
+
+Il punto 5 è diventato una metrica: **`STAIRWELL_MIN_WIDTH`**, con il clamp che rende il difetto
+inesprimibile come già per l'alzata.
+
+### La decisione: fuori dal menu, non consegnato
+Verifica finale su sei torri (4/8/12/20 m, rotazioni 0/90/215): **tre percorribili fino in cima,
+tre no**. E il gate sui dati dice **0 problemi**, perché il difetto nasce nella **voxelizzazione**,
+non nella geometria dichiarata — quindi nemmeno l'autore se ne accorgerebbe prima di provare.
+
+> Consegnare una primitiva che produce **in silenzio** torri non percorribili è l'esatto contrario
+> della promessa di ADR-053 ("il difetto diventa inesprimibile"). Meglio non averla.
+
+Il codice resta, con tutti e cinque i rimedi e i tre casi ancora aperti annotati sul posto (due sole
+rampe, molte rampe, rotazioni non ortogonali). Vanno affrontati con una **passata dedicata**, non a
+tentativi. Nel frattempo una torre si costruisce con `platform` + `stair` per livello, che sono
+verificate.
+
+**La libreria consegnata è di OTTO primitive**: scala, rampa, muro, muro con apertura, stanza,
+piattaforma con accessi, passerella, linea di coperture.
+
+### Cosa mi porto dietro da questa indagine
+Il navmesh non è una funzione della geometria dichiarata: fra le due ci sono **erosione**
+(`kAgentRadius` per lato), **sfoltimento dei cigli** (`rcFilterLedgeSpans` toglie le celle sul
+bordo di uno strapiombo), **altezza libera** e **area minima di regione**. Una superficie stretta e
+sopraelevata può sparire pur essendo perfetta sulla carta — ed è per questo che l'unica prova che
+conta è **chiedere al navmesh**, non guardare i box.
+
+**Build-verified** Release e Debug, 0 warning. Training Ground invariata: `--validate` 0 problemi,
+1043 poligoni, 5/5 command post raggiungibili. Mappe di prova cancellate.
+
+---
+
+## 2026-08-05 (157) — Libreria di strutture a NOVE primitive, e la sonda di raggiungibilità mentiva
+
+Controlli di sicurezza richiesti dall'utente + ampliamento della libreria "in vista della prossima
+mappa, che alzerà parecchio il livello di complessità".
+
+### Controlli di sicurezza: tutti verdi, tranne un ADR rimasto indietro
+Build Release e Debug **0 errori e 0 warning**; Training Ground `--validate` 0 problemi; 6002 tick di
+simulazione con **0 eventi ERROR** e 2 stalli (max 5,1 s); geometria di Training Ground **byte per
+byte identica** al pre-modifica. Trovato invece che **ADR-047** era ancora *Proposed* pur essendo la
+premessa su cui ADR-053 respinge il pitch sul box e la collisione a mesh: la sua condizione
+("quando la pipeline prefab sarà implementata e verificata") è soddisfatta da ADR-048 dal 2026-08-04.
+**Promosso ad Accepted.**
+
+### Cinque primitive nuove, scelte dal fabbisogno e non per completismo
+Il numero che decide: **una salita di 8 m occupa 12 m di sviluppo diritto** alle nostre metriche.
+Dentro un edificio è insostenibile — e da lì nasce la prima delle cinque.
+
+| primitiva | perché serve |
+|---|---|
+| **Scala con pianerottolo** | due rampanti + pianerottolo: **dimezza l'ingombro**. È ciò che rende possibile la verticalità in uno spazio denso |
+| **Muro con apertura** | porta o finestra con stipiti e architrave giusti. Con il parapetto diventa una **finestra**, e il parapetto è **copertura vera** (box di tipo `cover`) |
+| **Stanza (guscio)** | pavimento + 4 muri + soffitto opzionale, con una porta per ogni lato dichiarato: il modulo canonico dei kit modulari, e **un interno non nasce senza vie d'ingresso** |
+| **Passerella** | un **corridoio in quota**: non decorazione, ma una corsia tattica che domina il piano di sotto. Parapetti opzionali (riparano ma accecano verso il basso — KI #83) |
+| **Linea di coperture** | barricata a intervalli. Emette box `cover`, cioè **proprio ciò che la derivazione dei metadata (doc 46) cerca** |
+
+Nove in tutto. Ogni misura non dichiarata prende il valore **normativo** di `MapMetrics`, e il
+pannello avvisa quando una scelta esce dai limiti ("il gigante non ci passa", "sotto il corridoio
+minimo", "altezza sotto il minimo al coperto").
+
+### Il banco di prova ha trovato un difetto vero nella scala con pianerottolo
+Mappa sintetica con tutte e nove le primitive e quattro obiettivi. Verdetto iniziale: la cima della
+scala doppia **irraggiungibile**. Causa, calcolata e non indovinata:
+
+> Il pianerottolo era largo quanto **un solo** rampante, quindi i due si toccavano **sul bordo**.
+> L'erosione del navmesh (raggio agente 0,40 per lato) li separava di **0,80 m**: il navmesh saliva
+> il primo rampante e si fermava lì.
+
+**Regola generale che ne esce**: due superfici che devono restare connesse vanno **sovrapposte**, non
+accostate. Primo rimedio (pianerottolo 2w × 2w) sbagliato a sua volta — estendendosi all'indietro
+seppelliva gli ultimi due gradini sotto il proprio ripiano e creava un salto di 0,60 m. Corretto:
+**largo il doppio, profondo uno solo**.
+
+### E ha trovato un difetto MIO nella sonda di raggiungibilità
+La passerella, costruita **senza alcun accesso**, risultava «raggiungibile, arriva a 10 cm». Falso:
+- `findPath` di Detour restituisce percorsi **PARZIALI** (`DT_PARTIAL_RESULT`) che si fermano al
+  poligono più vicino raggiungibile, e `findStraightPath` appende comunque il punto richiesto;
+- quindi sia `found` sia `miss_by` erano veri anche per un'isola.
+
+E il punto peggiore: **`NavManager::isReachable` esisteva già**, controllava il parziale *e* che il
+path toccasse il poligono destinazione, ed è quello che usa l'AI a runtime. Avevo scritto una seconda
+verità sulla stessa domanda. Le sonde ora la chiamano.
+
+### Conseguenza sui numeri già pubblicati: KI #96 ridimensionato
+Con il criterio giusto Training Ground passa da **8 posizioni irraggiungibili a 1**. Le altre 7-8
+non sono irraggiungibili: sono autorate **a mezz'aria sotto i ponti** (y 1,55-1,77), l'unità ci
+arriva stando sotto, ma il grafo tattico è calcolato con la LOS da quella quota — **descrive un punto
+di vista che nessuno occupa**. Difetto più insidioso, non minore. Dettaglio in KI #96.
+
+**Build-verified** Release e Debug, 0 warning. **Verificato per navmesh**: tutte e quattro le mete
+del banco di prova raggiungibili dopo le correzioni; Training Ground invariata (1043 poligoni,
+5/5 command post, `--validate` 0 problemi). Mappe di prova cancellate.
+
+---
+
+## 2026-08-05 (156) — G7: i difetti si vedono MENTRE costruisci
+
+Ultima fase degli strumenti prima della mappa grande (doc 47 E7).
+
+### Una sola analisi, mostrata prima
+I box con difetti si colorano nel viewport: **rosso** = problema (il navmesh non ci sale, nessuno ci
+arriva), **ambra** = avviso. La sorgente è `m_issues`, cioè **la stessa `analyzeTacticalHealth` che
+usa `--validate`** — non una seconda analisi "per l'editor", che prima o poi darebbe un verdetto
+diverso da quello del gioco. È il difetto che ci è già costato di più (changelog 77: due verità sullo
+stesso mondo).
+
+Acceso di default: un controllo che va ricordato di accendere è un controllo che non si usa.
+
+### Il numero sott'occhio
+In toolbar compare lo stato di salute — *"N problemi" / "N avvisi" / "nessun difetto"* — ricalcolato
+a ogni modifica. Prima quel conteggio esisteva solo dentro un pannello da aprire; ora se
+un'operazione introduce un problema, **il numero sale nello stesso istante**. È la differenza fra
+correggere un box e rifare una zona.
+
+### Il confine, dichiarato invece che aggirato
+Doc 47 §6 elencava anche due controlli **su navmesh**: connettività vera dallo spawn e tempo di
+cammino verso gli obiettivi. **Restano fuori dall'editor**, e non per pigrizia: il Map Editor linka
+`ContentValidation` e `WorldIntel` ma **non** Recast/Detour (CMake, ADR-002) — costruire il navmesh
+nell'editor è una decisione a sé, non un dettaglio di questa fase.
+
+Quei due controlli **esistono già**, dal lato motore: le sonde `objective reachability` e
+`posizioni irraggiungibili` (changelog 147) li riportano al caricamento, in modo deterministico. E
+con doc 46 M1 la connettività diventa un dato di prima classe (`componentId` per poligono),
+consumato sia dall'AI sia dall'editor. Fare qui una terza strada sarebbe stato il contrario della
+regola che questa fase applica.
+
+**Build-verified** Release e Debug. Training Ground `--validate` 0 problemi.
+**Da verificare a mano**: i box rossi/ambra nel viewport e il contatore in toolbar.
+
+**Con G7 il piano degli strumenti è chiuso salvo G8** (riparazione di Training Ground).
+
+---
+
+## 2026-08-05 (155) — Il taglio in quota diventa una SEZIONE vera (e via la lastra)
+
+Due difetti segnalati dall'utente su 154, entrambi centrati.
+
+### "Le cose sopra non vengono tagliate"
+La regola era *"nascondi il box se la sua BASE sta sopra la quota"*. Conseguenza: **ogni muro che
+parte da terra restava in piedi qualunque fosse il taglio**, e muovendo lo slider non si vedeva
+tagliare quasi nulla. Il difetto era la semantica, non il codice.
+
+Ora il box viene **sezionato**: sopra la quota sparisce, e quello a cavallo si disegna **solo fino
+al piano**. È una vista in sezione vera — costa due sottrazioni per box, e i **dati non si toccano**
+(vale anche per i gradini delle strutture, che si sezionano come tutto il resto).
+
+### "La lastra gialla mi farebbe da tetto"
+Vero, ed era controproducente: la lastra che segnava il piano di taglio diventava essa stessa una
+superficie che copriva la vista — l'opposto di ciò per cui si taglia. **Rimossa.** Il piano non ha
+bisogno di essere disegnato: si vede da sé, è la quota a cui la geometria risulta sezionata.
+
+**Build-verified** Release e Debug. Training Ground `--validate` 0 problemi, navmesh 1043 poligoni,
+5/5 command post raggiungibili.
+
+---
+
+## 2026-08-05 (154) — I filtri di vista non si vedevano: mancava il ridisegno
+
+Segnalazione dell'utente: *"la vista non sembra funzionare"*. Esatta.
+
+### La causa
+Le spunte cambiavano `m_showType`/`m_hideAboveY` e **nessuno richiamava `updateViewport()`**: lo
+stato cambiava, la scena no, finché non si toccava qualcos'altro. Il filtro sembrava inerte.
+
+### E perché non bastava chiamarlo e basta
+`updateViewport()` comincia con `recomputeExposure()`, che è **O(n²) sulle posizioni tattiche**.
+Rifarlo a ogni frame mentre si trascina uno slider significherebbe pagare un'analisi tattica
+completa per nascondere un tetto. Quindi la funzione prende ora un parametro:
+`updateViewport(recomputeDerived = false)` per i cambi di **sola vista**. È la distinzione fra
+"il mondo è cambiato" e "sto guardando il mondo in un altro modo".
+
+### Le due richieste dell'utente sul taglio in quota
+- **Slider oltre al numero preciso.** Ora è uno `SliderFloat` con estremi presi dall'**estensione
+  vera della mappa** (da −Y del box più basso a +Y del più alto): uno slider da −5 a 1000 sarebbe
+  stato inutilizzabile. Ctrl+click sullo slider consente comunque di digitare il valore esatto —
+  una cosa sola, entrambi i modi. Sotto, l'etichetta ricorda la quota corrente e il range della mappa.
+- **Vedere il taglio in tempo reale.** Con il ridisegno immediato il taglio si aggiorna mentre si
+  trascina, e nel viewport compare una **lastra gialla alla quota del taglio**, larga quanto la
+  mappa: si porta il piano dove serve invece di provare un numero alla volta.
+
+Semantica dichiarata nel tooltip, perché non è ovvia: si nasconde ciò che ha la **base** sopra la
+quota. È quella giusta per lavorare dentro un edificio — sparisce il tetto, restano i muri della
+stanza.
+
+**Build-verified** Release e Debug. Training Ground `--validate` 0 problemi.
+**Da verificare a mano**: spunte per tipo, slider del taglio con la lastra gialla, figura di scala.
+
+---
+
+## 2026-08-05 (153) — G6: serie con offset, filtri di vista, figura di scala, righello
+
+### Prima: Ctrl+A diventa un INTERRUTTORE
+Segnalazione dell'utente: Esc non era affidabile (Windows se lo prende in certe combinazioni), e un
+pulsante "Deseleziona" separato era un secondo modo di fare la stessa cosa. Ora **Ctrl+A seleziona
+tutto e, ripremuto, deseleziona**; il pulsante è stato tolto e resta il solo contatore
+`"N selezionati"`, che spiega le scorciatoie nel tooltip. Un tasto, due versi, nessuna ambiguità.
+
+### Serie con offset progressivo (E4)
+`Serie...` crea N copie della **selezione intera** con offset *progressivo* — la copia i-esima sta a
+**i × offset** dall'originale. La differenza con "Duplica" ripetuto è che una fila di dodici colonne
+resta allineata invece di accumulare l'errore di dodici trascinamenti a mano. C'è anche un passo di
+rotazione per copia, che basta a disporre elementi in arco.
+
+Dettaglio non ovvio: `duplicateOne` mette la copia a +2/+2 di default, quindi la serie la **riporta
+sull'originale** prima di applicare l'offset dichiarato — altrimenti ogni copia porterebbe dentro uno
+spostamento che nessuno ha chiesto.
+
+### Filtri di vista (E5)
+`Vista` nasconde per **tipo** (pavimenti, muri, piattaforme, coperture, decorazioni), nasconde le
+strutture, e taglia **sopra una quota**: è il modo di lavorare dentro un edificio senza il tetto
+davanti agli occhi. Solo visivo, non tocca i dati e non si salva. Il pulsante mostra un asterisco
+quando qualcosa è nascosto — senza, ci si dimentica di aver filtrato e si crede che un box sia
+sparito.
+
+### Figura di scala (E6)
+Due sagome affiancate: l'unità di oggi (**2,0 m**) e il **gigante di riferimento** (2,40 × 1,20) su
+cui sono dimensionate le metriche. Serve al difetto più comune del blockout — gli sbagli di scala —
+e mostra a colpo d'occhio se una porta o un corridoio reggono anche il caso peggiore.
+
+Si **ancora dove la piazzi** invece di seguire la telecamera: `updateViewport` ricalcola anche
+l'esposizione (O(n²) sulle posizioni), quindi rinfrescarla a ogni frame costerebbe caro — e una
+sagoma che insegue lo sguardo distrae invece di aiutare. C'è "Riposiziona qui" per spostarla.
+
+### Righello, senza uno strumento nuovo (E6)
+Con **esattamente due elementi selezionati** il pannello mostra la distanza in pianta, quella totale
+e i tre delta. Non serviva un modo separato: la selezione multipla è già il gesto giusto. E se c'è un
+dislivello oltre lo scalino massimo, lo dice con l'azione: *"servono N gradini"*.
+
+**Build-verified** Release e Debug. Nessuna regressione: Training Ground `--validate` 0 problemi,
+navmesh 1043 poligoni, 5/5 command post raggiungibili, 8/169 posizioni irraggiungibili.
+**Da verificare a mano**: Serie, filtri, figura di scala, righello a due selezioni.
+**Restano G7** (validazione dal vivo nel viewport) **e G8** (riparazione di Training Ground).
+
+---
+
+## 2026-08-05 (152) — G3: selezione multipla, e la fine di una catena duplicata quattro volte
+
+Ultima fase mancante fra quelle che rendono costruibile una mappa da 1.520 box (doc 47 E2).
+
+### Il modello: un INSIEME di codici, con un primario
+`m_multiSel` contiene codici di selezione (la stessa codifica di `m_selBox`, più **-6000-i** per le
+strutture). `m_selBox`/`m_selStruct` restano il **primario** — l'ultimo cliccato — ed è quello che il
+pannello proprietà mostra. **Con un solo elemento il comportamento è identico a prima**: la selezione
+multipla è additiva, non sostitutiva.
+
+- **Ctrl+click** aggiunge/toglie, nel viewport e in entrambe le liste. Al primo Ctrl+click l'insieme
+  parte da ciò che era già selezionato, altrimenti si perderebbe.
+- **Ctrl+A** seleziona tutti i box e tutte le strutture; **Esc** deseleziona.
+
+### Cosa agisce sul gruppo, e cosa no — con il motivo
+| operazione | gruppo? |
+|---|---|
+| **Sposta** | ✅ tutti |
+| **Ruota** | ✅ tutti, **orbitando attorno al baricentro** |
+| **Elimina** | ✅ tutti |
+| **Duplica** | ✅ tutti |
+| **Scala** | ❌ resta al primario |
+
+La rotazione di gruppo non poteva limitarsi a sommare lo yaw a ciascun elemento: avrebbe fatto
+**girare ogni pezzo su sé stesso**, che è l'opposto di ciò che serve per ruotare un edificio. Ogni
+elemento orbita attorno al baricentro comune *e* gira su di sé.
+
+La scala resta esclusa di proposito: su un gruppo misto un **raggio**, un'**altezza** e un `facing`
+non si scalano allo stesso modo, e un comportamento "ragionevole" inventato lì sarebbe una sorpresa.
+Il pannello lo dice esplicitamente invece di lasciarlo scoprire.
+
+### Il refactoring che è servito per farlo
+La catena `if/else if` che mappa un codice di selezione sul suo elemento era ripetuta **quattro
+volte** (sposta, ruota, scala, duplica), con guardie leggermente diverse. Con la selezione multipla
+sarebbe diventata cinque. Estratte:
+- `applyMove(code, delta)` — la catena dello spostamento, ora con un chiamante per elemento;
+- `codePosition(code)` / `codeYaw(code)` — accesso ai campi comuni, usati da rotazione di gruppo,
+  baricentro del gizmo ed evidenziazione;
+- `duplicateOne(code)` + `duplicateSelected()` che gli itera sopra;
+- `deleteSelection()` che raggruppa per contenitore e cancella **in ordine decrescente** — in avanti
+  invaliderebbe gli indici successivi e si eliminerebbe l'elemento sbagliato.
+
+### Dettagli che evitano sorprese
+- Il gizmo si posiziona al **baricentro** del gruppo: è il punto attorno a cui ruota.
+- **Tutti** gli elementi selezionati si evidenziano, non solo il primario — altrimenti non si vede
+  cosa si sta per spostare.
+- Contatore in toolbar (`"N selezionati"`) con pulsante Deseleziona.
+- Dopo `Duplica` la selezione **non** segue le copie: un secondo Duplica farebbe una copia della
+  copia, che non è mai ciò che si vuole.
+- Spawn, route e comandante restano fuori da elimina/duplica di gruppo: sono singoli o liste di
+  punti, e "eliminarli in blocco" non è un'operazione sensata.
+
+**Build-verified** Release e Debug. Training Ground `--validate` 0 problemi, navmesh 1043 poligoni,
+5/5 command post raggiungibili, 8/169 posizioni irraggiungibili (KI #96, invariate).
+**Da verificare a mano**: Ctrl+click, Ctrl+A, Esc, rotazione di un gruppo di box, elimina e duplica
+multipli, e che l'undo copra ogni operazione di gruppo in una voce sola.
+
+**Con G3 sono chiuse G1-G5**. Restano G6 (array/duplica con offset, livelli, figura di scala),
+G7 (validazione dal vivo nel viewport), G8 (riparazione di Training Ground).
+
+---
+
+## 2026-08-05 (151) — La causa vera dell'"elimina asset non funziona": NESSUN loader era idempotente
+
+Tre segnalazioni dell'utente su 150. La seconda ha portato a un difetto strutturale del registry.
+
+### `--- il difetto ---` I `loadX` non azzeravano il proprio contenitore
+L'utente: *"elimina asset non sembra funzionare, i prefab rimangono nella lista e posso comunque
+usarli... ovviamente se chiudo e riapro l'editor i prefab cancellati non ci sono più, quindi il
+comando in sé funziona"*. Diagnosi esatta da parte sua, e la causa era una riga più in profondità:
+
+> **`m_prefabs.clear()` viveva solo in `loadAll`.** Ogni `loadX` singolo **sommava** al vecchio stato
+> invece di sostituirlo. Ricaricare i prefab dopo aver cancellato un file lasciava l'asset in
+> memoria — quindi ancora nel menu, ancora piazzabile.
+
+Non era un difetto del comando di eliminazione: **non era autoritativo il ricaricamento**. E valeva
+per **tutte e 14 le categorie**, non solo i prefab: qualunque editor ricarichi la propria categoria
+avrebbe visto dati fantasma. Corretto alla radice — ogni `loadX` ora azzera il proprio contenitore,
+quindi "ricarica" significa davvero "rileggi il disco".
+
+Con questo, la ricarica è **automatica** dopo creazione ed eliminazione (`reloadPrefabAssets`, un
+punto solo, usato da entrambe): niente riavvio e nessun pulsante "ricarica" da ricordarsi di premere,
+come chiesto dall'utente.
+
+### Le strutture non si selezionavano dal viewport
+I loro box derivati avevano `pickId = -1`, che non è un codice valido. Ora hanno **`-6000 - indice`**:
+cliccare un gradino seleziona **la scala**, che è l'unica cosa modificabile.
+
+### "Elimina asset" spostato dove ha senso
+Era stretto fra `+` e `-`, che aggiungono e tolgono un'**istanza in questa mappa** — accostare quei
+due gesti a uno che cancella un file dal disco era un invito all'errore. Ora è su una riga propria
+sotto il menu a tendina e agisce sul prefab lì selezionato. Tolta la nota sulle altre mappe, come
+chiesto.
+
+### Nota di contenuto: i due prefab sono stati cancellati
+`data/prefabs/` è **vuota**: "Muro triplo" e "sandbag_nest" non ci sono più, e `Prefab Test` ha perso
+anche le sue 2 istanze. È coerente con i test del pulsante da parte dell'utente. **Sono entrambi
+tracciati in git e recuperabili** con `git checkout -- data/prefabs/`. Non li ho ripristinati: la
+cancellazione sembra voluta, ed è una scelta di contenuto.
+Verificato con un prefab usa-e-getta che il **caricamento funziona ancora** (`Prefab: __probe`).
+
+**Build-verified** Release e Debug. Training Ground `--validate` 0 problemi, navmesh 1043 poligoni,
+5/5 command post raggiungibili. `Prefab Test` ora è una mappa vuota (1 box): conseguenza della
+cancellazione, non una regressione.
+
+---
+
+## 2026-08-05 (150) — Le strutture si manipolano, i prefab si eliminano, e il rombo se ne va
+
+Quattro segnalazioni dell'utente dopo la prova in gioco di 149. Tutte risolte.
+
+### 1. Le strutture non si potevano né spostare né ruotare — bug vero
+Il gizmo agiva solo su `m_selBox`, e le strutture usano `m_selStruct`: la selezione c'era ma nessuna
+delle tre modalità la raggiungeva. Ora sposta/ruota/scala funzionano sulla **ricetta**, ed è proprio
+il motivo per cui conviene: si sposta la scala intera, non quindici gradini.
+
+Con una regola sulla scala: **agisce sui parametri del tipo, non su un box**, quindi
+i gradini non si possono rompere — allargare una scala non tocca l'alzata, e alzarla **aggiunge
+gradini** invece di renderli più ripidi. X/Y/Z mappano su larghezza/dislivello/pedata (scala e rampa),
+lunghezza/altezza/spessore (muro), lato X/quota/lato Z (piattaforma).
+
+Aggiunta anche la mutua esclusione fra le due selezioni: sceglierne una azzera l'altra, altrimenti il
+gizmo avrebbe agito sul bersaglio sbagliato.
+
+### 2. "I muri sono un po' larghi" + misure regolabili senza rompere i gradini
+- Nuova metrica **`WALL_THICKNESS` 0,25 m** (era 0,40 fisso, visibilmente grosso). Resta ben sopra la
+  cella del navmesh (0,20), sotto la quale un muro rischia di non essere voxelizzato come ostacolo
+  continuo. Lo spessore autorato a 0 usa la normativa.
+- Nuovo parametro **`tread` (pedata)** su scala e rampa: allunga o accorcia la scalinata **senza
+  toccare l'alzata**. Il numero di gradini dipende solo dal dislivello, quindi è una leva che non può
+  romperla. Limitata verso il basso a `STAIR_TREAD` — sotto quella il navmesh fatica a collegare i
+  gradini, ed è la stessa soglia che usa il gate.
+- Il pannello ora mostra **pendenza in gradi** e avvisa oltre i 35°: *"più ripida di una scala vera,
+  allunga la pedata"*.
+
+### 3. I prefab non si potevano eliminare
+Mancava del tutto: i prefab di prova restavano per sempre nel dropdown. Aggiunto **"Elimina asset..."**
+con conferma che dice **quante istanze si romperebbero in questa mappa**, e ammette il proprio limite
+(*"altre mappe non le posso controllare da qui"*). Il `.bak` di `saveJsonRMW` resta di proposito: è la
+rete se l'eliminazione era un errore.
+
+### 4. Il rombo sui blocchi selezionati → colore
+Durante la creazione di un prefab gli elementi inclusi avevano un rombo sospeso sopra. Ora il **box
+stesso diventa ciano** e gli esclusi si smorzano al 45%: il contrasto è più netto e non si aggiunge
+geometria alla scena. Il rombo resta solo per le **posizioni tattiche**, che sono punti e non hanno
+un volume da colorare.
+
+Aggiunta nella stessa passata: **la struttura selezionata si illumina tutta** (tutti i suoi box
+insieme), così si vede che una scala è un oggetto solo.
+
+**Build-verified** Release e Debug. **Nessuna regressione**: Training Ground `--validate` 0 problemi,
+navmesh 1043 poligoni, 5/5 command post raggiungibili, 8/169 posizioni irraggiungibili (KI #96).
+**Da verificare a mano**: il gizmo sulle strutture, l'eliminazione di un prefab e il nuovo
+evidenziamento a colore.
+
+---
+
+## 2026-08-05 (149) — G1/G2/G4/G5 implementate: le primitive parametriche esistono, e l'editor ha finalmente l'undo
+
+Primo blocco di implementazione del piano di map building (doc 47). Quattro fasi su otto.
+
+### G1 — Le metriche diventano codice: `mini/game/MapMetrics.hpp`
+Sorgente **unica** per tre consumatori: gate, editor, generazione. Prima non esistevano da
+nessuna parte, ed è la ragione strutturale per cui le scale erano sbagliate — l'autore non aveva
+sbagliato un numero, non ne aveva nessuno.
+`AGENT_HEIGHT`/`AGENT_RADIUS` si trasferiscono qui da `NavManager.cpp`: le legge anche il gate, e
+due copie sarebbero due verità sullo stesso mondo.
+
+### G5 — Il `type` del box arriva al runtime
+`MapGeometryBox` guadagna `type` (`floor`/`wall`/`platform`/`cover`/`decoration`), che l'editor
+**scriveva dal primo giorno e il parser scartava**. Con `boxShouldBeReachable()` il gate smette di
+segnalare come difetto i muri e i cubi-ostacolo: **Training Ground passa da 4 problemi a 0**.
+
+### G4 — Primitive parametriche (ADR-053): `mini/game/MapStructures.hpp`
+> Una scala non è un oggetto: è una **ricetta**.
+
+Quattro tipi, come deciso: **scala, rampa, muro, piattaforma-con-accessi**. Si salva la ricetta
+(`"structures"` nel JSON di mappa), i box si rigenerano al load — mai salvati, come i prefab
+(ADR-048) e ogni dato derivato (ADR-033). **Una sola implementazione**: `mapstructures::expand` è
+chiamata sia dal registry al load sia dall'editor per l'anteprima, così viewport e gioco non possono
+divergere.
+
+**Le due promesse, verificate su una mappa di prova e non affermate:**
+1. *L'alzata sbagliata è inesprimibile.* Chiesta un'alzata da **2,0 m**: `effectiveRiser` la limita a
+   `STEP_HEIGHT`, la scala esce con 6 gradini da 0,50 e **il gate non la segnala**.
+2. *Una piattaforma con accesso dichiarato non può nascere irraggiungibile.* Piattaforma a 3 m con un
+   solo lato di accesso, command post in cima → **`found:true`, arrivo a 10 cm** (misurato dal
+   navmesh, non dedotto). La stessa piattaforma con `access` tutti falsi **viene segnalata**.
+
+### E il test ha trovato due difetti nel gate — che contraddiceva le metriche che deve far rispettare
+- La soglia minima del gradino era **0,6 m scelti a mano**, e scartava le scale generate dalle nostre
+  stesse primitive (pedate da **0,30**, la misura normativa). Ora la soglia **è** `STAIR_TREAD`.
+- Il controllo dei command post chiedeva *"c'è un gradino accanto a questo campione?"*: su una
+  piattaforma 8×8 con la scala su un lato, tutti i campioni del raggio di cattura distavano più di
+  mezzo metro dalla scala → falso allarme, mentre il navmesh ci arrivava benissimo. La domanda giusta
+  è **"il box che regge questo punto ha un accesso?"**, ed è ora una lambda sola condivisa dai due
+  controlli.
+
+### G2 — UNDO/REDO nel Map Editor (non esisteva affatto)
+A **snapshot del documento**, non a comandi: l'editor muta lo stato in decine di punti sparsi, e un
+command pattern avrebbe richiesto di riscriverli tutti. Una mappa in memoria sono poche decine di KB.
+Profondità 64, `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`, più due pulsanti in toolbar col conteggio.
+
+Il pezzo che lo rende utile davvero: **un aggancio unico** su `ImGui::IsAnyItemActive()`. Invece di
+infilare una chiamata accanto a ogni `DragFloat` — decine di punti, e il primo dimenticato è
+un'operazione non annullabile — si fotografa lo stato quando un widget diventa attivo e lo si
+consegna solo se qualcosa è cambiato davvero. **Un intero trascinamento = una sola voce di undo.**
+Stessa coalescenza per il gizmo (delta per frame fusi entro 0,6 s).
+
+### Nessuna regressione
+Training Ground: navmesh **1043 poligoni**, tutti e 5 i command post raggiungibili (detour ≤ 1,07),
+8/169 posizioni irraggiungibili (invariate: sono KI #96). `--validate`: **0 problemi**.
+**Build-verified** Release e Debug, 0 errori.
+**Da verificare a mano dall'utente** (non ho eseguito la GUI): il pannello delle strutture, il
+dropdown "+ Struttura", l'anteprima nel viewport e il comportamento di Ctrl+Z.
+
+**Resta da fare**: G3 selezione multipla, G6 array/livelli/figura di scala, G7 validazione dal vivo.
+
+---
+
+## 2026-08-05 (148) — Metriche confermate: le taglie MISURATE, e il margine messo nella geometria
+
+L'utente ha confermato le metriche di doc 47 §4 con una riserva precisa: *"non sono sicuro al 100%
+che siano giuste perché i dati tipo l'altezza dei modelli li vedi tu... l'importante è che siamo
+sicuri siano perfetti e lascino un minimo di margine in caso magari di truppe che siano un po' più
+alte o larghe"*. Riserva giustissima: le avevo dedotte dalle costanti, non misurate.
+
+### Le taglie vere, dalle hitbox × `mesh_scale`
+| unità | altezza modello | busto |
+|---|---|---|
+| Clone Trooper | **1,98 m** | 0,33 m |
+| B1 Battle Droid | **2,03 m** | 0,30 m |
+
+### E la misura ha fatto emergere un difetto: la stessa unità ha TRE altezze
+modello **1,98-2,03 m** · agente navmesh **1,80 m** · box di collisione **1,00 m** (`AI_HALF_Y` 0,50).
+Il navmesh dichiarava percorribile un sottopasso da 1,85 m in cui la testa passava **dentro** il
+soffitto.
+
+**Corretto**: `kAgentHeight` **1,80 → 2,10 m**. Misurato prima di adottarlo: costa **4 poligoni su
+1047** su Training Ground, raggiungibilità dei 5 command post invariata (detour ≤ 1,07), posizioni
+irraggiungibili invariate (8/169). Il box di collisione a 1,00 m **resta aperto**: tocca la fisica,
+non la navigazione, e va valutato a parte.
+
+### Dove va il margine — la decisione strutturale
+`kAgentRadius`/`kAgentHeight` sono costanti **globali** e il navmesh si costruisce **una volta, per
+una taglia**: un'unità più larga semplicemente non entra, e non c'è nulla che l'AI possa fare a
+runtime. Da cui:
+
+> **Il margine va nella GEOMETRIA, non nelle costanti.** Cambiare `kAgentRadius` è una riga;
+> allargare i corridoi di una mappa da 60.000 m² già costruita è rifarla.
+
+**Gigante di riferimento: 2,40 × 1,20 m** — +18% in altezza e +50% in larghezza sull'unità di oggi,
+sufficiente per Super Battle Droid, Magnaguard, Droideka, Wookiee. La mappa si dimensiona su di lui;
+il motore resta tarato sull'unità attuale. Quando servirà: una riga di costante, oppure un secondo
+navmesh per taglia (Recast lo supporta, +1,4 s di build sulla mappa grande).
+
+### Cinque metriche allargate di conseguenza
+corridoio **2,0 → 2,4 m** · porta **1,5 × 2,4 → 1,8 × 2,8** · altezza libera al coperto
+**2,4 → 2,8** · muro **3,0 → 3,2** · copertura alta **1,6 → 1,7**. Erano tutte dimensionate
+sull'unità di oggi. Costano solo disciplina in costruzione.
+
+**Build-verified** Release e Debug, 0 errori. **Misurato**: navmesh 1043 poligoni, 5/5 obiettivi
+raggiungibili, 8/169 posizioni irraggiungibili (invariate, sono KI #96).
+**Deciso anche**: primitive del primo giro = **scala, rampa, muro, piattaforma-con-accessi**.
+
+---
+
+## 2026-08-05 (147) — Training Ground non era rotta: era il GATE a mentire (e una riparazione annullata)
+
+Il piano era *"prima sistemo Training Ground, poi gli strumenti"* (decisione dell'utente). Ho
+sistemato — e ho scoperto che non c'era quasi nulla da sistemare.
+
+### Cos'è successo, in ordine
+1. Ho **riparato le due scalinate "C Box"** (alzate 0,75-0,78 m contro un massimo di 0,55) dimezzando
+   la profondità delle pedate e inserendo 8 gradini intermedi: 4 gradini alti → 8 bassi, stesso
+   ingombro, stesse quote dei ripiani.
+2. Poi ho misurato l'**effetto** invece del dato — ed era **nullo**. Alpha era già raggiungibile
+   prima; nessuna posizione tattica dipendeva da quelle terrazze; il conto delle posizioni
+   irraggiungibili era identico (8/169) prima e dopo.
+3. **Ho annullato la modifica alla mappa.** La geometria di Training Ground è tornata byte per byte
+   com'era. Cambiare il contenuto dell'utente per un difetto che non blocca nulla, senza poter
+   dimostrare un miglioramento, è esattamente ciò che le regole del progetto vietano.
+
+### Il vero difetto era nel gate: 13 problemi → 4, e 9 erano falsi allarmi
+Le scale che il gate dichiarava inesistenti **c'erano già**: "Stair 1-4" per i Big Box (alzata 0,11),
+"CT stair 10-11" per il Droid CT Floor (alzata 0,47). Tre difetti, tutti corretti in
+`ContentValidation.cpp`:
+- **slab sepolti** — una scalinata si costruisce impilando slab e il gate segnalava anche quelli
+  sotto (10 falsi allarmi). Ora chiede se c'è **altezza per starci in piedi** (1,80 m), campionando
+  la superficie 5×5 invece di guardare il solo centro. Due tentativi sbagliati prima di azzeccarlo:
+  il test sul centro cade sul confine fra due mezze pedate, e filtrare per *base* scarta proprio il
+  box che seppellisce, perché gli slab autorati a mano **si compenetrano di 3 cm** — "sta sopra" si
+  giudica dal top;
+- **pedate strette** — il gradino da cui si sale doveva essere largo 1,2 m come un pavimento, così le
+  pedate da 0,8 m non contavano. Ora la soglia per il **gradino** è 0,6 m: basta appoggiarci un
+  piede, perché i gradini si concatenano;
+- **post in quota** — `[post Aplha]` era dichiarato incatturabile perché il controllo accettava solo
+  `top ≤ STEP_HEIGHT`: **puniva ogni obiettivo sopraelevato**, cioè esattamente la verticalità che
+  stiamo cercando di abilitare.
+
+### KI #94 smentita — e l'utente aveva ragione
+Il post `Aplha` **non è incatturabile**: `found:true`, percorso 40,2 m contro 37,4 in linea d'aria
+(**detour 1,07**), arrivo a **10 cm**. L'utente lo aveva detto — *"in realtà ci possono andare in
+alpha e anche catturarlo"* — e la diagnosi sbagliata veniva da una guardia che non sapeva salire le
+scale. Resta valido solo il refuso nel nome.
+
+### Osservabilità nuova, permanente (ADR-050): due sonde che mancavano
+Il punto di svolta è stato smettere di contare **esiti** (catture, eventi di combattimento — che
+divergono fra run e non dicono nulla sulla geometria) e misurare il **sintomo**, deterministico:
+- **`objective reachability`** — per ogni command post: percorso trovato?, lunghezza, distanza in
+  linea d'aria, **detour** (rapporto fra le due) e **`miss_by`** (di quanto il percorso manca il
+  bersaglio: se Detour ripiega sul poligono più vicino, `found` è `true` ma non ci si arriva);
+- **`posizioni irraggiungibili`** — quante delle posizioni tattiche il navmesh non raggiunge, con le
+  8 peggiori e il loro scarto.
+
+### E la seconda sonda ha trovato subito un difetto vero (KI #96)
+**8 posizioni su 169 sono sospese in aria**: `chokepoint` #2-5 e `cover` #44-47, tutte **sotto** i
+ponti, con `y` fra 1,55 e 1,77 m mentre il suolo lì è a ~0. Il percorso si ferma 1,6-1,8 m sotto di
+loro. L'AI le vede, le può scegliere, e non ci arriva. È contenuto: da correggere all'utente.
+
+### Correzione a doc 47 e ADR-053: l'AI non salta affatto
+Avevo scritto *"salto giocatore 1,29 m, salto AI 1,08 m"*, deducendoli dalle costanti. Verificato in
+`AiSystem.cpp`: il salto è dentro un ramo `if (!useCrowd && ai->jumpEnabled …)` e `useCrowd =
+navActive` → **con il navmesh attivo, cioè sempre, l'AI non salta mai**. La regola giusta è più
+netta: sopra **0,55 m** l'AI si ferma, punto; fra 0,55 e 1,29 il giocatore sale e l'AI no.
+
+**Build-verified** Release e Debug, 0 errori. **Misurato**: 13→4 problemi, raggiungibilità di tutti e
+5 i command post, 8/169 posizioni irraggiungibili. **Non verificato a mano**: l'aspetto in gioco (non
+ho toccato la geometria, quindi non c'è nulla da guardare).
+
+---
+
+## 2026-08-04 (146) — Map building: il PIANO (doc 47, ADR-053) e due misure corrette
+
+**Nessun codice** (a parte quanto già in 145). L'utente ha deciso la taglia della mappa nuova —
+**300 × 200 m** — e chiesto ricerca + pianificazione su map building e geometrie. Risultato: **doc 47**.
+
+### La misura che ho sbagliato due volte, e come si è chiusa
+In 145 avevo "corretto" le dimensioni di Training Ground a 154,9 × 91,9 m. **Sbagliato anche quello**:
+calcolavo l'ingombro dei box **ignorando la rotazione `ry`**, e due "Side Bridge" lunghi 90 m ruotati
+di 90° risultavano estesi lungo X invece che lungo Z. Il valore vero, confrontato con i `bmin`/`bmax`
+che il motore stampa per il navmesh:
+
+> **Training Ground = 71,3 × 92,4 m = 6.595 m², quota −0,4…15,5 m.** 169 posizioni = **una ogni 39 m²**.
+
+Il dato del motore era giusto, il mio calcolo no. Leggere il JSON non è misurare la mappa: la
+verifica è contro ciò che il motore costruisce davvero. Corretti doc 44, 46, 13_ADR, 10_ProjectMemory
+e l'entry 145.
+
+### La mappa da 300 × 200: misurata, non stimata
+Generata una mappa sintetica 300 × 200 con la stessa densità di box di Training Ground (1.520 box),
+caricata in Release:
+
+| | Training Ground | sintetica 300 × 200 | rapporto |
+|---|---|---|---|
+| area | 6.595 m² | 60.000 m² | 9,1× |
+| poligoni navmesh | 1.047 | 5.806 | 5,5× |
+| **build navmesh** | **0,113 s** | **1,385 s** | **12,3×** |
+
+**Verdetto: 300 × 200 regge a tile singola**, `ok: true`, nessun cambio architetturale, ~1,4 s di
+load. E il costo cresce **più che linearmente** con l'area → 300 × 200 è anche il limite naturale
+della tile singola: è la taglia giusta tecnicamente, non solo di design. (Mappa di prova cancellata
+dopo la misura.)
+
+### Audit dell'editor: i tre pulsanti contro i 1.520 box
+Letto sul codice, non ricordato. `MapEditor.cpp` (2.921 righe) offre per costruire: **`+ Box`,
+`Duplica`, `Elimina`**. E inoltre:
+- **selezione singola** (`int m_selBox`): non si può spostare un edificio;
+- **nessun undo/redo**, in tutto `editor/`;
+- nessun gruppo, nessun livello, nessun array, nessuna primitiva oltre il box;
+- ✅ snap alla griglia e gizmo esistono già.
+
+> Con questi strumenti, 1.520 box significa ~1.520 clic su "+ Box" **senza poter annullare un
+> errore**. Non è pessimismo: è l'aritmetica degli strumenti che ci sono.
+
+### Il difetto strutturale: una pendenza è INESPRIMIBILE
+`MapGeometryBox` ha `ry` e basta — nessun pitch, nessun roll. Non si può autorare una rampa. E questo
+**mentre il navmesh dichiara di accettare pendenze fino a 45°** (`kAgentSlope`): una capacità che
+nessun dato può attivare — la stessa forma di difetto di ADR-023, applicata alla geometria.
+
+### La decisione: primitive parametriche che si espandono in box (ADR-053, Proposed)
+> **Una scala non è un oggetto: è una RICETTA.** L'autore dichiara "da qui a lì, larga 4 m"; la
+> macchina emette i box con l'alzata giusta. **L'alzata sbagliata diventa inesprimibile.**
+
+Parametri salvati, box espansi **mai** (rigenerati al load, come i prefab ADR-048 e i derivati
+ADR-033). Le pendenze si risolvono per **scalettatura fine** — alzata 0,20 m = multiplo esatto di
+`kCellHeight`, pedata 0,30 → 33,7°, dentro la banda 30-35° della letteratura — **non** aggiungendo
+pitch al box, che romperebbe LOS analitica, navmesh e collisione (cioè ADR-047) per una feature di
+authoring. E **la piattaforma dichiara i propri accessi**: non si verifica dopo che sia
+raggiungibile, si rende il difetto inesprimibile prima.
+
+### Una regola che nasce da una nostra misura, non dalla letteratura
+Salto giocatore **1,29 m**; **l'AI non salta** col navmesh attivo (corretto in 147). Quindi:
+**mai un dislivello fra 0,55 e 1,29 m senza una scala** — sopra 0,55 non si cammina, sotto 1,29 il
+giocatore salta e **l'AI no**. È il sintomo che l'utente ha descritto (*"molti sono rimasti giù ad
+andare contro il muro"*) espresso come vincolo di costruzione invece che come bug da inseguire.
+
+### Un canale semantico già autorato e buttato via
+L'editor scrive per ogni box un `type` (`floor`/`wall`/`platform`/`cover`/`decoration`) e su Training
+Ground è **già compilato con criterio**: 75 floor, 74 wall, 18 cover. Ma `MapGeometryBox` non ha quel
+campo: **il runtime lo scarta al parse**. È il cambiamento più economico del piano — il dato esiste già.
+
+**Documenti**: nuovo 47; 13_ADR +1 (053, Proposed); 44 §W1 rinvia a 47; 46 §0/§7/§12 aggiornati con
+la misura del 300 × 200 e la decisione dell'utente; 06_Todo aggiornato.
+**Restano tre scelte all'utente** (doc 47 §12): le metriche normative, quante primitive nel primo
+giro, e se riparare Training Ground come collaudo prima di costruire la mappa nuova.
+
+---
+
+## 2026-08-04 (145) — Metadata tattici: dalla ricerca al PIANO (doc 46, ADR-051/052)
+
+**Nessun codice.** Su richiesta dell'utente: prima ricerca pura (doc 45), poi *"una pianificazione
+nel dettaglio della miglior combinazione possibile di sistemi"*. Il risultato è **doc 46**.
+
+### Ricerca completata con i due riferimenti indicati dall'utente
+Aggiunti a doc 45 **F.E.A.R.** e **Arma 3**, e sono i due che hanno cambiato la conclusione.
+- **F.E.A.R.** dà il modello del **sensore per-agente**: *"each A.I. already has sensors keeping an
+  up to date list of potentially valid cover positions nearby... All the squad behavior needs to do
+  is select one node that the A.I. knows about"*. La squadra non analizza la mappa; rivendica.
+- **Arma 3** conferma i prefab (`buildingPos` = ADR-048) ma è soprattutto il **controesempio**:
+  annota gli edifici e **non il terreno**, ed è precisamente lì che la sua AI è criticata da vent'anni.
+
+### La lezione che ha deciso l'architettura
+> Se l'unico livello di metadata è "posizioni su oggetti autorati", **lo spazio fra gli oggetti resta
+> muto** — e non si tappa aggiungendo posizioni.
+
+### Correzione di un numero che avevo sbagliato in doc 44 e 45
+Avevo scritto che Training Ground è *"una mappa di prova da 50×40"*. Misurata sulla geometria:
+**71,3 × 92,4 m, quota massima 15,5 m**. Il dato che ne esce è **più severo**, non meno: 169
+posizioni su 6.595 m² = **una ogni 39 m²**. Il mondo è quasi vuoto di significato, ed è coerente con
+il sintomo che stiamo inseguendo (AI che non sanno cosa farci con lo spazio).
+
+### La decisione: substrato a TRE livelli (ADR-051, Proposed)
+La domanda aperta dell'utente era *posizioni discrete o poligoni navmesh*. La risposta è che la
+domanda era mal posta — **nessun sistema che funziona usa una granularità sola**:
+- **A — griglia d'influenza** (2 m, dinamica): *"com'è messa quest'area, adesso?"*
+- **B — poligoni navmesh** (statico, derivato al load): *"che tipo di luogo è, e come ci si arriva?"*
+- **C — posizioni tattiche** (semantico, autorabile): *"dove mi metto, e cosa ci faccio?"*
+
+**Regola d'oro**: un dato vive nel livello più basso che può calcolarlo, e in nessun altro — è
+questa, non i tre livelli, a impedire le verità parallele (il difetto del changelog 77).
+
+Effetto: la mappa passa da 169 dati tattici a **decine di migliaia**, e l'autore **non scrive una
+riga in più di oggi**.
+
+### Il pezzo che risolve la verticalità, e costa quasi nulla
+`distToObjective` come **campo di Dijkstra per obiettivo** sul grafo dei poligoni: una passata al
+load dà la **distanza di cammino** da ogni punto della mappa, e il **gradiente dello stesso campo è
+la via d'accesso**. "Alpha è a 8 m in linea d'aria ma a 40 m di cammino perché si sale solo dalla
+scala" smette di essere una cosa che l'AI non può sapere e diventa la lettura di un `float`.
+
+### Query in tre sezioni + sensore per-agente (ADR-052, Proposed)
+Da CryEngine: `Generation` / `Conditions` / `Weights` separate — oggi le mescoliamo, ed è il motivo
+per cui non so dire *perché* una query ha scelto quel punto. Il **funnel di ADR-050 verrebbe gratis**
+dalla struttura. Col sensore F.E.A.R. il costo per decisione passa da `O(posizioni)` a `O(20)`:
+**smette di dipendere dal numero di posizioni**, che è la precondizione perché mappa grande e
+generazione automatica siano possibili.
+
+### Le 5 domande aperte di doc 45 sono tutte chiuse
+Influence map **sì** (utente); granularità → **tre livelli**; protezione **per direzione**, 8 settori
+da 45° (8 byte/posizione, 8 raycast al load); distanza **di cammino** via Dijkstra; ispezione via
+overlay + viewport + `--validate` + `--trace-ai`.
+
+### Il gate contro il fallimento già visto (ADR-026)
+La generazione automatica si adotta **solo se** ritrova ≥ 60% delle 169 posizioni autorate a mano su
+Training Ground. Se la macchina non ritrova ciò che l'autore ha scelto, non ha capito la mappa.
+
+### Il numero misurato che ha cambiato il piano
+Misurando invece di stimare (`--sim-ticks 60`, Release): Training Ground ha **1.047 poligoni
+navmesh** (metà della mia stima — il livello B costa ancora meno del previsto), ma
+**`buildTacticalLinks` impiega 8,1423 ms per 2.323 link su 169 posizioni**, ed è **O(n²)**:
+~0,29 µs a coppia. Proiezione a 2.000 posizioni generate: **~1,14 secondi di load**.
+
+> **Conseguenza dura**: M7 (generazione automatica) **non esiste** finché il grafo resta quadratico.
+> Non è un'ottimizzazione da rimandare, è un prerequisito — aggiunto come **M0-bis**, con il rimedio
+> noto (indice spaziale a griglia + limite di `fireRange`, ~10× su questa mappa).
+> Senza questa misura avrei messo M7 in fondo come "nice to have" e l'avrei scoperto irrealizzabile
+> **dopo** aver costruito tutto il resto.
+
+### Correzione di codice (l'unica del change set): il log mentiva sulla mappa
+`ConquestMode.cpp` e `SandboxMode.cpp` stampavano stringhe **hardcoded** `"Firebase"` / `"firebase"`
+a ogni avvio, qualunque mappa fosse caricata. Caricando Training Ground il motore diceva
+`[SandboxMode] Avvio — mappa firebase...` e poi `[Sandbox] Geometria firebase: 167 box` — che sono i
+box di Training Ground. Un log che nomina la cosa sbagliata è peggio di nessun log: la memoria
+operativa diceva *"conferma sempre quale mappa carica"*, e la riga che serviva a confermarlo
+**confermava il falso**. Ora stampano `m_mapId`.
+**Build-verified** (Debug e Release, 0 errori) e **verificato in esecuzione**:
+`[ConquestMode] Caricamento mappa 'Training Ground'...`.
+
+**Documenti**: nuovo 46; 45 esteso (F.E.A.R., Arma 3, domande chiuse); 44 corretto (dimensioni reali,
+rinvio a 46); 13_ADR +2 (051, 052, Proposed); 06_Todo aggiornato.
+**Prossimo passo concordato**: piano di **map building/geometrie (doc 47)**, poi l'utente costruisce
+la mappa, poi si implementa doc 46.
+
+---
+
+## 2026-08-04 (144) — Le scale di Training Ground sono TROPPO RIPIDE (e il gate ora lo dice)
+
+Segnalazione dell'utente: *"quando do il MoveTo su Alpha mi appare posizione irraggiungibile, alcuni
+ci vanno ma molti sono rimasti giù ad andare contro il muro"*. **Il messaggio era corretto**, ed è
+la conferma della guardia aggiunta ieri.
+
+Su **Training Ground** (l'unica mappa su cui si fanno test — firebase va ignorata) le scale
+**esistono**: box impilati a z=±5,3 con ripiani a **0,63 → 1,44 → 2,20 → 2,96**. Ma ogni alzata è di
+**0,68-0,81 m**, e in un punto **1,21 m**, contro uno `STEP_HEIGHT` di **0,55**. Il navmesh non le
+collega: la piattaforma centrale (alta 3,5 m) resta un'isola, MoveTo risponde correttamente
+"irraggiungibile", e chi ci prova finisce contro il muro. Le zone rialzate vicino allo spawn
+funzionano meglio perché hanno dislivelli minori — coerente con l'osservazione dell'utente.
+
+**Guardia resa AZIONABILE.** Diceva solo *"manca un gradino adiacente"*, che qui manderebbe a
+costruire scale già esistenti. Ora distingue i due casi e dà i numeri:
+> `[geometria 39] ripiano a 2.96 m: il gradino adiacente più alto è a 2.20 m, ALZATA 0.76 m contro un
+> massimo di 0.55 → troppo ripido, il navmesh non ci sale. Servono gradini intermedi`
+
+Su Training Ground: **13 problemi**, fra cui il post `Aplha` senza alcun punto calpestabile nel suo
+raggio di cattura (3,6 m) — cioè esattamente il posto dove l'utente ha provato il MoveTo.
+
+**Alzare `STEP_HEIGHT` non è la risposta**: 0,9-1,2 m non è un gradino ma un salto, e la costante è
+usata anche dal movimento fisico (`slideMoveWithStepUp`) — cambierebbe il gioco ovunque. Il rimedio
+è nei dati (gradini intermedi), oppure un giorno una **capacità di arrampicata dichiarata**.
+
+### Prossimo blocco deciso: la FONDAZIONE DEL MONDO (nuovo doc 44)
+
+Ordine scelto dall'utente, e i dati lo confermano: **prima la fondazione, poi gli ordini** — ruota,
+ordini rapidi e mappa tattica si appoggiano tutti a settori, posizioni e obiettivi, e costruirli
+sopra metadata scarni significherebbe rifarli. Nuovo **`44_WorldBuildingFoundation.md`** (Planned
+Feature, zero codice): **W1** geometria percorribile per costruzione (scale/rampe come primitive che
+non possono sbagliare l'alzata, verifica nel viewport, connettività vera via navmesh) · **W2**
+metadata **derivati** da geometria/ambiente/posizione, con all'autore il solo INTENTO · **W3**
+generazione automatica delle posizioni tattiche come suggerimento correggibile · **W4** la mappa
+grande come banco di prova, **solo dopo** gli strumenti.
+
+Il rischio principale è dichiarato nel documento: **sovra-derivazione**. Un metadato che l'autore
+non capisce e non può correggere è peggio di uno assente. Ogni dato derivato dovrà essere
+ispezionabile e sovrascrivibile.
+
+## 2026-08-04 (143) — Verticalità sbloccata: tre difetti nel motore, e su firebase MANCANO LE SCALE
+
+Tre correzioni sul riconoscimento delle superfici e del movimento in quota, più la causa vera del
+caso `firebase` — che non era nessuna delle tre.
+
+**1. `groundHeightAt` aveva un tetto a 1,6 m.** Un box contava come suolo solo se il suo ripiano
+stava sotto quella quota, per escludere i muri. Ma **l'altezza non distingue un muro da un
+pavimento**: le piattaforme laterali di firebase stanno a **2,5 m** e per tutto il gioco **non erano
+suolo**. È letteralmente ciò che l'utente descriveva — *"le superfici camminabili non vengono
+riconosciute"* — e da lì nascevano quote di mira sbagliate, punti di ricerca a terra sotto una
+piattaforma e spawn alla quota errata. Il criterio ora è la **pianta**: un muro è sottile (0,5 m),
+un pavimento è largo abbastanza da starci sopra (soglia 1,2 m, agente ~0,8) — **a qualunque quota**.
+
+**2. Il test di "arrivato" era 2D** (`rdx² + rdz² < 3²`): chi stava *sotto* una piattaforma, a 2 m in
+pianta, si credeva arrivato e mollava il waypoint senza mai salire. Ora include la quota.
+
+**3. La destinazione di movimento non portava la sua quota**: `requestMoveTarget` passava `et->y`,
+l'altezza di **chi cammina**, quindi `findNearestPoly` agganciava il pavimento *sotto* la
+piattaforma invece del ripiano sopra. L'unità ci andava a terra credendo di aver obbedito — ed è il
+motivo per cui un ordine MoveTo funzionava (lì la quota arriva col punto) e l'iniziativa no.
+
+**Misurato su Training Ground**, che ha geometria salibile: le unità raggiungono **quota 3,05**
+(prima: nessuna sopra 0,60 in una sim su firebase), combattimento **248 → 267**, stalli **3 → 2**.
+
+### E su firebase non salgono comunque: MANCANO LE SCALE
+
+Elencati tutti i 22 box: **non esiste un solo gradino**. Il salto dal pavimento (top 0,10) a
+qualunque piattaforma (top 1,00) è di **0,90 m**, contro uno `STEP_HEIGHT` di **0,55**. Le
+piattaforme sono **isole scollegate** nel navmesh: nessuna unità potrà mai salirci, con qualunque AI.
+Le scale che si vedono esistono nel **modello visivo**, non nei box che generano la navigazione — è
+esattamente il divario contro cui mette in guardia ADR-047 (*la verità tattica sono i box*).
+
+Nota per l'utente: i **muretti attorno alla piattaforma centrale sono ancora nel file** (quattro box
+con ripiano a 2,00 m attorno ad Alpha), anche se ricordava di averli tolti.
+
+**Nuova guardia** `UnreachablePoint` estesa alla geometria: per ogni ripiano calpestabile sopra lo
+scalino massimo, esiste un gradino adiacente che permetta di salirci? Su firebase ne segnala
+**11**; su Training Ground **13**. Sono difetti reali di mappa che nessuno poteva vedere, se non
+guardando le AI girare in tondo.
+
+## 2026-08-04 (142) — Verticalità: "arrivato" era un test 2D, e la meta di movimento non ha quota
+
+**Correzione dell'utente che ribalta il changelog 141**: su firebase i muretti sulle zone rialzate
+**non ci sono più da tempo**, ad Alpha ci si arriva e lo si cattura, e con un ordine **MoveTo** le
+unità ci vanno. Quindi *non* è irraggiungibile: la mia diagnosi "è la geometria" era **sbagliata**,
+costruita su una lettura del MapDef senza verificare il comportamento reale. Il problema che l'utente
+descrive è un altro: *"hanno problemi a capire che possono salire solo dalle scale"*.
+
+**La traccia lo conferma in modo brutale**: il clone 13 resta a **quota 0,60 per 9000 tick** — non
+sale **mai** — mentre la distanza da Alpha oscilla fra 7,5 e 20 m. Non è fermo: **vaga a terra**.
+
+### Primo difetto trovato e corretto: "arrivato" ignorava la quota
+
+Il test di raggiungimento del waypoint era `rdx² + rdz² < 3²` — **puramente orizzontale**. Un clone
+fermo *sotto* una piattaforma, a 2 m in pianta dal punto, risultava **arrivato**: mollava il segnale
+e ripartiva senza essere mai salito. Su una mappa con dislivelli ogni obiettivo in quota diventava un
+giro a vuoto perpetuo. Aggiunta la quota al test (`allySigY`, tolleranza 2×`STEP_HEIGHT`) — stessa
+famiglia del punto di mira di KI #86: **un'assunzione 2D in un mondo 3D**.
+
+Effetto misurato su Training Ground (che ha posizioni elevate): **215 → 248 eventi** di
+combattimento, ripetibile 248/248, e **stalli 4 → 3**. Cambio di comportamento voluto, non
+regressione: le unità smettono di dichiararsi arrivate a un piano di distanza.
+
+### Secondo difetto, IDENTIFICATO ma NON ancora corretto
+
+Le unità continuano a non salire, e la causa successiva è visibile nel codice: la richiesta di
+movimento passa al navmesh **la quota dell'agente**, non quella della destinazione —
+`requestMoveTarget(idx, {x + dx*dist, et->y, z + dz*dist})`. `findNearestPoly` cerca quindi il
+poligono più vicino **all'altezza di chi cammina**: puntando un posto su una piattaforma, aggancia
+il pavimento *sotto* invece del ripiano sopra, e l'unità ci va a terra credendo di aver obbedito.
+
+**Non l'ho corretto**: è una modifica al percorso di movimento di *ogni* unità in *ogni* stato, e
+non ho margine per verificarla come si deve in questo giro. Farla senza misurarla sarebbe
+esattamente l'errore che questo progetto ha già pagato più volte. **È il primo passo del prossimo
+giro**, con la verifica già chiara: la quota del clone 13 deve superare 1,0.
+
+*Nota su KI #90 e sulla guardia `UnreachablePoint` (141): la guardia resta valida e ha trovato un
+difetto vero su Training Ground (post `Aplha` incatturabile, KI #94), ma la diagnosi su firebase era
+sbagliata — corretta in KI #90.*
+
+## 2026-08-04 (141) — A6 parte 2: la scatola nera chiude l'indagine — non era l'AI, è la GEOMETRIA
+
+Puntata la scatola nera su un singolo clone, come previsto. La traccia dice tutto in dieci righe:
+il clone **orbita** attorno ad Alpha a raggio costante — 8,2 → 8,4 → 8,7 → 9,2 → 9,9 m — muovendosi
+in arco senza mai avvicinarsi. Non è fermo, non è in stallo: **gira intorno**.
+
+**Perché**: ad Alpha non c'è uno spiazzo. C'è una **piattaforma 10×10 alta 1,0 m** circondata da
+**muretti a ±6 m** — è la firebase. Il navmesh scala al massimo `STEP_HEIGHT` = **0,55 m**, quindi
+la piattaforma è un ostacolo e Detour ci passa **intorno**. Dentro il perimetro resta una fascia di
+terreno larga **1 m** fra il bordo della piattaforma (±5) e i muretti (±6): con raggio agente 0,4 m
+e l'erosione del navmesh, quella fascia si assottiglia sotto la soglia e sparisce.
+
+**Quindi il post è irraggiungibile a piedi, e l'AI stava facendo la cosa giusta**: ci andava il più
+vicino possibile. Le tre cuciture del changelog 140 erano necessarie e corrette — senza, i cloni non
+si sarebbero nemmeno avvicinati (restavano sulle route). Il difetto residuo è di **mappa**.
+
+### La guardia che avrebbe dovuto dirlo — e il mio primo tentativo sbagliato
+
+Nuovo difetto `UnreachablePoint` in `analyzeTacticalHealth` (quindi anche in `--validate`).
+**Primo criterio: sbagliato.** Chiedeva "il centro del post sta su un ripiano alto?" e segnalava
+anche Bravo e Charlie, che nelle simulazioni vengono catturati regolarmente — stanno su un rialzo ma
+hanno terreno normale dentro il raggio. *Una guardia che grida al lupo si smette di leggere*: è la
+terza volta che questa lezione si presenta (settori di transito, funnel di missione, ora questa).
+
+**Criterio corretto**: campionare il disco del raggio di cattura e chiedere *"esiste almeno un punto
+in cui un'unità a terra può stare?"*. Risultato: **firebase 0 problemi**, e un difetto **vero** e
+mai visto su Training Ground — il post **`Aplha`** (con il refuso nell'etichetta) non ha **nessun**
+punto calpestabile nei suoi 4 m: è incatturabile da chiunque.
+
+**Limite dichiarato**: il controllo è sui DATI, quindi vede "c'è terreno" ma non "quel terreno è
+CONNESSO al resto". Su Alpha il terreno esiste ed è chiuso dai muretti — per questo firebase risulta
+pulito mentre in partita il post resta inaccessibile. La guardia definitiva è a livello di navmesh
+(`nav->isReachable` dallo spawn), ed è il naturale passo successivo: qui serve il runtime, non il
+MapDef.
+
+**Nessuna regressione**: Training Ground 215 eventi, 4 stalli — identico.
+
+## 2026-08-04 (140) — A6 parte 1: l'AI non è più cieca alle missioni (ma KI #90 non è chiuso)
+
+Prima di oggi il livello AI aveva **zero riferimenti** a `activeMission`/`objectiveDefs`: il
+comandante ordinava i fronti per solo peso tattico e l'obiettivo di missione non entrava nel
+calcolo. Su firebase il post richiesto sta in un settore di importanza 0,5 — la più bassa — quindi
+non ci andava **mai** nessuno (KI #90).
+
+**Tre cuciture, ognuna trovata perché la precedente non bastava** — e ognuna verificata con la
+telemetria invece che supposta:
+
+1. **Mailbox `World::activeObjectives`**, scritta da `ObjectiveSystem` e letta dall'AI: stesso
+   idioma di `sectorStates`/`allyIntel`, così il livello AI non si accoppia al framework missioni.
+   Per Capture/Defend il punto pubblicato è il **command post**, non il centro dell'obiettivo.
+   Nuovo termine `objectivePrimary/Secondary` in `sectorTacticalWeight` — **bias, non comando**
+   (ADR-020): 1,5 mette un primario alla pari di una contesa piena senza superarla.
+   *Risultato: nessun cambiamento.* Misurato: `torre di controllo: assente` su firebase.
+2. **L'obiettivo non passa dalla torre.** `updateAllyIntel` esce subito senza torre, e questo è
+   giusto per l'INTEL tattica — ma un obiettivo di missione è ciò che alla squadra è stato detto
+   *prima* di schierarsi: non dipende da un'antenna. Aggiunto come segnale in `pickAllySignal`.
+   *Risultato: ancora nessun cambiamento.* Misurato: il ramo era chiuso da `allyIntel.active`,
+   quindi la funzione non veniva **mai chiamata**.
+3. **Aperto il gate**: il ramo dei cloni ora vale con la torre **oppure** con un obiettivo attivo.
+   *Risultato: comportamento cambiato davvero* — `su_route` 10 → **0**, i cloni lasciano le
+   pattuglie e convergono su Alpha.
+
+### Dove si è fermato, detto con precisione
+
+I cloni **convergono ma non catturano**: si dispongono in un anello a **7,2-15,7 m** da un post che
+ha raggio **6 m**. Mancano gli ultimi due metri. Ho aggiunto anche la divisione del compito col
+`bias` (una parte va *sul* punto, il resto copre dai dintorni — perché `bestOrderPosition` mandava
+tutti su posizioni tattiche *vicine*, lettura giusta per un segnale della torre e sbagliata per una
+cattura), e non è bastato.
+
+**Non ho chiuso KI #90 e non fingo di averlo fatto.** Quattro tentativi, tre dei quali hanno
+prodotto un cambiamento misurabile e nessuno la cattura. I sospetti restanti, in ordine: la
+**separazione del crowd** (dieci agenti che puntano lo stesso punto si impacchettano in un anello),
+il **guinzaglio** al leader, o una soglia d'arrivo nel movimento. Il passo giusto è la scatola nera
+su un singolo clone (`--trace-ai`), che è esattamente lo strumento costruito per questo — e che non
+ho ancora puntato qui.
+
+**Nessuna regressione**: Training Ground senza missione dà 215 eventi e 4 stalli, identico al
+baseline — le cuciture sono inerti quando non c'è una missione, che è il comportamento voluto.
+
+## 2026-08-04 (139) — Il culling TOCCA già le unità, le armi sono il 24%, e il render è VERTEX-BOUND (provato)
+
+Domanda dell'utente: *"non si può applicare il frustum culling anche alle entità come i droidi?"*.
+**Si applica già** — il ciclo passa su ogni entità con una mesh. Che nel changelog 138 le 35 scartate
+fossero quasi tutte box di mappa era un esito della *scena*, non un'esclusione. Ma il contatore
+aggregato non permetteva di dirlo, quindi l'ho reso capace di rispondere: **unità esaminate 12,4/frame,
+unità scartate 1,6 (13%)**. Le unità vengono cullate; semplicemente in quella scena l'86% è inquadrato.
+
+### Le armi in mano sono il 24% dei vertici → primo LOD
+
+Lo stesso contatore, diviso per tipo: **corpi 1.165k (76%) · armi 376k (24%)**. I mesh delle armi
+vanno da 6k a 57k vertici e se ne disegna uno per unità. A 35 m un'arma è pochi pixel: nuova
+`WEAPON_DRAW_DISTANCE`, oltre la quale l'arma non si disegna. **Armi 376k → 39k (−90%), totale
+−22%.** Il **corpo si disegna sempre**: un soldato che sparisce è un difetto di gioco, un'arma che
+sparisce a 35 m è un dettaglio.
+
+### E ho dovuto smentire una mia affermazione del changelog 138
+
+Lì avevo scritto che "il tempo di rendering segue i vertici, ~15-20 ns ciascuno", deducendolo da due
+scene diverse. Poi il LOD delle armi ha tolto il 22% dei vertici **senza cambiare il tempo** — e a
+quel punto avevo prove contraddittorie e stavo per mandare l'utente a decimare modelli in Blender
+sulla base di un modello non verificato.
+
+**Esperimento decisivo** (sonda temporanea, taglio brutale dei corpi oltre 25 m, stessa scena):
+
+| vertici/frame | draw call | `render.scena` |
+|---|---|---|
+| 1.210.000 | 161 | **31,3 ms** |
+| **83.000** | 154 | **3,0 ms** |
+
+**Il render È limitato dai vertici**: ~25 ns ciascuno, ×10 di velocità per un taglio del 93%, con le
+draw call praticamente invariate. Il modello regge; a non reggere era il *confronto* precedente.
+
+**La trappola di misura, da ricordare**: `--sim-ticks N` fissa i **tick di simulazione**, ma la
+finestra del profilo è di 300 **frame**. Con un renderer più lento passano meno frame negli stessi
+tick, quindi "l'ultima finestra" di due build copre **momenti diversi della partita** — e con essi
+un numero diverso di B1 vivi, che è ciò che determina i vertici. Per confronti di rendering serve
+una scena fissa, non due run a pari tick.
+
+**Conseguenza per l'utente**: R1 (decimazione dei modelli) **pagherà, e molto** — ora è dimostrato,
+non ipotizzato. Portare il B1 da 161k a ~16k vertici è la differenza fra 31 ms e pochi millisecondi
+di scena. Vale la pena farlo quando arriva la scheda grafica nuova.
+
+## 2026-08-04 (138) — R2 frustum culling: implementato, corretto, e onestamente poco utile QUI
+
+Primo lavoro di doc 43. Nuovo `include/mini/render/Frustum.hpp`: estrazione dei sei piani dalla
+matrice view-projection (Gribb/Hartmann) — quindi corretto per qualunque proiezione, split-screen
+compreso — e test a **sfera**, deliberatamente conservativo: un falso positivo costa una draw call,
+un falso negativo fa **sparire** un oggetto dallo schermo, che è il difetto peggiore che un culling
+possa avere. Raggio d'ingombro calcolato **una volta** alla costruzione della mesh, dall'origine
+(la matrice modello ruota e scala attorno all'origine, quindi la sfera resta valida senza ricalcoli).
+
+**Risultato, detto senza abbellirlo**:
+
+| | baseline | con culling |
+|---|---|---|
+| entità esaminate → disegnate | 195 → 194 | 195 → **159** (35 scartate) |
+| draw call | 206 | **170** |
+| **vertici per frame** | 1.648.849 | **1.567.618** (−5%) |
+| `render.scena` | 30,28 ms | **30,3 ms** (3 run: 31,26 / 30,28 / 30,26) |
+
+**Il culling è gratuito ma non guadagna quasi nulla qui.** Scarta il 18% delle entità e solo il 5%
+dei vertici, perché ciò che scarta sono i **box della mappa** — geometria a poche decine di vertici —
+mentre il costo sta nelle **unità**, che la camera inquadra quasi sempre. Un primo campione dava
++3 ms: era rumore, tre run successive danno 30,3 ms come il baseline.
+
+**E una conferma che vale più del culling stesso.** Con `--stress 40`: **737k vertici → 9,6 ms**;
+con 12 unità: **1,57 M vertici → 30 ms**. Il tempo di rendering **segue i vertici** (~15-20 ns per
+vertice), e il numero di vertici segue **quanti B1 sono vivi** — il mesh da 161k vertici, dieci volte
+il Clone Trooper. La relazione è ora quantificata, non dedotta.
+
+**Conclusione operativa**: R2 resta (è corretto, costa zero, e conterà su mappe più grandi o quando
+la camera guarda altrove), ma **il lavoro che paga è R1**, la decimazione degli asset — esattamente
+come diceva la misura di KI #87 e come avevo previsto proponendolo. Portare il B1 da 161k a ~16k
+vertici toglierebbe circa il 90% del traffico quando i droidi sono in campo.
+
+**Da verificare a mano**: guardarsi intorno in gioco e controllare che **nulla sparisca o
+sfarfalli** ai bordi dello schermo. È l'unico rischio di questo cambio, ed è l'unica cosa che io
+non posso vedere.
+
 ## 2026-08-04 (137) — Il caduto era invulnerabile E calamita d'attenzione (KI #93)
 
 Segnalazione dell'utente da una simulazione con molti più droidi che cloni: *"rimaneva un clone a

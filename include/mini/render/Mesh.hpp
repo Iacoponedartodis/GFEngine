@@ -33,12 +33,22 @@ public:
     const std::vector<float>& getVertexData()  const { return m_data; }
     int                       getVertexCount() const { return m_vertexCount; }
 
+    // Raggio della sfera d'ingombro nel MODEL SPACE, dall'origine (doc 43 R2).
+    // Calcolato UNA volta alla costruzione: farlo per frame significherebbe
+    // scorrere 161k vertici a ogni disegno per risparmiare un disegno.
+    // Dall'origine e non dal centroide: la matrice modello ruota e scala attorno
+    // all'origine, quindi una sfera centrata lì resta valida sotto qualunque
+    // trasformazione — con il centroide servirebbe trasformarlo ogni volta.
+    [[nodiscard]] float getBoundingRadius() const { return m_boundRadius; }
+
     // Factory: cubo unitario [-0.5, 0.5]^3 con normali e UV per faccia
     static Mesh createCube(const glm::vec3& color = {1.0f, 1.0f, 1.0f});
 
 private:
     std::vector<float> m_data;         // dati interleaved (11 float per vertice)
     int                m_vertexCount = 0;
+    float              m_boundRadius = 0.0f;   // sfera d'ingombro (doc 43 R2)
+    void computeBoundingRadius();
 };
 
 } // namespace mini

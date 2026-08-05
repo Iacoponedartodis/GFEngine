@@ -216,6 +216,32 @@ void ObjectiveSystem::update(World& world, float dt)
         }
     }
 
+    // ── PUBBLICA GLI OBIETTIVI ATTIVI PER L'AI (A6, doc 40 Cucitura 2) ───
+    // Il livello AI non deve conoscere il framework missioni: legge una mailbox,
+    // come fa già per settori e torre. Ricostruita ogni tick — è piccola (pochi
+    // obiettivi) e così non può diventare stantia, che è il difetto tipico di
+    // questi ponti fra sistemi.
+    //
+    // Per Capture/Defend il PUNTO è il command post, non il centro dell'obiettivo:
+    // è lì che bisogna andare. Senza questa risoluzione il bias cadrebbe nel posto
+    // sbagliato — ed è esattamente il caso di KI #90, dove il post "Alpha" è ciò
+    // che la missione chiede.
+    world.activeObjectives.clear();
+    for (const auto& r : m_objs)
+    {
+        if (!r.def || r.state != State::Active) continue;
+        const ObjectiveDef& d = *r.def;
+        World::ActiveObjective ao;
+        ao.x = d.x; ao.z = d.z; ao.radius = d.radius;
+        ao.actorTeam = d.actorTeam;
+        ao.primary   = (d.tier == ObjectiveTier::Primary);
+        if (!d.targetPost.empty() && world.activeMap)
+            for (const auto& cp : world.activeMap->commandPosts)
+                if (cp.label == d.targetPost)
+                { ao.x = cp.x; ao.z = cp.z; if (ao.radius < 6.0f) ao.radius = 6.0f; break; }
+        world.activeObjectives.push_back(ao);
+    }
+
     // ── Funnel della MISSIONE (ADR-050, doc 42 buco O7) ──────────────────
     // Gli eventi c'erano già, ma solo sui SALTI (attivato, completato, fallito):
     // una missione che si impianta non produce nessun evento, quindi era
@@ -295,6 +321,13 @@ void ObjectiveSystem::update(World& world, float dt)
         }
         telemetry::event(telemetry::Level::Info, "Objective", "stato missione",
             {{"missione", m->id}, {"tempo_s", m_missionTime},
+             // Quanti obiettivi sono PUBBLICATI per l'AI (A6) e per quale team:
+             // senza, "la missione non avanza" non distingue "l'AI non li riceve"
+             // da "li riceve e non ci va". Sono due bug in due file diversi.
+             {"pubblicati_per_ai", (int)world.activeObjectives.size()},
+             {"pubblicati_team1", [&]{ int n = 0;
+                 for (const auto& ao : world.activeObjectives) if (ao.actorTeam == 1) ++n;
+                 return n; }()},
              {"obiettivi", (int)m_objs.size()}, {"attivi", attivi},
              {"attivi_senza_progresso", fermi}, {"dettaglio", arr}});
     }

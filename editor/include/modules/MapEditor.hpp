@@ -1,6 +1,7 @@
 #pragma once
 #include "viewport/FreeCameraViewport.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"   // prefab per il piazzamento (ADR-048)
+#include "mini/game/MapStructures.hpp"             // primitive parametriche (ADR-053)
 #include <string>
 #include <vector>
 #include <array>
@@ -147,6 +148,23 @@ private:
     struct CommanderEntry { bool exists=false; std::string unit;
                             float x=0, z=0; float leashRadius=0.0f; };
     CommanderEntry m_commander;
+    // ── PRIMITIVE PARAMETRICHE (ADR-053) ─────────────────────────────────
+    // Si autora la RICETTA, non i box: l'espansione la fa `mapstructures::expand`,
+    // la stessa funzione che usa il motore al load — così l'anteprima nel viewport
+    // e il gioco non possono divergere. I box espansi NON entrano in `m_boxes` e
+    // NON si salvano mai (ADR-033): vivono solo in `m_structPreview`, rigenerata a
+    // ogni modifica.
+    // Rilegge data/prefabs/ e rifà la lista del menu. Un solo punto, così ogni
+    // operazione che tocca gli asset (creazione, eliminazione) resta allineata da
+    // sé invece di richiedere un pulsante "ricarica" da premere a mano.
+    void reloadPrefabAssets();
+
+    std::vector<mini::StructureDef> m_structures;
+    std::vector<mini::MapGeometryBox> m_structPreview;   // derivata, mai salvata
+    int  m_selStruct = -1;                               // indice in m_structures
+    void rebuildStructurePreview();
+    void addStructure(mini::StructureKind kind);
+
     int                       m_selRoutePt = 0;   // punto attivo della route sel.
     std::array<float,3>       m_spawnTeam1 = {0.f, 0.86f,  8.f};
     std::array<float,3>       m_spawnTeam2 = {0.f, 0.86f, -8.f};
@@ -161,8 +179,102 @@ private:
     // -1000..-2000 posizione tattica; ≤-2000 settore; -5 comandante (ADR-041)
     static constexpr int kSelCommander = -5;
     int   m_selBox       = -1;   // box selezionato
+
+    // ── SELEZIONE MULTIPLA (doc 47 E2 / G3) ──────────────────────────────
+    // Insieme di CODICI di selezione (stessa codifica di `m_selBox`, più
+    // -6000-i per le strutture). `m_selBox`/`m_selStruct` restano il PRIMARIO,
+    // cioè l'ultimo cliccato: è quello che il pannello proprietà mostra e su cui
+    // agiscono rotazione e scala. Con un solo elemento il comportamento è
+    // identico a prima — la selezione multipla è additiva, non sostitutiva.
+    // Motivo per cui serve: con 1.520 box su una mappa grande, senza questo un
+    // edificio non si sposta, si ricostruisce (doc 47 §1.2).
+    std::vector<int> m_multiSel;
+    std::vector<int> selectionCodes() const;      // insieme effettivo
+    int  primaryCode() const;                     // ultimo cliccato
+    void setSelection(int code, bool additive);   // click normale / Ctrl+click
+    bool codePosition(int code, glm::vec3& out) const;   // posizione, se ne ha una
+    float* codeYaw(int code);                     // orientamento, se ne ha uno
+    void applyMove(int code, const glm::vec3& delta);
+    void applyGizmoRotateScale();
+    void deleteSelection();                       // elimina TUTTI i selezionati
+    void duplicateOne(int code);                  // una copia, per un solo codice
+
+    // ── ARRAY: N copie con offset progressivo (doc 47 E4) ────────────────
+    // Una fila di 12 colonne è UN comando, non 12 operazioni. Agisce sulla
+    // selezione corrente, quindi funziona anche su un gruppo intero.
+    int   m_arrayCount = 4;
+    float m_arrayOff[3] = { 4.0f, 0.0f, 0.0f };
+    float m_arrayYawStep = 0.0f;
+    void  makeArray();
+
+    // ── FILTRI DI VISIBILITÀ (doc 47 E5) ─────────────────────────────────
+    // Su 1.520 box il problema diventa VEDERE. Nascondere per tipo e per quota è
+    // ciò che rende lavorabile un interno senza il tetto davanti agli occhi.
+    // Solo visivo: non tocca i dati e non si salva.
+    bool  m_showType[5] = { true, true, true, true, true };   // floor/wall/platform/cover/decoration
+    float m_hideAboveY  = 1000.0f;   // nasconde ciò che sta più in alto
+    bool  m_showStructures = true;
+    bool  filtersActive() const;
+
+    // ── FIGURA DI SCALA (doc 47 E6) ──────────────────────────────────────
+    // Il rimedio raccomandato all'errore più comune del blockout: gli sbagli di
+    // scala. Si piazza dove stai guardando, così il confronto è immediato.
+    // Si ANCORA dove la piazzi, non segue la telecamera: `updateViewport` ricalcola
+    // anche l'esposizione (O(n²) sulle posizioni), quindi rinfrescarla ogni frame
+    // costerebbe caro — e una sagoma che insegue lo sguardo distrae invece di aiutare.
+    bool  m_showScaleFigure = false;
+    float m_scaleFigX = 0.0f, m_scaleFigY = 0.0f, m_scaleFigZ = 0.0f;
+
+    // ── VALIDAZIONE DAL VIVO (doc 47 G7) ─────────────────────────────────
+    // I difetti si vedono nel viewport MENTRE costruisci, non solo in un elenco a
+    // parte o nel gate a mappa finita. Sorgente: `m_issues`, cioè la STESSA
+    // `analyzeTacticalHealth` che usa `--validate` — nessuna seconda analisi che
+    // possa dare un verdetto diverso da quello del gioco.
+    // Acceso di default: un controllo che va ricordato di accendere è un controllo
+    // che non si usa.
+    bool  m_showDefects = true;
     float m_gridSnap     = 0.5f; // snap griglia
     bool  m_showNavmesh  = false; // evidenzia floor
+
+    // ── UNDO / REDO (doc 47 E1) ──────────────────────────────────────────
+    // A SNAPSHOT del documento, non a comandi. Motivo: l'editor muta lo stato in
+    // decine di punti sparsi (ogni DragFloat scrive direttamente nel vettore), e un
+    // command pattern richiederebbe di riscriverli tutti. Una mappa in memoria sono
+    // poche decine di KB: copiarla per intero a ogni operazione costa nulla ed è
+    // impossibile da sbagliare.
+    // È il #1 dichiarato dagli editor a brush, e finora non esisteva affatto: senza,
+    // su una mappa grande ogni esperimento è irreversibile, ed è la paura di
+    // sbagliare che rende lenti.
+    struct Snapshot
+    {
+        std::vector<BoxEntry>          boxes;
+        std::vector<PostEntry>         posts;
+        std::vector<PositionEntry>     positions;
+        std::vector<SectorEntry>       sectors;
+        std::vector<DangerEntry>       dangers;
+        std::vector<RouteEntry>        routes;
+        std::vector<VehicleSpawnEntry> vehSpawns;
+        std::vector<TargetEntry>       targets;
+        std::vector<PrefabInstEntry>   prefabInsts;
+        std::vector<mini::StructureDef> structures;
+        CommanderEntry                 commander;
+        std::array<float,3>            spawnTeam1, spawnTeam2;
+        std::vector<std::array<float,3>> spawnPoints1, spawnPoints2;
+    };
+    std::vector<Snapshot> m_undo, m_redo;
+    static constexpr size_t kUndoDepth = 64;
+    // Coalescenza: trascinare un gizmo produce uno stato nuovo a ogni frame, e senza
+    // raggruppamento un solo trascinamento riempirebbe tutta la pila. `pushUndo`
+    // ignora le chiamate ravvicinate con la stessa etichetta.
+    std::string m_lastUndoTag;
+    float       m_lastUndoTime = -100.0f;
+    float       m_editorClock  = 0.0f;
+
+    Snapshot captureState() const;
+    void     applyState(const Snapshot& s);
+    void     pushUndo(const char* tag);   // da chiamare PRIMA di modificare
+    void     doUndo();
+    void     doRedo();
 
     // ── Viewport 3D ──────────────────────────────────────────────────────
     FreeCameraViewport m_viewport;
@@ -177,7 +289,13 @@ private:
     void duplicateSelected();   // duplica QUALSIASI elemento selezionato (F4, doc 39)
     void deleteBox(int idx);
 
-    void updateViewport();                    // rigenera geometria viewport
+    // Rigenera la geometria del viewport. `recomputeDerived = false` salta il
+    // ricalcolo dei dati derivati (esposizione, visuale verticale): serve ai cambi
+    // di sola VISTA — filtri, taglio in quota — che vanno aggiornati a ogni frame
+    // mentre si trascina uno slider. `recomputeExposure` è O(n²) sulle posizioni:
+    // rifarlo per una spunta di visibilità sarebbe pagare un'analisi tattica per
+    // nascondere un tetto.
+    void updateViewport(bool recomputeDerived = true);
     void recomputeExposure();                 // ADR-033: esposizione per posizione
     float snap(float v) const;               // applica grid snap
 

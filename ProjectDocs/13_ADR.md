@@ -2371,7 +2371,7 @@ KI #77): una prima misura su "Training Ground" girava su un'altra mappa per via 
 
 ---
 
-## ADR-047 — La geometria a BOX è la verità tattica; Blender fornisce il visivo (Proposed, 2026-07-27)
+## ADR-047 — La geometria a BOX è la verità tattica; Blender fornisce il visivo (Accepted — in force 2026-08-05; 2026-07-27)
 
 ### Context
 Le mappe future saranno prodotte con un flusso ibrido (editor + Blender). La tentazione naturale è
@@ -2395,7 +2395,15 @@ porta con sé un **proxy di collisione** composto da box.
   LOS e navmesh in modo difficile da tornare indietro → va impedita con un controllo in `--validate`.
 
 ### Status
-**Proposed.** Diventa Accepted quando la pipeline prefab sarà implementata e verificata.
+**Accepted — in force (2026-08-05).** La condizione dichiarata ("quando la pipeline prefab sarà
+implementata e verificata") è soddisfatta da **ADR-048**, Accepted dal 2026-08-04. Da allora la
+decisione è stata anche **usata come vincolo** in due punti: ADR-053 respinge il pitch sul box e la
+collisione a mesh proprio perché romperebbero lo slab test analitico, e le rampe si risolvono per
+scalettatura per la stessa ragione. Era rimasta Proposed per inerzia mentre il resto ci si appoggiava
+sopra — trovata nel controllo di coerenza del 2026-08-05.
+
+**Resta aperto** il controllo in `--validate` contro la scorciatoia "uso la mesh anche per la
+collisione": oggi nessun gate lo impedisce.
 
 ---
 
@@ -2523,3 +2531,138 @@ Vincoli:
 - Non retroattivo su tutto: i sistemi esistenti si strumentano quando li si tocca. Oggi
   l'AI è coperta (funnel + scatola nera); **non lo sono** navigazione, game mode, missioni,
   ability e veicoli.
+
+---
+
+## ADR-051 — La conoscenza tattica del mondo vive su TRE livelli, non uno (Proposed, 2026-08-04)
+
+**Contesto.** Oggi tutta la conoscenza tattica di una mappa sta in un solo tipo di dato:
+`TacticalPositionDef`, posizioni discrete autorate a mano (169 su Training Ground, che è
+71,3 × 92,4 m — **una posizione ogni 39 m²**). La ricerca (doc 45) ha mostrato che questo è il
+modello di Arma 3 — annotare gli **oggetti** — e che il suo limite noto è esattamente il nostro:
+**lo spazio fra gli oggetti resta muto**, e l'AI non sa ragionare sul terreno aperto. Non è un
+difetto che si tappa aggiungendo posizioni: le posizioni descrivono **cose**, e all'AI servono i
+**luoghi**.
+
+Nessuno dei sistemi che funzionano usa una granularità sola: Killzone ha waypoint *e* aree,
+CryEngine punti *e* navmesh, Arma `buildingPos` *e* (nei mod) griglie di pericolo.
+
+**Decisione.** La conoscenza tattica si articola su **tre livelli**, assegnati secondo la **natura
+della domanda**, non secondo comodità:
+
+- **A — Griglia d'influenza** (celle 2 m, dinamica, anonima, nessun authoring): *"com'è messa
+  quest'area, adesso?"*
+- **B — Poligoni del navmesh** (statico, denso, derivato al load, nessun authoring): *"che tipo di
+  luogo è questo, e come ci si arriva?"*
+- **C — Posizioni tattiche** (statico, rado, semantico, autorabile): *"dove mi metto esattamente, e
+  cosa ci faccio?"*
+
+**Regola d'oro**: *un dato vive nel livello più basso che può calcolarlo, e in nessun altro.* È
+questa regola — non i tre livelli — che impedisce la divergenza fra verità parallele, che è il
+difetto che ci è costato di più (changelog 77).
+
+L'accesso resta esclusivamente via `worldintel` e i buffer runtime: nessun sistema AI legge
+direttamente le strutture di mappa.
+
+**Conseguenze.**
+- L'autore continua a scrivere **solo l'intento** (`role`, `importance`, `destructible`, tag), e
+  **non una riga in più di oggi** — ma la mappa passa da 169 dati tattici a decine di migliaia.
+- Il livello B è quasi gratuito: Recast produce già poligoni, vicini e bordi, e oggi li buttiamo via.
+- `distToObjective` come campo di Dijkstra per obiettivo dà la **distanza di cammino** ovunque e il
+  suo gradiente **è** la via d'accesso: è la risposta strutturale alla verticalità (KI #95).
+- Ogni livello nasce con la sua osservabilità (ADR-050): overlay per A, colorazione viewport per B e
+  C, funnel di query, `--trace-ai` esteso a *"fra cosa stavo scegliendo"*.
+
+**Status: Proposed** finché M1 (annotazione poligoni) non è implementata e verificata. Piano completo
+e criteri di accettazione: **doc 46**.
+
+---
+
+## ADR-052 — Le query tattiche si scrivono in tre sezioni: Generazione / Condizioni / Pesi (Proposed, 2026-08-04)
+
+**Contesto.** Le 7 query di `worldintel` mescolano nella stessa funzione ciò che **scarta** un
+candidato e ciò che lo **ordina**. Conseguenza misurata sul lavoro reale: non so dire *perché* una
+query ha scelto quel punto, e ogni modifica rischia di cambiare silenziosamente il filtro invece del
+punteggio (è già successo: i pesi di `kHold` finiti su `bestAdvantageInArea`).
+
+Il Tactical Point System di CryEngine separa esplicitamente `Generation` / `Conditions` / `Weights`.
+
+**Decisione.** Ogni query tattica si struttura in tre sezioni separate, **in C++, senza introdurre un
+linguaggio di query a dati** (sarebbe un interprete in più da scrivere, mantenere e osservare, per un
+guadagno che una persona sola non incassa). Condizioni e pesi diventano primitive riusabili.
+
+Si aggiunge il **sensore per-agente** (modello F.E.A.R.): ogni agente mantiene una lista corta di
+candidati vicini, aggiornata a ~2 Hz sfalsata via indice spaziale; le decisioni interrogano solo
+quella. Il livello squadra non analizza la mappa: sceglie fra ciò che l'agente sa e **rivendica**
+(`allyTac.claimed`, già esistente).
+
+**Conseguenze.**
+- Il **funnel con denominatori** che ADR-050 richiede viene **gratis** dalla struttura: candidati
+  generati → sopravvissuti a ogni condizione → punteggio dei primi tre.
+- Il costo per decisione passa da `O(posizioni)` a `O(20)`: **smette di dipendere dal numero di
+  posizioni**, che è la condizione perché la mappa grande e la generazione automatica siano possibili.
+- Criterio di accettazione: **invarianza di comportamento** (come A5, ±5% sugli eventi nella stessa
+  run) prima di qualunque cambio di punteggio.
+
+**Status: Proposed.** Dipende da ADR-051. Dettaglio: doc 46 §5.
+
+---
+
+## ADR-053 — Le forme complesse sono PRIMITIVE PARAMETRICHE che si espandono in box (Accepted — in force, implementato e verificato 2026-08-05; 2026-08-04)
+
+**Contesto.** `MapGeometryBox` ha `ry` e basta: **nessun pitch, nessun roll**. Una superficie
+inclinata è *inesprimibile*, mentre il navmesh dichiara di accettare pendenze fino a 45°
+(`kAgentSlope`) — una capacità che nessun dato può attivare (la stessa forma di difetto di ADR-023,
+applicata alla geometria). Le scale si costruiscono impilando box a mano, ed è così che sono nate le
+alzate di **0,68-1,21 m** contro uno `STEP_HEIGHT` di **0,55** (KI #95): l'autore le ha disegnate
+credendo fossero scale, e niente gliel'ha detto. Le alzate reali stanno fra 0,10 e 0,18 m: quelle di
+Training Ground sono **da 4 a 8 volte** una scala vera.
+
+**Decisione.** Scala, rampa, muro, stanza e piattaforma diventano **primitive parametriche**:
+l'autore dichiara l'intento (*"da qui a lì, larga 4 m"*), il motore **espande in
+`MapGeometryBox`** rispettando `STEP_HEIGHT`. **L'alzata sbagliata diventa inesprimibile.**
+
+I parametri **si salvano**; i box espansi **no** — si rigenerano al load, come i prefab (ADR-048) e
+come tutti i dati derivati (ADR-033).
+
+Le pendenze si risolvono per **scalettatura fine** (alzata 0,20 m = multiplo esatto di
+`kCellHeight` 0,10; pedata 0,30 → 33,7°, dentro la banda 30-35° della letteratura), **non**
+aggiungendo pitch al box. Motivo: le pedate orizzontali aggirano del tutto il limite di pendenza, il
+campo di altezza di Recast le rappresenta senza arrotondamenti, e il visivo liscio resta a carico di
+Blender (ADR-047).
+
+**La piattaforma dichiara i propri accessi** come parte della sua definizione: non si verifica dopo
+che sia raggiungibile, si rende irraggiungibile-per-costruzione impossibile.
+
+**Alternative respinte.**
+- *Pitch/roll sul box*: romperebbe lo slab test analitico della LOS, `appendBox` del navmesh e la
+  collisione — cioè la fondazione tattica (ADR-047) per una feature di authoring.
+- *Collisione a mesh arbitrarie*: contraddice ADR-047 frontalmente.
+- *CSG / brush (Hammer, TrenchBroom)*: altra rappresentazione del mondo. Se ne prende il **flusso di
+  lavoro** (undo, livelli, gruppi, duplicatore con offset), non la geometria.
+- *Alzare `STEP_HEIGHT` a 0,9*: non è un gradino, è un salto; cambierebbe il movimento ovunque per
+  tappare un difetto di authoring.
+
+**Conseguenze.**
+- Zero modifiche a collisione, LOS, navmesh e render: a valle dell'espansione ci sono solo box.
+- `MapGeometryBox` guadagna `type` (`floor`/`wall`/`platform`/`cover`/`decoration`), che l'editor
+  **già scrive e il runtime già scarta** — canale semantico gratuito per doc 46.
+- Le mappe esistenti continuano a funzionare identiche: le primitive sono una sezione **nuova**.
+- Serve una tabella di **metriche normative** (doc 47 §4), oggi inesistente — ed è la ragione
+  strutturale per cui le scale erano sbagliate: non c'era un numero giusto da rispettare.
+
+**Status: Accepted — in force** (2026-08-05). Implementata in `mini/game/MapStructures.hpp`
+(espansione) + `StructureDef` in `Definitions.hpp` (ricetta) + authoring nel Map Editor.
+**Verificata come richiesto, per connettività e non a occhio:**
+- alzata richiesta **2,0 m** → limitata a `STEP_HEIGHT`, 6 gradini da 0,50, **nessuna segnalazione**;
+- piattaforma a 3 m con **un solo** lato di accesso, command post in cima → il navmesh trova il
+  percorso: **`found:true`, arrivo a 10 cm**;
+- la stessa piattaforma con tutti gli accessi disattivati **viene segnalata** dal gate.
+
+Nota emersa dall'implementazione: il gate contraddiceva le metriche che deve far rispettare — la sua
+soglia minima di gradino era 0,6 m scelti a mano, e scartava le scale prodotte dalle primitive
+(pedate da 0,30, la misura normativa). La soglia ora **è** `mapmetrics::STAIR_TREAD`. Lezione
+generale: quando una regola diventa codice, ogni soglia scelta a mano che la riguarda va ricondotta
+alla regola, altrimenti i due si contraddicono in silenzio.
+
+Piano completo: **doc 47**.

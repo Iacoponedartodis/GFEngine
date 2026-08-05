@@ -1,5 +1,4 @@
 # 06 — Todo (reality-based, prioritized)
-
 ## ⚠ PUNTO DELLA SITUAZIONE — 2026-08-02 (aggiornato dopo changelog 116-123)
 
 Gli ultimi giri hanno chiuso molto ma lasciato aperte cose di tre tipi diversi. **Non confonderli**:
@@ -38,17 +37,52 @@ Accumulo di changelog 108-123. In ordine di rischio:
 - **Sonde temporanee**: nessuna lasciata accesa (verificato 2026-08-02).
 
 ### B-bis. RENDERING — nuovo binario, causa misurata (doc 43, KI #87)
-Il collo di bottiglia del gioco. **Zero righe di codice scritte**: scope in doc 43.
+Il collo di bottiglia del gioco. **R2 fatto** (138); il resto è scope in doc 43.
+- ▶▶ **R1 è LA priorità di rendering, ora dimostrata**: tempo ≈ vertici × ~15-20 ns, e i vertici
+  seguono quanti B1 sono vivi. Portare il B1 da 161k a ~16k toglie ~90% del traffico.
 - ▶ **R1 LOD degli asset** — *dipende dall'utente (Blender)*: mesh semplificate, con un livello
   "bot/lontano" molto leggero. Guadagno massimo, rischio minimo, non tocca il motore. Il B1 a 161k
   vertici vale da solo due terzi del traffico.
-- ▶ **R2 frustum culling** — oggi **non esiste** (205 disegnate su 206 esaminate). Lavoro mio.
-  La guardia è già pronta: `entita_esaminate` vs `mesh_disegnate` nel funnel di rendering.
+- ✅ **R2 frustum culling** (138): fatto e corretto, ma **non è la leva** — scarta il 18% delle entità
+  e solo il 5% dei vertici, tempo invariato. Il costo sta nelle unità, quasi sempre inquadrate.
 - ⏸ **R3 soglia di distanza + LOD a scaglioni** (dopo R1: serve avere i livelli).
 - ⏸ **R4 simulazione a distanza (AI LOD)** — **non è performance oggi** (la simulazione è il 2,9%
   del frame): è scalabilità futura per mappe grandi. Solo se il profilo lo giustifica.
 - ❌ **VBO / riapertura ADR-003**: fuori scope. Si riapre per **compatibilità universale Windows**,
   non per performance, e **sull'hardware nuovo** (il workaround è per il driver di questo PC).
+
+### B-ter. FONDAZIONE DEL MONDO — il prossimo blocco grande (doc 44)
+Ordine deciso con l.utente (2026-08-04): **prima la fondazione, poi gli ordini**, perché ruota,
+ordini rapidi e mappa tattica si appoggiano tutti a settori/posizioni/obiettivi.
+Stato al 2026-08-04: **la pianificazione dei metadata è COMPLETA (doc 46)**. Si passa al piano di
+map building, poi l.utente costruisce la mappa, poi si implementa.
+
+- ▶ **W1 = MAP BUILDING — doc 47, IN CORSO**. ✅ G1 metriche (`MapMetrics.hpp`) · ✅ G2 undo/redo ·
+  ✅ G4 primitive parametriche (ADR-053 Accepted, `MapStructures.hpp`) · ✅ G5 `type` al runtime.
+  ✅ G3 selezione multipla (Ctrl+click; Ctrl+A a interruttore; sposta/ruota/elimina/duplica sul gruppo).
+  ✅ G6 serie con offset, filtri di vista, figura di scala, righello a due selezioni.
+  ✅ G7 validazione dal vivo nel viewport (stessa analisi del gate) + contatore di salute.
+  ▶ Resta **G8: riparazione di Training Ground** con i nuovi strumenti, poi l.utente costruisce la
+  mappa 300 × 200 e si passa a doc 46 (metadata). Fasi originali G1-G8:
+  metriche normative → undo/redo → selezione multipla → **primitive parametriche**
+  (scala/rampa/muro/piattaforma-con-accessi, che si espandono in box) → `type` letto dal runtime →
+  array/livelli/figura di scala → validazione dal vivo nel viewport → **riparazione di Training
+  Ground come collaudo**. Tre scelte all.utente (doc 47 §12): metriche, quante primitive nel primo
+  giro, se riparare Training Ground prima.
+- ⏸ **W4 mappa grande — 300 × 200 m** (deciso dall.utente 2026-08-04; **verificato per misura**:
+  navmesh a tile singola, 1,385 s di build, nessun cambio architetturale). La costruisce l.utente
+  con gli strumenti di doc 47, **prima** dei metadata: non per giocarci, ma per avere il banco su
+  cui sviluppare la derivazione.
+- ⏸ **W2 metadata DERIVATI** — **PIANIFICATO: doc 46** (ricerca in doc 45, decisioni in ADR-051/052).
+  Substrato a tre livelli: griglia d.influenza / poligoni navmesh / posizioni tattiche.
+  Fasi M1-M7 con criteri di accettazione. Restano tre scelte all.utente (doc 46 §12): dimensione
+  della mappa grande, fin dove arrivare (M1-M4 o fino a M7), se servono le posizioni generate.
+- ⏸ **W3 generazione automatica** = M7 di doc 46, col gate del 60% contro il fallimento di ADR-026.
+
+### Dopo la fondazione (ordine dell.utente)
+- ⏸ **Rework degli ordini rapidi** (l.utente dirà come) · **ordini della ruota** · **mappa tattica**
+  con controllo di priorità, obiettivi e settori.
+- ⏸ Modelli e animazioni: in **parallelo** lato utente, nessuna dipendenza reciproca.
 
 ### C. Decisioni di design aperte (servono all'utente, non implementarle d'istinto)
 - ▶ **A5 taratura curve** (doc 40 §6): i pesi sono in `AiUtility.hpp`. **Sbloccata**: KI #86 è chiuso

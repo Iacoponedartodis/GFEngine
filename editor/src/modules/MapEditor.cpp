@@ -82,36 +82,198 @@ MapEditor::MapEditor()
 void MapEditor::tick(float dt)
 {
     m_viewport.tick(dt);
+    m_editorClock += dt;   // orologio per la coalescenza dell'undo
 
-    // Gizmo Sposta: applica lo spostamento all'elemento selezionato.
+    // Gizmo Sposta: applica lo spostamento a TUTTA la selezione (G3).
     glm::vec3 delta;
     if (m_viewport.popGizmoDelta(delta))
     {
-        if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+        // Un trascinamento produce un delta per frame: `pushUndo` li fonde in una
+        // sola voce (stessa etichetta entro 0,6 s), così "annulla" riporta all'inizio
+        // del gesto e non indietro di un pixel.
+        pushUndo("gizmo");
+        for (int code : selectionCodes()) applyMove(code, delta);
+        m_dirty = true;
+        updateViewport();
+    }
+
+    applyGizmoRotateScale();
+}
+
+// ── Modello di SELEZIONE MULTIPLA (G3) ───────────────────────────────────────
+// Un solo insieme di codici. Il PRIMARIO è l'ultimo della lista: è ciò che il
+// pannello proprietà mostra, e con un solo elemento tutto si comporta come prima.
+int MapEditor::primaryCode() const
+{
+    if (!m_multiSel.empty()) return m_multiSel.back();
+    if (m_selStruct >= 0) return -6000 - m_selStruct;
+    return m_selBox;
+}
+
+std::vector<int> MapEditor::selectionCodes() const
+{
+    if (!m_multiSel.empty()) return m_multiSel;
+    const int c = primaryCode();
+    if (c == -1) return {};
+    return { c };
+}
+
+void MapEditor::setSelection(int code, bool additive)
+{
+    if (additive)
+    {
+        // Ctrl+click: aggiunge o toglie, come in qualunque gestore di file. Se
+        // l'insieme è vuoto si parte da ciò che era già selezionato, altrimenti
+        // il primo Ctrl+click perderebbe la selezione corrente.
+        if (m_multiSel.empty() && primaryCode() != -1)
+            m_multiSel.push_back(primaryCode());
+        auto it = std::find(m_multiSel.begin(), m_multiSel.end(), code);
+        if (it != m_multiSel.end()) m_multiSel.erase(it);
+        else                        m_multiSel.push_back(code);
+    }
+    else
+    {
+        m_multiSel.clear();
+        if (code != -1) m_multiSel.push_back(code);
+    }
+    // Il primario governa il pannello proprietà: si tiene allineato all'ultimo.
+    const int p = m_multiSel.empty() ? -1 : m_multiSel.back();
+    if (p <= -6000) { m_selStruct = -6000 - p; m_selBox = -1; }
+    else            { m_selStruct = -1;        m_selBox = p;  }
+    if (m_selBox <= -300 && m_selBox > -400) m_selRoutePt = 0;
+    updateViewport();
+}
+
+// Posizione di un elemento, se ne ha una. Serve alla rotazione di gruppo (per il
+// baricentro) e all'evidenziazione.
+bool MapEditor::codePosition(int code, glm::vec3& out) const
+{
+    auto set = [&](float x, float y, float z) { out = {x, y, z}; return true; };
+    if (code <= -6000 && (-6000 - code) < (int)m_structures.size())
+    { const auto& s = m_structures[-6000 - code]; return set(s.x, s.y, s.z); }
+    if (code >= 0 && code < (int)m_boxes.size())
+    { const auto& b = m_boxes[code]; return set(b.x, b.y, b.z); }
+    if (code == -2) return set(m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]);
+    if (code == -3) return set(m_spawnTeam2[0], m_spawnTeam2[1], m_spawnTeam2[2]);
+    if (code <= -10 && code > -100 && (-10 - code) < (int)m_posts.size())
+    { const auto& p = m_posts[-10 - code]; return set(p.x, p.y, p.z); }
+    if (code <= -200 && code > -300 && (-200 - code) < (int)m_dangers.size())
+    { const auto& d = m_dangers[-200 - code]; return set(d.x, d.y, d.z); }
+    if (code <= -400 && code > -500 && (-400 - code) < (int)m_vehSpawns.size())
+    { const auto& v = m_vehSpawns[-400 - code]; return set(v.x, 0.0f, v.z); }
+    if (code <= -500 && code > -1000 && (-500 - code) < (int)m_targets.size())
+    { const auto& t = m_targets[-500 - code]; return set(t.x, t.y, t.z); }
+    if (code <= -1000 && code > -2000 && (-1000 - code) < (int)m_positions.size())
+    { const auto& p = m_positions[-1000 - code]; return set(p.x, p.y, p.z); }
+    if (code <= -2000 && code > -3000 && (-2000 - code) < (int)m_sectors.size())
+    { const auto& s = m_sectors[-2000 - code]; return set(s.x, 0.0f, s.z); }
+    if (code <= -4000 && code > -5000 && (-4000 - code) < (int)m_prefabInsts.size())
+    { const auto& p = m_prefabInsts[-4000 - code]; return set(p.x, p.y, p.z); }
+    return false;
+}
+
+// Orientamento di un elemento, se ne ha uno (nullptr = non ruotabile).
+float* MapEditor::codeYaw(int code)
+{
+    if (code <= -6000 && (-6000 - code) < (int)m_structures.size())
+        return &m_structures[-6000 - code].ry;
+    if (code >= 0 && code < (int)m_boxes.size())
+        return &m_boxes[code].ry;
+    if (code <= -400 && code > -500 && (-400 - code) < (int)m_vehSpawns.size())
+        return &m_vehSpawns[-400 - code].ry;
+    if (code <= -500 && code > -1000 && (-500 - code) < (int)m_targets.size())
+        return &m_targets[-500 - code].ry;
+    if (code <= -1000 && code > -2000 && (-1000 - code) < (int)m_positions.size())
+        return &m_positions[-1000 - code].facing;
+    if (code <= -4000 && code > -5000 && (-4000 - code) < (int)m_prefabInsts.size())
+        return &m_prefabInsts[-4000 - code].ry;
+    return nullptr;
+}
+
+// Elimina TUTTI gli elementi selezionati. Si raccolgono gli indici per contenitore
+// e si cancella in ordine DECRESCENTE: cancellare in avanti invaliderebbe gli indici
+// successivi e si finirebbe per eliminare l'elemento sbagliato.
+void MapEditor::deleteSelection()
+{
+    const auto codes = selectionCodes();
+    if (codes.empty()) return;
+    pushUndo("elimina selezione");
+
+    std::vector<int> boxes, structs, positions, posts, dangers, targets,
+                     sectors, vehicles, prefabs;
+    for (int c : codes)
+    {
+        if      (c >= 0)                          boxes.push_back(c);
+        else if (c <= -6000)                      structs.push_back(-6000 - c);
+        else if (c <= -4000 && c > -5000)         prefabs.push_back(-4000 - c);
+        else if (c <= -2000 && c > -3000)         sectors.push_back(-2000 - c);
+        else if (c <= -1000 && c > -2000)         positions.push_back(-1000 - c);
+        else if (c <= -500  && c > -1000)         targets.push_back(-500 - c);
+        else if (c <= -400  && c > -500)          vehicles.push_back(-400 - c);
+        else if (c <= -200  && c > -300)          dangers.push_back(-200 - c);
+        else if (c <= -10   && c > -100)          posts.push_back(-10 - c);
+        // spawn, route e comandante restano fuori: sono singoli o liste di punti,
+        // e "eliminarli in blocco" non è un'operazione sensata.
+    }
+    auto eraseAll = [](auto& vec, std::vector<int>& idx) {
+        std::sort(idx.begin(), idx.end(), std::greater<int>());
+        idx.erase(std::unique(idx.begin(), idx.end()), idx.end());
+        for (int i : idx) if (i >= 0 && i < (int)vec.size()) vec.erase(vec.begin() + i);
+    };
+    eraseAll(m_boxes, boxes);            eraseAll(m_structures, structs);
+    eraseAll(m_prefabInsts, prefabs);    eraseAll(m_sectors, sectors);
+    eraseAll(m_positions, positions);    eraseAll(m_targets, targets);
+    eraseAll(m_vehSpawns, vehicles);     eraseAll(m_dangers, dangers);
+    eraseAll(m_posts, posts);
+
+    m_multiSel.clear();
+    m_selBox = -1; m_selStruct = -1;
+    m_dirty = true;
+    rebuildStructurePreview();
+    updateViewport();
+}
+
+// Sposta di `delta` l'elemento identificato dal CODICE di selezione.
+// Estratta dalla catena di `tick` perché ora serve a più chiamanti (uno per elemento
+// selezionato): con la selezione multipla la stessa logica andava ripetuta, ed è il
+// tipo di duplicazione che diverge al primo tipo aggiunto.
+void MapEditor::applyMove(int code, const glm::vec3& delta)
+{
+    {
+        // Le STRUTTURE si spostano come tutto il resto (ADR-053). Il gizmo muove la
+        // RICETTA e i box si rigenerano: è il motivo per cui una scala si sposta
+        // intera, gradini compresi, invece che uno alla volta.
+        if (code <= -6000 && (-6000 - code) < (int)m_structures.size())
         {
-            auto& b = m_boxes[m_selBox];
+            auto& s = m_structures[-6000 - code];
+            s.x += delta.x; s.y += delta.y; s.z += delta.z;
+            rebuildStructurePreview();
+        }
+        else if (code >= 0 && code < (int)m_boxes.size())
+        {
+            auto& b = m_boxes[code];
             b.x += delta.x; b.y += delta.y; b.z += delta.z;
         }
-        else if (m_selBox == -2)
+        else if (code == -2)
         { m_spawnTeam1[0]+=delta.x; m_spawnTeam1[1]+=delta.y; m_spawnTeam1[2]+=delta.z; }
-        else if (m_selBox == -3)
+        else if (code == -3)
         { m_spawnTeam2[0]+=delta.x; m_spawnTeam2[1]+=delta.y; m_spawnTeam2[2]+=delta.z; }
-        else if (m_selBox <= -10 && m_selBox > -100
-                 && (-10 - m_selBox) < (int)m_posts.size())
+        else if (code <= -10 && code > -100
+                 && (-10 - code) < (int)m_posts.size())
         {
-            auto& p = m_posts[-10 - m_selBox];
+            auto& p = m_posts[-10 - code];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
         }
-        else if (m_selBox <= -200 && m_selBox > -300
-                 && (-200 - m_selBox) < (int)m_dangers.size())
+        else if (code <= -200 && code > -300
+                 && (-200 - code) < (int)m_dangers.size())
         {
-            auto& d = m_dangers[-200 - m_selBox];
+            auto& d = m_dangers[-200 - code];
             d.x += delta.x; d.y += delta.y; d.z += delta.z;
         }
-        else if (m_selBox <= -300 && m_selBox > -400
-                 && (-300 - m_selBox) < (int)m_routes.size())
+        else if (code <= -300 && code > -400
+                 && (-300 - code) < (int)m_routes.size())
         {
-            auto& r = m_routes[-300 - m_selBox];
+            auto& r = m_routes[-300 - code];
             if (m_selRoutePt >= 0 && m_selRoutePt < (int)r.points.size())
             {
                 r.points[m_selRoutePt][0] += delta.x;
@@ -119,62 +281,109 @@ void MapEditor::tick(float dt)
                 r.points[m_selRoutePt][2] += delta.z;
             }
         }
-        else if (m_selBox <= -400 && m_selBox > -500
-                 && (-400 - m_selBox) < (int)m_vehSpawns.size())
+        else if (code <= -400 && code > -500
+                 && (-400 - code) < (int)m_vehSpawns.size())
         {
-            auto& v = m_vehSpawns[-400 - m_selBox];
+            auto& v = m_vehSpawns[-400 - code];
             v.x += delta.x; v.z += delta.z;
         }
-        else if (m_selBox <= -500 && m_selBox > -1000
-                 && (-500 - m_selBox) < (int)m_targets.size())
+        else if (code <= -500 && code > -1000
+                 && (-500 - code) < (int)m_targets.size())
         {
-            auto& t = m_targets[-500 - m_selBox];
+            auto& t = m_targets[-500 - code];
             t.x += delta.x; t.y += delta.y; t.z += delta.z;
             if (t.y < 0.0f) t.y = 0.0f;   // non sotto il suolo
         }
-        else if (m_selBox <= -2000 && (-2000 - m_selBox) < (int)m_sectors.size())   // ADR-034
+        else if (code <= -2000 && (-2000 - code) < (int)m_sectors.size())   // ADR-034
         {
-            auto& s = m_sectors[-2000 - m_selBox];
+            auto& s = m_sectors[-2000 - code];
             s.x += delta.x; s.z += delta.z;
         }
-        else if (m_selBox <= -1000 && m_selBox > -2000
-                 && (-1000 - m_selBox) < (int)m_positions.size())   // ADR-030
+        else if (code <= -1000 && code > -2000
+                 && (-1000 - code) < (int)m_positions.size())   // ADR-030
         {
-            auto& p = m_positions[-1000 - m_selBox];
+            auto& p = m_positions[-1000 - code];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
         }
-        else if (m_selBox <= -3000 && m_selBox > -3100
-                 && (-3000 - m_selBox) < (int)m_spawnPoints1.size())   // multi-spawn team1
+        else if (code <= -3000 && code > -3100
+                 && (-3000 - code) < (int)m_spawnPoints1.size())   // multi-spawn team1
         {
-            auto& p = m_spawnPoints1[-3000 - m_selBox];
+            auto& p = m_spawnPoints1[-3000 - code];
             p[0] += delta.x; p[1] += delta.y; p[2] += delta.z;
         }
-        else if (m_selBox <= -3100 && m_selBox > -3200
-                 && (-3100 - m_selBox) < (int)m_spawnPoints2.size())   // multi-spawn team2
+        else if (code <= -3100 && code > -3200
+                 && (-3100 - code) < (int)m_spawnPoints2.size())   // multi-spawn team2
         {
-            auto& p = m_spawnPoints2[-3100 - m_selBox];
+            auto& p = m_spawnPoints2[-3100 - code];
             p[0] += delta.x; p[1] += delta.y; p[2] += delta.z;
         }
-        else if (m_selBox <= -4000 && (-4000 - m_selBox) < (int)m_prefabInsts.size())
+        else if (code <= -4000 && (-4000 - code) < (int)m_prefabInsts.size())
         {   // Istanza di prefab (ADR-048): si sposta l'ISTANZA, il contenuto la segue.
-            auto& p = m_prefabInsts[-4000 - m_selBox];
+            auto& p = m_prefabInsts[-4000 - code];
             p.x += delta.x; p.y += delta.y; p.z += delta.z;
         }
-        else if (m_selBox == kSelCommander && m_commander.exists)   // ADR-041
+        else if (code == kSelCommander && m_commander.exists)   // ADR-041
         {
             m_commander.x += delta.x; m_commander.z += delta.z;
         }
-        m_dirty = true;
-        updateViewport();
     }
+}
 
+// Rotazione e scala del gizmo. Restano legate all'elemento PRIMARIO (l'ultimo
+// selezionato): ruotare o scalare un gruppo eterogeneo non ha un significato unico —
+// un raggio, un'altezza e un `facing` non si scalano allo stesso modo. La rotazione
+// DI GRUPPO esiste ed è gestita a parte, sotto, per i soli elementi con posizione.
+void MapEditor::applyGizmoRotateScale()
+{
     // Gizmo Ruota (solo asse Y): box mappa (ry), cover point (facing), veicolo (ry).
     // ADR-025: i marker metadata con un campo di orientamento sono ruotabili.
     glm::vec3 rotDelta;
     if (m_viewport.popGizmoRotDelta(rotDelta))
     {
         auto wrap = [](float a) { while (a > 180.0f) a -= 360.0f; while (a < -180.0f) a += 360.0f; return a; };
-        if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+        // ── ROTAZIONE DI GRUPPO (G3) ──────────────────────────────────────
+        // Con più elementi selezionati la rotazione deve far ORBITARE ognuno
+        // attorno al baricentro comune, oltre a girarlo su sé stesso. Applicare
+        // solo il proprio yaw farebbe "girare sul posto" ogni pezzo, ed è
+        // esattamente ciò che NON serve quando si ruota un edificio.
+        if (selectionCodes().size() > 1)
+        {
+            pushUndo("gizmo-rot-gruppo");
+            glm::vec3 c(0.0f); int n = 0;
+            for (int code : selectionCodes())
+            { glm::vec3 p; if (codePosition(code, p)) { c += p; ++n; } }
+            if (n > 0)
+            {
+                c /= (float)n;
+                const float rad = rotDelta.y * 3.14159265f / 180.0f;
+                const float cs = std::cos(rad), sn = std::sin(rad);
+                for (int code : selectionCodes())
+                {
+                    glm::vec3 p;
+                    if (!codePosition(code, p)) continue;
+                    const float dx = p.x - c.x, dz = p.z - c.z;
+                    // Stessa convenzione di rotazione dei prefab e delle strutture.
+                    const glm::vec3 moved = { c.x + dx * cs + dz * sn - p.x, 0.0f,
+                                              c.z - dx * sn + dz * cs - p.z };
+                    applyMove(code, moved);
+                    if (float* yaw = codeYaw(code)) *yaw = wrap(*yaw + rotDelta.y);
+                }
+                rebuildStructurePreview();
+                m_dirty = true; updateViewport();
+            }
+            return;
+        }
+        // Struttura: ruota la RICETTA, e con lei la direzione di salita. Una scala
+        // ruotata resta una scala — è il vantaggio di orientare l'intento invece
+        // che quindici box.
+        if (m_selStruct >= 0 && m_selStruct < (int)m_structures.size())
+        {
+            auto& s = m_structures[m_selStruct];
+            s.ry = wrap(s.ry + rotDelta.y);
+            pushUndo("gizmo-rot");
+            m_dirty = true; rebuildStructurePreview(); updateViewport();
+        }
+        else if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
         {
             auto& b = m_boxes[m_selBox];
             b.ry = wrap(b.ry + rotDelta.y);
@@ -214,7 +423,38 @@ void MapEditor::tick(float dt)
     glm::vec3 scaleDelta;
     if (m_viewport.popGizmoScaleDelta(scaleDelta))
     {
-        if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+        // Struttura: la scala del gizmo agisce sui PARAMETRI che hanno senso per il
+        // tipo, non su un box. X = larghezza (scala/rampa) o lunghezza (muro),
+        // Y = dislivello o altezza, Z = profondità della piattaforma.
+        // I GRADINI NON SI ROMPONO: allargare una scala non tocca l'alzata, e
+        // alzarla aggiunge gradini invece di renderli più ripidi.
+        if (m_selStruct >= 0 && m_selStruct < (int)m_structures.size())
+        {
+            auto& s = m_structures[m_selStruct];
+            auto grow = [](float& v, float d, float lo) { v += d; if (v < lo) v = lo; };
+            switch (s.kind)
+            {
+            case mini::StructureKind::Stair:
+            case mini::StructureKind::Ramp:
+                grow(s.width, scaleDelta.x, 0.5f);
+                grow(s.rise,  scaleDelta.y, 0.1f);
+                grow(s.tread, scaleDelta.z, mini::mapmetrics::STAIR_TREAD);
+                break;
+            case mini::StructureKind::Wall:
+                grow(s.length,    scaleDelta.x, 0.5f);
+                grow(s.height,    scaleDelta.y, 0.2f);
+                grow(s.thickness, scaleDelta.z, 0.05f);
+                break;
+            case mini::StructureKind::Platform:
+                grow(s.sizeX, scaleDelta.x, 1.0f);
+                grow(s.y,     scaleDelta.y, s.baseY + 0.1f);
+                grow(s.sizeZ, scaleDelta.z, 1.0f);
+                break;
+            }
+            pushUndo("gizmo-scale");
+            m_dirty = true; rebuildStructurePreview(); updateViewport();
+        }
+        else if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
         {
             auto& b = m_boxes[m_selBox];
             b.sx += scaleDelta.x; if (b.sx < 0.1f) b.sx = 0.1f;
@@ -356,10 +596,56 @@ void MapEditor::loadMap(const std::string& id)
         m_commander.leashRadius = c.value("leash_radius", 0.0f);
     }
 
+    // Primitive parametriche (ADR-053): si legge la RICETTA. I box che ne derivano
+    // si rigenerano subito sotto e non stanno in `m_boxes` — non vanno né salvati né
+    // modificati a mano, altrimenti si perde il legame con la ricetta.
+    m_structures.clear();
+    m_selStruct = -1;
+    if (j.contains("structures") && j["structures"].is_array())
+    {
+        for (auto& s : j["structures"])
+        {
+            mini::StructureDef d;
+            d.kind  = mini::mapstructures::parseKind(s.value("kind", std::string("stair")));
+            d.label = s.value("label", std::string(""));
+            d.x = s.value("x", 0.f);  d.y = s.value("y", 0.f);  d.z = s.value("z", 0.f);
+            d.ry        = s.value("ry", 0.f);
+            d.rise      = s.value("rise", 2.f);
+            d.width     = s.value("width", 2.f);
+            d.riser     = s.value("riser", 0.f);
+            d.tread     = s.value("tread", 0.f);
+            d.length    = s.value("length", 4.f);
+            d.height    = s.value("height", 0.f);
+            d.thickness = s.value("thickness", 0.0f);
+            d.sizeX     = s.value("size_x", 6.f);
+            d.sizeZ     = s.value("size_z", 6.f);
+            d.baseY     = s.value("base_y", 0.f);
+            d.openW     = s.value("open_w", 0.f);
+            d.openH     = s.value("open_h", 0.f);
+            d.openSill  = s.value("open_sill", 0.f);
+            d.openOff   = s.value("open_off", 0.f);
+            d.flightRise= s.value("flight_rise", 0.f);
+            d.spacing   = s.value("spacing", 0.f);
+            d.ceiling   = s.value("ceiling", false);
+            d.railing   = s.value("railing", false);
+            if (s.contains("access") && s["access"].is_array())
+                for (size_t i = 0; i < 4 && i < s["access"].size(); ++i)
+                    d.access[i] = s["access"][i].get<bool>();
+            d.color[0] = s.value("r", 0.35f);
+            d.color[1] = s.value("g", 0.32f);
+            d.color[2] = s.value("b", 0.28f);
+            m_structures.push_back(d);
+        }
+    }
+
     if (j.contains("geometry") && j["geometry"].is_array())
     {
         for (auto& gb : j["geometry"])
         {
+            // I box derivati da una primitiva non si salvano MAI (ADR-033/053).
+            // Se ne trovo uno in un file scritto male, lo scarto: altrimenti al
+            // prossimo salvataggio verrebbe congelato accanto a quello rigenerato.
+            if (gb.value("from_structure", false)) continue;
             BoxEntry b;
             b.x  = gb.value("x",  0.f);
             b.y  = gb.value("y",  0.f);
@@ -508,6 +794,12 @@ void MapEditor::loadMap(const std::string& id)
     }
 
     m_dirty = false;
+    // La pila di undo appartiene al DOCUMENTO: tenerla fra due mappe diverse
+    // significherebbe poter "annullare" la mappa A dentro la mappa B.
+    m_undo.clear();
+    m_redo.clear();
+    m_lastUndoTag.clear();
+    rebuildStructurePreview();   // ADR-053: i box derivati esistono solo qui
     updateViewport();
 }
 
@@ -548,6 +840,33 @@ bool MapEditor::saveMap()
         for (const auto& p : m_prefabInsts)
             arr.push_back({{"id", p.id}, {"x", p.x}, {"y", p.y}, {"z", p.z}, {"ry", p.ry}});
         j["prefabs"] = arr;
+    }
+
+    // Primitive parametriche (ADR-053): si scrive SOLO la ricetta, mai i box che ne
+    // derivano — stessa disciplina dei prefab poco sopra.
+    if (m_structures.empty()) j.erase("structures");
+    else
+    {
+        json arr = json::array();
+        for (const auto& s : m_structures)
+        {
+            json o;
+            o["kind"]  = mini::mapstructures::kindName(s.kind);
+            o["label"] = s.label;
+            o["x"] = s.x;  o["y"] = s.y;  o["z"] = s.z;  o["ry"] = s.ry;
+            o["rise"] = s.rise;  o["width"] = s.width;
+            o["riser"] = s.riser;  o["tread"] = s.tread;
+            o["length"] = s.length;  o["height"] = s.height;  o["thickness"] = s.thickness;
+            o["size_x"] = s.sizeX;  o["size_z"] = s.sizeZ;  o["base_y"] = s.baseY;
+            o["open_w"] = s.openW;  o["open_h"] = s.openH;
+            o["open_sill"] = s.openSill;  o["open_off"] = s.openOff;
+            o["flight_rise"] = s.flightRise;  o["spacing"] = s.spacing;
+            o["ceiling"] = s.ceiling;  o["railing"] = s.railing;
+            o["access"] = json::array({s.access[0], s.access[1], s.access[2], s.access[3]});
+            o["r"] = s.color[0];  o["g"] = s.color[1];  o["b"] = s.color[2];
+            arr.push_back(o);
+        }
+        j["structures"] = arr;
     }
 
     json geom = json::array();
@@ -689,6 +1008,7 @@ bool MapEditor::saveMap()
 // ── addBox ────────────────────────────────────────────────────────────────────
 void MapEditor::addBox()
 {
+    pushUndo("addBox");
     BoxEntry b;
     // Nasce davanti alla camera (dove stai guardando), non al centro mappa.
     const glm::vec3 fp = m_viewport.groundFocusPoint();
@@ -719,30 +1039,30 @@ void MapEditor::duplicateBox(int idx)
 // l'authoring dei metadata era laborioso perché ogni nuovo elemento partiva dai
 // default e andava ri-regolato. Ora si autora una volta e si duplica in serie.
 // Copia spostata di +2 in XZ per non sovrapporre. Spawn e comandante (unici) no.
-void MapEditor::duplicateSelected()
+void MapEditor::duplicateOne(int code)
 {
     const float off = 2.0f;
-    if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
-    { duplicateBox(m_selBox); return; }
-    else if (m_selBox <= -10 && m_selBox > -100)
+    if (code >= 0 && code < (int)m_boxes.size())
+    { duplicateBox(code); return; }
+    else if (code <= -10 && code > -100)
     {
-        int i = -10 - m_selBox;
+        int i = -10 - code;
         if (i < 0 || i >= (int)m_posts.size()) return;
         PostEntry p = m_posts[i]; p.x += off; p.z += off;
         m_posts.push_back(p);
         m_selBox = -10 - ((int)m_posts.size() - 1);
     }
-    else if (m_selBox <= -200 && m_selBox > -300)
+    else if (code <= -200 && code > -300)
     {
-        int i = -200 - m_selBox;
+        int i = -200 - code;
         if (i < 0 || i >= (int)m_dangers.size()) return;
         DangerEntry d = m_dangers[i]; d.x += off; d.z += off;
         m_dangers.push_back(d);
         m_selBox = -200 - ((int)m_dangers.size() - 1);
     }
-    else if (m_selBox <= -300 && m_selBox > -400)
+    else if (code <= -300 && code > -400)
     {
-        int i = -300 - m_selBox;
+        int i = -300 - code;
         if (i < 0 || i >= (int)m_routes.size()) return;
         RouteEntry r = m_routes[i];
         std::snprintf(r.id, sizeof(r.id), "route_%d", (int)m_routes.size() + 1);
@@ -751,33 +1071,41 @@ void MapEditor::duplicateSelected()
         m_selBox = -300 - ((int)m_routes.size() - 1);
         m_selRoutePt = 0;
     }
-    else if (m_selBox <= -400 && m_selBox > -500)
+    else if (code <= -400 && code > -500)
     {
-        int i = -400 - m_selBox;
+        int i = -400 - code;
         if (i < 0 || i >= (int)m_vehSpawns.size()) return;
         VehicleSpawnEntry v = m_vehSpawns[i]; v.x += off; v.z += off;
         m_vehSpawns.push_back(v);
         m_selBox = -400 - ((int)m_vehSpawns.size() - 1);
     }
-    else if (m_selBox <= -500 && m_selBox > -1000)
+    else if (code <= -500 && code > -1000)
     {
-        int i = -500 - m_selBox;
+        int i = -500 - code;
         if (i < 0 || i >= (int)m_targets.size()) return;
         TargetEntry t = m_targets[i]; t.x += off; t.z += off;
         m_targets.push_back(t);
         m_selBox = -500 - ((int)m_targets.size() - 1);
     }
-    else if (m_selBox <= -1000 && m_selBox > -2000)
+    else if (code <= -1000 && code > -2000)
     {
-        int i = -1000 - m_selBox;
+        int i = -1000 - code;
         if (i < 0 || i >= (int)m_positions.size()) return;
         PositionEntry p = m_positions[i]; p.x += off; p.z += off;
         m_positions.push_back(p);
         m_selBox = -1000 - ((int)m_positions.size() - 1);
     }
-    else if (m_selBox <= -2000)
+    else if (code <= -6000 && (-6000 - code) < (int)m_structures.size())
+    {   // Struttura parametrica: si duplica la RICETTA, i box si rigenerano.
+        mini::StructureDef s = m_structures[-6000 - code];
+        s.x += off; s.z += off;
+        m_structures.push_back(s);
+        m_selStruct = (int)m_structures.size() - 1;
+        rebuildStructurePreview();
+    }
+    else if (code <= -2000 && code > -3000)
     {
-        int i = -2000 - m_selBox;
+        int i = -2000 - code;
         if (i < 0 || i >= (int)m_sectors.size()) return;
         SectorEntry s = m_sectors[i]; s.x += off; s.z += off;
         m_sectors.push_back(s);
@@ -786,6 +1114,68 @@ void MapEditor::duplicateSelected()
     else return;   // spawn team1/2 e comandante: unici, non duplicabili
 
     m_dirty = true;
+}
+
+// ── ARRAY: N copie con offset progressivo (doc 47 E4) ────────────────────────
+// La differenza con "Duplica" ripetuto è che l'offset è **progressivo**: la copia
+// i-esima sta a i × offset dall'originale, quindi una fila resta allineata invece
+// di accumulare l'errore di dodici trascinamenti a mano.
+void MapEditor::makeArray()
+{
+    const auto codes = selectionCodes();
+    if (codes.empty() || m_arrayCount < 1) return;
+    pushUndo("array");
+
+    for (int k = 1; k <= m_arrayCount; ++k)
+    {
+        const glm::vec3 off = { m_arrayOff[0] * (float)k,
+                                m_arrayOff[1] * (float)k,
+                                m_arrayOff[2] * (float)k };
+        const float yaw = m_arrayYawStep * (float)k;
+        for (int c : codes)
+        {
+            // `duplicateOne` mette la copia a +2/+2 di default: la si riporta
+            // sull'originale e poi si applica l'offset voluto, così l'unico
+            // spostamento è quello dichiarato.
+            const int beforeBoxes  = (int)m_boxes.size();
+            const int beforeStruct = (int)m_structures.size();
+            duplicateOne(c);
+            int newCode = -1;
+            if ((int)m_boxes.size() > beforeBoxes)          newCode = (int)m_boxes.size() - 1;
+            else if ((int)m_structures.size() > beforeStruct) newCode = -6000 - ((int)m_structures.size() - 1);
+            else                                             newCode = m_selBox;
+            glm::vec3 src, dst;
+            if (codePosition(c, src) && codePosition(newCode, dst))
+                applyMove(newCode, src + off - dst);
+            if (yaw != 0.0f) if (float* y = codeYaw(newCode)) *y += yaw;
+        }
+    }
+    m_multiSel.clear();
+    m_dirty = true;
+    rebuildStructurePreview();
+    updateViewport();
+}
+
+bool MapEditor::filtersActive() const
+{
+    for (bool b : m_showType) if (!b) return true;
+    return m_hideAboveY < 999.0f || !m_showStructures;
+}
+
+// Duplica TUTTA la selezione (G3). Le copie si accodano, quindi gli indici degli
+// elementi già selezionati restano validi mentre si itera.
+void MapEditor::duplicateSelected()
+{
+    const auto codes = selectionCodes();
+    if (codes.empty()) return;
+    pushUndo("duplica");
+    for (int c : codes) duplicateOne(c);
+    // La selezione NON segue le copie: restare sugli originali renderebbe il
+    // secondo "duplica" una copia della copia, che non è mai ciò che si vuole.
+    // Si tiene il primario sull'ultima copia creata, come nel caso singolo.
+    m_multiSel.clear();
+    m_dirty = true;
+    rebuildStructurePreview();
     updateViewport();
 }
 
@@ -793,6 +1183,7 @@ void MapEditor::duplicateSelected()
 void MapEditor::deleteBox(int idx)
 {
     if (idx < 0 || idx >= (int)m_boxes.size()) return;
+    pushUndo("elimina");
     m_boxes.erase(m_boxes.begin() + idx);
     m_selBox = std::min(m_selBox, (int)m_boxes.size() - 1);
     m_dirty  = true;
@@ -886,10 +1277,8 @@ bool MapEditor::savePrefabFromZone(std::string& err)
     { err = "Scrittura fallita: " + path; return false; }
 
     // Ricarica il registry: il nuovo prefab dev'essere subito piazzabile.
-    m_prefabReg.loadPrefabs(getDataDir());
-    m_prefabIds.clear();
-    for (const auto& [pid, def] : m_prefabReg.prefabs()) m_prefabIds.push_back(pid);
-    std::sort(m_prefabIds.begin(), m_prefabIds.end());
+    // Stesso punto usato dall'eliminazione: una via sola per stare allineati al disco.
+    reloadPrefabAssets();
 
     if (m_newPrefabConsume)
     {
@@ -1028,26 +1417,248 @@ void MapEditor::recomputeExposure()
                      [](const TacticalIssue& a, const TacticalIssue& b) { return a.sev > b.sev; });
 }
 
-// ── updateViewport ────────────────────────────────────────────────────────────
-void MapEditor::updateViewport()
+// ── Ricarica degli asset prefab ───────────────────────────────────────────────
+// Un punto solo. Funziona perché dal 2026-08-05 `loadPrefabs` AZZERA il proprio
+// contenitore: prima sommava al vecchio stato, quindi un prefab cancellato dal
+// disco restava nel menu e si poteva ancora piazzare fino al riavvio dell'editor.
+// Il comando di eliminazione funzionava: non era autoritativo il ricaricamento.
+void MapEditor::reloadPrefabAssets()
 {
-    recomputeExposure();   // ADR-033: tenuta in pari con le posizioni
+    m_prefabReg.loadPrefabs(getDataDir());
+    m_prefabIds.clear();
+    for (const auto& [pid, def] : m_prefabReg.prefabs()) m_prefabIds.push_back(pid);
+    std::sort(m_prefabIds.begin(), m_prefabIds.end());
+    if (m_prefabIds.empty()) m_prefabIds.push_back("");   // il combo vuole una voce
+    if (m_prefabPick >= (int)m_prefabIds.size()) m_prefabPick = 0;
+    updateViewport();   // le istanze di un prefab sparito diventano subito "rotte"
+}
+
+// ── UNDO / REDO a snapshot (doc 47 E1) ────────────────────────────────────────
+MapEditor::Snapshot MapEditor::captureState() const
+{
+    Snapshot s;
+    s.boxes = m_boxes;           s.posts       = m_posts;
+    s.positions = m_positions;   s.sectors     = m_sectors;
+    s.dangers = m_dangers;       s.routes      = m_routes;
+    s.vehSpawns = m_vehSpawns;   s.targets     = m_targets;
+    s.prefabInsts = m_prefabInsts;
+    s.structures = m_structures; s.commander   = m_commander;
+    s.spawnTeam1 = m_spawnTeam1; s.spawnTeam2  = m_spawnTeam2;
+    s.spawnPoints1 = m_spawnPoints1; s.spawnPoints2 = m_spawnPoints2;
+    return s;
+}
+
+void MapEditor::applyState(const Snapshot& s)
+{
+    m_boxes = s.boxes;           m_posts       = s.posts;
+    m_positions = s.positions;   m_sectors     = s.sectors;
+    m_dangers = s.dangers;       m_routes      = s.routes;
+    m_vehSpawns = s.vehSpawns;   m_targets     = s.targets;
+    m_prefabInsts = s.prefabInsts;
+    m_structures = s.structures; m_commander   = s.commander;
+    m_spawnTeam1 = s.spawnTeam1; m_spawnTeam2  = s.spawnTeam2;
+    m_spawnPoints1 = s.spawnPoints1; m_spawnPoints2 = s.spawnPoints2;
+    // La selezione può puntare a un elemento che non esiste più: azzerarla è più
+    // sicuro che provare a rimapparla (un indice sbagliato fa modificare il box
+    // sbagliato, che è peggio di perdere la selezione).
+    m_selBox    = -1;
+    m_selStruct = -1;
+    m_dirty     = true;
+    rebuildStructurePreview();
+    updateViewport();
+}
+
+void MapEditor::pushUndo(const char* tag)
+{
+    // Coalescenza: un trascinamento di gizmo genera una modifica per frame. Senza
+    // raggruppamento, un solo gesto riempirebbe la pila e "annulla" tornerebbe
+    // indietro di un pixel per volta — inutile.
+    if (m_lastUndoTag == tag && (m_editorClock - m_lastUndoTime) < 0.6f)
+    {
+        m_lastUndoTime = m_editorClock;
+        return;
+    }
+    m_lastUndoTag  = tag;
+    m_lastUndoTime = m_editorClock;
+
+    m_undo.push_back(captureState());
+    if (m_undo.size() > kUndoDepth) m_undo.erase(m_undo.begin());
+    m_redo.clear();   // una nuova azione taglia il ramo di ripristino
+}
+
+void MapEditor::doUndo()
+{
+    if (m_undo.empty()) return;
+    m_redo.push_back(captureState());
+    const Snapshot s = m_undo.back();
+    m_undo.pop_back();
+    applyState(s);
+    m_lastUndoTag.clear();   // il prossimo push non si fonde con quello annullato
+}
+
+void MapEditor::doRedo()
+{
+    if (m_redo.empty()) return;
+    m_undo.push_back(captureState());
+    const Snapshot s = m_redo.back();
+    m_redo.pop_back();
+    applyState(s);
+    m_lastUndoTag.clear();
+}
+
+// ── Primitive parametriche (ADR-053) ──────────────────────────────────────────
+// L'anteprima usa `mapstructures::expand`, LA STESSA funzione che il motore chiama
+// al load. Non è pigrizia: due espansioni separate divergerebbero al primo campo
+// aggiunto, e l'editor mostrerebbe una scala diversa da quella che si gioca.
+void MapEditor::rebuildStructurePreview()
+{
+    m_structPreview.clear();
+    for (const auto& s : m_structures)
+        mini::mapstructures::expand(s, m_structPreview);
+}
+
+void MapEditor::addStructure(mini::StructureKind kind)
+{
+    pushUndo("addStructure");
+    mini::StructureDef d;
+    d.kind = kind;
+    // Nasce davanti alla camera come gli altri elementi, e con i valori NORMATIVI
+    // (doc 47 §4.3): il default è già a norma, non un punto di partenza da correggere.
+    const glm::vec3 fp = m_viewport.groundFocusPoint();
+    d.x = snap(fp.x);  d.z = snap(fp.z);  d.y = 0.0f;
+    switch (kind)
+    {
+        case mini::StructureKind::Stair:
+            d.label = "Scala";  d.rise = 2.0f;
+            d.width = mini::mapmetrics::STAIR_MIN_WIDTH;  break;
+        case mini::StructureKind::Ramp:
+            d.label = "Rampa";  d.rise = 2.0f;
+            d.width = mini::mapmetrics::CORRIDOR_MIN;     break;
+        case mini::StructureKind::Wall:
+            d.label = "Muro";   d.length = 6.0f;
+            d.height = mini::mapmetrics::WALL_HEIGHT;
+            d.thickness = 0.0f;                          break;
+        case mini::StructureKind::Platform:
+            d.label = "Piattaforma";  d.sizeX = 8.0f; d.sizeZ = 8.0f;
+            d.y = 3.0f; d.baseY = 0.0f;
+            d.access[0] = true;                          break;
+        case mini::StructureKind::Switchback:
+            d.label = "Scala doppia";  d.rise = 6.0f;
+            d.width = mini::mapmetrics::STAIR_MIN_WIDTH;
+            d.flightRise = 0.0f;                         break;
+        case mini::StructureKind::Doorway:
+            d.label = "Porta";  d.length = 6.0f;
+            d.height = mini::mapmetrics::WALL_HEIGHT;
+            d.openW = mini::mapmetrics::DOOR_WIDTH;
+            d.openH = mini::mapmetrics::DOOR_HEIGHT;     break;
+        case mini::StructureKind::Room:
+            d.label = "Stanza";  d.sizeX = 10.0f; d.sizeZ = 8.0f;
+            d.height = mini::mapmetrics::WALL_HEIGHT;
+            d.openW = mini::mapmetrics::DOOR_WIDTH;
+            d.openH = mini::mapmetrics::DOOR_HEIGHT;
+            d.access[0] = true;                          break;
+        case mini::StructureKind::Catwalk:
+            d.label = "Passerella";  d.length = 12.0f;
+            d.width = mini::mapmetrics::CORRIDOR_MIN;
+            d.y = 4.0f;  d.railing = true;               break;
+        case mini::StructureKind::Barricade:
+            d.label = "Barricata";  d.length = 12.0f;
+            d.width = 2.0f;  d.spacing = 1.5f;
+            d.height = mini::mapmetrics::COVER_LOW;      break;
+    }
+    m_structures.push_back(d);
+    m_selStruct = (int)m_structures.size() - 1;
+    m_selBox    = -1;
+    rebuildStructurePreview();
+    updateViewport();
+}
+
+// ── updateViewport ────────────────────────────────────────────────────────────
+void MapEditor::updateViewport(bool recomputeDerived)
+{
+    if (recomputeDerived) recomputeExposure();   // ADR-033: tenuta in pari con le posizioni
     std::vector<FreeCameraViewport::MapBoxDraw> draws;
     draws.reserve(m_boxes.size() + 2);
+
+    // Selezione in corso per la creazione di un prefab: si raccoglie PRIMA del ciclo
+    // dei box, perché ora gli elementi inclusi si mostrano COLORANDO il box stesso
+    // invece di appoggiarci sopra un rombo. Il rombo funzionava ma è un oggetto in
+    // più da leggere: colorare la cosa selezionata è come si comportano tutti gli
+    // editor 3D, e non aggiunge geometria alla scena.
+    std::vector<int> zoneBoxes, zonePositions;
+    if (m_prefabZoneMode) prefabZoneCollect(zoneBoxes, zonePositions);
+    auto inZone = [&](int idx) {
+        return std::find(zoneBoxes.begin(), zoneBoxes.end(), idx) != zoneBoxes.end();
+    };
+
+    // ── Difetti per box (G7) ──────────────────────────────────────────────
+    // −1 = nessun difetto, 0 = avviso, 1 = problema. Costruito da `m_issues`, che
+    // viene da `analyzeTacticalHealth`: la stessa funzione del gate `--validate`.
+    // Una seconda analisi "solo per l'editor" prima o poi darebbe un verdetto
+    // diverso da quello del gioco, ed è il difetto che ci è costato di più
+    // (changelog 77: due verità sullo stesso mondo).
+    std::vector<int> boxDefect(m_boxes.size(), -1);
+    if (m_showDefects)
+        for (const auto& is : m_issues)
+            if (is.sel >= 0 && is.sel < (int)boxDefect.size())
+                boxDefect[is.sel] = std::max(boxDefect[is.sel], is.sev);
+
+    // Seziona un box alla quota di taglio. `false` = sta tutto sopra, non si disegna.
+    auto cutBox = [&](FreeCameraViewport::MapBoxDraw& d) -> bool {
+        if (m_hideAboveY > 999.0f) return true;              // nessun taglio
+        const float base = d.y - d.sy * 0.5f;
+        const float top  = d.y + d.sy * 0.5f;
+        if (base >= m_hideAboveY) return false;              // interamente sopra
+        if (top  <= m_hideAboveY) return true;               // interamente sotto
+        d.sy = m_hideAboveY - base;                          // a cavallo: si tronca
+        d.y  = base + d.sy * 0.5f;
+        return true;
+    };
 
     // Tipi "floor" visualizzati diversamente se showNavmesh
     for (int i = 0; i < (int)m_boxes.size(); ++i)
     {
         const auto& b = m_boxes[i];
+        // FILTRI DI VISIBILITÀ (E5): solo visivi, non toccano i dati.
+        {
+            const int ti = (std::strcmp(b.type,"floor")==0)    ? 0
+                         : (std::strcmp(b.type,"wall")==0)     ? 1
+                         : (std::strcmp(b.type,"platform")==0) ? 2
+                         : (std::strcmp(b.type,"cover")==0)    ? 3 : 4;
+            if (!m_showType[ti]) continue;
+        }
         FreeCameraViewport::MapBoxDraw d;
         d.x = b.x; d.y = b.y; d.z = b.z; d.ry = b.ry;
         d.sx = b.sx; d.sy = b.sy; d.sz = b.sz;
-        d.selected = (i == m_selBox);
+        // ── SEZIONE alla quota di taglio ──────────────────────────────────
+        // Non "nascondi ciò che ha la base sopra": quella regola lasciava in piedi
+        // ogni muro che parte da terra, quindi muovendo lo slider non si vedeva
+        // tagliare nulla. Qui il box viene **sezionato**: sopra la quota sparisce,
+        // a cavallo viene disegnato solo fino al piano. È una vista in sezione vera,
+        // e costa solo due sottrazioni — i DATI non si toccano.
+        if (!cutBox(d)) continue;
+        // Selezione multipla (G3): tutti gli elementi dell'insieme si evidenziano,
+        // non solo il primario — altrimenti non si vede cosa si sta per spostare.
+        d.selected = (i == m_selBox)
+            || std::find(m_multiSel.begin(), m_multiSel.end(), i) != m_multiSel.end();
         d.pickId = i;
 
         bool isFloor = (std::string(b.type) == "floor");
 
-        if (m_showNavmesh && isFloor) {
+        if (m_prefabZoneMode && inZone(i)) {
+            // Incluso nel prefab: ciano pieno. Si legge a colpo d'occhio COSA entra,
+            // senza rombi sospesi sopra gli oggetti.
+            d.r = 0.30f; d.g = 0.90f; d.b = 1.00f;
+        } else if (!m_prefabZoneMode && boxDefect[i] >= 0) {
+            // DIFETTO (G7): rosso = problema (il navmesh non ci sale, nessuno ci
+            // arriva), ambra = avviso. Si vede mentre costruisci, non dopo aver
+            // salvato: è la differenza fra correggere un box e rifare una zona.
+            if (boxDefect[i] >= 1) { d.r = 0.95f; d.g = 0.22f; d.b = 0.18f; }
+            else                   { d.r = 0.95f; d.g = 0.72f; d.b = 0.20f; }
+        } else if (m_prefabZoneMode) {
+            // Escluso: smorzato, così il contrasto con gli inclusi è netto.
+            d.r = b.r * 0.45f; d.g = b.g * 0.45f; d.b = b.b * 0.45f;
+        } else if (m_showNavmesh && isFloor) {
             // Overlay verde per area navigabile
             d.r = 0.10f; d.g = 0.90f; d.b = 0.30f;
         } else {
@@ -1055,6 +1666,72 @@ void MapEditor::updateViewport()
         }
 
         draws.push_back(d);
+    }
+
+    // ── Box DERIVATI dalle primitive (ADR-053) ────────────────────────────
+    // Non sono in `m_boxes` e non si salvano: si vedono, non si toccano. Il pickId
+    // negativo li mappa sulla RICETTA che li ha generati, così cliccare un gradino
+    // seleziona la scala — che è l'unica cosa modificabile.
+    // Si rigenera per struttura, così si sa QUALE ricetta ha prodotto ogni box e la
+    // selezionata si può evidenziare tutta insieme.
+    for (int si = 0; si < (int)m_structures.size() && m_showStructures; ++si)
+    {
+        std::vector<mini::MapGeometryBox> own;
+        mini::mapstructures::expand(m_structures[si], own);
+        const bool selected = (si == m_selStruct)
+            || std::find(m_multiSel.begin(), m_multiSel.end(), -6000 - si) != m_multiSel.end();
+        for (const auto& b : own)
+        {
+            FreeCameraViewport::MapBoxDraw d;
+            d.x = b.x; d.y = b.y; d.z = b.z; d.ry = b.ry;
+            d.sx = b.sx; d.sy = b.sy; d.sz = b.sz;
+            if (!cutBox(d)) continue;   // i gradini di una scala si sezionano come tutto
+            d.selected = selected;
+            // Cliccare un GRADINO seleziona la SCALA: i box derivati non esistono
+            // come entità modificabili, quindi il pickId rimanda alla ricetta.
+            // Codice -6000-i, coerente con gli altri intervalli negativi.
+            d.pickId = -6000 - si;
+            if (selected)
+            {   // Tutta la struttura si accende: una scala si seleziona intera.
+                d.r = 1.00f; d.g = 0.78f; d.b = 0.35f;
+            }
+            else
+            {   // Tinta più fredda: si distingue a colpo d'occhio ciò che è generato
+                // da ciò che è stato messo a mano.
+                d.r = b.r * 0.85f; d.g = b.g * 0.95f; d.b = b.b * 1.15f;
+                if (d.b > 1.0f) d.b = 1.0f;
+            }
+            draws.push_back(d);
+        }
+    }
+
+    // NOTA: nessuna lastra a segnare il piano di taglio. Un primo tentativo la
+    // disegnava (2026-08-05) ed era controproducente — diventava essa stessa un
+    // tetto che copriva la vista, cioè l'opposto di ciò per cui si taglia. Il piano
+    // si vede da sé: è la quota a cui la geometria risulta sezionata.
+
+    // ── FIGURA DI SCALA (E6) ──────────────────────────────────────────────
+    // L'errore più comune del blockout sono gli sbagli di SCALA, e il rimedio
+    // raccomandato è banale: avere sotto gli occhi una figura di riferimento.
+    // Si disegnano DUE sagome affiancate — l'unità di oggi e il gigante da 2,40 ×
+    // 1,20 su cui sono dimensionate le metriche — così si vede subito se una porta
+    // o un corridoio reggono anche il caso peggiore.
+    if (m_showScaleFigure)
+    {
+        const glm::vec3 fp = { m_scaleFigX, m_scaleFigY, m_scaleFigZ };
+        auto figure = [&](float dx, float w, float h, float r, float g, float b) {
+            FreeCameraViewport::MapBoxDraw f;
+            f.x = fp.x + dx; f.z = fp.z; f.ry = 0.0f;
+            f.sy = h;  f.y = fp.y + h * 0.5f;
+            f.sx = w;  f.sz = w * 0.6f;
+            f.r = r; f.g = g; f.b = b;
+            f.selected = false;
+            f.pickId = FreeCameraViewport::MapBoxDraw::kNoPick;
+            draws.push_back(f);
+        };
+        figure(-0.9f, 0.80f, 2.00f, 0.30f, 0.85f, 0.45f);   // clone/B1: ~2,0 m
+        figure( 0.9f, mini::mapmetrics::REF_UNIT_WIDTH,
+                      mini::mapmetrics::REF_UNIT_HEIGHT, 0.95f, 0.65f, 0.25f);  // gigante
     }
 
     // Spawn team1 (blu) come croce
@@ -1183,21 +1860,10 @@ void MapEditor::updateViewport()
         disc.selected = false; disc.pickId = FreeCameraViewport::MapBoxDraw::kNoPick;
         draws.push_back(disc);
 
-        std::vector<int> selBoxes, selPos;
-        prefabZoneCollect(selBoxes, selPos);
-        // Marker sopra ogni elemento incluso: si legge a colpo d'occhio COSA entra,
-        // anche quando gli oggetti sono uno dietro l'altro.
-        for (int i : selBoxes)
-        {
-            if (i < 0 || i >= (int)m_boxes.size()) continue;
-            const auto& b = m_boxes[i];
-            FreeCameraViewport::MapBoxDraw m;
-            m.x = b.x; m.y = b.y + b.sy * 0.5f + 0.45f; m.z = b.z; m.ry = 45.0f;
-            m.sx = 0.4f; m.sy = 0.4f; m.sz = 0.4f;
-            m.r = 0.35f; m.g = 0.95f; m.b = 1.0f;
-            m.selected = false; m.pickId = i;   // cliccabile per il toggle Shift+click
-            draws.push_back(m);
-        }
+        // I BOX inclusi non hanno più un rombo sopra: sono colorati di ciano nel
+        // ciclo principale (vedi sopra). Restano i marker per le POSIZIONI TATTICHE,
+        // che non hanno un volume da colorare — sono punti.
+        const std::vector<int>& selPos = zonePositions;
         for (int i : selPos)
         {
             if (i < 0 || i >= (int)m_positions.size()) continue;
@@ -1414,7 +2080,33 @@ void MapEditor::updateViewport()
 
     // Gizmo sull'elemento selezionato (box o spawn point).
     // I box mappa ruotano solo attorno a Y; gli spawn: solo Sposta.
-    if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
+    // SELEZIONE MULTIPLA (G3): il gizmo si mette al BARICENTRO del gruppo, che è
+    // il punto attorno a cui la rotazione fa orbitare gli elementi. Scala
+    // disattivata: su un gruppo eterogeneo non ha un significato unico.
+    if (m_multiSel.size() > 1)
+    {
+        glm::vec3 c(0.0f); int n = 0;
+        for (int code : m_multiSel)
+        { glm::vec3 p; if (codePosition(code, p)) { c += p; ++n; } }
+        if (n > 0)
+        {
+            m_viewport.setGizmoTarget(c / (float)n, true);
+            m_viewport.setGizmoRotAxes(false, true, false);
+            m_viewport.setGizmoCanRotateScale(true, false);
+        }
+        else m_viewport.setGizmoTarget({0,0,0}, false);
+    }
+    // Struttura selezionata: il gizmo agisce sulla RICETTA (ADR-053). Sposta,
+    // ruota e scala sono tutti e tre attivi — la scala però tocca i PARAMETRI del
+    // tipo, non un box, così i gradini non si possono rompere.
+    else if (m_selStruct >= 0 && m_selStruct < (int)m_structures.size())
+    {
+        const auto& s = m_structures[m_selStruct];
+        m_viewport.setGizmoTarget({s.x, s.y, s.z}, true);
+        m_viewport.setGizmoRotAxes(false, true, false);
+        m_viewport.setGizmoCanRotateScale(true, true);
+    }
+    else if (m_selBox >= 0 && m_selBox < (int)m_boxes.size())
     {
         const auto& b = m_boxes[m_selBox];
         m_viewport.setGizmoTarget({b.x, b.y, b.z}, true);
@@ -1524,6 +2216,66 @@ void MapEditor::updateViewport()
 // ── draw ─────────────────────────────────────────────────────────────────────
 void MapEditor::draw()
 {
+    // ── Aggancio unico dell'undo per TUTTE le modifiche da widget ─────────
+    // Invece di infilare un `pushUndo` accanto a ogni DragFloat (decine di punti,
+    // e il primo che si dimentica è un'operazione non annullabile), si osserva
+    // quando un widget diventa attivo: si fotografa lo stato PRIMA che l'utente
+    // cominci a trascinare, e lo si consegna alla pila solo se qualcosa è davvero
+    // cambiato. Un intero trascinamento diventa una sola voce di undo.
+    {
+        static bool s_wasActive = false;
+        static Snapshot s_before;
+        static bool s_dirtyBefore = false;
+        const bool active = ImGui::IsAnyItemActive();
+        if (active && !s_wasActive)
+        {
+            s_before      = captureState();
+            s_dirtyBefore = m_dirty;
+        }
+        else if (!active && s_wasActive && m_dirty && !s_dirtyBefore)
+        {
+            m_undo.push_back(s_before);
+            if (m_undo.size() > kUndoDepth) m_undo.erase(m_undo.begin());
+            m_redo.clear();
+        }
+        s_wasActive = active;
+    }
+
+    // Scorciatoie: Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z, che molti si aspettano).
+    if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
+        {
+            if (ImGui::GetIO().KeyShift) doRedo(); else doUndo();
+        }
+        else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) doRedo();
+        // Ctrl+A: INTERRUTTORE seleziona-tutto / deseleziona-tutto.
+        // Un tasto solo per i due versi dello stesso gesto — Esc da solo non è
+        // affidabile qui (Windows se lo prende in certe combinazioni), e un pulsante
+        // "Deseleziona" separato aggiungeva un secondo modo di fare la stessa cosa.
+        else if (ImGui::IsKeyPressed(ImGuiKey_A, false))
+        {
+            const size_t total = m_boxes.size() + m_structures.size();
+            if (m_multiSel.size() >= total && total > 0)
+            {
+                setSelection(-1, false);   // già tutto selezionato → si azzera
+            }
+            else
+            {
+                m_multiSel.clear();
+                for (int i = 0; i < (int)m_boxes.size(); ++i) m_multiSel.push_back(i);
+                for (int i = 0; i < (int)m_structures.size(); ++i) m_multiSel.push_back(-6000 - i);
+                if (!m_multiSel.empty())
+                {
+                    const int last = m_multiSel.back();
+                    m_selBox    = last >= 0 ? last : -1;
+                    m_selStruct = last <= -6000 ? -6000 - last : -1;
+                }
+                updateViewport();
+            }
+        }
+    }
+
     float totalW = ImGui::GetContentRegionAvail().x;
     float totalH = ImGui::GetContentRegionAvail().y;
 
@@ -1619,16 +2371,244 @@ void MapEditor::drawToolbar()
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Salva geometry in JSON");
 
     ImGui::SameLine();
+    // ── Annulla / Ripristina (doc 47 E1) ──────────────────────────────────
+    ImGui::BeginDisabled(m_undo.empty());
+    if (ImGui::Button("Annulla")) doUndo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Ctrl+Z — annulla l'ultima modifica (%d in memoria)",
+                          (int)m_undo.size());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(m_redo.empty());
+    if (ImGui::Button("Ripristina")) doRedo();
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Ctrl+Y o Ctrl+Shift+Z (%d in memoria)", (int)m_redo.size());
+    ImGui::SameLine();
+
     if (ImGui::Button("+ Box"))         addBox();
     ImGui::SameLine();
+    // ── Primitive parametriche (ADR-053) ──────────────────────────────────
+    // In un DROPDOWN e non in fila: la barra ha già otto controlli e aggiungerne
+    // quattro la farebbe tagliare — regola d'uso dell'editor confermata dall'utente.
+    if (ImGui::Button("+ Struttura")) ImGui::OpenPopup("##addstruct");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Forme che si autorano come RICETTA, non come box.\n"
+                          "Dichiari \"da qui, salendo di 3 m, larga 4\" e i gradini\n"
+                          "li genera il motore rispettando lo scalino massimo:\n"
+                          "un'alzata sbagliata diventa impossibile da disegnare.");
+    if (ImGui::BeginPopup("##addstruct"))
+    {
+        // Raggruppate per COSA SERVONO, non per ordine di implementazione: si cerca
+        // "come salgo" o "come chiudo uno spazio", non "la quarta primitiva".
+        ImGui::TextDisabled("Salire");
+        if (ImGui::MenuItem("Scala"))  addStructure(mini::StructureKind::Stair);
+        if (ImGui::MenuItem("Rampa"))  addStructure(mini::StructureKind::Ramp);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Alzata fine: dolce, adatta anche ai veicoli.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Chiudere e aprire");
+        if (ImGui::MenuItem("Muro"))   addStructure(mini::StructureKind::Wall);
+        if (ImGui::MenuItem("Muro con apertura"))
+            addStructure(mini::StructureKind::Doorway);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Porta o finestra. Stipiti e architrave li mette lui,\n"
+                              "con le misure normative. Con il parapetto (sill) diventa\n"
+                              "una finestra, e il parapetto e' COPERTURA vera.");
+        if (ImGui::MenuItem("Stanza (guscio)"))
+            addStructure(mini::StructureKind::Room);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pavimento + 4 muri + soffitto opzionale, con una porta\n"
+                              "per ogni lato dichiarato: un interno non nasce senza\n"
+                              "vie d'ingresso.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Terreno tattico");
+        if (ImGui::MenuItem("Piattaforma con accessi"))
+            addStructure(mini::StructureKind::Platform);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Dichiara da quali lati ci si sale: le scale nascono\n"
+                              "con lei. Non puo' venire irraggiungibile.");
+        if (ImGui::MenuItem("Passerella"))
+            addStructure(mini::StructureKind::Catwalk);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Un corridoio IN QUOTA: domina il piano di sotto.\n"
+                              "Parapetti opzionali — riparano, ma tolgono la visuale\n"
+                              "verso il basso (KI #83).");
+        if (ImGui::MenuItem("Linea di coperture"))
+            addStructure(mini::StructureKind::Barricade);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Barricata a intervalli. Emette box di tipo `cover`,\n"
+                              "che e' cio' che la derivazione dei metadata cerca.");
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Duplica")) duplicateSelected();
+    ImGui::SameLine();
+    // ── ARRAY (E4) ────────────────────────────────────────────────────────
+    // In un popup e non in fila: la barra è già affollata, e questi sono quattro
+    // campi che si usano insieme una volta ogni tanto.
+    if (ImGui::Button("Serie...")) ImGui::OpenPopup("##array");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("N copie con offset PROGRESSIVO: la copia i-esima sta a\n"
+                          "i × offset dall'originale, quindi la fila resta allineata\n"
+                          "invece di accumulare l'errore di N trascinamenti a mano.\n"
+                          "Agisce su tutta la selezione.");
+    if (ImGui::BeginPopup("##array"))
+    {
+        const int n = (int)selectionCodes().size();
+        if (n == 0) ImGui::TextDisabled("Seleziona qualcosa prima.");
+        else
+        {
+            ImGui::TextDisabled("%d element%s selezionat%s", n, n == 1 ? "o" : "i",
+                                n == 1 ? "o" : "i");
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::DragInt("Copie", &m_arrayCount, 0.2f, 1, 200);
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::DragFloat3("Offset", m_arrayOff, 0.1f);
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::DragFloat("Rotazione", &m_arrayYawStep, 1.0f, -180.0f, 180.0f, "%.0f°/copia");
+            ImGui::TextDisabled("Totale: %d nuovi elementi", m_arrayCount * n);
+            ImGui::Separator();
+            if (ImGui::Button("Crea", {110, 0})) { makeArray(); ImGui::CloseCurrentPopup(); }
+            ImGui::SameLine();
+            if (ImGui::Button("Annulla", {110, 0})) ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    // ── Stato di salute SEMPRE VISIBILE (G7) ──────────────────────────────
+    // Il conteggio stava solo dentro un pannello che bisognava aprire. Qui è
+    // sott'occhio mentre si costruisce: se un'operazione introduce un problema, il
+    // numero sale nello stesso istante.
+    {
+        int nProb = 0, nWarn = 0;
+        for (const auto& is : m_issues) { if (is.sev >= 1) ++nProb; else ++nWarn; }
+        ImGui::SameLine();
+        if (nProb > 0)
+            ImGui::TextColored({0.95f, 0.35f, 0.30f, 1.0f}, "%d problemi", nProb);
+        else if (nWarn > 0)
+            ImGui::TextColored({0.90f, 0.75f, 0.35f, 1.0f}, "%d avvisi", nWarn);
+        else
+            ImGui::TextColored({0.45f, 0.85f, 0.50f, 1.0f}, "nessun difetto");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Salute tattica della mappa, ricalcolata a ogni modifica.\n"
+                              "%d problemi, %d avvisi. I box colpevoli sono colorati nel\n"
+                              "viewport; l'elenco completo è nel pannello a sinistra.",
+                              nProb, nWarn);
+    }
+
+    ImGui::SameLine();
+    // ── VISTA: filtri + figura di scala (E5/E6) ───────────────────────────
+    const bool filtered = filtersActive();
+    if (filtered) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.35f, 1.0f));
+    if (ImGui::Button(filtered ? "Vista *" : "Vista")) ImGui::OpenPopup("##vista");
+    if (filtered) ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Nasconde per tipo o per quota. Solo visivo: non tocca i dati.\n"
+                          "L'asterisco ricorda che qualcosa è nascosto.");
+    if (ImGui::BeginPopup("##vista"))
+    {
+        // Ogni cambio ridisegna SUBITO. Prima nulla richiamava il ridisegno, quindi
+        // le spunte cambiavano lo stato e non si vedeva nulla finché non si toccava
+        // altro: il filtro sembrava non funzionare. `false` = non ricalcolare i dati
+        // derivati, è solo vista.
+        bool viewChanged = false;
+        const char* tn[5] = { "Pavimenti", "Muri", "Piattaforme", "Coperture", "Decorazioni" };
+        for (int i = 0; i < 5; ++i)
+            if (ImGui::Checkbox(tn[i], &m_showType[i])) viewChanged = true;
+        if (ImGui::Checkbox("Strutture (scale, rampe...)", &m_showStructures))
+            viewChanged = true;
+        ImGui::Separator();
+
+        // Estensione VERA della mappa in quota: uno slider da -5 a 1000 sarebbe
+        // inutilizzabile, e senza estremi sensati non si trova la quota giusta.
+        float mapLo = 0.0f, mapHi = 8.0f;
+        for (const auto& b : m_boxes)
+        {
+            mapLo = std::min(mapLo, b.y - b.sy * 0.5f);
+            mapHi = std::max(mapHi, b.y + b.sy * 0.5f);
+        }
+        mapHi += 1.0f;
+        const bool cutting = (m_hideAboveY < mapHi);
+        float cut = cutting ? m_hideAboveY : mapHi;
+
+        ImGui::SetNextItemWidth(200.0f);
+        // Slider per trovare la quota trascinando (il taglio si vede mentre si
+        // muove), Ctrl+click per digitarla precisa: ImGui dà entrambe le cose con
+        // un controllo solo.
+        if (ImGui::SliderFloat("Taglia sopra", &cut, mapLo, mapHi, "%.2f m"))
+        { m_hideAboveY = (cut >= mapHi - 0.001f) ? 1000.0f : cut; viewChanged = true; }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("VISTA IN SEZIONE: sopra questa quota la geometria sparisce,\n"
+                              "e ciò che sta a cavallo viene tagliato al piano. È il modo\n"
+                              "di guardare dentro un edificio dall'alto.\n"
+                              "Ctrl+click per digitare un valore esatto.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Tutto##nocut")) { m_hideAboveY = 1000.0f; viewChanged = true; }
+        if (cutting)
+            ImGui::TextDisabled("taglio a %.2f m (mappa %.1f → %.1f)", m_hideAboveY, mapLo, mapHi - 1.0f);
+        else
+            ImGui::TextDisabled("nessun taglio");
+        ImGui::Separator();
+        if (ImGui::Checkbox("Evidenzia i difetti", &m_showDefects)) viewChanged = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Colora nel viewport i box con difetti: ROSSO = problema\n"
+                              "(il navmesh non ci sale, nessuno ci arriva), AMBRA = avviso.\n"
+                              "Stessa analisi del gate --validate, mostrata mentre costruisci.");
+        if (ImGui::Checkbox("Figura di scala", &m_showScaleFigure))
+        {
+            if (m_showScaleFigure)
+            {
+                const glm::vec3 fp = m_viewport.groundFocusPoint();
+                m_scaleFigX = fp.x; m_scaleFigY = fp.y; m_scaleFigZ = fp.z;
+            }
+            viewChanged = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Due sagome dove stai guardando ORA: l'unità di oggi\n"
+                              "(2,0 m) e il gigante di riferimento (2,40 × 1,20) su cui\n"
+                              "sono dimensionate le metriche. Restano dove le piazzi.");
+        if (m_showScaleFigure && ImGui::SmallButton("Riposiziona qui"))
+        {
+            const glm::vec3 fp = m_viewport.groundFocusPoint();
+            m_scaleFigX = fp.x; m_scaleFigY = fp.y; m_scaleFigZ = fp.z;
+            viewChanged = true;
+        }
+        ImGui::Separator();
+        if (ImGui::Button("Mostra tutto", {150, 0}))
+        {
+            for (bool& b : m_showType) b = true;
+            m_showStructures = true;
+            m_hideAboveY = 1000.0f;
+            viewChanged = true;
+        }
+        if (viewChanged) updateViewport(/*recomputeDerived=*/false);
+        ImGui::EndPopup();
+    }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Duplica l'elemento selezionato (box, posizione, settore,\n"
                           "pericolo, bersaglio, post, percorso, veicolo) con TUTTI i\n"
                           "suoi valori. Autora una volta, posane una serie.");
     ImGui::SameLine();
-    if (ImGui::Button("Elimina") && m_selBox >= 0) {
+    // Elimina TUTTA la selezione (G3), non solo il box primario.
+    if (ImGui::Button("Elimina") && !selectionCodes().empty()) {
         ImGui::OpenPopup("##del_confirm");
+    }
+    if (ImGui::IsItemHovered() && selectionCodes().size() > 1)
+        ImGui::SetTooltip("Elimina i %d elementi selezionati.",
+                          (int)selectionCodes().size());
+
+    // Indicatore della selezione multipla: senza, non si sa quanti elementi si sta
+    // per spostare o eliminare finché non è troppo tardi.
+    if (m_multiSel.size() > 1)
+    {
+        ImGui::SameLine();
+        ImGui::TextColored({1.0f, 0.78f, 0.35f, 1.0f},
+                           "%d selezionati", (int)m_multiSel.size());
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ctrl+click aggiunge o toglie un elemento.\n"
+                              "Ctrl+A seleziona tutto, e ripremuto deseleziona.");
     }
 
     // ── Rinomina mappa: UN SOLO nome, UN SOLO comando (ADR-010) ──────────
@@ -1729,8 +2709,10 @@ void MapEditor::drawToolbar()
     }
     if (ImGui::BeginPopupModal("##del_confirm", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Eliminare il box selezionato?");
-        if (ImGui::Button("Sì")) { deleteBox(m_selBox); ImGui::CloseCurrentPopup(); }
+        const int n = (int)selectionCodes().size();
+        if (n > 1) ImGui::Text("Eliminare i %d elementi selezionati?", n);
+        else       ImGui::Text("Eliminare l'elemento selezionato?");
+        if (ImGui::Button("Sì")) { deleteSelection(); ImGui::CloseCurrentPopup(); }
         ImGui::SameLine();
         if (ImGui::Button("No")) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1877,6 +2859,36 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         return typeIcons[4];
     };
 
+    // ── Le STRUTTURE per prime (ADR-053) ──────────────────────────────────
+    // Stanno sopra i box perché sono l'unità di lavoro: una scala da 15 gradini è
+    // UNA riga qui, non quindici nella lista dei box.
+    if (!m_structures.empty())
+    {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        char shdr[64];
+        std::snprintf(shdr, sizeof(shdr), "Strutture (%d)###structs", (int)m_structures.size());
+        if (ImGui::CollapsingHeader(shdr))
+        {
+            for (int i = 0; i < (int)m_structures.size(); ++i)
+            {
+                const auto& s = m_structures[i];
+                char sb[160];
+                const char* nm = s.label.empty() ? "(senza nome)" : s.label.c_str();
+                // Il conto dei box generati è l'informazione che serve davvero:
+                // dice quanto costa quella riga.
+                std::vector<mini::MapGeometryBox> tmpb;
+                mini::mapstructures::expand(s, tmpb);
+                std::snprintf(sb, sizeof(sb), "%s  [%s, %d box]##st%d",
+                              nm, mini::mapstructures::kindName(s.kind), (int)tmpb.size(), i);
+                const int code = -6000 - i;
+                const bool ssel = (m_selStruct == i)
+                    || std::find(m_multiSel.begin(), m_multiSel.end(), code) != m_multiSel.end();
+                if (ImGui::Selectable(sb, ssel))
+                    setSelection(code, ImGui::GetIO().KeyCtrl);
+            }
+        }
+    }
+
     for (int i = 0; i < (int)m_boxes.size(); ++i)
     {
         const auto& b = m_boxes[i];
@@ -1884,12 +2896,10 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         const char* name = (b.label[0] != '\0') ? b.label : "(nessun nome)";
         std::snprintf(buf, sizeof(buf), "%s %s##box%d", typeIcon(b.type), name, i);
 
-        bool sel = (i == m_selBox);
+        const bool sel = (i == m_selBox)
+            || std::find(m_multiSel.begin(), m_multiSel.end(), i) != m_multiSel.end();
         if (ImGui::Selectable(buf, sel))
-        {
-            m_selBox = i;
-            updateViewport();
-        }
+            setSelection(i, ImGui::GetIO().KeyCtrl);
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("tipo: %s\npos: (%.1f, %.1f, %.1f)\ndim: %.1fx%.1fx%.1f",
                               b.type, b.x, b.y, b.z, b.sx, b.sy, b.sz);
@@ -2197,6 +3207,46 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
             { m_prefabInsts.erase(m_prefabInsts.begin() + i); m_selBox = -1;
               m_dirty = true; updateViewport(); }
         }
+
+        // ── ELIMINA L'ASSET (non l'istanza) ───────────────────────────────
+        // Su una riga PROPRIA sotto il menu a tendina, non stretto fra "+" e "-":
+        // quelli aggiungono e tolgono un'ISTANZA in questa mappa, questo cancella
+        // l'asset dal disco. Metterli in fila accostava due gesti con conseguenze
+        // molto diverse. Agisce sul prefab scelto nel menu qui sopra.
+        if (!m_prefabIds.empty() && !m_prefabIds[m_prefabPick].empty())
+        {
+            if (ImGui::SmallButton("Elimina asset...")) ImGui::OpenPopup("##delprefab");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cancella data/prefabs/%s.json dal disco.",
+                                  m_prefabIds[m_prefabPick].c_str());
+            if (ImGui::BeginPopup("##delprefab"))
+            {
+                const std::string pid = m_prefabIds[m_prefabPick];
+                int used = 0;
+                for (const auto& pi : m_prefabInsts) if (pi.id == pid) ++used;
+                ImGui::Text("Eliminare l'asset '%s'?", pid.c_str());
+                if (used > 0)
+                    ImGui::TextColored({1.0f, 0.55f, 0.45f, 1.0f},
+                                       "%d istanze in questa mappa resterebbero rotte.", used);
+                else
+                    ImGui::TextDisabled("Non è usato in questa mappa.");
+                ImGui::Separator();
+                if (ImGui::Button("Elimina", {110, 0}))
+                {
+                    std::error_code ec;
+                    fs::remove(fs::path(getDataDir()) / "prefabs" / (pid + ".json"), ec);
+                    // Ricarica AUTOMATICA: dal 2026-08-05 `loadPrefabs` azzera il
+                    // proprio contenitore, quindi rileggere il disco è autoritativo
+                    // e il prefab sparisce subito dal menu — niente riavvio, e
+                    // nessun pulsante "ricarica" da ricordarsi di premere.
+                    reloadPrefabAssets();
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Annulla", {110, 0})) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+        }
     }
 
     ImGui::Separator();
@@ -2349,6 +3399,323 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
 void MapEditor::drawProperties(float panelW, float /*panelH*/)
 {
     float sliderW = panelW - 16.0f;
+
+    // ── SELEZIONE MULTIPLA (G3) ───────────────────────────────────────────
+    // Non si mostrano i campi di un elemento solo: sarebbe ambiguo su quale dei
+    // dieci si sta agendo. Si mostra COSA c'è dentro e cosa si può farci.
+    if (m_multiSel.size() > 1)
+    {
+        int nBox = 0, nStruct = 0, nAltro = 0;
+        for (int c : m_multiSel)
+        {
+            if      (c >= 0)      ++nBox;
+            else if (c <= -6000)  ++nStruct;
+            else                  ++nAltro;
+        }
+        ImGui::TextColored({1.0f, 0.78f, 0.35f, 1.0f},
+                           "%d elementi selezionati", (int)m_multiSel.size());
+        ImGui::Separator();
+        if (nBox)    ImGui::BulletText("%d box", nBox);
+        if (nStruct) ImGui::BulletText("%d strutture", nStruct);
+        if (nAltro)  ImGui::BulletText("%d altri elementi", nAltro);
+        ImGui::Separator();
+        ImGui::TextDisabled("Sposta e ruota agiscono su TUTTI (la rotazione fa\n"
+                            "orbitare attorno al baricentro). Elimina e Duplica\n"
+                            "pure. La SCALA resta al singolo: su un gruppo misto\n"
+                            "un raggio e un'altezza non si scalano allo stesso modo.");
+
+        // ── RIGHELLO (doc 47 E6) ──────────────────────────────────────────
+        // Con ESATTAMENTE due elementi selezionati si misura la distanza fra loro.
+        // Non serve uno strumento a parte: la selezione multipla è già il gesto
+        // giusto, e il confronto con le metriche normative dice subito se un
+        // corridoio o una porta stanno nei limiti.
+        if (m_multiSel.size() == 2)
+        {
+            glm::vec3 a, b;
+            if (codePosition(m_multiSel[0], a) && codePosition(m_multiSel[1], b))
+            {
+                const glm::vec3 d = b - a;
+                const float horiz = std::sqrt(d.x * d.x + d.z * d.z);
+                ImGui::Separator();
+                ImGui::TextColored({0.55f, 0.85f, 1.0f, 1.0f}, "Distanza");
+                ImGui::Text("%.2f m in pianta, %.2f m totali", horiz, glm::length(d));
+                ImGui::TextDisabled("ΔX %.2f   ΔY %.2f   ΔZ %.2f", d.x, d.y, d.z);
+                if (std::fabs(d.y) > 0.01f)
+                {
+                    const float rise = std::fabs(d.y);
+                    if (rise > mini::config::STEP_HEIGHT)
+                        ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                            "Dislivello %.2f m: oltre lo scalino (%.2f). Servono %d gradini.",
+                            rise, mini::config::STEP_HEIGHT,
+                            mini::mapmetrics::stepsFor(rise));
+                }
+            }
+        }
+        return;
+    }
+
+    // ── PRIMITIVA PARAMETRICA selezionata (ADR-053) ───────────────────────
+    if (m_selStruct >= 0 && m_selStruct < (int)m_structures.size())
+    {
+        auto& s = m_structures[m_selStruct];
+        bool changed = false;
+        using SK = mini::StructureKind;
+        const bool isFlight = (s.kind == SK::Stair || s.kind == SK::Ramp
+                            || s.kind == SK::Switchback);
+        const bool isWallish = (s.kind == SK::Wall || s.kind == SK::Doorway);
+        const bool hasOpening = (s.kind == SK::Doorway || s.kind == SK::Room);
+
+        ImGui::TextColored({0.55f, 0.80f, 1.00f, 1.0f}, "Struttura parametrica");
+        ImGui::TextDisabled("Si autora la RICETTA. I box li genera il motore, e non\n"
+                            "si salvano: cambiano da soli se cambi i parametri.");
+        ImGui::Separator();
+
+        char nameBuf[64];
+        std::snprintf(nameBuf, sizeof(nameBuf), "%s", s.label.c_str());
+        ImGui::SetNextItemWidth(sliderW);
+        if (editor::ui::textRow("Nome", nameBuf, sizeof(nameBuf)))
+        { s.label = nameBuf; changed = true; }
+
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::BeginCombo("Tipo", mini::mapstructures::kindLabel(s.kind)))
+        {
+            // Switchback assente di proposito: vedi la nota in MapStructures.hpp —
+            // non produce ancora torri percorribili in modo affidabile.
+            const mini::StructureKind kinds[8] = {
+                mini::StructureKind::Stair,      mini::StructureKind::Ramp,
+                mini::StructureKind::Wall,       mini::StructureKind::Doorway,
+                mini::StructureKind::Room,       mini::StructureKind::Platform,
+                mini::StructureKind::Catwalk,    mini::StructureKind::Barricade };
+            for (auto k : kinds)
+                if (ImGui::Selectable(mini::mapstructures::kindLabel(k), s.kind == k))
+                { s.kind = k; changed = true; }
+            ImGui::EndCombo();
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Posizione");
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::DragFloat("X##st", &s.x, 0.1f)) changed = true;
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::DragFloat("Y##st", &s.y, 0.1f)) changed = true;
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::DragFloat("Z##st", &s.z, 0.1f)) changed = true;
+        ImGui::SetNextItemWidth(sliderW);
+        if (ImGui::DragFloat("Rotazione##st", &s.ry, 1.0f, -360.0f, 360.0f, "%.0f°"))
+            changed = true;
+
+        ImGui::Separator();
+        if (isFlight)
+        {
+            ImGui::TextDisabled("Salita");
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Dislivello##st", &s.rise, 0.1f, 0.1f, 40.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Larghezza##st", &s.width, 0.1f, 0.5f, 20.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Alzata##st", &s.riser, 0.01f, 0.0f,
+                                 mini::config::STEP_HEIGHT, "%.2f m (0 = normativa)"))
+                changed = true;
+            // La PEDATA allunga o accorcia la scala senza toccare i gradini: il
+            // numero di gradini dipende solo dal dislivello, quindi questa leva
+            // cambia quanto spazio occupa e quanto è dolce, e non può romperla.
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Pedata##st", &s.tread, 0.01f, 0.0f, 3.0f,
+                                 "%.2f m (0 = normativa)"))
+                changed = true;
+            // I numeri che contano per progettare.
+            const float run  = mini::mapstructures::flightRun(s);
+            const float used = mini::mapstructures::effectiveRiser(s);
+            const float trd  = mini::mapstructures::effectiveTread(s);
+            const float slope = (trd > 0.001f)
+                ? std::atan(used / trd) * 57.2957795f : 0.0f;
+            ImGui::TextDisabled("%d gradini da %.2f × %.2f m — pendenza %.0f°",
+                                mini::mapmetrics::stepsFor(s.rise, used), used, trd, slope);
+            if (s.kind != SK::Switchback)
+                ImGui::TextDisabled("occupa %.2f m in pianta", run);
+            if (slope > 35.5f)
+                ImGui::TextColored({1.0f, 0.80f, 0.40f, 1.0f},
+                                   "Piu' ripida di una scala vera (30-35°): allunga la pedata.");
+            if (s.kind == SK::Switchback)
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Dislivello per rampa##st", &s.flightRise, 0.1f, 0.0f, 10.0f,
+                                     "%.2f m (0 = 3,00, un piano)")) changed = true;
+                // I numeri che servono a progettare la torre: quante rampe e, soprattutto,
+                // che l'INGOMBRO NON CAMBIA con l'altezza — è il punto di questa primitiva.
+                const float maxF = (s.flightRise > 0.1f) ? s.flightRise : 3.0f;
+                int nf = (int)std::ceil(s.rise / maxF); if (nf < 2) nf = 2;
+                const float rF = s.rise / (float)nf;
+                const float R  = (float)mini::mapmetrics::stepsFor(rF, used) * trd;
+                const float wid = (s.width > 0.1f) ? s.width : mini::mapmetrics::STAIR_MIN_WIDTH;
+                ImGui::TextDisabled("%d rampe da %.2f m — pianta %.1f × %.1f m",
+                                    nf, rF, wid * 2.0f, R + wid);
+                const float straight = (float)mini::mapmetrics::stepsFor(s.rise, used) * trd;
+                ImGui::TextDisabled("diritta occuperebbe %.1f m di sviluppo", straight);
+            }
+            if (s.riser > mini::config::STEP_HEIGHT - 0.001f && s.riser > 0.0f)
+                ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                                   "Alzata limitata a %.2f: oltre non ci si sale.",
+                                   mini::config::STEP_HEIGHT);
+        }
+        else if (isWallish || s.kind == SK::Catwalk || s.kind == SK::Barricade)
+        {
+            ImGui::TextDisabled("%s", mini::mapstructures::kindLabel(s.kind));
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Lunghezza##st", &s.length, 0.1f, 0.5f, 200.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Altezza##st", &s.height, 0.1f, 0.0f, 20.0f,
+                                 "%.2f m (0 = normativa)")) changed = true;
+            if (s.kind == SK::Catwalk)
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Larghezza##st", &s.width, 0.1f, 0.5f, 20.0f, "%.2f m"))
+                    changed = true;
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Quota impalcato##st", &s.y, 0.1f, 0.0f, 40.0f, "%.2f m"))
+                    changed = true;
+                if (ImGui::Checkbox("Parapetti", &s.railing)) changed = true;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Riparano chi ci sta sopra, MA tolgono la visuale\n"
+                                      "verso il basso: e' il difetto KI #83 (posizione cieca\n"
+                                      "verso le altre quote). Da mettere con criterio.");
+                if (s.width < mini::mapmetrics::CORRIDOR_MIN - 0.01f)
+                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                        "Sotto il corridoio minimo (%.2f m).", mini::mapmetrics::CORRIDOR_MIN);
+            }
+            else if (s.kind == SK::Barricade)
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Lungh. elemento##st", &s.width, 0.1f, 0.3f, 20.0f, "%.2f m"))
+                    changed = true;
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Varco##st", &s.spacing, 0.1f, 0.0f, 20.0f,
+                                     "%.2f m (0 = continua)")) changed = true;
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Spessore##st", &s.thickness, 0.05f, 0.0f, 5.0f,
+                                     "%.2f m (0 = 0,60)")) changed = true;
+                ImGui::TextDisabled("Bassa %.2f = ci si spara sopra · alta %.2f = ripara in piedi",
+                                    mini::mapmetrics::COVER_LOW, mini::mapmetrics::COVER_HIGH);
+            }
+            else
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Spessore##st", &s.thickness, 0.05f, 0.0f, 5.0f,
+                                     "%.2f m (0 = normativo)")) changed = true;
+            }
+        }
+        else if (s.kind == SK::Room)
+        {
+            ImGui::TextDisabled("Stanza");
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Lato X##st", &s.sizeX, 0.1f, 2.0f, 80.0f, "%.2f m")) changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Lato Z##st", &s.sizeZ, 0.1f, 2.0f, 80.0f, "%.2f m")) changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Altezza##st", &s.height, 0.1f, 0.0f, 20.0f,
+                                 "%.2f m (0 = normativa)")) changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Spessore muri##st", &s.thickness, 0.05f, 0.0f, 5.0f,
+                                 "%.2f m (0 = normativo)")) changed = true;
+            if (ImGui::Checkbox("Soffitto", &s.ceiling)) changed = true;
+            ImGui::Separator();
+            ImGui::TextDisabled("Aperture — su quali lati");
+            const char* sideName[4] = { "Lato -Z", "Lato +Z", "Lato -X", "Lato +X" };
+            for (int i = 0; i < 4; ++i)
+                if (ImGui::Checkbox(sideName[i], &s.access[i])) changed = true;
+            if (!s.access[0] && !s.access[1] && !s.access[2] && !s.access[3])
+                ImGui::TextColored({1.0f, 0.55f, 0.45f, 1.0f},
+                                   "Nessuna apertura: stanza sigillata.");
+            const float lh = (s.height > 0.01f) ? s.height : mini::mapmetrics::WALL_HEIGHT;
+            if (lh < mini::mapmetrics::CEILING_MIN - 0.01f)
+                ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                    "Altezza sotto il minimo al coperto (%.2f m): il gigante non ci sta.",
+                    mini::mapmetrics::CEILING_MIN);
+        }
+        else
+        {
+            ImGui::TextDisabled("Piattaforma");
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Quota ripiano##st", &s.y, 0.1f, 0.0f, 40.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Lato X##st", &s.sizeX, 0.1f, 1.0f, 60.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Lato Z##st", &s.sizeZ, 0.1f, 1.0f, 60.0f, "%.2f m"))
+                changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Quota di partenza##st", &s.baseY, 0.1f, -10.0f, 40.0f, "%.2f m"))
+                changed = true;
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Accessi — da quali lati ci si sale");
+            const char* sideName[4] = { "Lato -Z", "Lato +Z", "Lato -X", "Lato +X" };
+            for (int i = 0; i < 4; ++i)
+                if (ImGui::Checkbox(sideName[i], &s.access[i])) changed = true;
+            if (!s.access[0] && !s.access[1] && !s.access[2] && !s.access[3]
+                && (s.y - s.baseY) > mini::config::STEP_HEIGHT)
+                ImGui::TextColored({1.0f, 0.55f, 0.45f, 1.0f},
+                                   "Nessun accesso: ci si sale solo volando.");
+        }
+
+        // ── APERTURA: comune a "muro con apertura" e alle porte della stanza ──
+        if (hasOpening)
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("Apertura");
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Larghezza##op", &s.openW, 0.05f, 0.0f, 20.0f,
+                                 "%.2f m (0 = normativa)")) changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Altezza##op", &s.openH, 0.05f, 0.0f, 20.0f,
+                                 "%.2f m (0 = normativa)")) changed = true;
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Parapetto##op", &s.openSill, 0.05f, 0.0f, 5.0f,
+                                 "%.2f m (0 = porta)")) changed = true;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Sopra zero diventa una FINESTRA, e il parapetto sotto\n"
+                                  "e' copertura vera: ci si ripara dietro e si spara sopra.\n"
+                                  "Bassa %.2f · alta %.2f",
+                                  mini::mapmetrics::COVER_LOW, mini::mapmetrics::COVER_HIGH);
+            if (s.kind == SK::Doorway)
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Scostamento##op", &s.openOff, 0.05f, -50.0f, 50.0f, "%.2f m"))
+                    changed = true;
+            }
+            const float ew = (s.openW > 0.01f) ? s.openW : mini::mapmetrics::DOOR_WIDTH;
+            const float eh = (s.openH > 0.01f) ? s.openH : mini::mapmetrics::DOOR_HEIGHT;
+            if (s.openSill <= 0.01f)
+            {
+                if (ew < mini::mapmetrics::DOOR_WIDTH - 0.01f)
+                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                        "Piu' stretta della porta normativa (%.2f m).", mini::mapmetrics::DOOR_WIDTH);
+                if (eh < mini::mapmetrics::REF_UNIT_HEIGHT + 0.01f)
+                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
+                        "Il gigante (%.2f m) non ci passa.", mini::mapmetrics::REF_UNIT_HEIGHT);
+            }
+        }
+
+        ImGui::Separator();
+        if (ImGui::Button("Elimina struttura"))
+        {
+            m_structures.erase(m_structures.begin() + m_selStruct);
+            m_selStruct = -1;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            m_dirty = true;
+            rebuildStructurePreview();
+            updateViewport();
+        }
+        return;
+    }
 
     // ── Comandante strategico (ADR-024/041) ──────────────────────────────
     if (m_selBox == kSelCommander)
@@ -2910,9 +4277,10 @@ void MapEditor::drawViewport(float vpW, float vpH)
         }
         else
         {
-            m_selBox = picked;
-            if (m_selBox <= -300 && m_selBox > -400) m_selRoutePt = 0;   // route: primo punto
-            updateViewport();   // rinfresca evidenziazione + bersaglio del gizmo
+            // Ctrl+click AGGIUNGE/TOGLIE dalla selezione (G3), click normale
+            // sostituisce. Fuori dalla modalità prefab, dove Ctrl ha già un altro
+            // significato — per questo il ramo `refine` viene prima.
+            setSelection(picked, ImGui::GetIO().KeyCtrl);
         }
     }
     (void)vpW; (void)vpH;

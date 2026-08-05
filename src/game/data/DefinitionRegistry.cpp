@@ -1,5 +1,6 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
-#include "mini/game/ai/WorldIntel.hpp"   // grafo dei link tattici (ADR-032)
+#include "mini/game/ai/WorldIntel.hpp"     // grafo dei link tattici (ADR-032)
+#include "mini/game/MapStructures.hpp"     // espansione delle primitive (ADR-053)
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <fstream>
@@ -71,6 +72,7 @@ static std::vector<std::string> getStrArray(const json& j, const char* k)
 // ── Loaders ───────────────────────────────────────────────────────────────
 void DefinitionRegistry::loadAbilities(const std::string& dir)
 {
+    m_abilities.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/abilities";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -99,6 +101,7 @@ void DefinitionRegistry::loadAbilities(const std::string& dir)
 
 void DefinitionRegistry::loadWeapons(const std::string& dir)
 {
+    m_weapons.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/weapons";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -167,6 +170,7 @@ void DefinitionRegistry::loadWeapons(const std::string& dir)
 
 void DefinitionRegistry::loadAiProfiles(const std::string& dir)
 {
+    m_aiProfiles.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/ai";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -281,6 +285,7 @@ static const std::initializer_list<const char*> kUnitKeys = {
 
 void DefinitionRegistry::loadEnemies(const std::string& dir)
 {
+    m_enemies.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/enemies";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -314,7 +319,47 @@ static MapGeometryBox parseGeometryBox(const json& gb)
     box.g  = getf(gb, "g",  0.32f);
     box.b  = getf(gb, "b",  0.28f);
     box.collider = getb(gb, "collider", true);
+    // Semantica autorata (ADR-053): l'editor la scriveva già, il runtime la scartava.
+    box.type = parseBoxType(gets(gb, "type", "wall"));
     return box;
+}
+
+// Primitiva parametrica (ADR-053). Si salva la RICETTA; i box li genera
+// `mapstructures::expand` al load — mai su file.
+static StructureDef parseStructure(const json& s)
+{
+    StructureDef d;
+    d.kind  = mapstructures::parseKind(gets(s, "kind", "stair"));
+    d.label = gets(s, "label", "");
+    d.x  = getf(s, "x",  0.0f);
+    d.y  = getf(s, "y",  0.0f);
+    d.z  = getf(s, "z",  0.0f);
+    d.ry = getf(s, "ry", 0.0f);
+    d.rise      = getf(s, "rise",      2.0f);
+    d.width     = getf(s, "width",     2.0f);
+    d.riser     = getf(s, "riser",     0.0f);
+    d.tread     = getf(s, "tread",     0.0f);
+    d.length    = getf(s, "length",    4.0f);
+    d.height    = getf(s, "height",    0.0f);
+    d.thickness = getf(s, "thickness", 0.0f);
+    d.sizeX     = getf(s, "size_x",    6.0f);
+    d.sizeZ     = getf(s, "size_z",    6.0f);
+    d.baseY     = getf(s, "base_y",    0.0f);
+    d.openW     = getf(s, "open_w",    0.0f);
+    d.openH     = getf(s, "open_h",    0.0f);
+    d.openSill  = getf(s, "open_sill", 0.0f);
+    d.openOff   = getf(s, "open_off",  0.0f);
+    d.flightRise= getf(s, "flight_rise", 0.0f);
+    d.spacing   = getf(s, "spacing",   0.0f);
+    d.ceiling   = getb(s, "ceiling",   false);
+    d.railing   = getb(s, "railing",   false);
+    if (s.contains("access") && s["access"].is_array())
+        for (size_t i = 0; i < 4 && i < s["access"].size(); ++i)
+            d.access[i] = s["access"][i].get<bool>();
+    d.color[0] = getf(s, "r", 0.35f);
+    d.color[1] = getf(s, "g", 0.32f);
+    d.color[2] = getf(s, "b", 0.28f);
+    return d;
 }
 
 static TacticalPositionDef parseTacticalPosition(const json& p, const char* roleKey,
@@ -348,6 +393,7 @@ static TacticalPositionDef parseTacticalPosition(const json& p, const char* role
 // Va chiamato PRIMA di `loadMaps`: le mappe li espandono al load.
 void DefinitionRegistry::loadPrefabs(const std::string& dir)
 {
+    m_prefabs.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/prefabs";
     if (!fs::exists(folder)) return;   // il progetto funziona anche senza prefab
     for (auto& entry : fs::directory_iterator(folder))
@@ -373,6 +419,7 @@ void DefinitionRegistry::loadPrefabs(const std::string& dir)
 
 void DefinitionRegistry::loadMaps(const std::string& dir)
 {
+    m_maps.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/maps";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -406,8 +453,20 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         if ((*j).contains("geometry") && (*j)["geometry"].is_array())
         {
             for (auto& gb : (*j)["geometry"])
-                m.geometry.push_back(parseGeometryBox(gb));   // parser condiviso col prefab
+            {
+                MapGeometryBox box = parseGeometryBox(gb);
+                // Guardia contro un file scritto male: i box derivati non si salvano
+                // MAI (ADR-033/053). Se ne trovo uno marcato nel file, lo scarto —
+                // altrimenti al prossimo load si sommerebbe a quello rigenerato.
+                if (getb(gb, "from_structure", false)) continue;
+                m.geometry.push_back(box);   // parser condiviso col prefab
+            }
         }
+        // Primitive parametriche (ADR-053): si leggono le RICETTE; l'espansione in
+        // box avviene più sotto, insieme a quella dei prefab.
+        if ((*j).contains("structures") && (*j)["structures"].is_array())
+            for (auto& s : (*j)["structures"])
+                m.structures.push_back(parseStructure(s));
         if ((*j).contains("command_posts") && (*j)["command_posts"].is_array())
         {
             for (auto& cp : (*j)["command_posts"])
@@ -551,7 +610,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         noteUnknownKeys(*j, "maps/" + m.id + ".json",
             {"name","mesh","metadata","max_tickets","enemy_count","ally_count",
              "spawn_team1","spawn_team2","spawn_points_team1","spawn_points_team2","prefabs",
-             "enemy_types","ally_types","geometry",
+             "enemy_types","ally_types","geometry","structures",
              "command_posts","strategic_targets","cover_points","patrol_routes",
              "danger_zones","vehicle_spawns","tactical_positions","tactical_points",
              "sectors","commander","description"}, m_unknownKeys);
@@ -640,6 +699,19 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                       << (missing ? std::to_string(missing) + ")" : "") << "\n";
         }
 
+        // ── Primitive parametriche → box (ADR-053) ───────────────────────────
+        // Stessa disciplina dei prefab: la ricetta è autorata, i box sono DERIVATI.
+        // Va DOPO i prefab e PRIMA del grafo tattico, perché le scale generate qui
+        // sono geometria a tutti gli effetti per LOS, navmesh e analisi.
+        if (!m.structures.empty())
+        {
+            const size_t before = m.geometry.size();
+            for (const auto& s : m.structures)
+                mapstructures::expand(s, m.geometry);
+            std::cout << "[Registry]   primitive espanse: " << m.structures.size()
+                      << " → " << (m.geometry.size() - before) << " box\n";
+        }
+
         // Grafo "chi copre chi" (ADR-032): derivato dalle posizioni autorate +
         // geometria. Si calcola QUI, una volta al load, così a runtime le AI lo
         // leggono e basta — è la scelta "meccaniche pesanti precalcolate nel mondo".
@@ -670,6 +742,7 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
 // ── Veicoli (19_Vehicles, Fase A) ─────────────────────────────────────────
 void DefinitionRegistry::loadVehicles(const std::string& dir)
 {
+    m_vehicles.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/vehicles";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -710,6 +783,7 @@ void DefinitionRegistry::loadVehicles(const std::string& dir)
 
 void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
 {
+    m_hitboxProfiles.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/hitboxes";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -773,6 +847,7 @@ void DefinitionRegistry::loadHitboxProfiles(const std::string& dir)
 // Carica alleati da data/allies/ — stesso parser dei nemici, team=1 (A7)
 void DefinitionRegistry::loadAllies(const std::string& dir)
 {
+    m_allies.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/allies";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -788,6 +863,7 @@ void DefinitionRegistry::loadAllies(const std::string& dir)
 
 void DefinitionRegistry::loadPlayerDefs(const std::string& dir)
 {
+    m_playerDefs.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/characters";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -888,6 +964,7 @@ bool parseMissionRule(const std::string& s, MissionRule& out)
 
 void DefinitionRegistry::loadCommanders(const std::string& dir)
 {
+    m_commanders.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/commanders";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -917,6 +994,7 @@ void DefinitionRegistry::loadCommanders(const std::string& dir)
 
 void DefinitionRegistry::loadClasses(const std::string& dir)
 {
+    m_classes.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/classes";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -947,6 +1025,7 @@ void DefinitionRegistry::loadClasses(const std::string& dir)
 
 void DefinitionRegistry::loadObjectives(const std::string& dir)
 {
+    m_objectives.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/objectives";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -994,6 +1073,7 @@ void DefinitionRegistry::loadObjectives(const std::string& dir)
 
 void DefinitionRegistry::loadMissions(const std::string& dir)
 {
+    m_missions.clear();   // idempotente: vedi nota in loadAll
     fs::path folder = dir + "/missions";
     if (!fs::exists(folder)) return;
     for (auto& entry : fs::directory_iterator(folder))
@@ -1032,6 +1112,13 @@ void DefinitionRegistry::loadMissions(const std::string& dir)
     }
 }
 
+// OGNI `loadX` AZZERA IL PROPRIO CONTENITORE (2026-08-05). Prima lo faceva solo
+// `loadAll`, quindi ricaricare una singola categoria **sommava** al vecchio stato
+// invece di sostituirlo: eliminare un prefab dall'editor cancellava il file ma
+// l'asset restava nel dropdown e si poteva ancora piazzare, fino al riavvio.
+// Non era un difetto del comando di eliminazione — era il ricaricamento a non
+// essere autoritativo. Con i loader idempotenti, "ricarica" significa davvero
+// "rileggi il disco", e ogni editor può ricaricare la sua categoria senza sorprese.
 void DefinitionRegistry::loadAll(const std::string& dataRoot)
 {
     m_classes.clear();

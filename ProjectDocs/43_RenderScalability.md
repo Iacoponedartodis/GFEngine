@@ -34,11 +34,21 @@ limitato dal design tattico e non dal numero di vertici di un modello.
 livello "bot/lontano" molto più leggero. È il guadagno maggiore al rischio minore e non tocca il
 motore. Richiede: un campo LOD nelle definizioni + selezione per distanza al draw.
 
-**R2 — Frustum culling.** Non disegnare ciò che è fuori dal cono della camera. Guardia già pronta:
-il funnel di rendering espone `entita_esaminate` vs `mesh_disegnate` — oggi 206/205, e il rapporto
-dirà subito se il culling funziona.
+**R2 — Frustum culling. ✅ FATTO (changelog 138), e con un esito da leggere bene.**
+`render/Frustum.hpp`, piani dalla view-projection, test a sfera conservativo. Funziona: scarta il
+**18% delle entità** e porta le draw call da 206 a 170. Ma i **vertici calano solo del 5%** e il
+tempo **non cambia** (30,3 ms, tre run) — perché scarta i *box della mappa*, che costano poche
+decine di vertici, mentre il costo sta nelle **unità**, quasi sempre inquadrate.
+*Tenuto perché è corretto e costa zero; conterà su mappe più grandi. Non è la leva.*
 
-**R3 — Soglia di distanza per il disegno**, con LOD a scaglioni (vicino / medio / lontano).
+> **Il render è VERTEX-BOUND, provato** (changelog 139): stessa scena, 1,21 M vertici → **31,3 ms**;
+> 83k → **3,0 ms**, con le draw call invariate. ~25 ns per vertice. Decimare i modelli (R1) paga, e
+> molto. *Trappola: per confrontare il rendering serve una scena fissa — `--sim-ticks` fissa i tick,
+> non i frame, quindi due build finiscono su momenti diversi della partita.*
+
+**R3 — Soglia di distanza.** ✅ *Primo passo fatto* (139): `WEAPON_DRAW_DISTANCE` — l.arma in mano
+non si disegna oltre 35 m (−90% dei vertici delle armi, −22% del totale). Il corpo si disegna
+sempre. Resta il LOD a scaglioni vero, che dipende da R1.
 
 **R4 — Simulazione a distanza ("AI LOD").** Unità lontane dal giocatore e non in vista aggiornano la
 loro logica a cadenza ridotta, mantenendo comportamento plausibile. **Attenzione**: la simulazione è

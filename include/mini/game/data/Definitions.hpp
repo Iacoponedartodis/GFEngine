@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <cstdint>
 #include <unordered_map>
 
 namespace mini
@@ -205,6 +206,46 @@ struct EnemyDef
 // ── MapGeometryBox ──────────────────────────────────────────────────────────
 // Un box di geometria della mappa, autorato nel Map Editor.
 // Posizione = centro; dimensioni = estensione totale (full size).
+// Che COSA è questo box, secondo l'autore. Non è decorazione: distingue una
+// superficie su cui si deve poter salire da un ostacolo su cui non si deve.
+// Senza, il gate non può dire se un ripiano irraggiungibile è un difetto o un muro
+// (su Training Ground produceva 4 falsi allarmi su cubi 2×2×2 messi come ostacoli).
+enum class BoxType : std::uint8_t
+{
+    Floor,       // pavimento / ripiano: ci si cammina, DEVE essere raggiungibile
+    Wall,        // ostacolo verticale: non ci si sale, e va bene così
+    Platform,    // ripiano sopraelevato: ci si sale, DEVE avere un accesso
+    Cover,       // riparo: ci si nasconde dietro, non ci si sale
+    Decoration   // solo visivo: non partecipa alla verità tattica
+};
+
+inline BoxType parseBoxType(const std::string& s)
+{
+    if (s == "floor")      return BoxType::Floor;
+    if (s == "platform")   return BoxType::Platform;
+    if (s == "cover")      return BoxType::Cover;
+    if (s == "decoration") return BoxType::Decoration;
+    return BoxType::Wall;   // default storico dell'editor
+}
+
+inline const char* boxTypeName(BoxType t)
+{
+    switch (t) {
+        case BoxType::Floor:      return "floor";
+        case BoxType::Platform:   return "platform";
+        case BoxType::Cover:      return "cover";
+        case BoxType::Decoration: return "decoration";
+        default:                  return "wall";
+    }
+}
+
+// Su questo box ci si deve poter salire? Solo pavimenti e piattaforme: un muro
+// irraggiungibile non è un difetto, è un muro.
+inline bool boxShouldBeReachable(BoxType t)
+{
+    return t == BoxType::Floor || t == BoxType::Platform;
+}
+
 struct MapGeometryBox
 {
     float x = 0, y = 0, z = 0;     // centro
@@ -212,6 +253,13 @@ struct MapGeometryBox
     float sx = 2, sy = 2, sz = 2;  // dimensioni totali
     float r = 0.35f, g = 0.32f, b = 0.28f;
     bool  collider = true;
+    // Semantica autorata (doc 47 §3.5). L'editor la scriveva già in JSON dal primo
+    // giorno — su Training Ground è compilata con criterio (75 floor, 74 wall,
+    // 18 cover) — ma il runtime la SCARTAVA al parse. Ora la legge.
+    BoxType type = BoxType::Wall;
+    // DERIVATO (ADR-053): `true` = generato espandendo una primitiva parametrica,
+    // quindi non si salva, si rigenera al load. Come `fromPrefab` per le posizioni.
+    bool  fromStructure = false;
 };
 
 // ── CommandPostDef ──────────────────────────────────────────────────────────
@@ -472,6 +520,94 @@ struct CommanderSpawnDef
 
 // ── MapDef ────────────────────────────────────────────────────────────────
 // data/maps/<id>.json
+// ── PRIMITIVA PARAMETRICA di costruzione (ADR-053, doc 47 §3) ───────────────
+// La RICETTA di una forma, non la forma: l'autore dichiara "da qui, salendo di 3 m,
+// larga 4", e il motore emette i `MapGeometryBox` rispettando `STEP_HEIGHT`.
+// **L'alzata sbagliata diventa inesprimibile** — è il rimedio strutturale a KI #95.
+// I parametri si SALVANO; i box espansi no, si rigenerano al load come i prefab
+// (ADR-048) e come ogni dato derivato (ADR-033).
+// L'espansione vive in `mini/game/MapStructures.hpp`, una sola implementazione per
+// registry, editor e gate.
+// La libreria (2026-08-05). I primi quattro sono del primo giro; gli altri cinque
+// nascono da cosa serve DAVVERO a una mappa complessa, non da completismo:
+//   · Switchback — una salita di 8 m occupa **12 m** di sviluppo diritto alle nostre
+//     metriche: dentro un edificio è insostenibile. Il pianerottolo la dimezza, ed è
+//     ciò che rende possibile la verticalità in uno spazio denso.
+//   · Room e Doorway — l'apertura in un muro è l'elemento più ripetuto di qualunque
+//     interno, e il guscio di stanza è il modulo canonico dei kit modulari (doc 47
+//     §2.3). Farli a mano significa tre box per porta con la misura sbagliata.
+//   · Catwalk — la passerella sopraelevata è un CORRIDOIO IN QUOTA: non decorazione,
+//     ma una corsia tattica con dominio sul piano di sotto.
+//   · Barricade — la linea di copertura è la struttura da campo di battaglia per
+//     eccellenza, e produce box di tipo `cover` che la derivazione dei metadata
+//     (doc 46) consuma direttamente.
+enum class StructureKind : std::uint8_t
+{
+    Stair, Ramp, Wall, Platform,
+    Switchback,   // scala con pianerottolo: dimezza l'ingombro in pianta
+    Doorway,      // muro CON apertura (porta o finestra)
+    Room,         // guscio: pavimento + 4 muri + soffitto opzionale, con aperture
+    Catwalk,      // passerella sopraelevata, parapetti opzionali
+    Barricade     // linea di coperture a intervalli
+};
+
+struct StructureDef
+{
+    StructureKind kind = StructureKind::Stair;
+    std::string   label;
+
+    // Origine e orientamento. `ry` = direzione di SALITA (scala/rampa), di sviluppo
+    // (muro), del ripiano (piattaforma).
+    float x = 0, y = 0, z = 0;
+    float ry = 0;
+
+    // Scala / rampa: `y` è il piede della salita.
+    float rise  = 2.0f;
+    float width = 2.0f;              // larghezza: libera, non tocca i gradini
+    float riser = 0.0f;              // 0 = alzata normativa del tipo
+    // Pedata: allunga o accorcia la scala **senza cambiare l'alzata**. È la leva per
+    // "questa scala è troppo ripida/troppo lunga" che non può rompere nulla — il
+    // numero di gradini dipende solo dal dislivello.
+    float tread = 0.0f;              // 0 = pedata normativa del tipo
+
+    // Muro: `x,y,z` = centro della base.
+    float length    = 4.0f;
+    float height    = 0.0f;          // 0 = WALL_HEIGHT normativa
+    float thickness = 0.0f;          // 0 = spessore normativo
+
+    // Apertura (Doorway, e ogni lato aperto di Room). 0 = misure normative.
+    // `openSill` > 0 la trasforma in FINESTRA: sotto resta il parapetto, che è
+    // copertura vera — una finestra non è un buco, è un riparo con la vista.
+    float openW    = 0.0f;
+    float openH    = 0.0f;
+    float openSill = 0.0f;
+    float openOff  = 0.0f;           // scostamento dal centro del muro
+
+    // Vano scala: dislivello massimo di UNA rampa (0 = 3,0 m, un piano).
+    // Il numero di rampe si ricava dal dislivello totale, e l'ingombro in pianta
+    // resta lo STESSO comunque: è ciò che rende il vano scala impilabile in una
+    // torre invece che un pezzo unico da riprogettare a ogni altezza.
+    float flightRise = 0.0f;
+
+    // Barricata: passo fra un elemento e il successivo (0 = continua).
+    float spacing = 0.0f;
+
+    // Guscio e passerella.
+    bool ceiling = false;            // Room: soffitto chiuso
+    bool railing = false;            // Catwalk/Platform: parapetto
+
+    // Piattaforma: `x,y,z` = centro del ripiano, `y` = quota CALPESTABILE.
+    float sizeX = 6.0f, sizeZ = 6.0f;
+    float baseY = 0.0f;              // quota da cui partono gli accessi
+    // ACCESSI OBBLIGATORI: la piattaforma dichiara da dove ci si sale e le scale
+    // nascono con lei. È il punto in cui "percorribile per costruzione" smette di
+    // essere uno slogan: il difetto non si verifica dopo, si rende impossibile prima.
+    // Ordine dei lati nel frame locale: -Z, +Z, -X, +X.
+    bool access[4] = { true, false, false, false };
+
+    std::array<float,3> color = { 0.35f, 0.32f, 0.28f };
+};
+
 struct MapDef
 {
     std::string id;
@@ -490,6 +626,11 @@ struct MapDef
     // Istanze di prefab (ADR-048): referenziate, non duplicate. Espanse AL LOAD in
     // `geometry` e `tacticalPositions` → i dati espansi sono DERIVATI e non si salvano.
     std::vector<PrefabInstanceDef> prefabs;
+    // Primitive parametriche (ADR-053): scale, rampe, muri, piattaforme-con-accessi.
+    // Espanse AL LOAD in `geometry` → i box che ne escono sono DERIVATI e non si
+    // salvano mai. Le mappe che non ne hanno funzionano identiche: è una sezione
+    // nuova, non una sostituzione dei box a mano (fallback documentato, CLAUDE.md §2).
+    std::vector<StructureDef> structures;
     int maxTickets = 10;
     int enemyCount = 6;
     int allyCount  = 1;

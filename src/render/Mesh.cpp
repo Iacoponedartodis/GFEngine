@@ -26,12 +26,32 @@ Mesh::Mesh(const std::vector<Vertex>& vertices)
         m_data.push_back(v.uv.x);
         m_data.push_back(v.uv.y);
     }
+    computeBoundingRadius();
 }
 
 Mesh::Mesh(std::vector<float> interleavedData, int vertexCount)
     : m_data(std::move(interleavedData))
     , m_vertexCount(vertexCount)
 {
+    computeBoundingRadius();
+}
+
+// Sfera d'ingombro nel model space, dall'ORIGINE (doc 43 R2). Una sola passata
+// alla costruzione: rifarla per frame significherebbe scorrere 161k vertici a
+// ogni disegno per risparmiare un disegno. Dall'origine e non dal centroide
+// perché la matrice modello ruota e scala attorno all'origine — una sfera
+// centrata lì resta valida sotto qualunque trasformazione, senza ricalcoli.
+void Mesh::computeBoundingRadius()
+{
+    float maxSq = 0.0f;
+    for (std::size_t i = 0; i + 2 < m_data.size(); i += 11)   // stride 11 float
+    {
+        const float sq = m_data[i]     * m_data[i]
+                       + m_data[i + 1] * m_data[i + 1]
+                       + m_data[i + 2] * m_data[i + 2];
+        if (sq > maxSq) maxSq = sq;
+    }
+    m_boundRadius = std::sqrt(maxSq);
 }
 
 // ============================================================

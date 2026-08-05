@@ -25,7 +25,9 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
                         const DefinitionRegistry* registry,
                         const MeshCache* meshCache)
 {
-    std::cout << "[SandboxMode] Avvio — mappa firebase...\n";
+    // Vedi ConquestMode: la stringa era hardcoded a "firebase" e mentiva sulla
+    // mappa realmente caricata.
+    std::cout << "[SandboxMode] Avvio — mappa '" << m_mapId << "'...\n";
     world.initialize();
     m_mesh      = mesh;
     m_tex       = tex;
@@ -34,7 +36,7 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     m_dummies.clear();
     m_respawnQueue.clear();
 
-    // ── Spawn point dalla mappa firebase ──────────────────────────────────
+    // ── Spawn point dalla mappa attiva ────────────────────────────────────
     float p1x = 0.0f, p1z = 8.0f;     // giocatore (team1)
     float p2x = 0.0f, p2z = -8.0f;    // manichini  (team2)
     const MapDef* map = registry ? registry->getMap(m_mapId) : nullptr;
@@ -275,7 +277,7 @@ void SandboxMode::buildMapGeometry(World& world)
         if (gb.collider)
             world.addCollider(c, {gb.sx * 0.5f, gb.sy * 0.5f, gb.sz * 0.5f});
     }
-    std::cout << "[Sandbox] Geometria firebase: " << map->geometry.size() << " box.\n";
+    std::cout << "[Sandbox] Geometria '" << m_mapId << "': " << map->geometry.size() << " box.\n";
 }
 
 void SandboxMode::buildArena(World& world)

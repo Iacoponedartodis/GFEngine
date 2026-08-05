@@ -1,6 +1,7 @@
 #include "mini/core/Application.hpp"
 #include "mini/core/Telemetry.hpp"
 #include "mini/core/Profiler.hpp"   // ADR-050: dove finisce il tempo del frame
+#include "mini/render/Frustum.hpp"   // doc 43 R2: non disegnare ciò che non si inquadra
 #include "mini/core/Audio.hpp"
 #include "mini/core/Clock.hpp"
 #include "mini/core/GameConfig.hpp"
@@ -116,7 +117,18 @@ struct RenderStat { long long scenes = 0, considered = 0, drawn = 0, attachments
                     // vertici SPEDITI per frame, non alle chiamate. "230 draw call"
                     // e "230 draw call da 161k vertici l'una" si ottimizzano in
                     // modi opposti, e senza questo campo sono indistinguibili.
-                    long long verts = 0; };
+                    long long verts = 0;
+                    long long culled = 0;   // scartate dal frustum (doc 43 R2)
+                    // Il culling scarta soprattutto BOX di mappa o anche UNITÀ? La
+                    // domanda è dell'utente e il contatore aggregato non poteva
+                    // rispondere: 35 scartate su 195 non dicono di che tipo.
+                    long long culledUnits = 0, unitsSeen = 0;
+                    // Vertici del CORPO vs dell'ARMA in mano. Le armi hanno mesh da
+                    // 5k a 57k vertici e se ne disegna una per unità: se pesassero
+                    // quanto i corpi, sarebbe una leva a sé — e non lo si poteva
+                    // sapere con un solo totale.
+                    long long vertsBody = 0, vertsAttach = 0;
+                  };
 static RenderStat g_renderStat;
 
 void Application::initialize()
@@ -670,6 +682,63 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 telemetry::event(telemetry::Level::Info, "Nav", "sample path",
                     {{"found", found}, {"waypoints", (int)wp.size()}, {"length", len},
                      {"from", {a.x, a.y, a.z}}, {"to", {b.x, b.y, b.z}}});
+
+                // ── Raggiungibilità degli OBIETTIVI (ADR-050) ─────────────────
+                // Il sintomo, non l'esito: "dallo spawn si arriva a ogni command
+                // post?" è deterministico e indipendente dalla run, mentre il numero
+                // di catture dipende da come è andata la partita e non dice nulla
+                // sulla geometria. È la misura che mancava per giudicare la
+                // verticalità: un post su un ripiano scollegato dà `found:false`,
+                // oppure un `detour` enorme (percorso ≫ distanza in linea d'aria)
+                // che rivela l'unico accesso lunghissimo.
+                for (const auto& cp : nm->commandPosts)
+                {
+                    std::vector<glm::vec3> pwp;
+                    const glm::vec3 t = {cp.x, cp.y, cp.z};
+                    // ⚠ `findPath` da solo NON basta: Detour restituisce percorsi
+                    // PARZIALI (DT_PARTIAL_RESULT) che si fermano al poligono più
+                    // vicino raggiungibile, e `findStraightPath` ci appende comunque
+                    // il punto d'arrivo richiesto — quindi "trovato" e "arriva a 10 cm"
+                    // erano veri anche per un'isola irraggiungibile.
+                    // `isReachable` ESISTEVA GIÀ e fa il controllo giusto (niente
+                    // parziale + il path tocca il poligono destinazione): la sonda ne
+                    // aveva scritta una seconda, sbagliata. Una verità sola.
+                    const bool ok = nav.isReachable(a, t);
+                    nav.findPath(a, t, pwp);
+                    float plen = 0.0f;
+                    for (size_t i = 1; i < pwp.size(); ++i) plen += glm::length(pwp[i] - pwp[i-1]);
+                    const float straight = glm::length(t - a);
+                    telemetry::event(ok ? telemetry::Level::Info : telemetry::Level::Warn,
+                        "Nav", "objective reachability",
+                        {{"post", cp.label}, {"raggiungibile", ok}, {"length", plen},
+                         {"straight", straight},
+                         {"detour", straight > 0.1f ? plen / straight : 0.0f},
+                         {"target", {t.x, t.y, t.z}}});
+                }
+
+                // ── Posizioni tattiche IRRAGGIUNGIBILI (ADR-050) ──────────────
+                // Una posizione su cui il navmesh non arriva è lavoro di authoring
+                // sprecato **e** un buco tattico invisibile: l'AI la vede nel
+                // registry, la sceglie, e poi non ci arriva. Il funnel dice quante
+                // sono e le peggiori quali: è il "quale entità guardare" di ADR-050
+                // applicato ai dati di mappa invece che alle unità.
+                int unreachable = 0;
+                nlohmann::json worst = nlohmann::json::array();
+                for (size_t pi = 0; pi < nm->tacticalPositions.size(); ++pi)
+                {
+                    const auto& tp = nm->tacticalPositions[pi];
+                    const glm::vec3 t = {tp.x, tp.y, tp.z};
+                    if (nav.isReachable(a, t)) continue;   // stesso criterio del runtime
+                    ++unreachable;
+                    if (worst.size() < 8)
+                        worst.push_back({{"idx", (int)pi}, {"role", tp.role},
+                                         {"pos", {tp.x, tp.y, tp.z}}});
+                }
+                telemetry::event(unreachable > 0 ? telemetry::Level::Warn : telemetry::Level::Info,
+                    "Nav", "posizioni irraggiungibili",
+                    {{"totali", (int)nm->tacticalPositions.size()},
+                     {"irraggiungibili", unreachable},
+                     {"peggiori", worst}});
             }
         }
     };
@@ -2303,14 +2372,53 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 // Il funnel dice anche quanto costa l'arma in mano, che raddoppia
                 // le draw call per unità.
                 ++g_renderStat.scenes;
+                // FRUSTUM CULLING (doc 43 R2). Il funnel diceva "esaminate 195 →
+                // disegnate 194": si disegnava tutto, anche dietro la camera. Con
+                // il client-side-array (ADR-003) un oggetto fuori campo costa
+                // quanto uno inquadrato, perché i suoi vertici risalgono comunque
+                // alla GPU. I piani si estraggono UNA volta per scena, non per
+                // oggetto — e per camera, così lo split-screen resta corretto.
+                const render::Frustum frustum(viewCam.getViewProjection());
                 for (EntityId id : world.getEntities())
                 {
                     ++g_renderStat.considered;
                     const auto* tr = world.getTransform(id);
                     const auto* mr = world.getMeshRenderer(id);
                     if (!tr || !mr || !mr->visible || !mr->mesh) continue;
+
+                    // Sfera d'ingombro in world space. Il raggio si scala col
+                    // fattore MAGGIORE fra i tre assi: prendere quello sbagliato
+                    // farebbe sparire oggetti scalati in modo non uniforme.
+                    // `meshOffsetY` sposta la mesh rispetto al transform, quindi
+                    // entra nel centro; l'attachment (arma) sta dentro il raggio
+                    // del corpo salvo casi estremi, e il margine lo copre.
+                    const float sMax = std::max({std::abs(tr->sx), std::abs(tr->sy),
+                                                 std::abs(tr->sz), 1e-4f});
+                    const float radius = mr->mesh->getBoundingRadius() * sMax + 0.5f;
+                    const glm::vec3 center{tr->x, tr->y + mr->meshOffsetY, tr->z};
+                    // "Unità" = ha un'AI: distingue i combattenti dai box di mappa.
+                    const glm::vec3 camPos = viewCam.getPosition();
+                    const float dx = center.x - camPos.x, dz = center.z - camPos.z;
+                    const bool isUnit = world.getAi(id) != nullptr;
+                    if (isUnit) ++g_renderStat.unitsSeen;
+                    if (!frustum.sphereVisible(center, radius))
+                    {
+                        ++g_renderStat.culled;
+                        if (isUnit) ++g_renderStat.culledUnits;
+                        continue;
+                    }
+
+                    // Indagine 2026-08-04: qui c'era una sonda che tagliava i corpi
+                    // oltre 25 m, per rispondere a "il render è limitato dai VERTICI
+                    // o no?". **Risposta: sì.** 1,21 M vertici → 31,3 ms; 83k → 3,0 ms
+                    // con le draw call quasi identiche (161 → 154): ~25 ns per
+                    // vertice, un ×10 di velocità per un taglio del 93%. Tolta: era
+                    // una risposta, non un comportamento — tagliare i corpi fa
+                    // sparire i soldati, che è inaccettabile. La stessa riduzione si
+                    // ottiene bene con i LOD degli asset (doc 43 R1).
                     ++g_renderStat.drawn;
                     g_renderStat.verts += mr->mesh->getVertexCount();
+                    g_renderStat.vertsBody += mr->mesh->getVertexCount();
                     // meshOffsetY sposta verticalmente la mesh rispetto al centro
                     // fisico dell'entità (es. per appoggiare i piedi a terra).
                     glm::mat4 model = toModelMatrix(*tr);
@@ -2331,11 +2439,22 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                         tint = {0.85f, 0.12f, 0.12f};
                     renderer.drawMeshFrom(viewCam, *mr->mesh, mr->texture, model, tint);
 
-                    // Arma in mano (o altro modello agganciato)
-                    if (mr->attachMesh)
+                    // Arma in mano (o altro modello agganciato). NON si disegna
+                    // oltre `WEAPON_DRAW_DISTANCE`: misurato, le armi sono il 24%
+                    // dei vertici per frame (mesh da 6k a 57k, una per unità) e a
+                    // quella distanza occupano pochi pixel. Primo LOD del progetto,
+                    // e il più conservativo possibile — il CORPO si disegna sempre:
+                    // un soldato che sparisce è un difetto di gioco, un'arma che
+                    // sparisce a 35 m è un dettaglio.
+
+                    const bool weaponInRange =
+                        (dx * dx + dz * dz) <
+                        config::WEAPON_DRAW_DISTANCE * config::WEAPON_DRAW_DISTANCE;
+                    if (mr->attachMesh && weaponInRange)
                     {
                         ++g_renderStat.attachments;
                         g_renderStat.verts += mr->attachMesh->getVertexCount();
+                        g_renderStat.vertsAttach += mr->attachMesh->getVertexCount();
                         renderer.drawMeshFrom(viewCam, *mr->attachMesh, mr->texture,
                                               model * mr->attachLocal,
                                               {0.55f, 0.55f, 0.58f});
@@ -2482,7 +2601,12 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                  {"agganci_disegnati",(double)g_renderStat.attachments / f},
                  {"draw_call",        (double)(g_renderStat.drawn
                                              + g_renderStat.attachments) / f},
-                 {"vertici_per_frame", (double)g_renderStat.verts / f}});
+                 {"vertici_per_frame", (double)g_renderStat.verts / f},
+                 {"scartate_dal_frustum", (double)g_renderStat.culled / f},
+                 {"unita_esaminate",  (double)g_renderStat.unitsSeen / f},
+                 {"unita_scartate",   (double)g_renderStat.culledUnits / f},
+                 {"vertici_corpi",    (double)g_renderStat.vertsBody / f},
+                 {"vertici_armi",     (double)g_renderStat.vertsAttach / f}});
             g_renderStat = {};
             profiler::report();
         }

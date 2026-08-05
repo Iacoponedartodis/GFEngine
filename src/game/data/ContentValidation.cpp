@@ -2,6 +2,8 @@
 // I gate qui dentro NON sono teorici: ognuno corrisponde a un problema che il
 // progetto ha già pagato (KI #7 near-duplicate, KI #24/#26 id e fallback morti,
 // incidente hitbox 2026-07-09, ADR-007 id di fallback hardcoded).
+#include "mini/core/GameConfig.hpp"   // STEP_HEIGHT: lo scalino che il navmesh sa salire
+#include "mini/game/MapMetrics.hpp"   // metriche normative (doc 47 §4): sorgente unica
 #include "mini/game/data/ContentValidation.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/ClassResolve.hpp"   // ADR-022: arma effettiva = quella della classe
@@ -754,6 +756,7 @@ const char* tacticalDefectKindName(TacticalDefect::Kind k)
         case TacticalDefect::Kind::Redundant:     return "Ridondanti";
         case TacticalDefect::Kind::EmptySector:   return "Settori senza posizioni";
         case TacticalDefect::Kind::UnmarkedCover: return "Ostacoli che tagliano il tiro ma non sono coperture";
+        case TacticalDefect::Kind::UnreachablePoint: return "Punti che il gioco chiede di raggiungere ma la navigazione no";
         default:                                   return "Altro";
     }
 }
@@ -891,6 +894,240 @@ std::vector<TacticalDefect> analyzeTacticalHealth(const MapDef& map)
             out.push_back({TacticalDefect::Target::Geometry, TacticalDefect::Kind::UnmarkedCover,
                            (int)g, major ? 1 : 0, buf});
             if (++reported >= 40) break;   // oltre, l'elenco non si legge: sistemane un po'
+        }
+    }
+
+    // 6) PUNTO CHIESTO MA IRRAGGIUNGIBILE (KI #90).
+    //    Un command post su un gradino più alto di `STEP_HEIGHT` non è salibile:
+    //    il navmesh lo tratta come ostacolo e Detour ci passa **intorno**. Il
+    //    gioco continua a chiedere di catturarlo, le AI ci orbitano attorno, e
+    //    nulla lo segnala — è successo davvero su `firebase`/Alpha, con una
+    //    missione resa incompletabile e mezza giornata per capirlo.
+    //
+    //    Controllo puramente sui DATI, quindi vale nell'editor e nel gate senza
+    //    costruire il navmesh: il post sta dentro la pianta di un box il cui
+    //    ripiano supera lo scalino massimo? Allora ci si sale solo se qualcosa
+    //    di più basso fa da gradino — e questo il controllo non lo sa, perciò
+    //    resta un AVVISO da valutare, non un errore.
+    // La domanda giusta NON è "il centro sta su un ripiano alto" — un primo
+    // tentativo la poneva così e segnalava anche i post Bravo/Charlie, che nelle
+    // simulazioni vengono catturati regolarmente: stanno su un rialzo, ma c'è
+    // terreno normale abbastanza vicino da rientrare nel raggio di cattura.
+    // Una guardia che grida al lupo si smette di leggere (lezione già pagata due
+    // volte: settori di transito, funnel di missione).
+    //
+    // La domanda giusta è: **esiste, dentro il raggio di cattura, almeno un punto
+    // in cui un'unità a terra può stare?** Si campiona il disco e si guarda il
+    // ripiano sotto ogni campione: se ovunque è più alto dello scalino massimo,
+    // per salirci non c'è modo e il post è irraggiungibile.
+    //
+    // ⚠ CORREZIONE 2026-08-05: "a terra" NON vuol dire "a quota zero". La versione
+    // precedente dichiarava calpestabile solo `top <= STEP_HEIGHT`, cioè **segnalava
+    // ogni post in quota anche quando le scale funzionavano** — puniva esattamente la
+    // verticalità che stiamo cercando di abilitare, e su Training Ground gridava al
+    // lupo su Alpha, che l'utente cattura regolarmente. Un ripiano è calpestabile se
+    // è al suolo **oppure** se ha un gradino adiacente entro `STEP_HEIGHT` da cui
+    // salirci. (La risposta completa — "è connesso allo spawn?" — è il `componentId`
+    // del navmesh, doc 46 M1: qui si resta sui soli dati, come dichiarato sopra.)
+    // La "raggiungibilità a gradini" è una proprietà della SUPERFICIE, non del punto.
+    // Prima chiedevo "c'è un gradino accanto a questo campione?", e su una piattaforma
+    // 8×8 con la scala su un lato tutti i campioni entro il raggio di cattura distavano
+    // più di mezzo metro dalla scala → falso allarme, mentre il navmesh ci arrivava
+    // benissimo (verificato: `found:true`, arrivo a 10 cm). La domanda giusta è: **il
+    // box che regge questo punto ha un accesso a gradini?**
+    // Usata sia dal controllo dei command post sia da quello dei ripiani: una logica
+    // sola, altrimenti divergono al primo aggiustamento (è già successo).
+    auto boxHasStepAccess = [&](const MapGeometryBox& b) -> bool
+    {
+        const float top = b.y + b.sy * 0.5f;
+        if (top <= config::STEP_HEIGHT + 0.01f) return true;       // è già il suolo
+        for (const auto& o : map.geometry)
+        {
+            if (&o == &b || !o.collider) continue;
+            // Il gradino da cui si sale deve poter reggere un piede. La soglia è la
+            // PEDATA NORMATIVA (doc 47 §4.3), non un numero scelto a mano: con 0,6 m
+            // il gate scartava le scale generate dalle nostre stesse primitive, che
+            // hanno pedate da 0,30 — cioè contraddiceva le metriche che deve far
+            // rispettare.
+            if (o.sx < mapmetrics::STAIR_TREAD || o.sz < mapmetrics::STAIR_TREAD) continue;
+            const float otop = o.y + o.sy * 0.5f;
+            if (otop >= top - 0.01f) continue;                     // non è sotto
+            if (top - otop > config::STEP_HEIGHT) continue;        // troppo alto
+            if (std::fabs(b.x - o.x) - (b.sx + o.sx) * 0.5f > 0.5f) continue;
+            if (std::fabs(b.z - o.z) - (b.sz + o.sz) * 0.5f > 0.5f) continue;
+            return true;
+        }
+        return false;
+    };
+    for (size_t c = 0; c < map.commandPosts.size(); ++c)
+    {
+        const auto& cp = map.commandPosts[c];
+        const float R = (cp.radius > 0.5f) ? cp.radius : 3.0f;
+        bool standable = false;
+        constexpr int kSteps = 12;   // griglia 12×12 sul disco: ~110 campioni utili
+        for (int iz = 0; iz <= kSteps && !standable; ++iz)
+            for (int ix = 0; ix <= kSteps && !standable; ++ix)
+            {
+                const float px = cp.x - R + (2.0f * R) * ix / kSteps;
+                const float pz = cp.z - R + (2.0f * R) * iz / kSteps;
+                const float ddx = px - cp.x, ddz = pz - cp.z;
+                if (ddx * ddx + ddz * ddz > R * R) continue;   // fuori dal disco
+                // Il box che REGGE il campione: è la superficie di cui va chiesta
+                // la raggiungibilità (non il punto — vedi il commento su
+                // `boxHasStepAccess`).
+                float top = 0.0f;
+                const MapGeometryBox* support = nullptr;
+                for (const auto& b : map.geometry)
+                {
+                    if (!b.collider) continue;
+                    if (std::fabs(px - b.x) > b.sx * 0.5f) continue;
+                    if (std::fabs(pz - b.z) > b.sz * 0.5f) continue;
+                    const float t = b.y + b.sy * 0.5f;
+                    if (t > top) { top = t; support = &b; }
+                }
+                if (top <= config::STEP_HEIGHT + 0.01f) standable = true;      // suolo
+                else if (support && boxHasStepAccess(*support)) standable = true;
+            }
+        if (standable) continue;
+        std::snprintf(buf, sizeof(buf),
+                      "[post %s] nessun punto calpestabile entro il raggio di cattura "
+                      "(%.1f m): tutto il disco sta su ripiani oltre lo scalino massimo "
+                      "(%.2f m) → il navmesh ci passa INTORNO e nessuno lo cattura",
+                      cp.label.c_str(), R, config::STEP_HEIGHT);
+        out.push_back({TacticalDefect::Target::Sector,   // niente target dedicato: il post
+                       TacticalDefect::Kind::UnreachablePoint, (int)c, 1, buf});
+    }
+
+    // 7) PIATTAFORME SENZA ACCESSO — isole del navmesh (2026-08-04).
+    //    Trovato indagando perché le AI non salissero mai su `firebase`: la mappa
+    //    ha piattaforme a 1,0 / 2,0 / 2,5 m e **nessun box che faccia da gradino**.
+    //    Il salto dal pavimento è 0,90 m contro uno `STEP_HEIGHT` di 0,55: per il
+    //    navmesh quelle superfici sono **isole irraggiungibili**, e nessuna unità
+    //    potrà mai salirci. Le scale esistevano solo nel modello VISIVO — ed è
+    //    esattamente il divario che ADR-047 mette in guardia: la verità tattica
+    //    sono i box, il mesh è decorazione.
+    //
+    //    Il controllo è volutamente semplice: per ogni ripiano abbastanza largo da
+    //    starci sopra, esiste un altro ripiano entro `STEP_HEIGHT` sotto di esso e
+    //    adiacente in pianta? Se no, non c'è modo di salirci a piedi.
+    {
+        constexpr float kMinFootprint = 1.2f;   // come mapquery::groundHeightAt
+        int reported = 0;
+        for (size_t g = 0; g < map.geometry.size() && reported < 12; ++g)
+        {
+            const auto& b = map.geometry[g];
+            if (!b.collider) continue;
+            // ── È una superficie su cui si DEVE poter salire? ────────────────
+            // Solo `floor` e `platform` (ADR-053). Un muro o un cubo-ostacolo
+            // irraggiungibile non è un difetto: è un muro. Prima il gate non aveva
+            // modo di distinguerli e segnalava 4 cubi 2×2×2 messi apposta come
+            // ostacoli su Training Ground.
+            if (!boxShouldBeReachable(b.type)) continue;
+            if (b.sx < kMinFootprint || b.sz < kMinFootprint) continue;   // non è pavimento
+            const float top = b.y + b.sy * 0.5f;
+            if (top <= config::STEP_HEIGHT + 0.01f) continue;             // già al suolo
+            // ── C'è ALTEZZA per starci in piedi? Se no, non è un ripiano. ─────
+            // Una scalinata si costruisce impilando slab: le terrazze di Training
+            // Ground hanno 2-4 slab sovrapposti per fascia, e solo il PIÙ ALTO è la
+            // superficie calpestabile — gli altri sono riempimento, sepolti sotto.
+            // Segnalarli produceva 10 falsi allarmi su 22, e un gate che grida al lupo
+            // su metà dei casi è un gate che si smette di leggere.
+            // Il criterio giusto NON è "è sepolto" (fra due slab autorati a mano restano
+            // 3 cm d'aria, e 3 cm non sono un posto dove stare): è **quanto spazio
+            // libero c'è sopra**. Sotto l'altezza dell'agente non ci si sta, punto —
+            // ed è lo stesso `walkableHeight` che usa Recast per scartare quelle celle.
+            // La domanda va posta per PUNTI, non per centro: dopo aver diviso una
+            // pedata in due metà, il centro dello slab sottostante cade sul confine
+            // fra le due e nessuna delle due "lo contiene" — il test sul solo centro
+            // dava il risultato opposto a quello giusto. Si campiona la superficie e
+            // si chiede: **esiste un punto dove ci si sta in piedi?** Se no, sepolto.
+            constexpr float kAgentHeadroom = mapmetrics::AGENT_HEIGHT;
+            constexpr int   kSamples       = 5;       // 5×5 sulla pianta
+            bool standable = false;
+            for (int si = 0; si < kSamples && !standable; ++si)
+            for (int sj = 0; sj < kSamples && !standable; ++sj)
+            {
+                const float fx = (si + 0.5f) / kSamples - 0.5f;
+                const float fz = (sj + 0.5f) / kSamples - 0.5f;
+                const float px = b.x + fx * b.sx;
+                const float pz = b.z + fz * b.sz;
+                float clearance = 1e9f;
+                for (const auto& o : map.geometry)
+                {
+                    if (&o == &b || !o.collider) continue;
+                    // "Sta sopra" si giudica dal TOP, non dalla base: gli slab autorati
+                    // a mano si COMPENETRANO (la terrazza sopra parte 3 cm sotto il top
+                    // di quella sotto), e filtrando per base si scartava proprio il box
+                    // che seppellisce. Con la base sotto il top la luce è negativa —
+                    // che è esattamente la risposta giusta: lì non ci si sta.
+                    if (o.y + o.sy * 0.5f <= top + 0.01f) continue;
+                    if (std::fabs(px - o.x) > o.sx * 0.5f) continue;
+                    if (std::fabs(pz - o.z) > o.sz * 0.5f) continue;
+                    clearance = std::min(clearance, (o.y - o.sy * 0.5f) - top);
+                }
+                if (clearance >= kAgentHeadroom) standable = true;
+            }
+            if (!standable) continue;
+            // Si cerca il ripiano adiacente PIÙ ALTO sotto questo: è il gradino da
+            // cui si salirebbe. Distinguere "non c'è nessun gradino" da "il gradino
+            // c'è ma è troppo alto" cambia completamente l'azione da fare — ed è il
+            // caso reale di Training Ground, dove le scale ESISTONO (ripiani a 0,63
+            // → 1,44 → 2,20 → 2,96) ma ogni alzata è 0,68-0,81 m contro un massimo
+            // di 0,55. Un avviso che dicesse solo "manca un gradino" manderebbe a
+            // costruire scale che ci sono già.
+            bool hasAccess = false;
+            float bestBelow = -1.0f;   // ripiano adiacente più alto sotto di questo
+            for (const auto& o : map.geometry)
+            {
+                if (&o == &b || !o.collider) continue;
+                // Il GRADINO da cui si sale non deve essere largo come un pavimento:
+                // basta che ci si appoggi un piede, perché i gradini si concatenano.
+                // Con la soglia da pavimento (1,2 m) le scale "CT stair" — pedate da
+                // 0,8 m, del tutto normali — non venivano viste come gradini e il gate
+                // dichiarava irraggiungibile un ripiano che ha la sua scala.
+                // La soglia è la PEDATA NORMATIVA (0,30), non un numero a mano: con
+                // 0,6 il gate scartava le scale prodotte dalle nostre stesse primitive.
+                if (o.sx < mapmetrics::STAIR_TREAD || o.sz < mapmetrics::STAIR_TREAD) continue;
+                const float otop = o.y + o.sy * 0.5f;
+                if (otop >= top - 0.01f) continue;                 // non è sotto
+                // Adiacente in pianta? (bordi che si toccano entro mezzo metro)
+                const float gapX = std::fabs(b.x - o.x) - (b.sx + o.sx) * 0.5f;
+                const float gapZ = std::fabs(b.z - o.z) - (b.sz + o.sz) * 0.5f;
+                if (gapX > 0.5f || gapZ > 0.5f) continue;
+                if (otop > bestBelow) bestBelow = otop;
+                if (top - otop <= config::STEP_HEIGHT) { hasAccess = true; break; }
+            }
+            if (hasAccess) continue;
+            if (bestBelow >= 0.0f)
+            {
+                const float rise = top - bestBelow;
+                // L'AZIONE, non solo la diagnosi (doc 47 §8): quanti gradini servono
+                // per coprire il dislivello all'alzata normativa.
+                const int need = mapmetrics::stepsFor(rise);
+                // La FASCIA PROIBITA merita una frase in più, perché è il caso
+                // peggiore: non "nessuno ci sale" ma "il GIOCATORE ci sale e l'AI no".
+                // Un difetto asimmetrico è più insidioso di uno simmetrico — sembra
+                // funzionare finché non lo provi con le AI.
+                const char* trap = mapmetrics::inLedgeTrap(rise)
+                    ? " ⚠ ed e' nella FASCIA PROIBITA: il giocatore ci salta sopra, l'AI NO"
+                      " (l'AI non salta mai col navmesh attivo) → asimmetria ingiusta"
+                    : "";
+                std::snprintf(buf, sizeof(buf),
+                              "[geometria %d] ripiano a %.2f m: il gradino adiacente piu' alto e' a "
+                              "%.2f m, ALZATA %.2f m contro un massimo di %.2f → troppo ripido, il "
+                              "navmesh non ci sale. Servono %d gradini da %.2f m%s",
+                              (int)g + 1, top, bestBelow, rise, config::STEP_HEIGHT,
+                              need, mapmetrics::STAIR_RISER, trap);
+            }
+            else
+                std::snprintf(buf, sizeof(buf),
+                              "[geometria %d] ripiano calpestabile a %.2f m senza alcun gradino "
+                              "adiacente: il navmesh non lo collega, nessuna unita' puo' salirci "
+                              "(le scale del modello visivo non contano)",
+                              (int)g + 1, top);
+            out.push_back({TacticalDefect::Target::Geometry,
+                           TacticalDefect::Kind::UnreachablePoint, (int)g, 1, buf});
+            ++reported;
         }
     }
 
