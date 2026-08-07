@@ -69,6 +69,18 @@ inline constexpr float STAIR_MIN_WIDTH  = 1.60f;   // ci passa il gigante + marg
 // vuole la larghezza di un CORRIDOIO, non quella di una scala.
 inline constexpr float STAIRWELL_MIN_WIDTH = 2.40f;   // = CORRIDOR_MIN
 
+// ── Il minimo di una superficie SOPRAELEVATA ────────────────────────────────
+// Ricavato dai filtri di Recast, non scelto a occhio. Una superficie in quota
+// perde, prima di diventare navmesh:
+//   · `rcFilterLedgeSpans` — una cella per lato, perché oltre il bordo c'è il vuoto;
+//   · `rcErodeWalkableArea` — `AGENT_RADIUS` (0,40) per lato;
+//   · `minRegionArea` — le regioni sotto ~2,56 m² vengono scartate del tutto.
+// Per un ripiano quadrato di lato s resta (s − 1,20)², che deve superare 2,56 m²
+// → **s ≥ 2,80**. Sotto quella misura il ripiano semplicemente non esiste per l'AI,
+// pur essendo perfetto nei dati — ed è esattamente il modo in cui un difetto passa
+// inosservato. Si arrotonda a 3,00 per stare larghi.
+inline constexpr float ELEVATED_MIN_SPAN = 3.00f;
+
 // ── La FASCIA PROIBITA ──────────────────────────────────────────────────────
 // Sopra `STEP_HEIGHT` l'AI si ferma: NON salta (il ramo di salto è dietro
 // `!useCrowd`, e col navmesh attivo — cioè sempre in partita — non viene mai

@@ -5,6 +5,7 @@
 #include "util/UiWidgets.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+#include "util/StartupOptions.hpp"
 #include "mini/game/ClassResolve.hpp"   // ADR-022: la regola "la classe vince", non una copia
 #include "mini/game/WeaponHandPose.hpp"  // LA formula della posa in mano: una sola, condivisa col runtime
 #include <imgui.h>
@@ -103,6 +104,33 @@ EntityEditor::EntityEditor()
 {
     loadEntries();
     loadAvailableIds();
+
+    // `--entity <id|indice>`: seleziona subito, così il percorso di CARICAMENTO
+    // MODELLO (mesh, rig, ossa, arma in mano) viene esercitato senza mouse.
+    // Senza questa opzione il modulo si apre a `m_sel = -1`, cioè con una viewport
+    // vuota: tutte le riproduzioni automatiche di KI #98 hanno collaudato lo
+    // scenario in cui non c'è nulla da disegnare, che non è quello dell'utente.
+    if (editor::startup::g_entitySelectSet && !m_entries.empty())
+    {
+        int idx = -1;
+        for (int i = 0; i < (int)m_entries.size(); ++i)
+            if (m_entries[i].id == editor::startup::g_entitySelect) { idx = i; break; }
+        if (idx < 0)
+        {
+            char* end = nullptr;
+            const long n = std::strtol(editor::startup::g_entitySelect.c_str(), &end, 10);
+            if (end && *end == '\0' && n >= 0 && n < (long)m_entries.size()) idx = (int)n;
+        }
+        if (idx >= 0)
+        {
+            std::printf("[EntityEditor] selezione all'avvio: %s\n",
+                        m_entries[idx].id.c_str());
+            selectEntry(idx);
+        }
+        else
+            std::fprintf(stderr, "[EntityEditor] --entity: '%s' non trovata\n",
+                         editor::startup::g_entitySelect.c_str());
+    }
 }
 
 void EntityEditor::loadAvailableIds()
@@ -300,6 +328,10 @@ void EntityEditor::selectEntry(int idx)
     if (idx < 0 || idx >= (int)m_entries.size()) return;
     m_sel   = idx;
     m_dirty = false;
+    // La cronologia appartiene all'ENTITÀ che si stava modificando: conservarla
+    // attraverso un cambio di selezione farebbe applicare a questa entità lo stato
+    // di un'altra — un annullamento che invece di riparare rompe.
+    m_undo.clear();
     auto& e = m_entries[idx];
     m_rotX  = e.meshRotX;
     m_rotY  = e.meshRotY;
@@ -637,9 +669,47 @@ void EntityEditor::saveSelected()
     std::cout << "[EntityEditor] Salvato: " << e.jsonPath << "\n";
 }
 
+// Ripristina uno stato fotografato. Un solo punto, così annullare e ripetere non
+// possono divergere fra loro (era la trappola classica dei due percorsi separati).
+void EntityEditor::applyUndoState(const UndoState& s)
+{
+    m_attachPoints    = s.attach;
+    m_hitboxZones     = s.zones;
+    m_selAttachPoint  = s.selAttach;
+    m_selZone         = s.selZone;
+    m_rotX            = s.rotX;
+    m_scale           = s.scale;
+    m_dirty           = true;
+    updateMarker();
+    syncViewportMarkers();
+    updateWeaponTransform();
+}
+
 void EntityEditor::tick(float dt)
 {
     m_viewport.tick(dt);
+    m_clock += dt;
+
+    // ── Annulla / Ripeti (doc 52 F2) ─────────────────────────────────────
+    // Prima non esistevano in questo modulo: si spostava una zona hitbox col gizmo e
+    // non c'era modo di tornare indietro.
+    if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
+    {
+        const bool wantRedo = ImGui::IsKeyPressed(ImGuiKey_Y, false)
+            || (ImGui::IsKeyPressed(ImGuiKey_Z, false) && ImGui::GetIO().KeyShift);
+        const bool wantUndo = ImGui::IsKeyPressed(ImGuiKey_Z, false)
+            && !ImGui::GetIO().KeyShift;
+        if (wantUndo || wantRedo)
+        {
+            UndoState st = snapshot();
+            if (wantRedo ? m_undo.redo(st) : m_undo.undo(st)) applyUndoState(st);
+        }
+    }
+
+    // La fotografia si prende quando il gesto COMINCIA: il gizmo produce un delta
+    // per frame, e fotografare a ogni delta riempirebbe la pila rendendo "annulla"
+    // un ritorno indietro di un pixel per volta.
+    if (m_viewport.gizmoDragging()) m_undo.push(snapshot(), "gizmo", m_clock);
 
     // Handle gizmo drag — il delta arriva in world space; i punti sono in
     // model space, quindi va riportato con l'inversa della trasformazione.
@@ -748,6 +818,13 @@ void EntityEditor::tick(float dt)
 
 void EntityEditor::draw()
 {
+    // Fotografia anche per le modifiche dai CAMPI, non solo dal gizmo: un valore
+    // digitato è una modifica come le altre, e un annullamento che ne copre metà
+    // sarebbe peggio di non averlo. La coalescenza per etichetta fa sì che un intero
+    // trascinamento su uno slider resti una voce sola.
+    if (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput)
+        m_undo.push(snapshot(), "campo", m_clock);
+
     // Rinomina completata nel frame precedente: ricarica e riseleziona.
     if (!m_pendingSelectId.empty())
     {

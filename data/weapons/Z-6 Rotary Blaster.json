@@ -35,7 +35,7 @@
         90.0,
         0.0
     ],
-    "hand_scale": 80.0,
+    "hand_scale": 55.0,
     "heat_per_shot": 0.10000000149011612,
     "mesh": "assets/models/weapons/cannon_blaster_rotatif_z-6_star_wars_clone_wars.glb",
     "mesh_rot_x": 0.0,

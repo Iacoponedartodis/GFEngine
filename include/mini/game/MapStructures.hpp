@@ -4,6 +4,7 @@
 #include "mini/game/data/Definitions.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -254,6 +255,215 @@ inline float flightRun(const StructureDef& s)
     return (float)mapmetrics::stepsFor(s.rise, effectiveRiser(s)) * effectiveTread(s);
 }
 
+// ── I MINIMI CHE ROMPONO LA STRUTTURA ───────────────────────────────────────
+// Regola dell'utente (2026-08-05): *"devo poter modificare le grandezze che non
+// rompono quella struttura"*. Quindi si **clampa solo ciò che la romperebbe** e si
+// lascia libero tutto il resto — allungare una passerella o un muro non ha limiti,
+// stringerli sotto la soglia sì. I minimi non sono scelti a occhio: vengono dai
+// filtri del navmesh (vedi `ELEVATED_MIN_SPAN` in MapMetrics).
+inline float minWidthFor(Kind k)
+{
+    switch (k) {
+        case Kind::Stair:
+        case Kind::Ramp:       return mapmetrics::STAIR_MIN_WIDTH;
+        case Kind::Switchback: return mapmetrics::STAIRWELL_MIN_WIDTH;
+        case Kind::Catwalk:    return mapmetrics::CORRIDOR_MIN;      // è un corridoio in quota
+        case Kind::Platform:   return mapmetrics::ELEVATED_MIN_SPAN;
+        default:               return 0.0f;                          // nessun vincolo
+    }
+}
+
+// Altezza minima di un'apertura: una PORTA deve far passare il gigante; una
+// FINESTRA (parapetto > 0) no — è fatta per sporgersi, non per attraversarla.
+inline float minOpenHeight(const StructureDef& s)
+{
+    return (s.openSill > 0.01f) ? 0.3f : mapmetrics::REF_UNIT_HEIGHT;
+}
+inline float minOpenWidth(const StructureDef& s)
+{
+    return (s.openSill > 0.01f) ? 0.4f : mapmetrics::DOOR_WIDTH;
+}
+
+// ── I PARAMETRI, ENUMERATI (ADR-055) ────────────────────────────────────────
+// Quali misure ha una primitiva, come si chiamano, e qual è il loro **pavimento
+// fisico**. Una tabella sola: la usano l'editor per mostrarle, il tipo per
+// vincolarle e il clamp per applicarle. Ripetere l'elenco in tre posti è il modo
+// sicuro di farli divergere al primo parametro aggiunto.
+using Param = StructureParam;
+
+struct ParamInfo
+{
+    Param       p;
+    const char* key;      // chiave nel JSON del tipo (stabile: è un dato salvato)
+    const char* label;    // etichetta mostrata
+    const char* help;     // a cosa serve, in una riga
+};
+
+inline const std::vector<ParamInfo>& paramsOf(Kind k)
+{
+    static const std::vector<ParamInfo> stair = {
+        {Param::Rise,  "rise",  "Dislivello (m)", "Quanto sale in totale."},
+        {Param::Width, "width", "Larghezza (m)",  "Non tocca i gradini."},
+        {Param::Riser, "riser", "Alzata (m)",     "0 = normativa. Non puo' superare lo scalino massimo."},
+        {Param::Tread, "tread", "Pedata (m)",     "Allunga o accorcia senza cambiare l'alzata."},
+    };
+    static const std::vector<ParamInfo> ramp = stair;
+    static const std::vector<ParamInfo> wall = {
+        {Param::Length,    "length",    "Lunghezza (m)", "Sviluppo del muro."},
+        {Param::Height,    "height",    "Altezza (m)",   "0 = normativa."},
+        {Param::Thickness, "thickness", "Spessore (m)",  "0 = normativo."},
+    };
+    static const std::vector<ParamInfo> doorway = {
+        {Param::Length,    "length",    "Lunghezza (m)",  "Sviluppo del muro."},
+        {Param::Height,    "height",    "Altezza (m)",    "0 = normativa."},
+        {Param::Thickness, "thickness", "Spessore (m)",   "0 = normativo."},
+        {Param::OpenW,     "open_w",    "Apertura L (m)", "Larghezza del varco."},
+        {Param::OpenH,     "open_h",    "Apertura H (m)", "Altezza del varco."},
+        {Param::OpenSill,  "open_sill", "Parapetto (m)",  "> 0 la rende FINESTRA: sotto resta copertura."},
+        {Param::OpenOff,   "open_off",  "Scostamento (m)","Spostamento dal centro del muro."},
+    };
+    static const std::vector<ParamInfo> platform = {
+        {Param::Elev,   "y",      "Quota (m)",    "Altezza del ripiano calpestabile."},
+        {Param::SizeX,  "size_x", "Lato X (m)",   "Ampiezza del ripiano."},
+        {Param::SizeZ,  "size_z", "Lato Z (m)",   "Profondita' del ripiano."},
+        {Param::BaseY,  "base_y", "Quota base (m)","Da dove partono gli accessi."},
+        // NIENTE `width`: le scale d'accesso della piattaforma sono fissate a
+        // `STAIR_MIN_WIDTH` dentro l'espansione (riga `st.width = ...`), quindi
+        // esporla darebbe un comando che non fa nulla — peggio che non averlo.
+        // Renderla efficace cambierebbe la geometria delle piattaforme già in mappa:
+        // è una decisione dell'utente, non un effetto collaterale.
+    };
+    static const std::vector<ParamInfo> room = {
+        {Param::SizeX,     "size_x",    "Lato X (m)",     "Ingombro interno."},
+        {Param::SizeZ,     "size_z",    "Lato Z (m)",     "Ingombro interno."},
+        {Param::Height,    "height",    "Altezza (m)",    "0 = normativa."},
+        {Param::Thickness, "thickness", "Spessore (m)",   "0 = normativo."},
+        {Param::OpenW,     "open_w",    "Porte L (m)",    "Larghezza delle aperture dichiarate."},
+        {Param::OpenH,     "open_h",    "Porte H (m)",    "Altezza delle aperture."},
+    };
+    static const std::vector<ParamInfo> catwalk = {
+        {Param::Elev,   "y",      "Quota (m)",     "Altezza del camminamento."},
+        {Param::Length, "length", "Lunghezza (m)", "Sviluppo della passerella."},
+        {Param::Width,  "width",  "Larghezza (m)", "E' un corridoio in quota."},
+    };
+    static const std::vector<ParamInfo> barricade = {
+        {Param::Length,  "length",  "Lunghezza (m)", "Sviluppo della linea."},
+        {Param::Height,  "height",  "Altezza (m)",   "0 = copertura bassa."},
+        {Param::Spacing, "spacing", "Passo (m)",     "0 = continua."},
+    };
+    static const std::vector<ParamInfo> switchback = {
+        {Param::Rise,       "rise",        "Dislivello (m)", "Salita totale."},
+        {Param::Width,      "width",       "Larghezza (m)",  "Del vano scala."},
+        {Param::FlightRise, "flight_rise", "Rampa (m)",      "0 = 3,0 m, un piano."},
+        {Param::Riser,      "riser",       "Alzata (m)",     "0 = normativa."},
+    };
+    static const std::vector<ParamInfo> none;
+    switch (k) {
+        case Kind::Stair:      return stair;
+        case Kind::Ramp:       return ramp;
+        case Kind::Wall:       return wall;
+        case Kind::Doorway:    return doorway;
+        case Kind::Platform:   return platform;
+        case Kind::Room:       return room;
+        case Kind::Catwalk:    return catwalk;
+        case Kind::Barricade:  return barricade;
+        case Kind::Switchback: return switchback;
+    }
+    return none;
+}
+
+inline float getParam(const StructureDef& s, Param p)
+{
+    switch (p) {
+        case Param::Rise:       return s.rise;
+        case Param::Width:      return s.width;
+        case Param::Riser:      return s.riser;
+        case Param::Tread:      return s.tread;
+        case Param::Length:     return s.length;
+        case Param::Height:     return s.height;
+        case Param::Thickness:  return s.thickness;
+        case Param::OpenW:      return s.openW;
+        case Param::OpenH:      return s.openH;
+        case Param::OpenSill:   return s.openSill;
+        case Param::OpenOff:    return s.openOff;
+        case Param::FlightRise: return s.flightRise;
+        case Param::Spacing:    return s.spacing;
+        case Param::SizeX:      return s.sizeX;
+        case Param::SizeZ:      return s.sizeZ;
+        case Param::BaseY:      return s.baseY;
+        case Param::Elev:       return s.y;
+        default:                return 0.0f;
+    }
+}
+
+inline void setParam(StructureDef& s, Param p, float v)
+{
+    switch (p) {
+        case Param::Rise:       s.rise       = v; break;
+        case Param::Width:      s.width      = v; break;
+        case Param::Riser:      s.riser      = v; break;
+        case Param::Tread:      s.tread      = v; break;
+        case Param::Length:     s.length     = v; break;
+        case Param::Height:     s.height     = v; break;
+        case Param::Thickness:  s.thickness  = v; break;
+        case Param::OpenW:      s.openW      = v; break;
+        case Param::OpenH:      s.openH      = v; break;
+        case Param::OpenSill:   s.openSill   = v; break;
+        case Param::OpenOff:    s.openOff    = v; break;
+        case Param::FlightRise: s.flightRise = v; break;
+        case Param::Spacing:    s.spacing    = v; break;
+        case Param::SizeX:      s.sizeX      = v; break;
+        case Param::SizeZ:      s.sizeZ      = v; break;
+        case Param::BaseY:      s.baseY      = v; break;
+        case Param::Elev:       s.y          = v; break;
+        default: break;
+    }
+}
+
+// Il PAVIMENTO FISICO di un parametro: sotto questo valore la struttura non è più
+// quella struttura, e nessun tipo può autorare un minimo più basso (ADR-055).
+// 0 = nessun pavimento. Lo 0 di un campo "0 = normativo" resta sempre lecito: è
+// l'assenza di scelta, non una misura.
+inline float physicalMin(Kind k, Param p, const StructureDef& s)
+{
+    switch (p) {
+        case Param::Width:
+            // Per la piattaforma `width` è la larghezza degli ACCESSI, cioè una scala.
+            return (k == Kind::Platform) ? mapmetrics::STAIR_MIN_WIDTH : minWidthFor(k);
+        case Param::SizeX:
+        case Param::SizeZ:
+            return (k == Kind::Platform) ? mapmetrics::ELEVATED_MIN_SPAN
+                                         : mapmetrics::CORRIDOR_MIN;   // stanza percorribile
+        case Param::Tread:      return mapmetrics::STAIR_TREAD;
+        case Param::OpenW:      return minOpenWidth(s);
+        case Param::OpenH:      return minOpenHeight(s);
+        default:                return 0.0f;
+    }
+}
+
+// Il tetto fisico: l'alzata non può superare lo scalino massimo, o l'AI non sale.
+inline float physicalMax(Kind /*k*/, Param p)
+{
+    return (p == Param::Riser) ? config::STEP_HEIGHT : 0.0f;   // 0 = nessun tetto
+}
+
+// Il minimo EFFETTIVO di un parametro sotto un tipo: il più severo fra il pavimento
+// fisico e il minimo autorato. Un tipo può stringere, mai allentare.
+inline float effectiveMin(const StructureTypeDef& t, Param p)
+{
+    const float phys = physicalMin(t.kind, p, t.defaults);
+    const float auth = t.rules[(std::size_t)p].min;
+    return (auth > phys) ? auth : phys;
+}
+inline float effectiveMax(const StructureTypeDef& t, Param p)
+{
+    const float phys = physicalMax(t.kind, p);
+    const float auth = t.rules[(std::size_t)p].max;
+    if (phys <= 0.0f) return auth;                 // solo il limite autorato
+    if (auth <= 0.0f) return phys;                 // solo il limite fisico
+    return (auth < phys) ? auth : phys;            // il più severo
+}
+
 // ── L'ESPANSIONE ────────────────────────────────────────────────────────────
 // Ricetta → box. Chiamata al load dal registry e dall'editor per l'anteprima.
 inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
@@ -265,7 +475,8 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
     case Kind::Stair:
     case Kind::Ramp:
     {
-        const float w = (s.width > 0.1f) ? s.width : mapmetrics::STAIR_MIN_WIDTH;
+        float w = (s.width > 0.1f) ? s.width : minWidthFor(s.kind);
+        if (w < minWidthFor(s.kind)) w = minWidthFor(s.kind);
         detail::emitFlight(f, s, s.y, s.rise, w, 0.0f, out);
         break;
     }
@@ -274,11 +485,17 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
     case Kind::Doorway:
     {
         const float h  = (s.height > 0.01f) ? s.height : mapmetrics::WALL_HEIGHT;
-        const float th = (s.thickness > 0.01f) ? s.thickness : mapmetrics::WALL_THICKNESS;
+        float th = (s.thickness > 0.01f) ? s.thickness : mapmetrics::WALL_THICKNESS;
+        if (th < 0.20f) th = 0.20f;   // sotto la cella del navmesh un muro non e un ostacolo continuo
         const float ln = (s.length > 0.01f) ? s.length : 4.0f;
-        const float ow = (s.kind == Kind::Doorway)
-                       ? ((s.openW > 0.01f) ? s.openW : mapmetrics::DOOR_WIDTH) : 0.0f;
-        const float oh = (s.openH > 0.01f) ? s.openH : mapmetrics::DOOR_HEIGHT;
+        float ow = 0.0f, oh = 0.0f;
+        if (s.kind == Kind::Doorway)
+        {
+            ow = (s.openW > 0.01f) ? s.openW : mapmetrics::DOOR_WIDTH;
+            oh = (s.openH > 0.01f) ? s.openH : mapmetrics::DOOR_HEIGHT;
+            if (ow < minOpenWidth(s))  ow = minOpenWidth(s);
+            if (oh < minOpenHeight(s)) oh = minOpenHeight(s);
+        }
         detail::emitWallWithOpening(f, s, 0.0f, 0.0f, ln, s.ry, s.y, h, th,
                                     ow, oh, s.openSill, s.openOff, out);
         break;
@@ -426,18 +643,24 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
         // con le misure normative — così un interno non nasce senza vie d'ingresso.
         const float h   = (s.height > 0.01f) ? s.height : mapmetrics::WALL_HEIGHT;
         const float th  = (s.thickness > 0.01f) ? s.thickness : mapmetrics::WALL_THICKNESS;
-        const float ow  = (s.openW > 0.01f) ? s.openW : mapmetrics::DOOR_WIDTH;
-        const float oh  = (s.openH > 0.01f) ? s.openH : mapmetrics::DOOR_HEIGHT;
+        float ow  = (s.openW > 0.01f) ? s.openW : mapmetrics::DOOR_WIDTH;
+        float oh  = (s.openH > 0.01f) ? s.openH : mapmetrics::DOOR_HEIGHT;
+        if (ow < minOpenWidth(s))  ow = minOpenWidth(s);
+        if (oh < minOpenHeight(s)) oh = minOpenHeight(s);
         constexpr float kSlabT = 0.30f;
-        const float hx = s.sizeX * 0.5f, hz = s.sizeZ * 0.5f;
+        // Interno percorribile: sotto un corridoio non ci si muove dentro.
+        const float minSide = mapmetrics::CORRIDOR_MIN + th * 2.0f;
+        const float sx_ = (s.sizeX < minSide) ? minSide : s.sizeX;
+        const float sz_ = (s.sizeZ < minSide) ? minSide : s.sizeZ;
+        const float hx = sx_ * 0.5f, hz = sz_ * 0.5f;
 
-        out.push_back(detail::slab(f, s, 0.0f, 0.0f, s.sizeX, s.sizeZ,
+        out.push_back(detail::slab(f, s, 0.0f, 0.0f, sx_, sz_,
                                    s.y - kSlabT, s.y, BoxType::Floor));
         // Lati: -Z, +Z, -X, +X (stessa convenzione di Platform).
         const float sx[4] = { 0.0f, 0.0f, -hx, hx };
         const float sz[4] = { -hz,  hz,  0.0f, 0.0f };
         const float sr[4] = { 0.0f, 0.0f, 90.0f, 90.0f };
-        const float sl[4] = { s.sizeX, s.sizeX, s.sizeZ, s.sizeZ };
+        const float sl[4] = { sx_, sx_, sz_, sz_ };
         for (int i = 0; i < 4; ++i)
             detail::emitWallWithOpening(f, s, sx[i], sz[i], sl[i], s.ry + sr[i],
                                         s.y, h, th,
@@ -445,7 +668,7 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
                                         s.access[i] ? s.openSill : 0.0f,
                                         s.openOff, out);
         if (s.ceiling)
-            out.push_back(detail::slab(f, s, 0.0f, 0.0f, s.sizeX, s.sizeZ,
+            out.push_back(detail::slab(f, s, 0.0f, 0.0f, sx_, sz_,
                                        s.y + h, s.y + h + kSlabT, BoxType::Platform));
         break;
     }
@@ -455,7 +678,8 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
         // Una passerella non è decorazione: è un CORRIDOIO IN QUOTA, cioè una corsia
         // tattica che domina il piano di sotto. `y` è la quota calpestabile.
         constexpr float kDeck = 0.25f;
-        const float w  = (s.width > 0.1f) ? s.width : mapmetrics::CORRIDOR_MIN;
+        float w = (s.width > 0.1f) ? s.width : minWidthFor(s.kind);
+        if (w < minWidthFor(s.kind)) w = minWidthFor(s.kind);
         const float ln = (s.length > 0.01f) ? s.length : 8.0f;
         out.push_back(detail::slab(f, s, 0.0f, 0.0f, ln, w,
                                    s.y - kDeck, s.y, BoxType::Platform));
@@ -499,7 +723,14 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
         MapGeometryBox top;
         top.x  = s.x; top.z = s.z;
         top.sy = kSlab;  top.y = s.y - kSlab * 0.5f;   // `y` = quota CALPESTABILE
-        top.sx = s.sizeX; top.sz = s.sizeZ;
+        // Un ripiano SOPRAELEVATO sotto `ELEVATED_MIN_SPAN` sparisce dal navmesh
+        // (erosione + sfoltimento dei cigli + area minima di regione): il difetto va
+        // reso inesprimibile, non lasciato scoprire provando in gioco.
+        const float px = (s.sizeX < mapmetrics::ELEVATED_MIN_SPAN)
+                       ? mapmetrics::ELEVATED_MIN_SPAN : s.sizeX;
+        const float pz = (s.sizeZ < mapmetrics::ELEVATED_MIN_SPAN)
+                       ? mapmetrics::ELEVATED_MIN_SPAN : s.sizeZ;
+        top.sx = px; top.sz = pz;
         top.ry = s.ry;
         top.r = s.color[0]; top.g = s.color[1]; top.b = s.color[2];
         top.collider = true;
@@ -521,7 +752,7 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
 
         // Lati locali: 0 = -Z, 1 = +Z, 2 = -X, 3 = +X. La scala sale VERSO il ripiano,
         // quindi parte fuori dal bordo e finisce contro di esso.
-        const float halfZ = s.sizeZ * 0.5f, halfX = s.sizeX * 0.5f;
+        const float halfZ = pz * 0.5f, halfX = px * 0.5f;
         const float sideYaw[4] = { 0.0f, 180.0f, 90.0f, 270.0f };
         const float offX[4]    = { 0.0f, 0.0f, -halfX - run, halfX + run };
         const float offZ[4]    = { -halfZ - run, halfZ + run, 0.0f, 0.0f };
@@ -540,6 +771,54 @@ inline void expand(const StructureDef& s, std::vector<MapGeometryBox>& out)
         break;
     }
     }
+}
+
+// ── ASSEMBLAGGI (ADR-056) ───────────────────────────────────────────────────
+// Un box espresso in coordinate LOCALI di un assemblaggio, portato nel mondo dalla
+// posa dell'istanza. Usa la STESSA convenzione di rotazione di `detail::Frame`: una
+// seconda convenzione qui e le parti ruoterebbero al contrario rispetto alle
+// primitive, cioè il difetto più insidioso possibile — visibile solo ruotando.
+inline MapGeometryBox transformPartBox(const MapGeometryBox& b,
+                                       float ox, float oy, float oz, float ryDeg)
+{
+    const detail::Frame f = detail::frameOf(ox, oz, ryDeg);
+    MapGeometryBox r = b;
+    r.x  = f.wx(b.x, b.z);
+    r.z  = f.wz(b.x, b.z);
+    r.y  = oy + b.y;
+    r.ry = b.ry + ryDeg;   // la parte ruota CON l'assemblaggio
+    return r;
+}
+
+// Il tipo è un assemblaggio? (`parts` non vuoto)
+inline bool isAssembly(const StructureTypeDef& t) { return !t.parts.empty(); }
+
+// Espande UN assemblaggio nella posa di un'istanza. Le parti si espandono in locale
+// e poi si trasformano: espanderle già trasformate avrebbe richiesto di propagare la
+// posa dentro ogni ramo di `expand`, cioè di duplicare la trasformazione in nove
+// posti — e il nono sarebbe stato sbagliato.
+inline void expandAssembly(const StructureTypeDef& t, const StructureDef& inst,
+                           std::vector<MapGeometryBox>& out)
+{
+    std::vector<MapGeometryBox> local;
+    for (const auto& p : t.parts)
+    {
+        local.clear();
+        if (p.isBox) local.push_back(p.box);
+        else         expand(p.prim, local);
+        for (const auto& b : local)
+            out.push_back(transformPartBox(b, inst.x, inst.y, inst.z, inst.ry));
+    }
+}
+
+// Espansione di un'istanza SAPENDO il suo tipo (può essere nullptr).
+// UN SOLO punto in cui si decide fra "assemblaggio" e "primitiva singola": il
+// registry, l'editor e il gate passano tutti di qui, quindi non possono divergere.
+inline void expandInstance(const StructureDef& inst, const StructureTypeDef* type,
+                           std::vector<MapGeometryBox>& out)
+{
+    if (type && isAssembly(*type)) { expandAssembly(*type, inst, out); return; }
+    expand(inst, out);   // tipo semplice o nessun tipo: comportamento di ADR-053
 }
 
 } // namespace mini::mapstructures

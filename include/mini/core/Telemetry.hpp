@@ -98,6 +98,28 @@ void flushEvents();   // forza la scrittura del buffer JSONL (es. a fine frame)
 
 // ── Frame counter (per correlare log/input/dump) ──────────────────────────
 void     beginFrame();   // chiamare una volta per frame nel main loop
+
+// ── Fase corrente, per il crash report ───────────────────────────────────────
+// Dichiara COSA sta facendo il programma adesso. Costa una store di un puntatore
+// e finisce in `crash_report.txt`: uno stack trace dice dove si è fermato il
+// processore, non cosa stava facendo il programma — e se il crash avviene dentro
+// la DLL del driver grafico (array client-side, ADR-003) il "dove" non ha nemmeno
+// nomi nostri. È il caso di KI #98.
+// L'argomento deve essere un LETTERALE o comunque vivere per sempre: viene letto
+// dentro un handler di eccezione, dove non si può possedere memoria.
+void setPhase(const char* phase);
+
+// Imposta la fase per la durata di uno scope e la ripristina all'uscita.
+struct ScopedPhase
+{
+    explicit ScopedPhase(const char* p) : prev(current()) { setPhase(p); }
+    ~ScopedPhase() { setPhase(prev); }
+    ScopedPhase(const ScopedPhase&) = delete;
+    ScopedPhase& operator=(const ScopedPhase&) = delete;
+private:
+    static const char* current();
+    const char* prev;
+};
 uint64_t frame();
 
 // ── Input recorder ────────────────────────────────────────────────────────

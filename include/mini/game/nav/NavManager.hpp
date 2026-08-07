@@ -61,6 +61,24 @@ public:
     // erosi dove finirebbero in trappola. Chiamata a bassa frequenza (al commit).
     [[nodiscard]] bool isReachable(const glm::vec3& start, const glm::vec3& end) const;
 
+    // ── Ispezione del navmesh COSTRUITO (doc 47, validazione nell'editor) ──
+    // Il navmesh non è una funzione della geometria dichiarata: fra i box e le
+    // superfici percorribili ci sono erosione, sfoltimento dei cigli, altezza
+    // libera e area minima di regione. Un ripiano perfetto nei dati può non
+    // esistere per l'AI — ed è successo davvero (KI #97). Questi due metodi
+    // servono a **guardarlo**, che è l'unico modo di accorgersene prima di giocare.
+    struct DebugTri
+    {
+        glm::vec3 a, b, c;
+        int component = 0;   // componente connessa: superfici non collegate = isole
+    };
+    // Triangolazione a ventaglio di tutti i poligoni, con la componente connessa
+    // di ciascuno. `outComponentCount` = quante isole separate esistono.
+    void debugTriangles(std::vector<DebugTri>& out, int* outComponentCount = nullptr) const;
+    // Componente connessa che contiene il punto (o -1 se il punto non è sul navmesh).
+    // Con questa, "è raggiungibile da qui?" diventa un confronto fra due interi.
+    [[nodiscard]] int componentAt(const glm::vec3& p) const;
+
     // ── Crowd (Phase B): steering + avoidance + pathfinding per agente ────
     [[nodiscard]] bool crowdReady() const { return m_crowd != nullptr; }
     // Incrementato a ogni build(): il CrowdSystem lo usa per resettare la sua

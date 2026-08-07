@@ -20,6 +20,10 @@ public:
     void draw();
     // Rilascio cattura mouse al cambio modulo (FreeCameraViewport::releaseMouseCapture).
     void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
+    // Lavoro non salvato (doc 52 F3).
+    [[nodiscard]] bool hasUnsavedChanges() const { return m_dirty; }
+    [[nodiscard]] std::string unsavedWhat() const { return "un'arma"; }
+    void savePending() { if (m_dirty) saveSelected(); }
 
 private:
     struct AttachPointEntry { float x=0, y=0, z=0; };

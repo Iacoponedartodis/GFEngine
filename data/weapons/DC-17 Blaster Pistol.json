@@ -25,6 +25,17 @@
     "effective_range": 25.0,
     "faction": "republic",
     "fire_rate": 4.0,
+    "hand_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "hand_rot": [
+        0.0,
+        90.0,
+        0.0
+    ],
+    "hand_scale": 1.0,
     "heat_per_shot": 0.2800000011920929,
     "mesh": "assets/models/weapons/dc-17.glb",
     "mesh_rot_x": 0.0,

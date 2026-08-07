@@ -139,6 +139,27 @@ significativa richiede almeno:
 Dichiara sempre esplicitamente quali di questi hai eseguito e quali restano da verificare
 manualmente dallo sviluppatore.
 
+## 6-bis. Una funzione che l'utente non trova NON ESISTE
+
+Gli assemblaggi (ADR-056) erano implementati, collaudati con 5 controlli e documentati in
+ProjectDocs. L'utente non è riuscito a usarli: *"non ho trovato il modo per fare un
+assemblaggio… nell'editor strutture non è cambiato nulla"*. La capacità era dietro
+un'intestazione **chiusa** che diceva "Parti (0)".
+
+È la stessa lezione di ADR-023 (un dropdown incompleto rende la capacità inesistente), e vale
+come criterio di completamento:
+
+- **Il percorso per invocare una funzione nuova va dichiarato** insieme alla funzione: da quale
+  menu, con quale etichetta, e cosa si vede quando la funzione non è ancora stata usata (lo
+  stato vuoto è ciò che l'utente incontra per primo).
+- **Niente capacità dietro sezioni chiuse per difetto.** Se una cosa è nuova, si vede.
+- **Ogni cambiamento che aggiunge o modifica un comando aggiorna `data/help/*.md`**, nello
+  stesso change set. Sono due documentazioni diverse e non si sostituiscono:
+  **ProjectDocs spiega PERCHÉ** (è per me, per non ripetere gli errori);
+  **`data/help/` spiega COME** (è per chi costruisce, dentro l'editor, con F1).
+- Nel dichiarare cosa resta da verificare a mano, dire **dove si clicca**, non solo cosa
+  provare.
+
 ## 7. Aggiornamento della documentazione
 
 Ogni change set che modifica comportamento, schema, o convenzione deve aggiornare

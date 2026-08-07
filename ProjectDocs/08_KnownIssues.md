@@ -1,5 +1,114 @@
 # 08 — Known Issues
 
+## 100. Tetti silenziosi sui codici di selezione — ⚠ **SEGNALATI dal 2026-08-06** (R1 fatto), causa aperta
+- L'identità di un elemento nell'editor è **l'indice nel suo array**, dentro un `int` il cui
+  significato dipende dall'intervallo. Ne derivano tetti impliciti: **1.000** posizioni tattiche,
+  **1.000** settori, **1.000** istanze prefab, **500** bersagli, **100** percorsi / zone di pericolo /
+  spawn veicoli / punti multi-spawn per squadra, **90** command post.
+- **Superarli non dà errore**: il codice cambia significato e si seleziona o si sposta un elemento di
+  un altro tipo.
+- **Rischio concreto**: Training Ground ha **169** posizioni tattiche su ~71 × 92 m. La prossima mappa
+  è **300 × 200** (≈9× l'area) con l'obiettivo dichiarato di *"moltissimi metadata per mappa"*: a
+  parità di densità sono ~1.500 posizioni, **oltre il tetto**.
+- **R1 fatto (2026-08-06, changelog 165)**: `MapEditor::capacityReport()` valutato a ogni frame — copre
+  anche il caricamento da disco e la duplicazione, non solo i pulsanti "+". Avviso giallo sopra l'80%,
+  rosso al tetto, sempre in vista nella barra. Tre controlli nel `--editor-selftest` impediscono alla
+  tabella dei tetti di divergere dagli intervalli reali.
+- **La CAUSA resta aperta**: l'identità è ancora posizionale. La riparazione vera (identità stabile,
+  doc 49 R5) è invasiva — tocca selezione, undo, gizmo, viewport, salvataggio — e va fatta solo se il
+  segnale di R1 dovesse scattare davvero. Con la guardia in piedi, il rischio non è più silenzioso.
+
+## 99. Editor: "Serie" spostava e ruotava l'elemento SBAGLIATO (HIGH) — RISOLTO 2026-08-05 (changelog 164)
+- `duplicateBox` inserisce la copia **accanto** all'originale (`insert(begin()+idx+1)`), ma
+  `makeArray` deduceva il codice della copia con *"sarà l'ultima del vettore"*. Offset e rotazione
+  finivano su **un'altra box**, che veniva trascinata via in silenzio.
+- Stesso errore in `duplicateSelected` su selezione multipla: inserire fa scalare gli indici
+  superiori, quindi dal secondo elemento in poi si duplicava una box diversa da quella scelta. Il
+  commento nel codice affermava il contrario (*"le copie si accodano"*).
+- Preesistente (commit `bc9a281`), segnalato dall'utente il 2026-08-05.
+- **Riparato**: `duplicateOne` **restituisce** il codice della copia — l'informazione non si deduce
+  più — e i codici raccolti prima del ciclo si aggiornano dopo ogni inserimento.
+- **Coperto da collaudo**: `--editor-selftest`, controllo *"serie non sposta elementi fuori dalla
+  selezione"*. La causa profonda (identità posizionale) resta: vedi KI #100 e doc 49 §2.
+
+## 98. GFEditor: crash entrando in Entity Editor (HIGH) — ⚠ **APERTO**, riprodotto una volta (2026-08-05, changelog 162)
+- **Sintomo**: passando a Entity Editor da un altro modulo, GFEditor termina con
+  `eccezione SEH 0xC0000005 (access violation)`. Segnalato dall'utente (frame 481).
+- **Riprodotto**: sì, **una volta**, con `GFEditor.exe --module home,weapon,entity` sul build
+  **Release**, crash al frame **480** — cioè esattamente il frame della transizione in Entity Editor.
+  L'utente conferma che Entity è l'unico modulo che lo fa.
+- **Non si riproduce più** dopo la ricompilazione che ha aggiunto i PDB (`/Zi /DEBUG`): 6 esecuzioni
+  singole + un martellamento di **240 transizioni** fra moduli (18.600 frame) senza un crash.
+  Il difetto è quindi **sensibile alla disposizione in memoria**: c'è ancora, ma il binario nuovo lo
+  maschera. Non è stato risolto — è stato solo nascosto.
+- **ASan non lo vede.** Provato sia in Debug+ASan (10.200 frame sul modulo, poi 9 transizioni) sia in
+  **Release+ASan**: nessun errore. È un dato diagnostico, non un'assoluzione — indica che la lettura
+  illecita **non avviene nel nostro codice compilato**. Il candidato coerente con tutto (solo Release,
+  invisibile ad ASan, crash dentro un modulo esterno) è una lettura fatta dal **driver OpenGL** su un
+  array *client-side* (ADR-003): ASan strumenta il nostro codice, non la DLL del driver.
+- **Verificato e scagionato**: i loader idempotenti di `DefinitionRegistry` (ogni loader azzera solo il
+  proprio contenitore, uno-a-uno); EntityEditor non conserva puntatori nel registry; tutti i membri di
+  `EntityEditor` sono inizializzati; tutti i contatori di vertici del viewport derivano da `size()/6`
+  e non possono superare i dati; `drawArray` e `Mesh::draw` riabbassano gli attributi che alzano.
+- **Riparato per strada** un difetto reale della stessa famiglia, trovato durante l'indagine ma
+  **non dimostrato essere questo crash**: `resizeFBO` chiamava `s_delFBO`/`s_delRBO` senza averli
+  verificati, mentre il distruttore li protegge — un puntatore a funzione nullo chiamato dà lo stesso
+  identico access violation.
+### Giro del 2026-08-06 — non riprodotto, ma reso diagnosticabile (changelog 166)
+- **Riproduzione realistica tentata e fallita.** Scoperto che *tutte* le riproduzioni automatiche
+  precedenti aprivano Entity Editor con `m_sel = -1`, cioè **senza alcun modello caricato**: si
+  collaudava una viewport vuota, non lo scenario dell'utente. Aggiunto `--entity <id|indice>`, che
+  seleziona all'avvio e fa girare mesh + rig + ossa + arma in mano. Con il B1 Battle Droid (42
+  primitive) e l'arma: **7 transizioni fra moduli, nessun crash**, e **nessun errore ASan** nemmeno
+  in Debug+ASan sullo stesso percorso.
+- **La rete di diagnosi ora funziona — verificata, non dichiarata.** `--crash-test` provoca un
+  access violation dentro una fase nota. Esito:
+  `fase: crash-test volontario` + `#8 main(int, int) at main.cpp:44`, cioè **nomi di funzione, file
+  e riga** dove prima c'era `#9 0x00007ff75ff533a0 in ??`.
+- **Nuovo: la FASE nel crash report** (`mini::telemetry::setPhase` / `ScopedPhase`, costo una store).
+  Uno stack trace dice dove si è fermato il processore, non cosa stava facendo il programma — e se
+  il crash avviene dentro la DLL del driver il "dove" non ha nomi nostri. Marcate: cambio modulo,
+  tick e draw di ciascun modulo.
+- **Due guardie contro la causa più probabile.** Con gli array client-side (ADR-003) è il **driver**
+  a leggere la nostra memoria: un conteggio di vertici maggiore dei dati diventa una lettura oltre il
+  limite **dentro la DLL del driver**, invisibile ad ASan. Ora `FreeCameraViewport::drawArray` e
+  `Mesh::draw` rifiutano il disegno e lo dicono, invece di lasciar leggere il driver.
+- **Un accesso fuori limite REALE riparato** (non dimostrato essere questo crash):
+  `FreeCameraViewport::loadModel` faceva `raw.data() + i*11` fidandosi di `getVertexCount()`, che è
+  memorizzato **separatamente** dai dati. Oggi il costruttore da `vector<Vertex>` li tiene allineati,
+  ma `Mesh(vector<float>, int)` si fida di chi lo chiama e nessuno impone l'invariante.
+- **Stato**: non riproducibile su richiesta. **Serve un'occorrenza reale**: quando ricapita, il
+  `crash_report.txt` va allegato — adesso contiene fase, funzioni, file e righe.
+
+## 97. Training Ground: il recinto "Droid CT" è INTERAMENTE irraggiungibile (2026-08-05, changelog 160)
+- **Trovato da G8**, e nessun controllo sui dati poteva vederlo: `--validate` dice **0 problemi**,
+  perché per i dati la catena di gradini è perfetta (alzate 0,10-0,20 m, tutte ben sotto 0,55).
+  È il **navmesh** a non costruirla.
+- **Portata**: non solo la posizione `observation` #166 — **tutto** ciò che sta sopra il suolo dentro
+  il recinto. Sondato gradino per gradino: dal primo (`CT stair 2`, quota 0,44) fino al ripiano
+  (`Droid CT Floor`, 2,59), **nessuno** è raggiungibile. Il suolo *dentro* il recinto invece sì: la
+  porta sul lato +Z (varco di 2,03 m fra i due `Droid CT Wall 5`) funziona.
+- **Tre cause sovrapposte**, tutte misurate:
+  1. **Gradini troppo stretti.** Le rampe sono larghe **1,50 m**. Una superficie sopraelevata perde
+     una cella per lato allo sfoltimento dei cigli + 0,40 per lato all'erosione: restano 0,30 m, e
+     l'area della regione (0,90-1,35 m²) è **sotto `minRegionArea`** (2,56 m²) → Recast la scarta.
+     È lo stesso conto da cui nasce `ELEVATED_MIN_SPAN`; qui se ne ha la conferma su una mappa vera.
+  2. **Giunzione da 3 cm.** `CT stair 2` (x −2,83..−1,47, z −39,17..−37,95) e `CT stair 3`
+     (z −39,72..−39,14) si sovrappongono in Z per **0,03 m**. Due superfici che devono restare
+     connesse vanno sovrapposte, non sfiorate.
+  3. **Un muro attraversa la scala.** `Droid CT Wall 3`+`4` corrono da x −5,64 a 6,06 a z ≈ −40,5,
+     da terra a 2,97 m, con un varco di soli **0,17 m** fra loro: la scala (z −39,4 → −41,6) ci
+     passa dentro. Provato ad aprirlo su una copia di lavoro: **non basta**, perché restano le
+     cause 1 e 2.
+- **Non l'ho riparato**: rifare quella scala significa ridisegnare un angolo della mappa (rampe più
+  larghe **e** un varco nel muro trasversale), e sono scelte di design. Provato e **annullato** il
+  solo allargamento dei gradini: da solo non sblocca nulla e cambia l'aspetto.
+- **Come ripararlo, quando vorrai**: cancellare `CT stair 2..12` e il muro trasversale dove passa la
+  scala, e rimetterla con la primitiva **Scala** (larghezza ≥ 2,40, alzata normativa 0,20) che
+  culmina **sul bordo** del `Droid CT Floor`. La primitiva rende inesprimibili tutte e tre le cause.
+- **Impatto reale**: basso. Nel recinto non spawna nessuno (lo spawn separatista è a z ≈ −35,4,
+  fuori) e non ci sono obiettivi; si perde una posizione `observation` e un ripiano decorativo.
+
 ## 96. Training Ground: posizioni tattiche con la QUOTA sbagliata — ⚠ **RIDIMENSIONATO il 2026-08-05**
 - **Prima versione (sbagliata)**: *"8 posizioni su 169 sono irraggiungibili"*. Il numero veniva da una
   sonda che **contava anche i percorsi PARZIALI** di Detour come riusciti e poi misurava la distanza

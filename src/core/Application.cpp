@@ -671,6 +671,26 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                  {"danger_polys", st.dangerPolys}, {"cover_polys", st.coverPolys},
                  {"bmin", {st.bmin.x, st.bmin.y, st.bmin.z}},
                  {"bmax", {st.bmax.x, st.bmax.y, st.bmax.z}}});
+            // ── ISOLE del navmesh (doc 47) ────────────────────────────────
+            // Quante superfici SCOLLEGATE esistono, e quanta area sta fuori da
+            // quella dello spawn. È la stessa analisi che l'editor disegna in
+            // rosso: qui serve a lasciarne traccia nella telemetria, così un
+            // difetto come KI #97 (un recinto intero irraggiungibile, invisibile
+            // al gate sui dati) si legge da un log invece che da un'indagine.
+            if (st.ok)
+            {
+                std::vector<NavManager::DebugTri> dt;
+                int nComp = 0;
+                nav.debugTriangles(dt, &nComp);
+                const glm::vec3 sp = mode->getSpawnPos();
+                const int main = nav.componentAt(sp);
+                int fuori = 0;
+                for (const auto& t : dt) if (t.component != main) ++fuori;
+                telemetry::event(nComp > 1 ? telemetry::Level::Warn : telemetry::Level::Info,
+                    "Nav", "isole navmesh",
+                    {{"componenti", nComp}, {"componente_spawn", main},
+                     {"triangoli", (int)dt.size()}, {"triangoli_isolati", fuori}});
+            }
             if (st.ok)   // path di esempio spawn1→spawn2: valida il pathfinding
             {
                 std::vector<glm::vec3> wp;
@@ -723,11 +743,19 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                 // sono e le peggiori quali: è il "quale entità guardare" di ADR-050
                 // applicato ai dati di mappa invece che alle unità.
                 int unreachable = 0;
+                // CONTROINCROCIO fra due metodi indipendenti: `isReachable`
+                // (pathfinding Detour) e la componente connessa (analisi del grafo
+                // dei poligoni). Devono dare lo stesso verdetto; se divergono, uno
+                // dei due sbaglia — ed è meglio saperlo da un numero che da un bug
+                // inseguito per mezza giornata.
+                int byComponent = 0;
+                const int mainComp = nav.componentAt(a);
                 nlohmann::json worst = nlohmann::json::array();
                 for (size_t pi = 0; pi < nm->tacticalPositions.size(); ++pi)
                 {
                     const auto& tp = nm->tacticalPositions[pi];
                     const glm::vec3 t = {tp.x, tp.y, tp.z};
+                    if (nav.componentAt(t) != mainComp) ++byComponent;
                     if (nav.isReachable(a, t)) continue;   // stesso criterio del runtime
                     ++unreachable;
                     if (worst.size() < 8)
@@ -738,6 +766,7 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                     "Nav", "posizioni irraggiungibili",
                     {{"totali", (int)nm->tacticalPositions.size()},
                      {"irraggiungibili", unreachable},
+                     {"per_componente", byComponent},
                      {"peggiori", worst}});
             }
         }

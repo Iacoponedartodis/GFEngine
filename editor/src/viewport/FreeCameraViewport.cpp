@@ -11,6 +11,8 @@
 #include "mini/render/Camera.hpp"
 #include "mini/render/Model.hpp"
 #include "mini/render/Mesh.hpp"
+#include "mini/core/Telemetry.hpp"
+#include "mini/game/MapMetrics.hpp"
 
 #include <imgui.h>
 #include <SDL2/SDL.h>
@@ -193,6 +195,29 @@ void FreeCameraViewport::drawArray(const std::vector<float>& data, int count,
 {
     if (count <= 0 || data.empty() || !m_shader || !m_shader->isValid()) return;
 
+    // ── GUARDIA: il conteggio non può superare i dati (KI #98) ───────────
+    // Con gli array client-side (ADR-003) è il DRIVER a leggere questa memoria
+    // durante `glDrawArrays`. Se `count` promette più vertici di quanti ce ne
+    // siano, la lettura oltre il limite avviene dentro la DLL del driver: un
+    // access violation che ASan non può vedere, perché ASan strumenta il nostro
+    // codice, non il driver. Qui la si intercetta PRIMA, con un nome.
+    // Costo: un confronto fra interi per disegno.
+    if ((std::size_t)count * 6u > data.size())
+    {
+        static bool s_told = false;   // una volta sola: non deve allagare il log
+        if (!s_told)
+        {
+            s_told = true;
+            std::fprintf(stderr,
+                "[Viewport] DISEGNO RIFIUTATO: %d vertici richiesti ma solo %zu "
+                "float disponibili (%zu vertici). Sarebbe stata una lettura oltre "
+                "il limite fatta dal driver. Vedi KI #98.\n",
+                count, data.size(), data.size() / 6u);
+            mini::telemetry::setPhase("drawArray: conteggio oltre i dati (KI #98)");
+        }
+        return;
+    }
+
     m_shader->use();
     m_shader->setMat4("uVP", glm::value_ptr(vp));
 
@@ -232,8 +257,14 @@ void FreeCameraViewport::resizeFBO(int w, int h)
     if (w <= m_texWidth && h <= m_texHeight && m_fboOk)
         return;   // la texture allocata basta già: nessun realloc
 
+    // s_delFBO/s_delRBO sono nella guardia perché più sotto vengono CHIAMATI:
+    // erano gli unici due usati senza essere verificati, e il distruttore (che
+    // li protegge con `s_delFBO &&`) mostra che nulli possono esserlo davvero.
+    // Un puntatore a funzione nullo chiamato è un access violation identico a
+    // quello che stiamo cercando — non un caso teorico.
     if (!s_genFBO || !s_bindFBO || !s_fboTex || !s_genRBO ||
-        !s_bindRBO || !s_rboSt  || !s_fboRBO || !s_chkFBO)
+        !s_bindRBO || !s_rboSt  || !s_fboRBO || !s_chkFBO ||
+        !s_delFBO  || !s_delRBO)
     {
         m_lastError = "FBO non disponibile.";
         return;
@@ -334,6 +365,20 @@ void FreeCameraViewport::renderScene()
 
     glDepthFunc(GL_LEQUAL);
     drawArray(m_mapBoxData, m_mapBoxVertCount, GL_LINES, vp);
+
+    // Navmesh SOPRA la geometria: è un'informazione di verifica, deve prevalere
+    // sul disegno della mappa invece di finirci sotto.
+    drawArray(m_navFillData, m_navFillVertCount, GL_TRIANGLES, vp);
+    drawArray(m_navEdgeData, m_navEdgeVertCount, GL_LINES, vp);
+
+    // Righello sopra tutto e SENZA test di profondità: una misura che sparisce
+    // dietro un muro non misura niente.
+    if (m_rulerVertCount > 0)
+    {
+        glDisable(GL_DEPTH_TEST);
+        drawArray(m_rulerData, m_rulerVertCount, GL_LINES, vp);
+        glEnable(GL_DEPTH_TEST);
+    }
 
     // Bone lines (rispettano la profondità)
     if (m_boneLineCount > 0)
@@ -553,11 +598,328 @@ bool FreeCameraViewport::popGizmoScaleDelta(glm::vec3& outDelta)
 // ── Pan ───────────────────────────────────────────────────────────────────────
 void FreeCameraViewport::panCamera(float rightDelta, float upDelta)
 {
-    glm::vec3 fwd   = m_camera->getForward();
+    const glm::vec3 fwd = m_camera->getForward();
+    // Guardando DRITTO in basso (vista dall'alto) `cross(fwd, {0,1,0})` è il vettore
+    // nullo, e normalizzarlo dà NaN: la camera sparirebbe alla prima trascinata.
+    // In quel caso lo "spostamento in su" nello schermo è −Z nel mondo, non +Y.
+    if (std::fabs(fwd.y) > 0.99f)
+    {
+        glm::vec3 pos = m_camera->getPosition();
+        pos.x += rightDelta;
+        pos.z -= upDelta * (fwd.y < 0.0f ? 1.0f : -1.0f);
+        m_camera->setPosition(pos);
+        return;
+    }
     glm::vec3 right = glm::normalize(glm::cross(fwd, {0,1,0}));
     glm::vec3 pos   = m_camera->getPosition();
     pos += right * rightDelta + glm::vec3(0,1,0) * upDelta;
     m_camera->setPosition(pos);
+}
+
+// ── MISURE VISIBILI SUL VIEWPORT (richiesta utente 2026-08-06) ──────────────
+// *"una funzione in più che aggiunge sulla griglia delle misure visibili in maniera
+// chiara evidente"*. Il righello dice la distanza fra due punti scelti; questo dice
+// la SCALA di ciò che si sta guardando, sempre, senza che tu debba chiedere.
+//
+// Due cose, entrambe come sulle carte geografiche:
+//   · una BARRA DI SCALA con la sua lunghezza scritta ("50 m"), che è il modo
+//     universale di dire quanto è grande ciò che si vede;
+//   · le COORDINATE lungo i bordi, a passi "tondi" (1/2/5 × 10ⁿ), così si legge
+//     dove si è e quanto dista una cosa dall'altra senza misurare.
+// Disegnate in sovrimpressione con la draw list di ImGui: sono testo, e il testo
+// nella scena 3D andrebbe ruotato, scalato e ridisegnato a ogni frame.
+void FreeCameraViewport::drawMeasureOverlay()
+{
+    if (!m_showMeasures || m_imgSize.x < 80.0f || m_imgSize.y < 60.0f) return;
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 colLine = IM_COL32(255, 255, 255, 60);
+    const ImU32 colText = IM_COL32(220, 235, 255, 220);
+    const ImU32 colBar  = IM_COL32(255, 220, 120, 235);
+
+    // Quanti metri copre il viewport in orizzontale: in ortografica è esatto; in
+    // prospettiva si stima sul piano del suolo, e allora si mostra SOLO la barra di
+    // scala (le coordinate ai bordi mentirebbero, perché la scala varia con la quota).
+    float metersAcross = 0.0f;
+    glm::vec3 pL, pR;
+    const float midY = m_imgMin.y + m_imgSize.y * 0.5f;
+    if (screenToPlane(m_imgMin.x + 2.0f, midY, 0.0f, pL)
+     && screenToPlane(m_imgMin.x + m_imgSize.x - 2.0f, midY, 0.0f, pR))
+        metersAcross = glm::length(glm::vec2(pR.x - pL.x, pR.z - pL.z));
+    if (metersAcross < 0.01f || metersAcross > 100000.0f) return;
+
+    // Passo "tondo": 1, 2 o 5 per una potenza di dieci. Un passo di 37,4 m sarebbe
+    // tecnicamente corretto e illeggibile.
+    auto niceStep = [](float rough) {
+        const float p = std::pow(10.0f, std::floor(std::log10(rough)));
+        const float n = rough / p;
+        if (n < 1.5f) return 1.0f * p;
+        if (n < 3.5f) return 2.0f * p;
+        if (n < 7.5f) return 5.0f * p;
+        return 10.0f * p;
+    };
+
+    // ── Barra di scala, in basso a sinistra ──────────────────────────────
+    {
+        const float target = metersAcross * 0.22f;      // ~un quinto della vista
+        const float step   = niceStep(target);
+        const float pxPerM = m_imgSize.x / metersAcross;
+        const float barPx  = step * pxPerM;
+        if (barPx > 20.0f && barPx < m_imgSize.x * 0.8f)
+        {
+            const float x0 = m_imgMin.x + 12.0f;
+            const float y0 = m_imgMin.y + m_imgSize.y - 22.0f;
+            dl->AddLine({x0, y0}, {x0 + barPx, y0}, colBar, 2.0f);
+            dl->AddLine({x0, y0 - 5.0f}, {x0, y0 + 5.0f}, colBar, 2.0f);
+            dl->AddLine({x0 + barPx, y0 - 5.0f}, {x0 + barPx, y0 + 5.0f}, colBar, 2.0f);
+            char lbl[32];
+            if (step >= 1.0f) std::snprintf(lbl, sizeof(lbl), "%.0f m", step);
+            else              std::snprintf(lbl, sizeof(lbl), "%.1f m", step);
+            // Ombra dietro il testo: sopra una scena chiara il bianco sparisce.
+            dl->AddText({x0 + 3.0f, y0 - 19.0f}, IM_COL32(0,0,0,160), lbl);
+            dl->AddText({x0 + 2.0f, y0 - 20.0f}, colBar, lbl);
+        }
+    }
+
+    // Le coordinate ai bordi solo in ORTOGRAFICA: in prospettiva la scala cambia
+    // con la profondità, quindi una tacca "ogni 10 m" sarebbe una bugia.
+    if (!isOrtho()) return;
+
+    const float step = niceStep(metersAcross / 10.0f);
+    const float pxPerM = m_imgSize.x / metersAcross;
+    if (step * pxPerM < 28.0f) return;   // troppo fitte per essere leggibili
+
+    // Assi mostrati: dipendono da cosa si sta guardando.
+    const bool topView = (m_viewMode == ViewMode::Top);
+    // Estremi del mondo visibili, presi dagli angoli dell'immagine.
+    glm::vec3 tl, br;
+    if (!screenToPlane(m_imgMin.x, m_imgMin.y, 0.0f, tl)) return;
+    if (!screenToPlane(m_imgMin.x + m_imgSize.x, m_imgMin.y + m_imgSize.y, 0.0f, br)) return;
+
+    if (topView)
+    {
+        // X lungo il bordo superiore, Z lungo quello sinistro.
+        // Ternari e non `std::min/max`: <windows.h> definisce `min` e `max` come
+        // macro e li trasforma in errori di sintassi (già inciampato una volta).
+        const float x0 = (tl.x < br.x) ? tl.x : br.x;
+        const float x1 = (tl.x < br.x) ? br.x : tl.x;
+        const float z0 = (tl.z < br.z) ? tl.z : br.z;
+        const float z1 = (tl.z < br.z) ? br.z : tl.z;
+        if (x1 - x0 < 0.01f || z1 - z0 < 0.01f) return;
+        for (float x = std::ceil(x0 / step) * step; x <= x1; x += step)
+        {
+            const float sx = m_imgMin.x + (x - x0) / (x1 - x0) * m_imgSize.x;
+            dl->AddLine({sx, m_imgMin.y}, {sx, m_imgMin.y + m_imgSize.y}, colLine, 1.0f);
+            char lbl[24]; std::snprintf(lbl, sizeof(lbl), "%.0f", x);
+            dl->AddText({sx + 3.0f, m_imgMin.y + 3.0f}, IM_COL32(0,0,0,160), lbl);
+            dl->AddText({sx + 2.0f, m_imgMin.y + 2.0f}, colText, lbl);
+        }
+        for (float z = std::ceil(z0 / step) * step; z <= z1; z += step)
+        {
+            // In vista dall'alto "su" sullo schermo è −Z: l'asse va ribaltato, o le
+            // etichette crescerebbero al contrario rispetto a ciò che si vede.
+            const float sy = m_imgMin.y + (1.0f - (z - z0) / (z1 - z0)) * m_imgSize.y;
+            dl->AddLine({m_imgMin.x, sy}, {m_imgMin.x + m_imgSize.x, sy}, colLine, 1.0f);
+            char lbl[24]; std::snprintf(lbl, sizeof(lbl), "%.0f", z);
+            dl->AddText({m_imgMin.x + 4.0f, sy + 3.0f}, IM_COL32(0,0,0,160), lbl);
+            dl->AddText({m_imgMin.x + 3.0f, sy + 2.0f}, colText, lbl);
+        }
+    }
+}
+
+// Schermo → punto sul piano orizzontale y = planeY. Si sproietta la matrice, quindi
+// vale sia in prospettiva sia in ortografica senza casi speciali.
+bool FreeCameraViewport::screenToPlane(float sx, float sy, float planeY,
+                                       glm::vec3& out) const
+{
+    if (m_imgSize.x < 1.0f || m_imgSize.y < 1.0f) return false;
+    const float nx = ((sx - m_imgMin.x) / m_imgSize.x) * 2.0f - 1.0f;
+    const float ny = 1.0f - ((sy - m_imgMin.y) / m_imgSize.y) * 2.0f;
+
+    const glm::mat4 inv = glm::inverse(m_camera->getViewProjection());
+    glm::vec4 p0 = inv * glm::vec4(nx, ny, -1.0f, 1.0f);
+    glm::vec4 p1 = inv * glm::vec4(nx, ny,  1.0f, 1.0f);
+    if (std::fabs(p0.w) < 1e-9f || std::fabs(p1.w) < 1e-9f) return false;
+    p0 /= p0.w; p1 /= p1.w;
+
+    const glm::vec3 a{p0}, b{p1};
+    const glm::vec3 d = b - a;
+    // Raggio parallelo al piano: nessuna intersezione (succede di lato/di fronte).
+    if (std::fabs(d.y) < 1e-6f) return false;
+    const float t = (planeY - a.y) / d.y;
+    out = a + d * t;
+    return true;
+}
+
+void FreeCameraViewport::setRulerActive(bool on)
+{
+    m_rulerActive = on;
+    m_rulerHasA = false;
+    m_rulerFrozen = false;
+    m_rulerData.clear(); m_rulerVertCount = 0;
+}
+
+// Linea A→B più due crocette agli estremi: gli estremi sono l'informazione, perché
+// dicono ESATTAMENTE cosa si sta misurando.
+void FreeCameraViewport::buildRulerGeometry()
+{
+    m_rulerData.clear();
+    if (!m_rulerActive || !m_rulerHasA) { m_rulerVertCount = 0; return; }
+
+    const float r = 0.25f, lift = 0.05f;
+    auto put = [&](glm::vec3 p, float cr, float cg, float cb) {
+        m_rulerData.insert(m_rulerData.end(),
+                           {p.x, p.y + lift, p.z, cr, cg, cb});
+    };
+    auto cross = [&](glm::vec3 c) {
+        put({c.x - r, c.y, c.z}, 1.0f, 0.85f, 0.25f);
+        put({c.x + r, c.y, c.z}, 1.0f, 0.85f, 0.25f);
+        put({c.x, c.y, c.z - r}, 1.0f, 0.85f, 0.25f);
+        put({c.x, c.y, c.z + r}, 1.0f, 0.85f, 0.25f);
+    };
+    put(m_rulerA, 1.0f, 0.85f, 0.25f);
+    put(m_rulerB, 1.0f, 0.85f, 0.25f);
+    cross(m_rulerA);
+    cross(m_rulerB);
+    m_rulerVertCount = (int)(m_rulerData.size() / 6);
+}
+
+// ── Viste ortografiche (doc 50 M3) ──────────────────────────────────────────
+// In prospettiva non si misura, si stima: una lunghezza sullo schermo non
+// corrisponde a una lunghezza nel mondo. È il motivo per cui il righello di Unreal
+// funziona SOLO in ortografica e per cui Hammer/Radiant lavorano su viste
+// ortografiche. La vista si àncora a ciò che si stava guardando, così cambiare modo
+// non fa perdere il posto.
+void FreeCameraViewport::setViewMode(ViewMode m)
+{
+    if (m == m_viewMode) return;
+
+    // Uscendo dalla PROSPETTIVA se ne conserva lo stato. Senza, tornandoci ci si
+    // ritrovava la camera dove l'aveva messa la vista ortografica — **200 m in
+    // aria**, a inquadrare il nulla, senza un modo ovvio di rimettersi a posto.
+    // È il difetto segnalato dall'utente, ed è anche il motivo per cui ogni editor
+    // 3D conserva la vista prospettica invece di ricalcolarla.
+    if (m_viewMode == ViewMode::Perspective)
+    {
+        m_perspPos   = m_camera->getPosition();
+        m_perspYaw   = m_camera->getYaw();
+        m_perspPitch = m_camera->getPitch();
+        m_perspSaved = true;
+    }
+
+    m_viewMode = m;
+    if (m == ViewMode::Perspective)
+    {
+        m_camera->setOrthographic(false);
+        if (m_perspSaved)
+        {
+            m_camera->setPosition(m_perspPos);
+            // `lookAt` ricostruisce yaw/pitch da una direzione: la si ricava dagli
+            // angoli salvati, così si torna esattamente a com'era.
+            const float yr = glm::radians(m_perspYaw), pr = glm::radians(m_perspPitch);
+            const glm::vec3 dir{ std::cos(yr) * std::cos(pr),
+                                 std::sin(pr),
+                                 std::sin(yr) * std::cos(pr) };
+            m_camera->lookAt(m_perspPos + dir, {0.0f, 1.0f, 0.0f});
+        }
+        return;
+    }
+
+    // Il CENTRO da inquadrare: il contenuto se c'è, altrimenti ciò che si stava
+    // guardando. `groundFocusPoint` usa un ripiego a distanza fissa quando la camera
+    // non punta verso il basso, e quel ripiego è la seconda causa dei salti nel
+    // vuoto — quindi non ci si affida più a lui da solo.
+    glm::vec3 center = groundFocusPoint();
+    float half = m_camera->getOrthoHalfHeight();
+    if (m_contentValid)
+    {
+        center = (m_contentMin + m_contentMax) * 0.5f;
+        half   = frameHalfHeightFor(m_contentMin, m_contentMax, m);
+    }
+
+    m_camera->setOrthographic(true, half);
+    applyOrthoPlacement(m, center);
+}
+
+// In ortografica la DISTANZA non cambia l'immagine (proiezione parallela): serve
+// solo a stare fuori dalla geometria. Non va però confusa col piano di taglio:
+// mettendola a 500 con `far` = 500, il contenuto cadeva **esattamente oltre** il
+// piano lontano e spariva. Con l'intervallo simmetrico [-far, +far] della
+// proiezione, una distanza modesta lascia dentro tutto ciò che sta davanti E
+// dietro alla camera. È il difetto che il collaudo ha trovato.
+void FreeCameraViewport::applyOrthoPlacement(ViewMode m, const glm::vec3& center)
+{
+    const float dist = 100.0f;
+    switch (m)
+    {
+        case ViewMode::Top:   // dall'alto: "su" sullo schermo = −Z nel mondo
+            m_camera->setPosition({center.x, center.y + dist, center.z});
+            m_camera->lookAt(center, {0.0f, 0.0f, -1.0f});
+            break;
+        case ViewMode::Front: // da −Z verso +Z
+            m_camera->setPosition({center.x, center.y, center.z - dist});
+            m_camera->lookAt(center, {0.0f, 1.0f, 0.0f});
+            break;
+        case ViewMode::Side:  // da −X verso +X
+            m_camera->setPosition({center.x - dist, center.y, center.z});
+            m_camera->lookAt(center, {0.0f, 1.0f, 0.0f});
+            break;
+        default: break;
+    }
+}
+
+// Quanta altezza inquadrare per contenere un ingombro, con un margine del 10%:
+// dipende dal modo, perché ogni vista guarda una coppia di assi diversa.
+float FreeCameraViewport::frameHalfHeightFor(const glm::vec3& mn, const glm::vec3& mx,
+                                             ViewMode m) const
+{
+    const glm::vec3 size = mx - mn;
+    // L'aspect della CAMERA, non quello del pannello: è quello che proietta davvero.
+    // Prenderlo dall'immagine sembrava equivalente, ma nel primo frame (e nel
+    // collaudo headless) l'immagine non è ancora stata disegnata e il valore era zero.
+    const float aspect = m_camera->getAspect() > 0.01f ? m_camera->getAspect() : 1.6f;
+    float wNeeded = 1.0f, hNeeded = 1.0f;
+    switch (m)
+    {
+        case ViewMode::Top:   wNeeded = size.x; hNeeded = size.z; break;
+        case ViewMode::Front: wNeeded = size.x; hNeeded = size.y; break;
+        case ViewMode::Side:  wNeeded = size.z; hNeeded = size.y; break;
+        default: break;
+    }
+    // Serve contenere sia in altezza sia in larghezza: si prende il vincolo peggiore.
+    const float halfByH = hNeeded * 0.5f;
+    const float halfByW = (aspect > 0.01f) ? (wNeeded * 0.5f / aspect) : halfByH;
+    float half = (halfByH > halfByW) ? halfByH : halfByW;
+    half *= 1.10f;                       // margine: la mappa non tocca i bordi
+    if (half < 2.0f) half = 2.0f;
+    return half;
+}
+
+// "Inquadra tutto": il comando che ogni editor 3D ha perché perdersi è normale.
+void FreeCameraViewport::frameContent()
+{
+    if (!m_contentValid) return;
+    const glm::vec3 center = (m_contentMin + m_contentMax) * 0.5f;
+    if (isOrtho())
+    {
+        m_camera->setOrthoHalfHeight(frameHalfHeightFor(m_contentMin, m_contentMax, m_viewMode));
+        applyOrthoPlacement(m_viewMode, center);
+        return;
+    }
+    // In prospettiva: indietreggia lungo la direzione attuale quanto basta.
+    const glm::vec3 size = m_contentMax - m_contentMin;
+    float radius = 0.5f * std::sqrt(size.x*size.x + size.y*size.y + size.z*size.z);
+    if (radius < 1.0f) radius = 1.0f;
+    const float d = radius / std::tan(glm::radians(m_camera->getFov() * 0.5f)) * 1.1f;
+    const glm::vec3 dir = m_camera->getForward();
+    m_camera->setPosition(center - dir * d);
+    m_camera->lookAt(center, {0.0f, 1.0f, 0.0f});
+}
+
+void FreeCameraViewport::setContentBounds(const glm::vec3& mn, const glm::vec3& mx)
+{
+    m_contentMin = mn; m_contentMax = mx;
+    m_contentValid = (mx.x >= mn.x && mx.y >= mn.y && mx.z >= mn.z);
 }
 
 glm::vec3 FreeCameraViewport::groundFocusPoint(float fallbackDist) const
@@ -1060,11 +1422,94 @@ void FreeCameraViewport::draw(bool showLoadBar)
 {
     if (showLoadBar) drawLoadBar();
 
-    ImGui::TextDisabled(
-        "Tasto destro = guarda + WASD/QE vola (Shift veloce, rotella = velocita')  |  "
-        "Rotella = zoom  |  Tasto centrale = pan  |  1/2/3 = gizmo");
-    ImGui::SameLine();
-    ImGui::TextDisabled("  vel: %.0f", m_camSpeed);
+    // ── Selettore del modo di vista (doc 50 M3) ──────────────────────────
+    // In cima al viewport perché è un cambio di STRUMENTO, non un'opzione: si passa
+    // in ortografica quando si deve misurare, e ci si torna di continuo.
+    {
+        struct Btn { const char* label; ViewMode mode; const char* tip; };
+        static const Btn btns[] = {
+            { "Prosp",  ViewMode::Perspective, "Prospettiva: per navigare e giudicare gli spazi." },
+            { "Alto",   ViewMode::Top,   "Dall'alto, ortografica: la pianta. Qui le lunghezze\n"
+                                         "sullo schermo SONO lunghezze nel mondo." },
+            { "Fronte", ViewMode::Front, "Da davanti, ortografica: le quote e le altezze." },
+            { "Lato",   ViewMode::Side,  "Di lato, ortografica: profondita' e dislivelli." },
+        };
+        for (const auto& b : btns)
+        {
+            const bool on = (m_viewMode == b.mode);
+            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.45f, 0.75f, 1.0f));
+            if (ImGui::SmallButton(b.label)) setViewMode(b.mode);
+            if (on) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", b.tip);
+            ImGui::SameLine();
+        }
+        // "Inquadra tutto": il rimedio al perdersi, presente in ogni editor 3D
+        // proprio perché perdersi è normale. Anche col tasto F.
+        if (ImGui::SmallButton(m_showMeasures ? "Misure ON" : "Misure OFF"))
+            m_showMeasures = !m_showMeasures;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Barra di scala e coordinate ai bordi, sempre in vista.\n"
+                              "Le coordinate compaiono solo in ortografica: in\n"
+                              "prospettiva la scala cambia con la profondita' e una\n"
+                              "tacca \"ogni 10 m\" sarebbe una bugia.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Inquadra")) frameContent();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Riporta la camera a inquadrare TUTTA la mappa.\n"
+                              "Scorciatoia: F. Da usare ogni volta che ti perdi.");
+        ImGui::SameLine();
+
+        // ── Righello (M4) ────────────────────────────────────────────────
+        if (m_rulerActive)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.55f, 0.15f, 1.0f));
+        if (ImGui::SmallButton("Righello")) setRulerActive(!m_rulerActive);
+        if (m_rulerActive) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Due clic sul terreno: misura la distanza fra due punti\n"
+                              "QUALSIASI, anche nel vuoto — la larghezza di un varco,\n"
+                              "la luce di un passaggio. Aggancio alla griglia.\n"
+                              "Il terzo clic ricomincia. In ortografica e' piu' preciso.");
+        ImGui::SameLine();
+
+        if (isOrtho())
+        {
+            // L'ampiezza inquadrata, in metri: è la scala della vista, e senza di
+            // essa "quanto sto guardando" resta una sensazione.
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                               "| inquadratura %.0f m di altezza",
+                               m_camera->getOrthoHalfHeight() * 2.0f);
+        }
+        else ImGui::TextDisabled("| vel: %.0f", m_camSpeed);
+
+        // La misura, con il confronto normativo detto invece che lasciato a mente.
+        if (m_rulerActive && m_rulerHasA)
+        {
+            const glm::vec3 d = m_rulerB - m_rulerA;
+            const float horiz = std::sqrt(d.x * d.x + d.z * d.z);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.25f, 1.0f),
+                               "|  %.2f m   (dX %.2f  dZ %.2f)", horiz, d.x, d.z);
+            const char* verdict = nullptr;
+            if (horiz > 0.01f)
+            {
+                if (horiz < mini::mapmetrics::DOOR_WIDTH)      verdict = "sotto la porta (1,80)";
+                else if (horiz < mini::mapmetrics::CORRIDOR_MIN) verdict = "sotto il corridoio (2,40)";
+            }
+            if (verdict)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.30f, 1.0f), "%s", verdict);
+            }
+        }
+    }
+
+    if (isOrtho())
+        ImGui::TextDisabled(
+            "Tasto destro o centrale = sposta  |  Rotella = ingrandisci  |  1/2/3 = gizmo");
+    else
+        ImGui::TextDisabled(
+            "Tasto destro = guarda + WASD/QE vola (Shift veloce, rotella = velocita')  |  "
+            "Rotella = zoom  |  Tasto centrale = pan  |  1/2/3 = gizmo");
 
     ImGui::Separator();
 
@@ -1105,12 +1550,41 @@ void FreeCameraViewport::draw(bool showLoadBar)
     m_imgMin  = ImGui::GetItemRectMin();
     m_imgSize = ImGui::GetItemRectSize();
 
+    drawMeasureOverlay();
+
     const bool imgHovered = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
 
     // ── Navigazione stile Unreal ──────────────────────────────────────
     // RMB tenuto: mouselook (+ WASD/QE in tick); rotella regola la velocità.
     // Senza RMB: rotella = dolly avanti/indietro; MMB drag = pan.
+    // ── In ORTOGRAFICA: si sposta e si ingrandisce, non si ruota ─────────
+    // Ruotare una vista ortografica assiale la disallinea dagli assi, e con essa
+    // perde senso l'unica cosa per cui esiste: misurare. Quindi il tasto destro
+    // TRASCINA invece di girare, e la rotella cambia l'inquadratura invece della
+    // velocità di volo.
+    if (isOrtho())
+    {
+        m_rmbLook = false;
+        if (imgHovered)
+        {
+            const float h = m_camera->getOrthoHalfHeight();
+            if (io.MouseWheel != 0.0f)
+                m_camera->setOrthoHalfHeight(h * (1.0f - 0.15f * io.MouseWheel));
+            // Lo spostamento è proporzionale allo zoom: a mappa intera si copre
+            // molta distanza, da vicino si rifinisce. Il fattore lega i pixel ai
+            // metri inquadrati, così il gesto "segue" il cursore a ogni scala.
+            const float k = h / 300.0f;
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)
+             || ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+            {
+                panCamera(-io.MouseDelta.x * k, io.MouseDelta.y * k);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            }
+        }
+    }
+    else
+    {
     if (imgHovered && ImGui::IsMouseDown(ImGuiMouseButton_Right))
         m_rmbLook = true;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right))
@@ -1140,6 +1614,42 @@ void FreeCameraViewport::draw(bool showLoadBar)
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
             panCamera(-io.MouseDelta.x * 0.02f, io.MouseDelta.y * 0.02f);
     }
+    }   // fine ramo prospettiva
+
+    // ── RIGHELLO (doc 50 M4) ─────────────────────────────────────────────
+    // Primo clic fissa A, il secondo congela B. Finché B non è congelato segue il
+    // cursore, così la misura si legge MENTRE si cerca il punto, non dopo.
+    if (m_rulerActive && imgHovered)
+    {
+        const ImVec2 mp = ImGui::GetMousePos();
+        glm::vec3 hit;
+        if (screenToPlane(mp.x, mp.y, 0.0f, hit))
+        {
+            if (m_rulerSnap > 0.001f)
+            {
+                hit.x = std::round(hit.x / m_rulerSnap) * m_rulerSnap;
+                hit.z = std::round(hit.z / m_rulerSnap) * m_rulerSnap;
+            }
+            if (!m_rulerFrozen)
+            {
+                if (!m_rulerHasA) m_rulerA = hit;
+                m_rulerB = hit;
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                if (!m_rulerHasA) { m_rulerA = hit; m_rulerB = hit; m_rulerHasA = true; }
+                else if (!m_rulerFrozen) { m_rulerB = hit; m_rulerFrozen = true; }
+                else { m_rulerA = hit; m_rulerB = hit; m_rulerFrozen = false; }
+            }
+        }
+    }
+    if (m_rulerActive) buildRulerGeometry();
+
+    // F = inquadra tutto. Mai mentre si scrive in un campo, o "F" diventerebbe
+    // un salto di camera invece di una lettera.
+    if (imgHovered && !ImGui::GetIO().WantTextInput
+        && ImGui::IsKeyPressed(ImGuiKey_F, false))
+        frameContent();
 
     // Check click (selezione: solo LMB, mai durante la navigazione)
     if (ImGui::IsItemClicked(0) && !m_mouseCapture && !m_rmbLook)
@@ -1232,8 +1742,21 @@ void FreeCameraViewport::loadModel(const std::string& path,
 
     for (const auto& mesh : mdl->getMeshes())
     {
-        const auto& raw   = mesh.getVertexData();
-        const int   count = mesh.getVertexCount();
+        const auto& raw = mesh.getVertexData();
+        // Il conteggio dichiarato non può promettere più vertici di quanti ne
+        // contenga `raw`: sotto c'è `raw.data() + i*11`, cioè una lettura fuori
+        // limite del NOSTRO codice se i due divergono. Oggi il costruttore da
+        // `vector<Vertex>` li tiene allineati, ma è un'invariante che nessuno
+        // impone — e `Mesh(vector<float>, int)` si fida di chi lo chiama.
+        const int avail = (int)(raw.size() / 11u);
+        // Confronto esplicito e non `std::min`: <windows.h> definisce `min` come
+        // macro e la trasformerebbe in un errore di sintassi.
+        const int declared = mesh.getVertexCount();
+        const int count = (declared < avail) ? declared : avail;
+        if (count < declared)
+            std::fprintf(stderr,
+                "[Viewport] modello incoerente: %d vertici dichiarati, %d "
+                "disponibili — uso i disponibili (KI #98).\n", declared, avail);
         m_modelData.reserve(m_modelData.size() + (size_t)count * 6);
         for (int i = 0; i < count; ++i)
         {
@@ -1440,6 +1963,47 @@ void FreeCameraViewport::clearMapBoxes()
     m_mapBoxVertCount = 0;
     m_mapBoxFillData.clear();
     m_mapBoxFillVertCount = 0;
+}
+
+// ── Overlay navmesh ──────────────────────────────────────────────────────────
+// I triangoli arrivano già in coordinate mondo e già colorati: qui si aggiunge
+// solo un rialzo di 4 cm per non finire dentro il pavimento, e si costruiscono
+// gli spigoli, che sono ciò che rende leggibile dove il navmesh **finisce** —
+// il bordo è l'informazione, non il riempimento.
+void FreeCameraViewport::setNavMesh(const std::vector<NavTriDraw>& tris)
+{
+    constexpr float kLift = 0.04f;
+    m_navFillData.clear(); m_navEdgeData.clear();
+    m_navFillData.reserve(tris.size() * 18);
+    m_navEdgeData.reserve(tris.size() * 36);
+
+    auto put = [](std::vector<float>& v, float x, float y, float z,
+                  float r, float g, float b)
+    { v.push_back(x); v.push_back(y + kLift); v.push_back(z);
+      v.push_back(r); v.push_back(g); v.push_back(b); };
+
+    for (const auto& t : tris)
+    {
+        put(m_navFillData, t.ax, t.ay, t.az, t.r, t.g, t.b);
+        put(m_navFillData, t.bx, t.by, t.bz, t.r, t.g, t.b);
+        put(m_navFillData, t.cx, t.cy, t.cz, t.r, t.g, t.b);
+        // Spigoli più scuri della faccia: si distinguono i poligoni fra loro.
+        const float er = t.r * 0.45f, eg = t.g * 0.45f, eb = t.b * 0.45f;
+        put(m_navEdgeData, t.ax, t.ay, t.az, er, eg, eb);
+        put(m_navEdgeData, t.bx, t.by, t.bz, er, eg, eb);
+        put(m_navEdgeData, t.bx, t.by, t.bz, er, eg, eb);
+        put(m_navEdgeData, t.cx, t.cy, t.cz, er, eg, eb);
+        put(m_navEdgeData, t.cx, t.cy, t.cz, er, eg, eb);
+        put(m_navEdgeData, t.ax, t.ay, t.az, er, eg, eb);
+    }
+    m_navFillVertCount = (int)(m_navFillData.size() / 6);
+    m_navEdgeVertCount = (int)(m_navEdgeData.size() / 6);
+}
+
+void FreeCameraViewport::clearNavMesh()
+{
+    m_navFillData.clear(); m_navFillVertCount = 0;
+    m_navEdgeData.clear(); m_navEdgeVertCount = 0;
 }
 
 } // namespace editor

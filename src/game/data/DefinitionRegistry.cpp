@@ -1,6 +1,7 @@
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/ai/WorldIntel.hpp"     // grafo dei link tattici (ADR-032)
-#include "mini/game/MapStructures.hpp"     // espansione delle primitive (ADR-053)
+#include "mini/game/MapStructures.hpp"
+#include "mini/game/StructureJson.hpp"   // una sola lettura/scrittura della ricetta     // espansione delle primitive (ADR-053)
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <fstream>
@@ -326,41 +327,10 @@ static MapGeometryBox parseGeometryBox(const json& gb)
 
 // Primitiva parametrica (ADR-053). Si salva la RICETTA; i box li genera
 // `mapstructures::expand` al load — mai su file.
-static StructureDef parseStructure(const json& s)
-{
-    StructureDef d;
-    d.kind  = mapstructures::parseKind(gets(s, "kind", "stair"));
-    d.label = gets(s, "label", "");
-    d.x  = getf(s, "x",  0.0f);
-    d.y  = getf(s, "y",  0.0f);
-    d.z  = getf(s, "z",  0.0f);
-    d.ry = getf(s, "ry", 0.0f);
-    d.rise      = getf(s, "rise",      2.0f);
-    d.width     = getf(s, "width",     2.0f);
-    d.riser     = getf(s, "riser",     0.0f);
-    d.tread     = getf(s, "tread",     0.0f);
-    d.length    = getf(s, "length",    4.0f);
-    d.height    = getf(s, "height",    0.0f);
-    d.thickness = getf(s, "thickness", 0.0f);
-    d.sizeX     = getf(s, "size_x",    6.0f);
-    d.sizeZ     = getf(s, "size_z",    6.0f);
-    d.baseY     = getf(s, "base_y",    0.0f);
-    d.openW     = getf(s, "open_w",    0.0f);
-    d.openH     = getf(s, "open_h",    0.0f);
-    d.openSill  = getf(s, "open_sill", 0.0f);
-    d.openOff   = getf(s, "open_off",  0.0f);
-    d.flightRise= getf(s, "flight_rise", 0.0f);
-    d.spacing   = getf(s, "spacing",   0.0f);
-    d.ceiling   = getb(s, "ceiling",   false);
-    d.railing   = getb(s, "railing",   false);
-    if (s.contains("access") && s["access"].is_array())
-        for (size_t i = 0; i < 4 && i < s["access"].size(); ++i)
-            d.access[i] = s["access"][i].get<bool>();
-    d.color[0] = getf(s, "r", 0.35f);
-    d.color[1] = getf(s, "g", 0.32f);
-    d.color[2] = getf(s, "b", 0.28f);
-    return d;
-}
+// La ricetta si legge da UN SOLO posto (mini::structjson): il campo type era
+// arrivato qui e non nel lettore dell'editor, e una composita perdeva il legame
+// col tipo al primo salvataggio. Due lettori sono la causa, non la distrazione.
+static StructureDef parseStructure(const json& s) { return mini::structjson::fromJson(s); }
 
 static TacticalPositionDef parseTacticalPosition(const json& p, const char* roleKey,
                                                  const char* defRole)
@@ -414,6 +384,71 @@ void DefinitionRegistry::loadPrefabs(const std::string& dir)
                   << " (collisione:" << p.collision.size()
                   << " tattiche:" << p.tactical.size() << ")\n";
         m_prefabs[p.id] = std::move(p);
+    }
+}
+
+// Tipi di struttura (ADR-055, doc 48): preset nominati delle primitive, con i
+// vincoli su quali misure si possono toccare e fra quali limiti. I limiti autorati
+// possono solo STRINGERE il pavimento fisico del codice, mai allentarlo — qui si
+// legge quel che c'è scritto, l'applicazione del pavimento sta in `effectiveMin`.
+void DefinitionRegistry::loadStructureTypes(const std::string& dir)
+{
+    m_structureTypes.clear();   // idempotente: vedi nota in loadAll
+    fs::path folder = dir + "/structures";
+    if (!fs::exists(folder)) return;   // il progetto funziona anche senza tipi
+    for (auto& entry : fs::directory_iterator(folder))
+    {
+        if (entry.path().extension() != ".json") continue;
+        auto j = readJson(entry.path()); if (!j) continue;
+        StructureTypeDef t;
+        t.id       = entry.path().stem().string();   // ADR-001
+        t.label    = gets(*j, "label", t.id);
+        t.note     = gets(*j, "note", "");
+        t.category = gets(*j, "category", "");
+        t.kind     = mapstructures::parseKind(gets(*j, "kind", "stair"));
+        t.verified = getb(*j, "verified", false);
+        // I predefiniti sono una ricetta completa: si rileggono con lo STESSO parse
+        // delle istanze, così un campo aggiunto domani non va ricordato in due posti.
+        if ((*j).contains("defaults") && (*j)["defaults"].is_object())
+            t.defaults = parseStructure((*j)["defaults"]);
+        t.defaults.kind = t.kind;   // il tipo decide la primitiva, non i predefiniti
+
+        // Parti dell'ASSEMBLAGGIO (ADR-056). Una parte è una primitiva o un box, con
+        // posa LOCALE. Si rileggono con gli STESSI parser delle istanze e della
+        // geometria: un terzo parser qui divergerebbe al primo campo aggiunto.
+        if ((*j).contains("parts") && (*j)["parts"].is_array())
+        {
+            for (const auto& pj : (*j)["parts"])
+            {
+                StructurePart p;
+                p.label = gets(pj, "label", "");
+                // Discriminatore `part`, NON `type`: `type` è già preso due volte —
+                // dalla semantica del box (`floor`/`wall`/...) e dall'id del tipo di
+                // una struttura. Riusarlo avrebbe fatto leggere a `parseGeometryBox`
+                // la parola "box" come semantica, cioè un box sempre di tipo muro.
+                p.isBox = (gets(pj, "part", "prim") == "box");
+                if (p.isBox) p.box  = parseGeometryBox(pj);
+                else         p.prim = parseStructure(pj);
+                t.parts.push_back(std::move(p));
+            }
+        }
+        if ((*j).contains("rules") && (*j)["rules"].is_object())
+        {
+            const auto& r = (*j)["rules"];
+            for (const auto& info : mapstructures::paramsOf(t.kind))
+            {
+                if (!r.contains(info.key) || !r[info.key].is_object()) continue;
+                const auto& e = r[info.key];
+                auto& rule = t.rules[(std::size_t)info.p];
+                rule.editable = getb(e, "editable", true);
+                rule.min      = getf(e, "min", 0.0f);
+                rule.max      = getf(e, "max", 0.0f);
+            }
+        }
+        std::cout << "[Registry] Struttura: " << t.id
+                  << " (" << mapstructures::kindName(t.kind) << ", "
+                  << (t.verified ? "verificata" : "NON verificata") << ")\n";
+        m_structureTypes[t.id] = std::move(t);
     }
 }
 
@@ -706,10 +741,26 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
         if (!m.structures.empty())
         {
             const size_t before = m.geometry.size();
+            int assemblies = 0, brokenType = 0;
             for (const auto& s : m.structures)
-                mapstructures::expand(s, m.geometry);
+            {
+                // Un'istanza con `type` può essere un ASSEMBLAGGIO: in quel caso si
+                // espandono le sue PARTI nella posa dell'istanza (ADR-056).
+                const StructureTypeDef* ty = s.type.empty() ? nullptr
+                                                            : getStructureType(s.type);
+                if (!s.type.empty() && !ty) ++brokenType;
+                if (ty && mapstructures::isAssembly(*ty)) ++assemblies;
+                mapstructures::expandInstance(s, ty, m.geometry);
+            }
             std::cout << "[Registry]   primitive espanse: " << m.structures.size()
-                      << " → " << (m.geometry.size() - before) << " box\n";
+                      << " (" << assemblies << " assemblaggi) → "
+                      << (m.geometry.size() - before) << " box\n";
+            // Un riferimento rotto NON deve passare in silenzio: l'istanza cadrebbe
+            // indietro sulla primitiva nuda e produrrebbe una forma diversa da quella
+            // che l'autore vede nell'editor — la peggior specie di divergenza.
+            if (brokenType > 0)
+                std::cout << "[Registry]   ATTENZIONE: " << brokenType
+                          << " strutture con tipo INESISTENTE (espanse come primitiva)\n";
         }
 
         // Grafo "chi copre chi" (ADR-032): derivato dalle posizioni autorate +
@@ -1132,6 +1183,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     m_allies.clear();
     m_maps.clear();
     m_prefabs.clear();
+    m_structureTypes.clear();
     m_hitboxProfiles.clear();
     m_playerDefs.clear();
     m_vehicles.clear();
@@ -1147,6 +1199,7 @@ void DefinitionRegistry::loadAll(const std::string& dataRoot)
     loadEnemies(dataRoot);
     loadAllies(dataRoot);
     loadPrefabs(dataRoot);   // ADR-048: PRIMA delle mappe, che li espandono
+    loadStructureTypes(dataRoot);   // ADR-055: PRIMA delle mappe, che li referenziano
     loadMaps(dataRoot);
     loadPlayerDefs(dataRoot);
     loadVehicles(dataRoot);

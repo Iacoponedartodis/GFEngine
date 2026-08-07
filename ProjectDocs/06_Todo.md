@@ -1,4 +1,46 @@
 # 06 — Todo (reality-based, prioritized)
+
+## ▶ I TRE LAVORI SUGLI STRUMENTI chiesti dall'utente il 2026-08-05
+
+1. ✅ **Validazione navmesh** nell'editor (changelog 161, ADR-054).
+2. ✅ **Editor strutture come TAB** del Map Editor (changelog 163, ADR-055, doc 48).
+   Resta fuori scope, deliberatamente: il gate `--validate` sui tipi non verificati (serve quando i
+   tipi saranno in uso su una mappa vera).
+3. ✅ **Liste del Map Editor in categorie espandibili** (changelog 165): box per tipo, posizioni per
+   ruolo (ruoli ricavati dai dati), filtro per nome, conteggi e posizioni cieche nell'intestazione.
+
+**I tre lavori sugli strumenti sono chiusi.** Fatto in più, dopo: doc 49 (stabilità), doc 50
+(misure), doc 51 (audit), doc 52 (framework), **assemblaggi** (ADR-056), **guida in-editor (F1)**,
+e il framework condiviso F1-F4.
+
+## ▶ STATO AL 2026-08-07 — pronti per la mappa
+
+### Aperto, in ordine di rischio
+1. **KI #98** — crash entrando in Entity Editor. Non riproducibile; la rete di diagnosi ora
+   funziona (fase + simboli, verificata). **Serve un'occorrenza reale**: allegare `crash_report.txt`.
+2. **KI #100** — identità posizionale e tetti dei codici. Guardati (avviso a 80% e al tetto), causa
+   non rimossa. La riparazione vera (doc 49 R5) è invasiva e si fa solo se il segnale scatta.
+3. **KI #97** — recinto Droid CT irraggiungibile su Training Ground: richiede una scelta di design.
+4. **Gizmo del Map Editor su `ViewportEditing`** — differito con motivo scritto (doc 52): funziona,
+   e nessun collaudo può confermarne la migrazione. Criterio: quando il gizmo sarà verificabile
+   senza mouse.
+5. **Editor prefab** — condizionato al fatto che gli assemblaggi funzionino nell'uso reale.
+   Con ADR-056 (un solo sistema) il prefab è il caso degenere di un assemblaggio: da valutare se
+   serva ancora un editor separato o basti estendere quello delle strutture.
+
+### Rumore da tenere d'occhio (non un difetto)
+Salvare una mappa **riscrive tutti i numeri** normalizzandoli (`8.0` → `8`): una correzione di una
+parola produce un diff di 1159 righe. Non danneggia nulla, ma rende impossibile vedere a colpo
+d'occhio cosa è cambiato davvero in una mappa. Da valutare se stabilizzare il formato numerico.
+
+### Verifiche manuali che restano (io non vedo lo schermo)
+- Barra tab: aprire/chiudere, il popup salva/scarta, e che tornando su `Mappa` vista e selezione
+  siano quelle di prima.
+- **Assemblaggi**: crearne uno, salvarlo, piazzarlo in mappa, **salvare la mappa e riaprirla** —
+  deve restare intero (era il difetto del changelog 179).
+- Ctrl+Z nel tab strutture e in Entity Editor; clic su una parte nella viewport.
+- `Vista → Marcatori` e "Solo geometria" con l'overlay navmesh acceso.
+- Uscita con modifiche non salvate in più moduli: l'elenco deve nominarli tutti.
 ## ⚠ PUNTO DELLA SITUAZIONE — 2026-08-02 (aggiornato dopo changelog 116-123)
 
 Gli ultimi giri hanno chiuso molto ma lasciato aperte cose di tre tipi diversi. **Non confonderli**:
@@ -57,13 +99,15 @@ ordini rapidi e mappa tattica si appoggiano tutti a settori/posizioni/obiettivi.
 Stato al 2026-08-04: **la pianificazione dei metadata è COMPLETA (doc 46)**. Si passa al piano di
 map building, poi l.utente costruisce la mappa, poi si implementa.
 
-- ▶ **W1 = MAP BUILDING — doc 47, IN CORSO**. ✅ G1 metriche (`MapMetrics.hpp`) · ✅ G2 undo/redo ·
+- ✅ **W1 = MAP BUILDING — doc 47, COMPLETO**. ✅ G1 metriche (`MapMetrics.hpp`) · ✅ G2 undo/redo ·
   ✅ G4 primitive parametriche (ADR-053 Accepted, `MapStructures.hpp`) · ✅ G5 `type` al runtime.
   ✅ G3 selezione multipla (Ctrl+click; Ctrl+A a interruttore; sposta/ruota/elimina/duplica sul gruppo).
   ✅ G6 serie con offset, filtri di vista, figura di scala, righello a due selezioni.
   ✅ G7 validazione dal vivo nel viewport (stessa analisi del gate) + contatore di salute.
-  ▶ Resta **G8: riparazione di Training Ground** con i nuovi strumenti, poi l.utente costruisce la
-  mappa 300 × 200 e si passa a doc 46 (metadata). Fasi originali G1-G8:
+  ✅ G8 collaudo su Training Ground: due correzioni piccole + KI #97 (recinto Droid CT
+  irraggiungibile, difetto invisibile ai dati). **Piano doc 47 COMPLETO.**
+  ▶ **PROSSIMO: l.utente costruisce la mappa 300 × 200**, poi si passa a doc 46 (metadata).
+  Fasi originali G1-G8:
   metriche normative → undo/redo → selezione multipla → **primitive parametriche**
   (scala/rampa/muro/piattaforma-con-accessi, che si espandono in box) → `type` letto dal runtime →
   array/livelli/figura di scala → validazione dal vivo nel viewport → **riparazione di Training

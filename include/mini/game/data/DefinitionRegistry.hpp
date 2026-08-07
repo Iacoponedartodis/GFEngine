@@ -17,6 +17,9 @@ public:
     // l'anteprima, senza pagare `loadAll` e — soprattutto — senza un secondo parser che
     // divergerebbe da questo. Chiamata anche da `loadAll`, PRIMA delle mappe.
     void loadPrefabs(const std::string& dir);
+    // Pubblica per lo stesso motivo dei prefab (ADR-055): l'editor strutture carica
+    // i soli tipi, senza `loadAll` e senza un secondo parser che divergerebbe.
+    void loadStructureTypes(const std::string& dir);
     void reload (const std::string& dataRoot = "data") { loadAll(dataRoot); }
 
     [[nodiscard]] const AbilityDef*    getAbility      (const std::string& id) const;
@@ -35,6 +38,20 @@ public:
     [[nodiscard]] const PrefabDef*     getPrefab       (const std::string& id) const;
     // Tutti i prefab (per l'editor: lista di piazzamento e validazione).
     [[nodiscard]] const std::unordered_map<std::string, PrefabDef>& prefabs() const { return m_prefabs; }
+    // Tipi di struttura (ADR-055): libreria per il menu `+ Struttura` e per l'editor.
+    [[nodiscard]] const std::unordered_map<std::string, StructureTypeDef>&
+        structureTypes() const { return m_structureTypes; }
+    // Solo per il COLLAUDO: inserisce/rimuove un tipo senza passare dal disco.
+    // Serve a verificare l'espansione degli assemblaggi in un test headless senza
+    // creare file veri, che poi resterebbero nella libreria dell'utente.
+    void addStructureTypeForTest(const StructureTypeDef& t) { m_structureTypes[t.id] = t; }
+    void removeStructureTypeForTest(const std::string& id) { m_structureTypes.erase(id); }
+
+    [[nodiscard]] const StructureTypeDef* getStructureType(const std::string& id) const
+    {
+        auto it = m_structureTypes.find(id);
+        return (it == m_structureTypes.end()) ? nullptr : &it->second;
+    }
 
     [[nodiscard]] const auto& abilities()      const { return m_abilities; }
     [[nodiscard]] const auto& weapons()        const { return m_weapons; }
@@ -70,6 +87,7 @@ private:
     std::unordered_map<std::string, EnemyDef>      m_allies;   // stessa struct, team=1
     std::unordered_map<std::string, MapDef>        m_maps;
     std::unordered_map<std::string, PrefabDef>     m_prefabs;   // ADR-048
+    std::unordered_map<std::string, StructureTypeDef> m_structureTypes;   // ADR-055
     std::unordered_map<std::string, HitboxProfile> m_hitboxProfiles;
     std::unordered_map<std::string, PlayerDef>     m_playerDefs;
     std::unordered_map<std::string, ClassDef>      m_classes;      // doc 14

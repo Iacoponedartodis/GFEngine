@@ -12,6 +12,12 @@ class BalanceEditor
 public:
     BalanceEditor();
     void draw();
+    // Lavoro non salvato (doc 52 F3). Qui NON si offre il salvataggio automatico:
+    // il Balance Editor scrive per singola definizione (arma, profilo, abilità) e
+    // non ha un "salva tutto" — offrirlo salverebbe una parte e sembrerebbe tutto.
+    // Meglio avvisare e lasciar tornare indietro.
+    [[nodiscard]] bool hasUnsavedChanges() const { return m_dirty; }
+    [[nodiscard]] std::string unsavedWhat() const { return "valori di bilanciamento"; }
 
 private:
     mini::DefinitionRegistry m_registry;

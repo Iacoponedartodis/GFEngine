@@ -112,6 +112,21 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(recastnavigation)
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
+# ── Simboli anche in Release ─────────────────────────────────────────────────
+# Il crash reporter (cpptrace) sa già stampare uno stack, ma senza PDB stampa
+# indirizzi: "#9 0x00007ff75ff533a0 in ??". Un crash che capita SOLO in Release
+# — e capitano, l'ottimizzazione fa emergere difetti che il Debug maschera — era
+# quindi illeggibile proprio nella configurazione in cui si presenta.
+# /Zi produce il PDB, /DEBUG lo collega, /OPT:REF /OPT:ICF rimettono le
+# ottimizzazioni di link che /DEBUG disattiva: il binario resta quello di prima,
+# i simboli vivono in un file a parte. Costo a runtime: zero (ADR-050).
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Zi>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG>
+                     $<$<CONFIG:Release>:/OPT:REF>
+                     $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 # ── Sanitizers (opt-in: rallentano molto, non per il playtest) ────────────────
 # MSVC supporta solo ASan (/fsanitize=address); UBSan NON esiste su MSVC.
 option(GF_ENABLE_ASAN "Abilita AddressSanitizer (e UBSan dove supportato)" OFF)
@@ -167,6 +182,11 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    # imgui_demo.cpp non è "la demo": è dove vivono ShowStyleEditor (l'editor di
+    # aspetto integrato) e ShowMetricsWindow, che contiene l'**ID Stack Tool** —
+    # lo strumento che diagnostica esattamente i conflitti di identificatore che ci
+    # sono già costati un modale invisibile (KI del 2026-08-05, changelog 164).
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
@@ -263,6 +283,7 @@ add_executable(GFEditor
     editor/src/main.cpp
     editor/src/EditorApp.cpp
     editor/src/ui/HomeScreen.cpp
+    editor/src/ui/HelpBrowser.cpp
     editor/src/viewport/FreeCameraViewport.cpp
     editor/src/util/FileDialog.cpp
     editor/src/util/RigReader.cpp
@@ -280,6 +301,13 @@ add_executable(GFEditor
     src/game/data/DefinitionRegistry.cpp
     src/game/data/ContentValidation.cpp   # ADR-018: STESSO gate del runtime, mai una copia
     src/game/ai/WorldIntel.cpp            # ADR-032: il loader costruisce il grafo dei link
+    src/game/nav/NavManager.cpp           # STESSA costruzione di navmesh del runtime.
+                                          # L'editor deve poter dire "qui non ci si cammina"
+                                          # PRIMA di salvare, e l'unico modo che non menta e
+                                          # costruire il navmesh vero: un secondo calcolo
+                                          # "solo per l'editor" darebbe un verdetto diverso da
+                                          # quello del gioco — il difetto che ci e costato di
+                                          # piu (changelog 77). Stesso principio di ADR-018.
     src/platform/OpenGL.cpp
     src/render/Shader.cpp
     src/render/Camera.cpp
@@ -310,6 +338,7 @@ target_link_libraries(GFEditor PRIVATE
     nlohmann_json::nlohmann_json
     spdlog::spdlog
     cpptrace::cpptrace
+    Recast Detour DetourCrowd   # navmesh nell'editor: vedi la nota su NavManager.cpp
 )
 gf_apply_sanitizers(GFEditor)
 if(WIN32)

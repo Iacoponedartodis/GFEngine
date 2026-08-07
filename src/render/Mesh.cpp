@@ -1,5 +1,7 @@
 #include "mini/render/Mesh.hpp"
 #include "mini/platform/OpenGL.hpp"
+#include <cstdio>
+#include <cstddef>
 
 namespace mini
 {
@@ -61,6 +63,24 @@ void Mesh::computeBoundingRadius()
 void Mesh::draw() const
 {
     if (m_data.empty()) return;
+
+    // GUARDIA (KI #98): `m_vertexCount` è memorizzato SEPARATAMENTE da `m_data`, e
+    // il costruttore `Mesh(vector<float>, int)` si fida di chi lo chiama. Con gli
+    // array client-side (ADR-003) un conteggio troppo grande fa leggere oltre il
+    // limite al DRIVER — invisibile ad ASan, che strumenta solo il nostro codice.
+    if (static_cast<std::size_t>(m_vertexCount) * 11u > m_data.size())
+    {
+        static bool s_told = false;
+        if (!s_told)
+        {
+            s_told = true;
+            std::fprintf(stderr,
+                "[Mesh] DISEGNO RIFIUTATO: %d vertici dichiarati ma solo %zu float "
+                "(%zu vertici). Lettura oltre il limite evitata. Vedi KI #98.\n",
+                m_vertexCount, m_data.size(), m_data.size() / 11u);
+        }
+        return;
+    }
 
     constexpr GLsizei stride = static_cast<GLsizei>(11 * sizeof(float));
     const float* base = m_data.data();

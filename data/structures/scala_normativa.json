@@ -1,0 +1,42 @@
+{
+    "defaults": {
+        "access": [
+            true,
+            false,
+            false,
+            false
+        ],
+        "ceiling": false,
+        "railing": false,
+        "rise": 3.0,
+        "riser": 0.20000000298023224,
+        "tread": 0.30000001192092896,
+        "width": 2.4000000953674316
+    },
+    "kind": "stair",
+    "label": "Scala normativa",
+    "note": "Esempio di partenza per la libreria: alzata 0,20 e pedata 0,30 fissate, larghezza libera fra 2,4 e 6 m. Rinominala o cancellala pure.",
+    "rules": {
+        "rise": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.5
+        },
+        "riser": {
+            "editable": false,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "tread": {
+            "editable": true,
+            "max": 0.6000000238418579,
+            "min": 0.30000001192092896
+        },
+        "width": {
+            "editable": true,
+            "max": 6.0,
+            "min": 2.4000000953674316
+        }
+    },
+    "verified": true
+}

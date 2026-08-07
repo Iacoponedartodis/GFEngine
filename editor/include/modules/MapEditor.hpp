@@ -2,6 +2,9 @@
 #include "viewport/FreeCameraViewport.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"   // prefab per il piazzamento (ADR-048)
 #include "mini/game/MapStructures.hpp"             // primitive parametriche (ADR-053)
+#include "mini/game/nav/NavManager.hpp"            // validazione navmesh (doc 47)
+#include "framework/UndoStack.hpp"                 // annullamento condiviso (doc 52 F2)
+#include "framework/ViewportEditing.hpp"           // selezione + gizmo condivisi (doc 52 F1)
 #include <string>
 #include <vector>
 #include <array>
@@ -21,7 +24,61 @@ public:
     void tick(float dt);
     void draw();
     // Rilascio cattura mouse al cambio modulo (FreeCameraViewport::releaseMouseCapture).
-    void releaseMouseCapture() { m_viewport.releaseMouseCapture(); }
+    // ENTRAMBE le viewport: quella del tab struttura può avere il mouse catturato,
+    // e un mouse catturato che nessuno rilascia è un editor da cui non si esce più.
+    void releaseMouseCapture()
+    { m_viewport.releaseMouseCapture(); m_structVp.releaseMouseCapture(); }
+
+    // Collaudo headless delle OPERAZIONI (`--editor-selftest`). Non tocca la UI:
+    // esercita duplica/serie/annulla su uno stato sintetico e verifica gli
+    // invarianti. Esiste perché le regressioni di queste operazioni sono finite
+    // in mano all'utente due volte — e un'operazione che nessuno può eseguire
+    // senza mouse è un'operazione che nessuno verifica. Ritorna il numero di
+    // controlli FALLITI (0 = tutto bene).
+    int selfTest();
+
+    // ── PROTEZIONE DEL LAVORO (doc 51) ───────────────────────────────────
+    // Il Map Editor non aveva né salvataggio automatico né un avviso all'uscita:
+    // chiudere la finestra buttava via ore di lavoro in silenzio, e con KI #98
+    // ancora aperto un crash faceva lo stesso. Su una mappa 300 × 200 costruita in
+    // più giorni è il rischio più grosso che ci sia — più di qualunque lentezza.
+    // TUTTO il modulo, non solo la mappa: anche i tab delle strutture. Prima
+    // guardava solo `m_dirty` della mappa, quindi chiudendo con un tipo modificato
+    // non chiedeva nulla e il lavoro spariva — un avviso che vale in un posto solo
+    // è peggio di nessun avviso, perché insegna a fidarsi.
+    [[nodiscard]] bool hasUnsavedChanges() const
+    {
+        if (m_dirty) return true;
+        for (const auto& t : m_structTabs) if (t.dirty) return true;
+        return false;
+    }
+    // Cosa c'è di non salvato, in chiaro: "la mappa", "2 tipi di struttura"...
+    [[nodiscard]] std::string unsavedSummary() const;
+    [[nodiscard]] const std::string& currentMapId() const { return m_mapId; }
+    // Copia di recupero periodica, FUORI da `data/maps/` (altrimenti diventerebbe
+    // una mappa fantasma nell'elenco). Non tocca il file dell'utente.
+    void tickAutosave(float dt);
+    [[nodiscard]] static std::string autosaveDir();
+    [[nodiscard]] const std::string& lastAutosave() const { return m_lastAutosave; }
+    // Salvataggio richiesto dall'esterno (avviso di uscita di EditorApp).
+    bool saveMapPublic() { return saveMap(); }
+    // Salva la mappa E i tipi di struttura modificati. Un "salva ed esci" che ne
+    // salva solo una parte è peggio di non offrirlo.
+    void saveAllPending()
+    {
+        if (m_dirty) saveMap();
+        for (auto& t : m_structTabs) if (t.dirty && !t.id.empty()) saveStructType(t);
+    }
+
+    // ── TETTI DEI CODICI DI SELEZIONE (doc 49 R1, KI #100) ───────────────
+    // Il codice di selezione è l'INDICE nell'array dentro un intervallo riservato
+    // per tipo: oltre il tetto il codice cambia significato e si muove un elemento
+    // di un altro tipo, **senza alcun errore**. Un controllo solo, eseguito a ogni
+    // frame, invece di una guardia in 26 punti di creazione: una guardia
+    // dimenticata in un punto è il difetto che si voleva evitare, e questo copre
+    // anche il caricamento da disco e la duplicazione.
+    struct CapacityInfo { const char* name; int used; int limit; };
+    [[nodiscard]] std::vector<CapacityInfo> capacityReport() const;
 
 private:
     // ── Working data ─────────────────────────────────────────────────────
@@ -163,6 +220,10 @@ private:
     std::vector<mini::MapGeometryBox> m_structPreview;   // derivata, mai salvata
     int  m_selStruct = -1;                               // indice in m_structures
     void rebuildStructurePreview();
+    // L'UNICO punto in cui l'editor espande una struttura della mappa risolvendone
+    // il tipo (ADR-056). Vedi la nota sull'implementazione: tre chiamate sparse su
+    // quattro sbagliavano.
+    void expandStructureAt(int idx, std::vector<mini::MapGeometryBox>& out) const;
     void addStructure(mini::StructureKind kind);
 
     int                       m_selRoutePt = 0;   // punto attivo della route sel.
@@ -197,7 +258,10 @@ private:
     void applyMove(int code, const glm::vec3& delta);
     void applyGizmoRotateScale();
     void deleteSelection();                       // elimina TUTTI i selezionati
-    void duplicateOne(int code);                  // una copia, per un solo codice
+    // Restituisce il CODICE della copia (-1 se non duplicabile). Non è un extra:
+    // le box si inseriscono accanto all'originale, quindi il codice della copia non
+    // si può dedurre dalla dimensione del vettore — dedurlo spostava un altro elemento.
+    int  duplicateOne(int code);                  // una copia, per un solo codice
 
     // ── ARRAY: N copie con offset progressivo (doc 47 E4) ────────────────
     // Una fila di 12 colonne è UN comando, non 12 operazioni. Agisce sulla
@@ -214,6 +278,14 @@ private:
     bool  m_showType[5] = { true, true, true, true, true };   // floor/wall/platform/cover/decoration
     float m_hideAboveY  = 1000.0f;   // nasconde ciò che sta più in alto
     bool  m_showStructures = true;
+    // I MARCATORI, separati dalla geometria. Nascono da una richiesta precisa:
+    // guardare il navmesh con 169 posizioni tattiche, 5 post, settori e percorsi
+    // colorati davanti è illeggibile. La verifica navmesh serve a vedere le
+    // superfici, e i metadati le coprono.
+    bool  m_showPositions  = true;   // posizioni tattiche (il gruppo più fitto)
+    bool  m_showAreas      = true;   // settori e zone di pericolo (dischi ampi)
+    bool  m_showRoutes     = true;   // percorsi di pattuglia
+    bool  m_showGamePoints = true;   // spawn, post, comandante, bersagli, veicoli
     bool  filtersActive() const;
 
     // ── FIGURA DI SCALA (doc 47 E6) ──────────────────────────────────────
@@ -233,6 +305,36 @@ private:
     // Acceso di default: un controllo che va ricordato di accendere è un controllo
     // che non si usa.
     bool  m_showDefects = true;
+
+    // ── VALIDAZIONE NAVMESH (doc 47) ─────────────────────────────────────
+    // Costruisce il navmesh VERO con lo stesso `NavManager` del motore. È l'unico
+    // controllo che non può mentire: fra i box e le superfici percorribili ci sono
+    // erosione, sfoltimento dei cigli, altezza libera e area minima di regione, e
+    // il gate sui dati non li vede — su Training Ground dice 0 problemi mentre un
+    // intero recinto è irraggiungibile (KI #97).
+    // Su richiesta, non a ogni frame: la costruzione costa ~0,11 s su Training
+    // Ground e ~1,4 s su una mappa 300 × 200.
+    mini::NavManager m_nav;
+    std::vector<FreeCameraViewport::NavTriDraw> m_navTris;
+    bool m_showNav  = false;   // overlay acceso
+    bool m_navBuilt = false;   // esiste un risultato da mostrare
+    bool m_navStale = true;    // la mappa è cambiata dall'ultima verifica
+    struct NavReport {
+        int polys = 0, components = 0, mainComponent = -1;
+        int islandTris = 0;                 // triangoli fuori dalla componente dello spawn
+        std::vector<int> badPositions;      // indici in m_positions
+        std::vector<int> badPosts;          // indici in m_posts
+        float buildSeconds = 0.0f;
+    };
+    NavReport m_navReport;
+    void validateNavmesh();
+    // Impronta della geometria: se cambia, il risultato della verifica è vecchio.
+    // Calcolata invece di essere "marcata a mano" nei venti punti che modificano
+    // la mappa — un flag da ricordarsi di alzare è un flag che prima o poi resta
+    // basso, e mostrare un navmesh stantio come se fosse buono è peggio che non
+    // mostrarlo affatto.
+    [[nodiscard]] std::size_t geometryFingerprint() const;
+    std::size_t m_navFingerprint = 0;
     float m_gridSnap     = 0.5f; // snap griglia
     bool  m_showNavmesh  = false; // evidenzia floor
 
@@ -261,13 +363,20 @@ private:
         std::array<float,3>            spawnTeam1, spawnTeam2;
         std::vector<std::array<float,3>> spawnPoints1, spawnPoints2;
     };
-    std::vector<Snapshot> m_undo, m_redo;
+    // La pila CONDIVISA (doc 52 F2). Prima era scritta qui — ed era l'unica dei
+    // sette moduli ad averla. Il componente è stato estratto da questa, quindi la
+    // migrazione non cambia comportamento: cambia solo chi lo implementa.
     static constexpr size_t kUndoDepth = 64;
+    UndoStack<Snapshot> m_hist{ kUndoDepth };
+    // Ogni due minuti: abbastanza spesso da non perdere lavoro vero, abbastanza raro
+    // da non intralciare (il salvataggio di una mappa grande non è gratis).
+    static constexpr float  kAutosaveSeconds = 120.0f;
+    float       m_autosaveTimer = 0.0f;
+    std::string m_lastAutosave;
     // Coalescenza: trascinare un gizmo produce uno stato nuovo a ogni frame, e senza
     // raggruppamento un solo trascinamento riempirebbe tutta la pila. `pushUndo`
     // ignora le chiamate ravvicinate con la stessa etichetta.
-    std::string m_lastUndoTag;
-    float       m_lastUndoTime = -100.0f;
+    // (l'etichetta e il tempo dell'ultimo gesto vivono ora dentro `UndoStack`)
     float       m_editorClock  = 0.0f;
 
     Snapshot captureState() const;
@@ -282,10 +391,12 @@ private:
     // ── Operazioni ───────────────────────────────────────────────────────
     void loadMaps();                          // scansiona data/maps/
     void loadMap(const std::string& id);      // carica dal JSON
-    bool saveMap();                           // salva sul JSON
+    // Salva sul JSON. `overridePath` non vuoto = scrive ALTROVE con la stessa
+    // serializzazione (lo usa il salvataggio automatico).
+    bool saveMap(const std::string& overridePath = "");
 
     void addBox();
-    void duplicateBox(int idx);
+    int  duplicateBox(int idx);   // -> indice della copia (inserita ACCANTO, non in coda)
     void duplicateSelected();   // duplica QUALSIASI elemento selezionato (F4, doc 39)
     void deleteBox(int idx);
 
@@ -308,6 +419,71 @@ private:
     void drawBoxList(float panelW, float panelH);
     void drawProperties(float panelW, float panelH);
     void drawViewport(float vpW, float vpH);
+
+    // ── TAB (doc 48 S1) ──────────────────────────────────────────────────
+    // Un tab, non un modulo: vincolo esplicito dell'utente — *"così non apre un
+    // altro modulo, ma posso rimanere in map editor avendo una viewport separata"*.
+    // La forma è quella di Unity Prefab Mode: si entra nella definizione **da dove
+    // la si usa** (in fondo al menu `+ Struttura`), si edita in ISOLAMENTO, e
+    // all'uscita c'è un contratto esplicito su cosa è stato salvato.
+    struct StructTab
+    {
+        std::string id;                     // filename stem; vuoto = mai salvato
+        mini::StructureTypeDef def;
+        bool dirty = false;
+        // Esito della verifica sulla struttura ISOLATA (doc 48 §Osservabilità).
+        struct Check {
+            bool  run = false;
+            bool  stale = true;
+            int   boxes = 0;                // box espansi dalla ricetta
+            int   tris = 0;                 // triangoli di navmesh prodotti
+            int   components = 0;           // >1 = la struttura si spezza
+            float declaredArea = 0.0f;      // m² calpestabili dichiarati
+            float navArea = 0.0f;           // m² effettivamente percorribili
+            bool  hasWalkable = false;      // falso = ostacolo puro (muro, barricata)
+            std::vector<std::string> mute;  // box che non producono superficie
+            float seconds = 0.0f;
+        } check;
+        std::size_t fingerprint = 0;
+        std::string saveError;   // non vuoto = l'ultimo salvataggio è fallito
+        // Annullamento PROPRIO del tab (doc 52 F2): la pila condivisa, non una
+        // seconda implementazione. Lo stato fotografato è la definizione del tipo
+        // più la parte selezionata — annullare e ritrovarsi un'altra parte scelta
+        // sarebbe disorientante quanto non annullare.
+        struct UndoState { mini::StructureTypeDef def; int selPart = -1; };
+        UndoStack<UndoState> undo;
+        // Un solo punto in cui si fotografa e si ripristina il tab.
+        [[nodiscard]] UndoState snapshot(int selPart) const { return { def, selPart }; }
+    };
+    std::vector<StructTab> m_structTabs;
+    int  m_activeTab = 0;          // 0 = Mappa; 1+ = m_structTabs[idx-1]
+    bool m_focusLastTab = false;   // un tab appena aperto va messo in primo piano
+    // Tab di cui si è chiesta la chiusura con modifiche non salvate. Serve un indice
+    // ESPLICITO: il tab che si chiude non è per forza quello attivo — la ✕ si può
+    // premere su un tab in secondo piano, e agire su `m_activeTab` scarterebbe il
+    // lavoro sbagliato.
+    int  m_pendingCloseTab = -1;
+    // Filtro per nome delle liste. Solo visivo, non si salva.
+    char m_listFilter[64] = "";
+    // Viewport SEPARATA, una sola riusata dal tab attivo: mostra la sola struttura.
+    FreeCameraViewport m_structVp;
+    ViewportEditing    m_structEdit;   // selezione + gizmo, dal componente condiviso
+    mini::NavManager   m_structNav;
+    std::vector<std::string> m_structTypeIds;   // libreria su disco, per i menu
+
+    void drawMapTab(float totalW, float totalH);
+    void drawStructTab(StructTab& t, float totalW, float totalH);
+    void openStructTab(const std::string& id);         // vuoto = nuovo tipo
+    void saveStructType(StructTab& t);
+    void checkStructType(StructTab& t);
+    void refreshStructTypeIds();
+    void rebuildStructTabPreview(StructTab& t);
+    static void expandTypeForEdit(const mini::StructureTypeDef& def,
+                                  std::vector<mini::MapGeometryBox>& out);
+    int  m_selPart = -1;   // parte selezionata nel tab assemblaggio
+    void placePartClear(const StructTab& t, mini::StructurePart& p);
+    static void scalePrimitivePart(mini::StructureDef& s, const glm::vec3& d);
+    [[nodiscard]] static std::size_t structFingerprint(const mini::StructureTypeDef& d);
 
     bool m_dirty = false;  // modifiche non salvate
 };

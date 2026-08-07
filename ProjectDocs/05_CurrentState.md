@@ -1,6 +1,83 @@
 # 05 — Current State
 
-## 2026-08-05 — Map building: STRUMENTI COMPLETI, G1-G7 (changelog 147-158)
+## 2026-08-07 — Framework condiviso dell'editor + strumenti di misura (changelog 167-179)
+
+**Cosa esiste ORA che prima non esisteva.**
+
+### Componenti condivisi (doc 52, correzione ad ADR-049)
+- **`editor/include/framework/UndoStack.hpp`** — pila di annullamento generica, estratta dal Map
+  Editor. Usata da **Map Editor, tab strutture ed Entity Editor** (che non aveva annullamento).
+  Coalescenza per gesto; `window` negativa = nessuna coalescenza. **11 controlli automatici.**
+- **`framework/ViewportEditing.hpp`** — selezione (ray-picking, anche additiva con Ctrl) e gizmo su
+  una **selezione come insieme**, con `valid(int)` e `anchor(selezione)`. Instrada eventi, **non
+  decide semantica**: le politiche (orbita di gruppo, model space) restano nei moduli.
+  Adottato dal tab strutture. **Il gizmo del Map Editor NON è migrato**, deliberatamente: funziona
+  e nessun collaudo può confermarne la migrazione (criterio in doc 52).
+- **`framework/DirtyGuard.hpp`** — lavoro non salvato raccolto da **tutti** i moduli. Prima cinque
+  moduli lo tenevano e uno solo lo dichiarava.
+- **`framework/Dialogs.hpp`** — `confirmDestructive`, `saveDiscardCancel`, `errorBox`: apertura e
+  disegno nella stessa funzione, quindi il modale invisibile è **inesprimibile**.
+- **`include/mini/game/StructureJson.hpp`** — la ricetta di una struttura ⇄ JSON in **un posto
+  solo**, condivisa da registry ed editor. Nasce dalla perdita di dati del changelog 179.
+
+### Strumenti di misura e vista (doc 50)
+- `Camera` ha un ramo **ortografico**; il viewport ha i modi **Prosp / Alto / Fronte / Lato**,
+  **Inquadra** (tasto **F**), **barra di scala** e coordinate ai bordi, **righello** libero a due
+  clic con aggancio alla griglia.
+- Ingombro della mappa e della selezione sempre in vista nel Map Editor.
+
+### Protezione del lavoro e diagnostica
+- Salvataggio di recupero ogni 2 minuti in `data/_autosave/`; uscita protetta su ogni via.
+- Release con **PDB**; `crash_report.txt` con la **fase**; `--crash-test` per verificare la rete.
+- `--editor-selftest` (senza finestre), `--module <lista>`, `--module-frames`, `--entity`,
+  `--struct-tab`.
+- **Guida in-editor con F1**, contenuti in `data/help/*.md` (4 capitoli, 28 sezioni).
+
+
+## 2026-08-05 — Editor strutture come TAB del Map Editor (changelog 163, ADR-055, doc 48)
+
+**Cosa esiste ORA che prima non esisteva.**
+
+- **Barra tab nel Map Editor**: `Mappa` sempre presente, i tipi aperti accanto come tab chiudibili,
+  con popup salva/scarta se ci sono modifiche non salvate. Nessun modulo nuovo.
+- **Viewport separata** per il tab struttura: la struttura da sola, con le due figure di scala
+  accanto. Solo la viewport del tab attivo avanza.
+- **`data/structures/<id>.json`** — nuovo tipo di definizione (id = filename stem, ADR-001), caricato
+  da `DefinitionRegistry::loadStructureTypes` prima delle mappe. Contiene la primitiva, i valori
+  predefiniti, e per ogni misura `editable` + `min`/`max`.
+- **`mapstructures::paramsOf/getParam/setParam/physicalMin/physicalMax/effectiveMin/effectiveMax`** —
+  la tabella unica dei parametri: la usano l'editor per mostrarli, il tipo per vincolarli, il clamp
+  per applicarli.
+- **Verifica sulla struttura ISOLATA**: navmesh vero su un piano neutro, con sintomo
+  (`superficie persa %`), funnel (box → triangoli → componenti) e il box che resta muto.
+- **`--struct-tab <id>`** — apre un tab struttura all'avvio e stampa l'esito della verifica.
+- `+ Struttura` ora ha la sezione **Libreria** (i tipi, con i non verificati in giallo), il tasto
+  **Editor strutture...** e il sottomenu **Modifica un tipo**.
+- `data/structures/scala_normativa.json` — un tipo d'esempio di partenza, rinominabile o eliminabile.
+
+**Nota**: `width` NON è esposto per la piattaforma — l'espansione fissa le scale d'accesso a
+`STAIR_MIN_WIDTH` e ignora il campo. Renderlo efficace cambierebbe la geometria delle piattaforme già
+in mappa.
+
+## 2026-08-05 — Diagnostica dei crash + filtro marcatori (changelog 162)
+
+**Cosa esiste ORA che prima non esisteva.**
+
+- **`GFEditor.exe --module <a,b,c>`** (con `--module-frames N`) — attraversa i moduli indicati senza
+  mouse. Serve a riprodurre un crash di modulo da riga di comando; la forma a lista collauda i
+  **passaggi** fra moduli, che è dove i difetti stanno davvero.
+- **PDB anche in Release** (`/Zi` + `/DEBUG` + `/OPT:REF /OPT:ICF` in `CMakeLists.txt`) — il
+  `crash_report.txt` di cpptrace ora può nominare le funzioni anche nella configurazione in cui i
+  crash si presentano. Costo a runtime: zero.
+- **Vista → Marcatori** nel Map Editor — quattro spunte (posizioni tattiche · settori e zone di
+  pericolo · percorsi · spawn/post/bersagli/veicoli) e il pulsante **"Solo geometria"**. È la vista
+  richiesta per leggere l'overlay del navmesh senza 169 marcatori davanti.
+- `FreeCameraViewport::resizeFBO` verifica anche `s_delFBO`/`s_delRBO` prima di chiamarli.
+
+**Aperto**: KI #98 — crash entrando in Entity Editor. Riprodotto una volta in Release, non
+riproducibile sul binario ricompilato (sensibile alla disposizione in memoria), **non risolto**.
+
+## 2026-08-05 — Map building: PIANO COMPLETO, G1-G8 (changelog 147-160)
 
 **Cosa esiste ORA che prima non esisteva.**
 
@@ -50,9 +127,31 @@
 
 **Stato misurato di Training Ground**: 71,3 × 92,4 m, 167 box, 1.043 poligoni navmesh,
 `--validate` **0 problemi**, tutti e 5 i command post raggiungibili, **1/169 posizioni tattiche
-irraggiungibile** (KI #96 — più 8 autorate a quota sbagliata: contenuto da correggere).
+irraggiungibile** (dentro il recinto Droid CT, KI #97).
 
-**Non ancora fatto** (doc 47): **G8**, la riparazione di Training Ground con i nuovi strumenti.
+**Doc 47 COMPLETO (G1-G8).** G8 ha cambiato natura: il presupposto ("le scale sono sbagliate") era
+caduto con la correzione del gate. Applicate due correzioni piccole a Training Ground (refuso
+**Aplha -> Alpha**, che avrebbe rotto in silenzio gli obiettivi capture_alpha/hold_alpha; posizione
+#166 spostata di 0,45 m perche stava a 26 cm dal bordo, dentro la fascia erosa dal navmesh) e
+trovato **KI #97**: il recinto Droid CT e irraggiungibile sopra il suolo per tre cause sovrapposte,
+e nessun controllo sui dati poteva vederlo. Non riparato: e un ridisegno, sono scelte di design.
+
+### Validazione navmesh nell'editor (ADR-054, changelog 161)
+Il Map Editor costruisce il **navmesh vero** con lo stesso `NavManager` del gioco, sullo stato in
+editing (primitive comprese), e lo **disegna**: verde = ci si arriva dallo spawn, rosso = isola.
+Pannello con poligoni, isole e l'elenco **cliccabile** di post e posizioni non raggiungibili; il
+risultato invecchia da solo tramite un'impronta della geometria. **Rimossa** la spunta "Area
+navigabile", che coloriva i box `floor` — l'intenzione dell'autore, non ciò che l'AI calpesta.
+
+`NavManager` guadagna `debugTriangles()` e `componentAt()`: la **componente connessa** è il
+`componentId` che doc 46 M1 vuole come dato di primo livello. Su Training Ground:
+**13 componenti (12 isole), 136 triangoli su 2173 isolati**. Il conteggio delle posizioni
+irraggiungibili coincide (**1**) fra `isReachable` e confronto di componente — due metodi
+indipendenti, stesso verdetto.
+
+**PROSSIMO: la mappa 300 × 200**, poi doc 46 (metadata). Restano chiesti dall'utente: **editor
+strutture** come tab dentro il Map Editor (poi lo stesso per i prefab) e **ordinamento in categorie**
+delle liste dell'editor.
 
 ---
 

@@ -2666,3 +2666,168 @@ generale: quando una regola diventa codice, ogni soglia scelta a mano che la rig
 alla regola, altrimenti i due si contraddicono in silenzio.
 
 Piano completo: **doc 47**.
+
+---
+
+## ADR-054 — L'editor costruisce il NAVMESH VERO, non una sua approssimazione (Accepted — in force, 2026-08-05)
+
+**Contesto.** Il Map Editor aveva una spunta "Area navigabile" che coloriva di verde i box di tipo
+`floor`. Mostrava l'**intenzione dell'autore**, non ciò su cui l'AI può camminare — e le due cose
+divergono in modo che nessun controllo sui dati può vedere. Fra i box e il navmesh ci sono quattro
+filtri di Recast: **erosione** (`kAgentRadius` per lato), **sfoltimento dei cigli**
+(`rcFilterLedgeSpans`), **altezza libera** (`walkableHeight`) e **area minima di regione**
+(`minRegionArea`).
+
+Il caso che ha forzato la decisione è **KI #97**: su Training Ground `--validate` dichiara
+**0 problemi** — per i dati le alzate sono 0,10-0,20 m, tutte a norma — mentre un **recinto intero**
+è irraggiungibile. Il difetto non è nella geometria dichiarata: è nella voxelizzazione.
+
+**Decisione.** Il **GFEditor linka `NavManager` + Recast/Detour** e costruisce il navmesh **vero**,
+con lo stesso codice del runtime, sullo stato in editing (box a mano **più** i box generati dalle
+primitive). Nessun calcolo "approssimato ma economico" solo per l'editor.
+
+È lo stesso principio di **ADR-018** (l'editor usa lo stesso `ContentValidation` del gioco) e di
+**ADR-032** (una sola `hasLineOfFire`): *una verità sola sul mondo*. Un secondo calcolo darebbe prima
+o poi un verdetto diverso da quello del gioco — il difetto che ci è costato di più (changelog 77).
+
+**Non viola ADR-002**: il contratto è che *GFEngine non deve mai linkare codice dell'editor*. Il
+verso opposto è già la norma (`DefinitionRegistry`, `ContentValidation`, `WorldIntel`, `Telemetry`).
+
+**Cosa ne esce, oltre alla visualizzazione.** `NavManager` guadagna due metodi che servono anche al
+runtime:
+- `debugTriangles()` — i poligoni con la loro **componente connessa**;
+- `componentAt(p)` — la componente di un punto, cioè *"è raggiungibile da qui?"* ridotto a un
+  confronto fra due interi.
+
+La componente connessa **è** il `componentId` che doc 46 M1 vuole come dato di primo livello: nasce
+qui, e resta una sola implementazione.
+
+**Verificato per controincrocio**, non per fiducia: su Training Ground il conteggio delle posizioni
+irraggiungibili dà **1** sia con `isReachable` (pathfinding Detour) sia con il confronto di
+componente (analisi del grafo). Due metodi indipendenti, stesso verdetto.
+
+**Costo**: la costruzione è **su richiesta**, non a ogni frame — 0,11 s su Training Ground, ~1,4 s su
+una mappa 300 × 200. Il risultato invecchia da solo tramite un'**impronta della geometria**
+ricalcolata a ogni frame: un flag da alzare a mano nei venti punti che modificano la mappa prima o
+poi resta basso, e mostrare un navmesh stantio come buono è peggio che non mostrarlo.
+
+## ADR-055 — Le strutture hanno un TIPO autorabile; i vincoli fisici restano nel codice (Proposed, 2026-08-05)
+
+**Contesto.** ADR-053 ha reso le forme complesse **ricette parametriche**, e ha funzionato: un'alzata
+sbagliata è diventata inesprimibile. Ma i **vincoli** di quelle ricette (`minWidthFor(kind)`, i clamp
+di `STEP_HEIGHT` e `STAIR_TREAD`) sono murati in `MapStructures.hpp`, e le nove primitive sono
+anonime: non esiste un posto dove *"la passerella stretta di questa mappa"* sia **definita**. Per la
+mappa 300 × 200 servono forme nominate, riusabili e già verificate — non nove ricette da
+riparametrizzare a memoria ogni volta, che è il modo in cui una forma sbagliata si ripete.
+
+**Decisione.** Si introduce un livello **TIPO** sopra le primitive, preso da **Revit**: nelle sue
+famiglie, *i parametri di tipo e di istanza si cambiano senza aprire la famiglia*.
+
+- Un **tipo** (`data/structures/<id>.json`, id = filename stem per ADR-001) dichiara: quale
+  primitiva, i valori predefiniti, e per ogni parametro se è **modificabile** e con quali
+  **min/max**.
+- Un'**istanza** (`MapDef.structures[]`) resta ciò che è oggi — posizione, rotazione, valori — e
+  guadagna un campo `type` **opzionale**.
+
+**Il pavimento fisico non è autorabile.** `minWidthFor(kind)`, il clamp di `STEP_HEIGHT` sull'alzata e
+di `STAIR_TREAD` sulla pedata **restano nel codice** e restano invalicabili: non sono preferenze, sono
+conseguenze dell'erosione di Recast e di `minRegionArea` (doc 47 §4). Un tipo può essere **più
+severo**, mai più permissivo; un `min` autorato sotto il pavimento viene alzato e l'editor lo dichiara.
+È la stessa logica per cui ADR-053 esiste: ciò che rompe la struttura deve restare **inesprimibile**,
+e renderlo autorabile sarebbe restituire all'autore esattamente l'errore che gli avevamo tolto.
+
+**Fallback durante la transizione** (CLAUDE.md §2): un'istanza **senza** `type` si comporta
+esattamente come oggi, con i minimi per primitiva. Nessuna mappa esistente cambia comportamento; il
+tipo è additivo.
+
+**Conseguenza da rendere visibile — la lezione di AutoCAD.** In REFEDIT, ridefinire un blocco
+**ridefinisce tutte le sue inserzioni**. Qui vale lo stesso: stringere il `min` di un tipo può
+invalidare istanze già piazzate, che verranno riportate nei limiti al caricamento. L'editor deve dire
+**quante istanze** un tipo ha, *prima* della modifica — non dopo.
+
+**Alternativa scartata: spostare anche i vincoli fisici nei dati.** Sarebbe stato più "configurabile"
+e sbagliato: quei numeri non sono opinioni, e un dato che può essere sbagliato in silenzio è
+esattamente ciò che il gate esiste per impedire. Un tipo con una passerella da 0,80 m si salverebbe
+senza un lamento e produrrebbe una struttura che il navmesh non genera — cioè KI #97 di nuovo, ma
+autorato.
+
+**Osservabilità** (ADR-050): un tipo che non supera la verifica navmesh si può salvare, ma resta
+**marcato non verificato**, e il menu `+ Struttura` lo mostra come tale. Il sintomo misurato è
+`superficie_persa_%` sulla struttura **isolata** — non un esito lontano, ma la cosa che si rompe.
+
+**Status: Proposed.** Passa ad Accepted quando i tipi sono implementati, un tipo reale è in uso su una
+mappa e la verifica navmesh isolata è stata confrontata con il comportamento in partita.
+
+## ADR-056 — Assemblaggio e prefab sono UN SOLO sistema, non due (Accepted — approvato dall'utente 2026-08-06)
+
+**Contesto.** ADR-055 ha dato alle strutture un livello di **tipo**: preset vincolati di **una**
+primitiva. L'utente ha subito segnalato il limite (2026-08-06): *"l'editor strutture mi permette di
+modificare le strutture ma non di crearne di nuove … per fare anche magari strutture un po' più
+complesse"*. Le nove primitive esprimono **elementi**, non **edifici**: una torre con scala interna,
+un bunker con feritoie, un magazzino su due piani sono **assemblaggi**.
+
+Ma un assemblaggio somiglia moltissimo a un **prefab** (ADR-048), che già oggi è *un insieme di box +
+posizioni tattiche piazzato come unità*. Le differenze reali sono due: il prefab contiene box
+**fissi**, il tipo struttura una **ricetta** rigenerata al caricamento; e il tipo ha **vincoli**.
+
+**Decisione.** **Un solo sistema di assemblaggi.** Un assemblaggio è un insieme di **parti** —
+primitive parametriche **o** box liberi — più i parametri e i vincoli propri. Il **prefab diventa il
+caso degenere**: un assemblaggio di soli box liberi, senza parametri.
+
+Costruire un "editor assemblaggi" *e* un "editor prefab" separati significherebbe costruire due volte
+la stessa cosa, con due formati, due editor e due verifiche destinati a divergere — esattamente ciò
+contro cui mette in guardia CLAUDE.md §5 sulla responsabilità dei sistemi. E la divergenza fra due
+implementazioni della stessa regola è il difetto che è costato di più su questo progetto
+(changelog 77, ADR-018, ADR-032).
+
+**Modello preso da AutoCAD (blocchi dinamici)**: geometria + **parametri** + **azioni** + **vincoli**,
+con l'opzione *elenco* che limita i valori ammessi. È la stessa scala di problema, già risolta.
+
+**Limite esplicito, preso da Revit**: la pratica delle famiglie annidate avverte di **non eccedere
+con l'annidamento**, perché diventa impossibile da gestire e da diagnosticare. Qui:
+**un assemblaggio NON può contenere altri assemblaggi.** Le parti sono primitive o box, punto.
+Annidare moltiplicherebbe i modi in cui il navmesh si rompe senza che si capisca dove — e la verifica
+isolata (doc 48) perderebbe il suo potere diagnostico.
+
+**Conseguenza sulla verifica.** L'assemblaggio è precisamente il punto in cui il navmesh si rompe:
+giunzioni che si sfiorano invece di sovrapporsi, altezza libera sotto un solaio, accessi che non si
+toccano. La verifica navmesh **sull'insieme** (non parte per parte) è quindi un requisito, non un
+accessorio: è la ragione per cui l'utente ha chiesto *"strutture che rispettino il navmesh"*.
+
+**Migrazione.** I prefab esistenti (ADR-048) continuano a funzionare come sono: il formato attuale
+resta leggibile e diventa il caso "assemblaggio senza parametri". Nessuna mappa cambia comportamento.
+
+**Status: Accepted** come DECISIONE (approvata esplicitamente dall'utente). L'implementazione è doc 50
+C1 e non è ancora iniziata; questo ADR passerà a "implementato e verificato" quando un assemblaggio
+reale sarà in uso su una mappa.
+
+### ADR-056 — aggiornamento 2026-08-06: implementato e verificato
+Assemblaggi implementati (changelog 171). `StructurePart` (primitiva **o** box libero, posa locale),
+`StructureTypeDef::parts`, `mapstructures::expandAssembly` / `expandInstance` come **unico** punto in
+cui si decide fra assemblaggio e primitiva — ci passano registry, editor e gate.
+
+Il limite dell'ADR è rispettato nel codice: **una parte non può essere un assemblaggio**, solo una
+primitiva o un box. Non c'è annidamento, come prescritto.
+
+Verificato su un assemblaggio reale a tre parti (ripiano + parapetto + insegna): la verifica navmesh
+**sull'insieme** ha trovato che l'insegna toglieva l'altezza libera sopra l'arrivo della scala e
+isolava il ripiano — con tutte e tre le parti legali singolarmente. È la conferma sul campo della
+tesi dell'ADR. Status resta **Accepted**, ora anche implementato.
+
+### ADR-049 — CORREZIONE 2026-08-07: la premessa sul viewport era sbagliata
+L'ADR affermava: *"Il viewport resta `FreeCameraViewport`: già condiviso, non si tocca."*
+
+**Vero per la classe, falso per la capacità.** Il viewport è condiviso da 4 moduli, ma tutto ciò che
+lo rende un EDITOR — selezione, wiring del gizmo, traduzione dei delta in modifiche, undo, filtri di
+vista — vive nel CHIAMANTE, riscritto ogni volta. È da lì che nasce la divergenza segnalata
+dall'utente (*"la viewport del map editor è evidentemente molto più avanti di quella dell'editor
+strutture"*), e la prova è che il ray-picking **esisteva già** nel viewport condiviso e al tab
+strutture mancava solo la riga che lo chiama.
+
+Va aggiunto un componente **`ViewportEditing`** all'elenco dei pezzi condivisi (doc 52 F1), insieme a
+`UndoStack` (F2), `DirtyGuard` (F3) e `Dialogs` (F4).
+
+**Stato della migrazione, misurato**: `ModuleShell`/`AssetBrowser` sono adottati da **1 modulo su 7**
+(VehicleEditor, 349 righe — il più piccolo proprio perché li usa; MapEditor ne ha 6258 senza).
+La migrazione "un modulo alla volta" prevista dall'ADR si è fermata dopo il pilota e va ripresa:
+è il piano di doc 52.

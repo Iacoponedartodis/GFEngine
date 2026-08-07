@@ -2,6 +2,851 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-07 (179) — Composita in mappa: PERDITA DI DATI riparata, e chiusa la classe di difetto
+
+Segnalazione dell'utente: *"ho creato una struttura composita ma una volta salvata se la carico in
+una mappa appare solo una scala"*. Erano **due difetti**, e il secondo perdeva dati.
+
+### 1. L'espansione ignorava il tipo (visualizzazione)
+Tre chiamate su quattro usavano `expand` invece di `expandInstance`: anteprima, disegno nel viewport
+e conteggio dei box in lista. Tutte mostravano la sola **primitiva di base**.
+→ Un solo punto, `MapEditor::expandStructureAt`, così la quinta chiamata non possa dimenticarsene.
+
+### 2. Il caricatore dell'editor non rileggeva `type` (PERDITA DI DATI)
+L'istanza perdeva il legame con l'assemblaggio, tornava a essere la primitiva nuda, e il
+salvataggio **successivo** rendeva la perdita **permanente**. Non un difetto di visualizzazione:
+il lavoro spariva.
+
+### La causa vera: DUE lettori
+Il campo `type` era stato aggiunto al lettore del registry e non a quello dell'editor — **terza
+volta** che un campo nuovo arriva in un lettore su due. La causa non è la distrazione: sono due
+lettori.
+
+Introdotto **`mini::structjson`** — `fromJson` / `toJson` in un posto solo, usato **dal registry e
+dall'editor**, in lettura e in scrittura. Stesso principio di ADR-018 (un solo gate), ADR-032 (una
+sola LOS), ADR-053 (una sola espansione): *una verità sola*. Chi aggiunge un campo ora lo aggiunge
+dove entrambi lo vedono.
+
+### Collaudo che avrebbe fermato tutto al primo build
+Cinque controlli nuovi, fra cui il **giro salva→ricarica** — che doc 52 indicava come *"l'invariante
+più prezioso e oggi non collaudato da nulla"*. Usa la **serializzazione vera**, non una copia
+scritta nel test: una copia avrebbe verificato il contratto e non il codice, cioè la trappola del
+banco che misura sé stesso, che su questo progetto ha già falsato tre diagnosi.
+
+L'ultimo controllo è letteralmente il sintomo dell'utente: *dopo il giro si espande ancora INTERO*.
+
+## 2026-08-07 (178) — F1 generalizzato; MapEditor NON migrato, con il motivo scritto
+
+`ViewportEditing` lavora ora su una **selezione come insieme**, con `valid(int)` al posto di un
+`count` (i codici del Map Editor non sono contigui: sono intervalli negativi per tipo) e un
+`anchor(selezione)` per il baricentro del gizmo. L'interfaccia **copre anche il Map Editor**, e il
+tab strutture ha guadagnato la predisposizione alla selezione multipla senza scriverne una riga.
+
+Aggiunta una cosa che nessun modulo aveva: i codici diventati **non validi escono da soli** dalla
+selezione. Una selezione che punta a ciò che non c'è più è la sorgente naturale degli "ha spostato
+l'elemento sbagliato" — cioè del difetto di "Serie" di due giorni fa.
+
+### Il confine, scritto dentro il componente
+**Instrada EVENTI, non decide SEMANTICA.** Le operazioni ricevono l'intera selezione e il modulo
+decide cosa significhi, perché le tre politiche sono davvero diverse e tutte e tre giuste: il Map
+Editor fa **orbitare** il gruppo attorno al baricentro (o un edificio girerebbe sul posto pezzo per
+pezzo), il tab strutture gira ogni parte su sé stessa, l'Entity Editor lavora in model space.
+Portarle qui dentro ne avrebbe fatto un contenitore di casi particolari — il framework rigido
+contro cui mette in guardia ADR-049.
+
+### Perché il Map Editor non è stato migrato
+Deliberato, non dimenticato. Il suo percorso del gizmo è ~80 righe di casi particolari maturi,
+**funziona**, e **nessun collaudo automatico può confermarne la migrazione** — al contrario
+dell'undo, dove un controllo esisteva ed è per quello che è stato migrato per ultimo e senza rischi.
+
+Criterio per farlo, scritto in doc 52: quando esisterà un modo di verificare il gizmo senza mouse.
+Fino ad allora il guadagno (meno duplicazione in un modulo) non paga il rischio. Riscrivere codice
+funzionante e non verificabile è il modo più elegante di introdurre una regressione — e questa
+settimana ne ho già introdotte abbastanza scoperte dall'utente.
+
+## 2026-08-07 (177) — Il Map Editor adotta la pila condivisa: zero implementazioni duplicate di undo
+
+Ultimo passo di F2, e fatto per **ultimo** di proposito: `UndoStack` era stato estratto **da qui**,
+quindi migrare il Map Editor non cambia comportamento — cambia chi lo implementa.
+
+`pushUndo`, `doUndo` e `doRedo` sono passate da ~35 righe di logica (coalescenza, taglio del ramo di
+ripristino, profondità) a **tre chiamate**. Undici punti che toccavano `m_undo`/`m_redo` a mano ora
+ne toccano uno solo.
+
+**Verificato automaticamente**: il controllo *"annulla: riporta al conteggio precedente"* del
+self-test esercita proprio il percorso migrato e continua a passare. È il motivo per cui il Map
+Editor è stato lasciato per ultimo — era l'unico modulo la cui migrazione un collaudo poteva
+confermare da solo.
+
+Una capacità è emersa dall'adozione, come per `rotate(vec3)` due giorni fa: `push` accetta una
+**finestra negativa** = *niente coalescenza*. Serve al gancio sui widget, che consegna una fotografia
+presa **prima** che il widget diventasse attivo: fonderla col gesto precedente perderebbe uno stato
+che l'utente ha davvero attraversato. Un controllo nuovo la copre — **11 controlli sulla pila**.
+
+**Stato di F2: completo.** Tre moduli (Map Editor, tab strutture, Entity Editor) su una sola
+implementazione, dove due giorni fa ce n'era una sola in un solo modulo.
+
+## 2026-08-07 (176) — F3/F4: il lavoro non si perde più in NESSUN modulo (doc 52)
+
+### F3 — `DirtyGuard`: il difetto era riparato in un quinto dei casi
+**Cinque moduli su sette** tenevano uno stato "modificato"; **uno solo** lo dichiarava. Uscendo da
+GFEditor con modifiche in **Entity, Weapon, Vehicle o Balance Editor**, quelle modifiche sparivano
+**in silenzio** — mentre per il Map Editor l'avviso c'era da due giorni.
+
+*Un avviso che vale in un posto solo è peggio di nessun avviso*: insegna a fidarsi. Ora l'uscita
+interroga tutti i moduli, elenca in chiaro **cosa** non è salvato ("la mappa X, l'entità Y e
+un'arma") e salva tutto ciò che sa salvarsi.
+
+Il **Balance Editor** si dichiara **non salvabile a comando**, perché scrive per singola definizione
+e non ha un "salva tutto": in quel caso l'uscita **non offre** "Salva ed esci". Una promessa
+mantenuta a metà è peggio di un'offerta assente.
+
+I moduli si dichiarano **al momento della domanda**, non registrando callback che sopravvivono a
+loro: stessa disciplina di `UndoStack` e `ViewportEditing`, e per lo stesso motivo.
+
+### F4 — `Dialogs`: il modale invisibile diventa inesprimibile
+`confirmDestructive`, `saveDiscardCancel`, `errorBox`. La difesa è **nella forma**, non nella
+disciplina: `OpenPopup` e `BeginPopupModal` stanno nella **stessa funzione**, quindi nello stesso
+livello di ID **per costruzione**. Il difetto del changelog 164 — apertura dentro `BeginTabBar` e
+disegno fuori, finestra aperta e mai disegnata, clic bloccati ovunque — non è più "da evitare".
+
+Adottati dall'uscita di GFEditor e dalla chiusura di un tab struttura: i modali scritti a mano in
+`EditorApp.cpp` sono passati da 1 a **0**.
+
+Verificato con 48 transizioni fra sei moduli con un tab struttura aperto. Build pulite, self-test
+verde, Training Ground 0 problemi.
+
+## 2026-08-07 (175) — Entity Editor guadagna l'ANNULLAMENTO che non aveva mai avuto (doc 52 F2)
+
+### La promessa del framework, verificata
+`UndoStack` era stato estratto ieri per il tab strutture. Oggi l'ha adottato **Entity Editor**, che
+**non aveva alcun annullamento**: si spostava una zona hitbox o un attach point col gizmo e non
+c'era modo di tornare indietro.
+
+Costo dell'adozione: **una dichiarazione, uno `snapshot()`, tre chiamate.** È esattamente la metrica
+di successo dichiarata in doc 52 — *"una capacità aggiunta al componente deve comparire in un altro
+modulo senza riscriverla"*.
+
+Coperti sia il **gizmo** (fotografia all'inizio del gesto, così un trascinamento intero è una voce
+sola) sia i **campi numerici**. E la pila si azzera al cambio di entità: conservarla farebbe
+applicare a un'entità lo stato di un'altra — un annullamento che invece di riparare rompe.
+
+### ⚠ Confine di F1 trovato e dichiarato
+Tentata anche l'adozione di `ViewportEditing` su Entity Editor, e **respinta con motivo**: lì la
+selezione è per **nome** (`"hit:2"`, `"right_hand"`), le coordinate sono in **model space**, e il
+picking è su joint/marker proiettati, non sui box del viewport.
+
+Forzarcelo dentro avrebbe richiesto una mappatura indice→nome, cioè reintrodurre l'**identità
+posizionale** che KI #100 ci ha insegnato a evitare. **Il confine di F1 è "selezione per indice su
+box disegnati"**, ed è meglio dirlo ora che scoprirlo al terzo adottante: un'astrazione che copre
+due casi bene vale più di una che ne copre tre male.
+
+L'adozione tentata ha comunque migliorato il componente: `rotateY(int, float)` è diventata
+`rotate(int, vec3)` — il viewport fornisce tre assi, e il prossimo adottante non deve dover
+modificare il componente per usarli.
+
+## 2026-08-07 (174) — F1/F2: i primi componenti condivisi veri (doc 52, correzione ADR-049)
+
+Cinque difetti segnalati dall'utente, tutti reali — ma il quinto era architetturale e ha guidato
+il resto: *"ti avevo detto di creare delle strutture condivise… la viewport del map editor è
+evidentemente molto più avanti di quella dell'editor strutture"*.
+
+### L'audit, misurato (doc 52)
+`ModuleShell`/`AssetBrowser` **esistevano già** da ADR-049 e sono adottati da **1 modulo su 7**.
+VehicleEditor (che li usa) è **349 righe**; MapEditor (che non li usa) ne ha **6258**. L'undo
+esisteva in **un solo modulo**. La migrazione si era fermata dopo il pilota.
+
+E ADR-049 conteneva un errore, ora corretto nell'ADR stesso: *"il viewport è già condiviso, non si
+tocca"* è vero per la **classe** e falso per la **capacità**. La prova: il ray-picking era già in
+`FreeCameraViewport`, e al tab strutture mancava **la riga che lo chiama**.
+
+### F2 — `UndoStack` condiviso
+Estratto dalla semantica matura del Map Editor, non inventato: coalescenza per etichetta (un
+trascinamento = una voce) e taglio del ramo di ripristino. **Ctrl+Z / Ctrl+Y ora funzionano nel tab
+strutture**, con storico proprio.
+
+Progettato **senza callback memorizzate** dopo che il primo abbozzo si è rivelato pericoloso: teneva
+`std::function` che catturavano un elemento di `std::vector<StructTab>`, e bastava aprire un altro
+tab perché la riallocazione le facesse puntare a memoria morta. Ora lo stato entra ed esce dai
+metodi e il componente non possiede riferimenti a nulla.
+
+**10 controlli automatici**, il primo pezzo di framework verificabile senza aprire una finestra —
+che è metà della ragione per averlo condiviso.
+
+### F1 — `ViewportEditing`
+Selezione (ray-picking), gizmo e applicazione dei delta in un componente solo. Il modulo dichiara
+**come si legge e si scrive** il proprio stato con quattro funzioni; non eredita nulla (ADR-049).
+`beginGesture` è separata da `move` di proposito: il gizmo produce un delta per frame, e fotografare
+a ogni delta riempirebbe la pila di annullamento.
+
+Adottato dal tab strutture: **~50 righe di wiring a mano sostituite da una dichiarazione**. Prossimi
+adottanti: EntityEditor, poi MapEditor (per ultimo — si estrae da lui, non si riscrive lui).
+
+### Gli altri quattro difetti
+- **Selezione dalla viewport** nel tab strutture: ogni box porta l'indice della sua parte.
+- **Metriche sparite**: il pavimento fisico era mostrato solo nel tipo semplice, non nelle parti —
+  e senza, un valore che non scende sembra un comando rotto. Rimesso.
+- **Pedata non allungabile col gizmo**: `scalePrimitivePart` toccava larghezza e dislivello ma non
+  la pedata. Allungarla è sempre lecito, accorciarla resta bloccata dal minimo.
+- **Avviso di uscita**: guardava solo la mappa. Ora copre i tab, dice **cosa** non è salvato, e
+  "Salva ed esci" salva tutto. *Un avviso che vale in un posto solo è peggio di nessun avviso.*
+- **Categorie** libere per i tipi (una nuova compare da sola), Libreria a sottomenu, e il segno
+  `[+]` che distingue una composita da un preset di primitiva.
+
+## 2026-08-07 (173) — Assemblaggi componibili: gizmo sulle parti, e la verifica che finalmente resta
+
+Quattro difetti segnalati dall'utente provando davvero il tab, tutti reali.
+
+### 1. "L'ho verificata col navmesh ma non cambia nulla" — DUE cause
+- L'esito restava **in memoria**. La Libreria del menu legge dal REGISTRY, che legge dal FILE:
+  finché non si salvava (e finché il registry non veniva riletto), il tipo restava giallo.
+  `verified` è un **risultato**, non una scelta d'autore: ora la verifica **salva da sola** e
+  ricarica la libreria. Chiedere un salvataggio per conservare un risultato è un passo che
+  nessuno indovina.
+- E il salvataggio **falliva comunque**: `getDataDir() + "structures/"` → `datastructures/`.
+  **Quarto bug di percorso della stessa famiglia** (dopo i tre di ieri): `getDataDir()` e
+  `datapath::root()` NON hanno lo slash finale. L'errore finiva solo su stderr, quindi
+  dall'editor sembrava semplicemente che verificare non servisse a niente.
+  Ora un salvataggio fallito **si vede in rosso** accanto al pulsante e il tab resta marcato
+  non salvato — un salvataggio che fallisce in silenzio è la classe di difetto peggiore.
+
+### 2. Le parti nascevano tutte nello stesso punto
+Una dentro l'altra all'origine: finché non le separavi a mano non si capiva nemmeno quante
+fossero. Ora una parte nuova nasce **accanto** all'ingombro attuale, con un metro di stacco.
+
+### 3. Niente gizmo sulle parti
+Un assemblaggio non era componibile, era *compilabile*: le parti si potevano solo digitare a
+numeri. Ora **1 Sposta / 2 Ruota / 3 Scala** agiscono sulla parte selezionata, come in mappa.
+
+Su un **box** la scala cambia le tre dimensioni. Su una **primitiva** agisce sulle sue
+**misure** (larghezza, dislivello, lunghezza), non su un fattore moltiplicativo: scalare una
+scala del 30% produrrebbe alzate fuori norma — esattamente l'errore che ADR-053 rende
+inesprimibile. Ogni misura resta clampata al suo pavimento fisico.
+
+### 4. Il combo della primitiva confondeva
+Su un assemblaggio la "primitiva di base" non governa nulla, ma restando visibile sembrava che
+aggiungere una parte la **sostituisse**. Ora sparisce e lascia la scritta ASSEMBLAGGIO. Un
+comando che non fa nulla ma cambia aspetto è peggio di un comando assente.
+
+Rimossa anche la scritta "crea un TIPO NUOVO..." dalla voce di menu (superflua).
+Guida `data/help/20_Strutture.md` aggiornata nello stesso change set, come da CLAUDE.md §6-bis.
+
+## 2026-08-07 (172) — GUIDA in-editor (F1) + gli assemblaggi resi trovabili (CLAUDE.md §6-bis)
+
+### Il fallimento che ha generato tutto
+Gli assemblaggi erano implementati, collaudati con 5 controlli e documentati in ProjectDocs.
+L'utente non è riuscito a usarli: *"non ho trovato il modo per fare un assemblaggio… nell'editor
+strutture non è cambiato nulla"*. La capacità era dietro un'intestazione **chiusa** che diceva
+"Parti (0)".
+
+**Una funzione che l'utente non trova non esiste.** È la stessa lezione di ADR-023 (un dropdown
+incompleto rende la capacità inesistente), ed è ora una regola operativa: **CLAUDE.md §6-bis**.
+
+Riparato: sezione **sempre aperta**, con lo stato vuoto che *spiega cosa sono gli assemblaggi e a
+cosa servono* invece di mostrare un contatore a zero; pulsanti normali invece di `SmallButton`;
+il campo senza etichetta ora dice "Nome del tipo" e spiega dove finirà; la voce di menu è
+"Editor strutture: crea un TIPO NUOVO...".
+
+### La guida (menu **Guida**, o **F1**)
+Finestra con indice a sinistra e contenuto a destra, ricerca che filtra capitoli **e sezioni**
+(una ricerca che poi obbliga a cercare a occhio non ha cercato nulla), e "Ricarica" per rileggere
+senza ricompilare.
+
+Contenuti in `data/help/*.md`, uno per capitolo, ordinati dal prefisso numerico: Map Editor ·
+Strutture e assemblaggi · Navmesh e metriche · Riga di comando e diagnostica.
+**4 capitoli, 23 sezioni.**
+
+**Due documentazioni diverse, che non si sostituiscono**: ProjectDocs spiega **perché** (è per me,
+per non ripetere gli errori); `data/help/` spiega **come** (è per chi costruisce, dentro l'editor).
+
+### Tre bug di percorso trovati verificando
+`datapath::root()` è la radice di `data/` **senza slash finale**, non la radice del progetto. Le
+mie concatenazioni erano sbagliate in tre punti, tutti scritti negli ultimi due giri:
+- la guida cercava in `data/data/help` → non avrebbe trovato nulla;
+- le preferenze d'aspetto finivano in `dataeditor_appearance.json` → sembravano salvarsi e non
+  tornavano più;
+- il salvataggio automatico scriveva in `data_autosave/`, una cartella sorella creata per errore.
+
+Trovati perché ho aggiunto un controllo che verifica che la guida **carichi davvero** i suoi file:
+una guida vuota sembra un problema di contenuti mancanti, non di cartella sbagliata.
+**30 controlli, verdi.**
+
+## 2026-08-06 (171) — C1: ASSEMBLAGGI, strutture fatte di più parti (ADR-056, doc 50 C1)
+
+Il pezzo che mancava. Un **tipo** non è più per forza una primitiva sola: può essere un
+**assemblaggio** di parti, e le parti sono **primitive parametriche o box liberi**.
+
+Perché entrambi: le primitive garantiscono le misure (un'alzata sbagliata resta inesprimibile,
+ADR-053) ma non esprimono tutto — un contrafforte, un parapetto storto, una feritoia sono box.
+Ammettere solo primitive avrebbe reso inesprimibili proprio le *"strutture un po' più complesse"*
+che sono il motivo per cui l'assemblaggio esiste.
+
+### La dimostrazione che il sistema serve
+Assemblaggio di prova a tre parti: ripiano a 3 m con accesso, parapetto, e un'insegna decorativa.
+**21 box** da 3 parti. Esito della verifica sull'insieme:
+```
+2 componenti, 7.2 / 71.2 m2 raggiungibili, 1 muto -> NON verificata
+```
+Il ripiano era isolato dalle sue stesse scale. Causa: **l'insegna** (y = 4,6, sopra l'arrivo della
+scala) toglieva l'altezza libera — 1,2 m contro i 2,10 richiesti. Alzandola a 6,2:
+```
+1 componente, 71.2 / 71.2 m2 -> VERIFICATA
+```
+**Le tre parti erano tutte legali singolarmente.** Solo l'assemblaggio era rotto, e nessun controllo
+sui dati poteva vederlo: è esattamente ciò che ADR-056 prometteva — *"l'assemblaggio è il punto in cui
+il navmesh si rompe"*.
+
+### Una sola decisione, un solo posto
+`mapstructures::expandInstance(inst, type, out)` decide se espandere come assemblaggio o come
+primitiva. Ci passano **registry, editor e gate**: un secondo criterio avrebbe fatto divergere
+l'anteprima dal gioco, che è il difetto che ADR-018/032/053 esistono per impedire.
+
+### Trappole chiuse
+- **Collisione di chiavi JSON**: il discriminatore delle parti è `part`, non `type` — `type` è già
+  la semantica del box (`floor`/`wall`/…) **e** l'id del tipo di una struttura. Riusarlo avrebbe
+  fatto leggere a `parseGeometryBox` la parola "box" come semantica, cioè box sempre di tipo muro.
+- **Le parti si salvano riscrivendo l'intero array**: una fusione campo-per-campo col file su disco
+  avrebbe lasciato parti fantasma alla cancellazione. Il RMW continua a proteggere il resto del file.
+- **Riferimento a un tipo inesistente**: non passa in silenzio. L'istanza ripiega sulla primitiva
+  nuda — che produce una forma diversa da quella vista nell'editor — e il registry lo dichiara.
+
+### Collaudo
+Cinque controlli nuovi, fra cui la **convenzione di rotazione**: una parte a (4, 0) locale con
+origine (10, 20) e ry 90° deve finire **esattamente** a (10, 16). Col segno sbagliato finirebbe a
+z = 24 — dall'altra parte — e a occhio sembrerebbe "quasi giusto". Al primo giro il controllo ha
+fallito per una condizione sbagliata **del collaudo stesso**, non del codice. **29 controlli, verdi.**
+
+Nessuna regressione: un tipo senza parti si comporta esattamente come prima (verificato), e
+Training Ground resta a 0 problemi.
+
+## 2026-08-06 (170) — Inquadratura riparata + misure sempre in vista (segnalazioni utente)
+
+### "L'inquadratura viene spostata troppo lontana, a volte viene inquadrato il nulla"
+Due cause distinte, **entrambe trovate dal collaudo prima che servisse un altro giro di
+segnalazioni**:
+1. **La vista prospettica non veniva conservata.** Tornando da una vista ortografica, la camera
+   restava dove l'aveva messa l'ortografica — centinaia di metri in aria — a inquadrare il nulla,
+   senza un modo ovvio di rimettersi a posto. Ora posizione e angoli si salvano all'uscita dalla
+   prospettiva e si ripristinano al rientro.
+2. **Il contenuto cadeva oltre il piano di taglio.** La camera ortografica veniva messa a
+   `dist = 500` con `far = 500`: il contenuto finiva **esattamente** oltre il piano lontano.
+   Ora la distanza è modesta (100) e l'intervallo simmetrico `[-far, +far]` tiene dentro ciò che sta
+   davanti **e** dietro. In proiezione parallela la distanza non cambia l'immagine — serve solo a
+   stare fuori dalla geometria, e confonderla col piano di taglio era l'errore.
+3. Corollario: `frameHalfHeightFor` usava l'aspect del **pannello** invece che quello della
+   **camera**. Al primo frame (e in collaudo headless) il pannello non è ancora disegnato e valeva
+   zero: si inquadrava un rettangolo diverso da quello che si proietta.
+
+**Aggiunto "Inquadra tutto"** (pulsante + tasto **F**), il rimedio che ogni editor 3D ha perché
+perdersi è normale, e `setContentBounds` con cui il Map Editor dice al viewport **dov'è la roba** —
+cambiare vista senza saperlo è il modo sicuro di inquadrare il vuoto.
+
+**Sei controlli nuovi** nel self-test: gli otto angoli del contenuto devono cadere dentro lo schermo
+in Alto/Fronte/Lato, la camera non deve restare lontanissima al ritorno in prospettiva, la proiezione
+deve tornare prospettica, e "Inquadra tutto" deve funzionare anche in prospettiva. Al primo giro
+**tre fallivano** — è così che le due cause sono venute fuori. **24 controlli totali, verdi.**
+
+### "Misure visibili sulla griglia in maniera chiara evidente"
+- **Barra di scala** in basso a sinistra, con la lunghezza scritta ("50 m"), come sulle carte
+  geografiche: dice la scala di ciò che si sta guardando **sempre**, senza doverla chiedere. Passi
+  "tondi" (1/2/5 × 10ⁿ): un passo di 37,4 m sarebbe corretto e illeggibile.
+- **Coordinate ai bordi** con le linee di riferimento, in vista dall'alto: X sopra, Z a sinistra, con
+  l'asse Z **ribaltato** perché in vista dall'alto "su" sullo schermo è −Z.
+- Compaiono **solo in ortografica**: in prospettiva la scala cambia con la profondità, e una tacca
+  "ogni 10 m" sarebbe una bugia. Interruttore **Misure ON/OFF**.
+- Disegnate in sovrimpressione con la draw list di ImGui: è testo, e il testo nella scena 3D andrebbe
+  ruotato e riscalato a ogni frame.
+
+## 2026-08-06 (169) — AUDIT dell'editor: protezione del lavoro, UI adattiva, strumento aspetto (doc 51)
+
+Richiesta dell'utente: non solo eseguire i suoi esempi, ma **analizzare il progetto e trovare da solo**
+cosa manca prima della mappa grande.
+
+### Il rilievo che nessun esempio toccava
+**Il Map Editor non aveva né salvataggio automatico né avviso all'uscita.** Chiudere la finestra
+buttava via le modifiche non salvate **in silenzio** — e non serviva un crash, bastava la X. Con
+KI #98 ancora aperto e una mappa 300 × 200 da costruire in più giorni, era il rischio più grosso
+dell'editor.
+- Copia di recupero ogni 2 minuti in `_autosave/`, **fuori** da `data/maps/` (dentro sarebbe
+  diventata una mappa fantasma nell'elenco). Riusa la stessa serializzazione di `saveMap`, perché un
+  secondo scrittore avrebbe salvato qualcosa di diverso dal file vero: un recupero che non recupera.
+- La copia **non azzera** lo stato "modificato": non è un salvataggio, e far credere il contrario
+  sarebbe peggio del problema.
+- Uscita protetta su **ogni** via (X della finestra e voce di menu): Salva ed esci / Esci senza
+  salvare / Annulla.
+
+### Scalabilità: misurata invece che temuta
+`updateViewport()` ricalcola l'esposizione a ogni modifica — anche a ogni frame durante un
+trascinamento — e `buildTacticalLinks` è O(n²). Banco aggiunto al self-test:
+**169 → 0,7 ms · 500 → 3,5 ms · 1000 → 9,5-14,6 ms · 1500 → 21-34 ms**.
+Verdetto: **non è un blocco** alla densità prevista; lo diventa oltre. Rimedio noto e non urgente
+(non ricalcolare durante il trascinamento; poi la griglia spaziale di doc 46 M0-bis).
+
+### Interfaccia
+- **`sliderRow` adattiva** (usata in **178 punti**): sotto la larghezza utile mette l'etichetta sopra
+  e i controlli sotto invece di tagliare, e misura l'etichetta con `CalcTextSize` invece di assumere
+  58 px. In Dear ImGui non esiste layout a vincoli — il ramo va scritto a mano — quindi la leva è il
+  widget condiviso, non i moduli.
+- **`editor::ui::panelSplitter`** condiviso, e Weapon Editor riparato: `ImGuiChildFlags_ResizeX` mette
+  il grip sul bordo destro, che per un pannello di destra è il bordo finestra — una volta stretto non
+  c'era più nulla da afferrare. **La riparazione esisteva già nel Map Editor e non era stata
+  propagata.** Verificati tutti gli altri usi: sono su pannelli sinistra/centro, dove funziona.
+- **Menu Aspetto → Interfaccia**: dimensione testo e densità, effetto immediato, conservate. Si salva
+  **solo** questo e non `ImGuiStyle` grezzo: scaricare quella struct non è affidabile fra versioni di
+  ImGui (#8659, #101), e preferenze che si rompono a ogni aggiornamento sono peggio di niente.
+- **`imgui_demo.cpp` nel build**: non è "la demo", è dove vivono `ShowStyleEditor` e
+  `ShowMetricsWindow` — con l'**ID Stack Tool**, lo strumento che diagnostica i conflitti di
+  identificatore che ci sono già costati un modale invisibile (changelog 164).
+
+**Dichiarato apertamente**: lo strumento aspetto **non sposta i comandi**. Per "tasti troppo in mezzo"
+servirebbe una barra configurabile — feature a sé, da decidere.
+
+## 2026-08-06 (168) — VISTA ORTOGRAFICA + righello libero (doc 50 M3/M4) e ADR-056
+
+### ADR-056 — assemblaggio e prefab sono UN sistema
+Decisione approvata dall'utente. Un assemblaggio è un insieme di **parti** (primitive parametriche o
+box liberi) con parametri e vincoli propri; il **prefab diventa il caso degenere** senza parametri.
+Due sistemi separati avrebbero significato due formati, due editor e due verifiche destinati a
+divergere. Limite esplicito preso dalla pratica Revit: **un assemblaggio non può contenerne altri** —
+annidare moltiplicherebbe i modi in cui il navmesh si rompe senza che si capisca dove.
+
+### M3 — La vista ortografica (che non esisteva)
+`Camera` guadagna un ramo ortografico (`setOrthographic`, `setOrthoHalfHeight`), e il viewport quattro
+modi: **Prosp / Alto / Fronte / Lato**. In prospettiva una lunghezza sullo schermo **non** corrisponde
+a una lunghezza nel mondo: si stima, non si misura. È il motivo per cui il righello di Unreal funziona
+solo in ortografica e per cui Hammer/Radiant lavorano su viste ortografiche.
+
+In ortografica il tasto destro **sposta** invece di ruotare (ruotare una vista assiale la disallinea
+dagli assi e le toglie l'unica cosa per cui esiste) e la rotella cambia l'inquadratura, mostrata in
+metri.
+
+**Due trappole trovate e chiuse prima che mordessero:**
+- `panCamera` faceva `cross(forward, {0,1,0})`: guardando **dritto in basso** è il vettore nullo, e
+  normalizzarlo dà NaN — la camera sarebbe sparita alla prima trascinata nella vista dall'alto.
+- Il piano vicino della proiezione ortografica è **negativo** di proposito: altrimenti tutto ciò che
+  sta *sopra* la camera verrebbe tagliato, e guardando una mappa dall'alto sparirebbe.
+
+**Verificata sulla matematica**, visto che non posso guardare lo schermo: 7 controlli nuovi nel
+self-test — niente NaN, il centro del mondo al centro dello schermo, la scala che rispetta l'aspect,
+−Z in alto, **la distanza che non cambia con la quota** (il senso stesso della vista), ciò che sta
+sopra la camera che resta visibile, più la controprova in prospettiva. **18 controlli totali, verdi.**
+
+### M4 — Righello libero
+Due clic sul terreno, con aggancio alla **stessa** griglia con cui si costruisce, misura in tempo
+reale mentre si cerca il secondo punto, e il confronto normativo detto (*"sotto il corridoio (2,40)"*)
+invece di lasciato a mente. Disegnato **senza test di profondità**: una misura che sparisce dietro un
+muro non misura niente.
+
+Il righello che c'era misurava solo fra **due elementi selezionati**, quindi non poteva misurare uno
+spazio **vuoto** — cioè il caso vero: la larghezza di un varco, la luce di un passaggio.
+`screenToPlane` sproietta la matrice e vale in entrambe le proiezioni; i segni sono stati verificati
+invertendo la `projectToScreen` già usata dal picking.
+
+## 2026-08-06 (167) — Misure: dimensioni della mappa e ingombro della selezione (doc 50 M1/M2)
+
+L'utente: *"hai messo le figure di scala, ma sono scomode, mi serve un modo per sapere le dimensioni
+tipo della mappa in maniera facile e chiara"*. Ha ragione: le figure di scala sono un **surrogato** —
+dicono "circa due metri", non "questo corridoio è 3,40".
+
+- **M1 — ingombro della mappa sempre in vista**, in cima al pannello sinistro: X × Z e l'escursione
+  di quota, su box a mano **più** quelli generati dalle primitive.
+- **M2 — ingombro della selezione**: larghezza × profondità × altezza del gruppo, con l'avviso quando
+  il lato minore scende sotto la misura del corridoio.
+
+### La rotazione conta, e me ne ero già dimenticato una volta
+La prima versione di M1 ignorava `ry`. Su Training Ground — che ha due passerelle da 90 m ruotate —
+questo dà **154,9 × 91,9** invece di **71,3 × 92,4**: è *esattamente* il numero sbagliato che avevo
+riportato all'utente settimane fa. Corretta con l'AABB completo di un box ruotato attorno a Y, e
+**verificata per controincrocio**: calcolo indipendente sul JSON = 71,3 × 92,4, uguale al valore
+ricavato dai limiti del navmesh. Tre fonti concordi.
+
+Un dato che nessuno mostra è un dato che si sbaglia — l'avevo sbagliato io due volte.
+
+### Ricerca e piano (doc 50)
+Confronti: **Unreal Measuring Tool** (aggancio alla griglia, e funziona **solo in ortografica** —
+in prospettiva non si misura, si stima), **Hammer** (viste ortografiche + griglia in unità dichiarate),
+**blocchi dinamici AutoCAD** (parametri + azioni + vincoli + elenco di valori ammessi),
+**famiglie annidate Revit** (con l'avvertenza esplicita a *non* eccedere con l'annidamento),
+letteratura sul **blockout modulare** (90°/45°, incrementi di griglia grandi per le stanze e piccoli
+per la rifinitura).
+
+Rilievi principali: **non esiste una camera ortografica** (`Camera::getProjection` è solo
+`glm::perspective`) e il righello esistente misura **solo fra due elementi selezionati**, quindi non
+può misurare uno spazio vuoto — che è il caso vero. Piano a fasi in doc 50.
+
+## 2026-08-06 (166) — KI #98: non riprodotto, ma la rete di diagnosi ora funziona davvero
+
+Obiettivo: chiudere il crash di Entity Editor. **Non chiuso** — non si riproduce. Ma la posizione è
+cambiata: da "crash illeggibile" a "crash che al prossimo colpo si racconta da solo".
+
+### Il difetto del mio metodo, prima del difetto del codice
+Tutte le riproduzioni automatiche fatte finora aprivano Entity Editor con `m_sel = -1`, cioè **senza
+alcun modello caricato**: collaudavo una viewport vuota, non lo scenario dell'utente. Aggiunto
+`--entity <id|indice>`, che seleziona all'avvio e fa girare mesh + rig + ossa + arma in mano.
+Con il B1 Battle Droid (42 primitive) e l'arma: **7 transizioni fra moduli, nessun crash**, e
+**nessun errore ASan** nemmeno in Debug+ASan sullo stesso percorso.
+
+### La FASE nel crash report
+`mini::telemetry::setPhase()` / `ScopedPhase` — costo una store di puntatore. Uno stack trace dice
+**dove si è fermato il processore**, non **cosa stava facendo il programma**; e se il crash avviene
+dentro la DLL del driver grafico, il "dove" non ha nemmeno nomi nostri. Marcate: cambio modulo, tick
+e draw di ciascun modulo.
+
+**Verificata, non dichiarata**: `--crash-test` provoca un access violation dentro una fase nota.
+```
+fase:   crash-test volontario
+#8  main(int, int) at ...\editor\src\main.cpp:44
+```
+dove il report originale di KI #98 diceva `#9 0x00007ff75ff533a0 in ??`. Un miglioramento al crash
+reporting che non si è mai visto funzionare è una speranza, non uno strumento.
+
+### Due guardie e un accesso fuori limite reale
+Con gli array client-side (ADR-003) è il **driver** a leggere la nostra memoria durante
+`glDrawArrays`: un conteggio di vertici maggiore dei dati diventa una lettura oltre il limite
+**dentro la DLL del driver**, che ASan non può vedere. Ora `FreeCameraViewport::drawArray` e
+`Mesh::draw` **rifiutano il disegno** e lo dicono.
+
+E un accesso fuori limite vero, riparato (non dimostrato essere questo crash):
+`FreeCameraViewport::loadModel` faceva `raw.data() + i*11` fidandosi di `getVertexCount()`, che è
+memorizzato **separatamente** dai dati — un'invariante che oggi regge per costruzione ma che nessuno
+impone, e che `Mesh(vector<float>, int)` lascia interamente al chiamante.
+
+## 2026-08-06 (165) — Guardia sui tetti (R1) + liste raggruppate: chiuso il terzo dei tre lavori
+
+### R1 — La guardia sui tetti dei codici (KI #100)
+Ci sono **26 punti** che creano elementi: una guardia in ciascuno significa dimenticarne uno, ed è
+proprio la dimenticanza il difetto che si vuole evitare. Quindi **un controllo solo**,
+`capacityReport()`, valutato a ogni frame — che copre anche il caricamento da disco e la
+duplicazione, cioè le strade da cui una mappa può arrivare già oltre il tetto.
+
+Compare **solo sopra l'80%**: un avviso sempre acceso diventa arredamento. Al tetto diventa rosso.
+
+Tre controlli nuovi nel self-test impediscono alla tabella dei tetti di divergere dagli intervalli
+veri: verificano che l'ultimo indice lecito risolva ancora, che il tetto dichiarato coincida con
+l'inizio dell'intervallo successivo, e che il superamento venga segnalato. **11 controlli, tutti verdi.**
+
+### Liste del Map Editor raggruppate (terzo lavoro chiesto il 2026-08-05)
+- **Box per tipo** — Pavimenti / Muri / Piattaforme / Coperture / Decorazioni, con il conteggio
+  nell'intestazione. Le categorie sono quelle di `BoxType` e dei filtri di Vista: un secondo
+  vocabolario per dire le stesse cose farebbe solo confusione.
+- **Filtro per nome** sopra la lista: quando sai come si chiama, la strada più corta non è la
+  categoria giusta. Col filtro attivo le categorie **si aprono da sole** — cercare e poi dover
+  anche aprire il cassetto vanificherebbe la ricerca — e i conteggi sono quelli filtrati, altrimenti
+  l'intestazione promette righe che non ci sono.
+- **Posizioni tattiche per ruolo**, con i ruoli ricavati dai **dati** e non da un elenco fisso: un
+  ruolo nuovo compare da solo invece di finire in un "altro" che nessuno guarda. Nell'intestazione
+  anche il numero di posizioni **cieche** del gruppo, così si vede da fuori dove c'è un problema
+  senza aprirli tutti.
+
+Su Training Ground sono 167 box e 169 posizioni; sulla mappa 300 × 200 saranno molte di più.
+
+## 2026-08-05 (164) — Fermata per stabilità: tre difetti chiusi + il primo collaudo headless (doc 49)
+
+L'utente ha fermato la costruzione: *"penso che abbiamo toccato qualcosa che ha rotto la stabilità
+dell'editor … costruire adesso potrebbe peggiorare le cose"*. Aveva ragione su due difetti su tre, e
+la terza intuizione — che il problema fosse **strutturale** — è quella giusta (analisi in doc 49).
+
+### I tre difetti
+1. **"Serie" spostava un elemento SBAGLIATO** (preesistente, `bc9a281`). `duplicateBox` inserisce la
+   copia *accanto* all'originale, ma `makeArray` deduceva il codice della copia con *"sarà l'ultima
+   del vettore"*: offset e rotazione finivano su un'altra box, che veniva trascinata via **in
+   silenzio**. Stesso errore in `duplicateSelected`, con un commento che affermava il contrario.
+   → `duplicateOne` ora **restituisce** il codice della copia, e i codici raccolti prima del ciclo si
+   aggiornano dopo ogni inserimento.
+2. **Modale invisibile che blocca i clic** (mio, changelog 163). `OpenPopup` dentro `BeginTabBar`
+   (che spinge un livello di ID, `imgui_widgets.cpp:9849`) e `BeginPopupModal` fuori: due ID diversi,
+   finestra aperta e mai disegnata. Tranello noto di ImGui (issue #331). Nella stessa riparazione:
+   la modale agiva sul tab **attivo** invece che su quello in chiusura.
+3. **Viewport della mappa che poteva congelarsi** (mio, changelog 163). `m_activeTab` resta al valore
+   vecchio nei frame in cui i `BeginTabItem` non girano; puntato a un tab inesistente, la viewport
+   della mappa non avanzava e **non rilasciava il mouse** — il sintomo *"non riesco più a cambiare
+   modulo, torno alla home"*.
+
+### `--editor-selftest`
+Sette controlli sulle operazioni (duplica, serie, serie con rotazione, annulla) su uno stato
+sintetico, senza finestra e senza frame. Include *"serie non sposta elementi fuori dalla selezione"*,
+cioè esattamente il difetto 1. Riferimenti: *Edit Mode tests* di Unity, *Automation Framework* di
+Unreal — entrambi collaudano **l'editor**, non solo il gioco.
+
+Non è vuoto: al primo giro ha fallito su un difetto vero **del banco di prova** (un `resize` che
+lasciava in testa le copie del caso precedente — lo stesso errore che ha già falsato tre diagnosi su
+questo progetto). Ora ricostruisce lo stato da zero prima di ogni caso.
+
+### ⚠ Il rilievo che riguarda la prossima mappa
+L'identità di un elemento è **la sua posizione in un array**, dentro un `int` il cui significato
+dipende dall'intervallo. Ne derivano **tetti silenziosi**: 1.000 posizioni tattiche, 1.000 settori,
+100 percorsi, 90 command post. Superarli non dà errore — il codice **cambia significato**.
+Training Ground ha 169 posizioni su ~71 × 92 m; la prossima è **300 × 200**, nove volte l'area, con
+l'obiettivo dichiarato di *"moltissimi metadata"*. Nessun controllo lo segnala oggi (doc 49 R1).
+
+## 2026-08-05 (163) — EDITOR STRUTTURE: un tab, non un modulo; i tipi hanno vincoli (ADR-055, doc 48)
+
+Secondo dei tre lavori sugli strumenti. Vincolo esplicito dell'utente sulla forma: *"che apre un
+altro tab nel map editor, tipo i tab di google, così non apre un altro modulo, ma posso rimanere in
+map editor avendo una viewport separata"*.
+
+### Ricerca prima di decidere
+- **Revit, famiglie**: *i parametri di tipo e di istanza si cambiano senza aprire la famiglia*. È la
+  spina dorsale adottata — il **tipo** dichiara quali misure esistono e con che limiti, l'**istanza**
+  in mappa ne fissa i valori.
+- **Unity, Prefab Mode**: si entra nella definizione **da dove la si usa**, si edita in isolamento,
+  e all'uscita c'è un contratto esplicito sulle modifiche non salvate. Da qui il tasto in fondo al
+  menu `+ Struttura` e il popup salva/scarta alla chiusura del tab.
+- **AutoCAD, REFEDIT**: ridefinire un blocco ridefinisce **tutte** le sue inserzioni. Da qui il
+  contatore *"usato da N strutture in questa mappa"*, mostrato **prima** della modifica.
+
+### Cosa esiste ora
+Barra tab nel Map Editor (`Mappa` + tipi aperti, chiudibili), **viewport separata** che mostra la
+struttura da sola con la figura di scala accanto, e un nuovo tipo di definizione
+`data/structures/<id>.json` (id = filename stem). Per ogni misura si decide se sarà **modificabile**
+in mappa e fra quali **min/max**.
+
+**Il pavimento fisico non è autorabile** (ADR-055): `minWidthFor`, il clamp di `STEP_HEIGHT` e di
+`STAIR_TREAD` restano nel codice. Un tipo può essere più severo, mai più permissivo; un `min` sotto
+il pavimento viene alzato e l'editor lo dichiara in chiaro. Renderlo autorabile avrebbe restituito
+all'autore esattamente l'errore che ADR-053 gli aveva tolto.
+
+**Fallback**: un'istanza senza `type` si comporta come prima, e il campo si scrive solo se c'è —
+nessuna mappa esistente cambia di un byte.
+
+### Osservabilità, verificata sul campo (non dichiarata)
+Il pannello dà il **sintomo** (`superficie persa %`), il **funnel** (box → triangoli → componenti) e
+la **singola entità** (quale box resta muto). Provato con una coppia di casi opposti:
+- piattaforma a 3 m **senza accessi** → `0.0/36.0 m² raggiungibili, 2 componenti, 1 muto` → **NON
+  verificata**;
+- stessa piattaforma **con un accesso** → `16 box, 43.2/43.2 m², 1 componente` → **verificata**;
+- scala normativa → `15 box, 10.8/10.8 m²` — e 15 × 2,4 × 0,30 = 10,8 esatti.
+
+Un validatore che dice sempre "va bene" non vale nulla: il caso negativo è stato costruito apposta.
+
+### Tre difetti trovati provando, non leggendo
+1. **Muri e barricate non sarebbero mai stati verificabili.** Non dichiarano superficie calpestabile,
+   e la prima regola (`superficie tutta raggiungibile`) li avrebbe marcati non verificati per sempre.
+   Per un ostacolo la domanda giusta è l'opposta: *non ostruisce tutto?* E il numero di componenti
+   non è un difetto — un muro che divide il piano sta facendo il suo mestiere.
+2. **Il banco di prova stava per inventare il risultato.** Il piano d'appoggio era messo sotto il
+   punto più basso della struttura: per una piattaforma sospesa a 3 m gli si incollava sotto,
+   rendendola raggiungibile per finta. Ora sta alla **base** (`min(0, minY)`).
+3. **`width` sulla piattaforma era un comando che non fa nulla**: l'espansione fissa le scale
+   d'accesso a `STAIR_MIN_WIDTH` e ignora il campo. Tolto dall'elenco invece di lasciarlo mentire.
+   Renderlo efficace cambierebbe la geometria delle piattaforme già in mappa — decisione dell'utente,
+   non effetto collaterale.
+
+### `--struct-tab <id>`
+Apre un tab struttura all'avvio ed esegue la verifica, stampandone l'esito. Serve a **eseguire** un
+percorso di UI che altrimenti vive solo dietro un clic: è così che i tre difetti sopra sono venuti
+fuori, invece di essere scoperti in mano all'utente (la lezione di KI #98).
+
+## 2026-08-05 (162) — Crash di Entity Editor: riprodotto, non risolto; e gli strumenti che mancavano
+
+Interruzione richiesta dall'utente: *"provare ad aprire entity editor fa crashare GFEditor"*. Il crash
+è **ancora aperto** (KI #98). Quello che è cambiato è che ora è **indagabile**, e non lo era.
+
+### Il problema dietro il problema
+Un crash di modulo si riproduceva solo col mouse, e la traccia che produceva era illeggibile:
+```
+#9  0x00007ff75ff533a0 in  ??
+```
+Il build **Release non generava PDB**. Cioè: l'unica configurazione in cui questo crash si presenta
+era anche l'unica in cui non si poteva sapere *dove* fosse. Due strumenti mancanti, entrambi chiusi:
+
+- **`GFEditor.exe --module <a,b,c>` (+ `--module-frames N`)** — apre i moduli indicati senza passare
+  dal mouse. La forma con la **lista** è quella che conta: quasi nessun difetto di modulo sta
+  nell'apertura, sta nel **passaggio** da un modulo all'altro con lo stato che il precedente ha
+  lasciato. È così che il crash è stato riprodotto, ed è ciò che ha permesso 240 transizioni
+  automatiche in un colpo solo.
+- **PDB anche in Release** (`/Zi` + `/DEBUG`, con `/OPT:REF /OPT:ICF` a rimettere le ottimizzazioni
+  di link). Il binario resta quello di prima, i simboli vivono a parte, il costo a runtime è zero.
+  Il prossimo `crash_report.txt` conterrà i **nomi delle funzioni**.
+
+### Cosa si sa del crash
+Riprodotto **una volta** (`--module home,weapon,entity`, Release, frame 480 = il frame esatto della
+transizione). Dopo la ricompilazione **non si riproduce più**: 6 esecuzioni e un martellamento di 240
+transizioni, pulite. È quindi **sensibile alla disposizione in memoria** — mascherato, non risolto.
+
+**ASan non lo rileva**, né in Debug né in **Release+ASan**. Non è un'assoluzione ma un indizio: la
+lettura illecita non avviene nel nostro codice compilato. Il candidato coerente con tutti e tre i
+fatti (solo Release, invisibile ad ASan, crash dentro un modulo esterno) è una lettura del **driver
+OpenGL** su un array *client-side* (ADR-003) — ASan strumenta il nostro codice, non la DLL del driver.
+
+Scagionati con verifica, non per esclusione: loader idempotenti di `DefinitionRegistry` (ciascuno
+azzera solo il proprio contenitore), puntatori nel registry conservati da EntityEditor (nessuno),
+membri non inizializzati (nessuno), contatori di vertici del viewport (tutti derivati da `size()/6`,
+non possono eccedere i dati), igiene degli attributi in `drawArray` e `Mesh::draw` (corretta).
+
+### Riparato per strada
+`FreeCameraViewport::resizeFBO` verificava otto puntatori a funzione OpenGL e poi ne **chiamava altri
+due mai verificati** (`s_delFBO`, `s_delRBO`) — mentre il distruttore li protegge, segno che nulli
+possono esserlo. Un puntatore a funzione nullo chiamato produce lo stesso identico access violation
+che stavamo cercando. Difetto reale, chiuso; **non dimostrato essere questo crash**.
+
+### Filtro vista per i marcatori (richiesta utente)
+*"guardare il navmesh con tutte quelle cose colorate in mezzo diventa difficile"*. In **Vista** ora ci
+sono quattro spunte separate dalla geometria — posizioni tattiche, settori e zone di pericolo,
+percorsi, punti di gioco — e il pulsante **"Solo geometria"** che le spegne tutte in un colpo: su
+Training Ground sono 169 posizioni più settori e percorsi davanti alle superfici che l'overlay deve
+mostrare. L'asterisco di "filtri attivi" tiene conto anche di queste, così una mappa che sembra vuota
+si spiega da sé.
+
+## 2026-08-05 (161) — VALIDAZIONE NAVMESH nell'editor: si vede dove si cammina davvero (ADR-054)
+
+Primo dei tre lavori chiesti dall'utente sugli strumenti, e il suo abilitante: *"la validazione
+navmesh è importante, perché le mappe non saranno tutte strutture già testate, quindi poter vedere da
+solo cosa è problematico mi aiuta"*.
+
+### Ricerca prima di decidere
+Recast fornisce già `DebugUtils` e, nel suo demo, un `NavMeshTesterTool`; Unreal mostra il navmesh nel
+viewport (tasto **P**) e lo si collauda mandandoci un agente. Il pattern comune è chiaro: **si guarda
+il navmesh, non lo si deduce**. Da lì la forma della funzione.
+
+### La decisione (ADR-054): l'editor costruisce il navmesh VERO
+Il GFEditor ora linka **`NavManager` + Recast/Detour** e costruisce il navmesh con **lo stesso codice
+del gioco**, sullo stato in editing — box a mano **più** i box generati dalle primitive.
+
+Niente approssimazioni "economiche" per l'editor: è lo stesso principio di ADR-018 (stesso gate) e
+ADR-032 (una sola `hasLineOfFire`). Il verso opposto di ADR-002 è già la norma.
+
+> La spunta **"Area navigabile"** è stata **rimossa**: coloriva i box di tipo `floor`, cioè
+> l'*intenzione* dell'autore, non ciò che l'AI può calpestare. Mostrava una cosa e ne suggeriva
+> un'altra — meglio niente che un indicatore che mente.
+
+### Cosa si vede ora
+**Verde** = ci si arriva dallo spawn. **Rosso** = isola. Più un pannello con poligoni, isole, tempo di
+costruzione, e l'elenco **cliccabile** degli elementi che il navmesh non raggiunge (post e posizioni):
+si passa da *"c'è un problema"* a *"guarda questo"*.
+
+Il risultato **invecchia da solo**: un'impronta della geometria ricalcolata a ogni frame marca la
+verifica come da rifare. Un flag da alzare a mano nei venti punti che modificano la mappa prima o poi
+resta basso, e mostrare un navmesh stantio come buono è peggio che non mostrarlo.
+
+### Due metodi nuovi su `NavManager`, che servono anche al runtime
+`debugTriangles()` (poligoni + **componente connessa**) e `componentAt(p)`. La componente connessa
+**è** il `componentId` che doc 46 M1 vuole come dato di primo livello: nasce qui, una sola
+implementazione.
+
+### Verificato per CONTROINCROCIO, non per fiducia
+Il conteggio delle posizioni irraggiungibili su Training Ground dà **1 con `isReachable`** (path
+Detour) e **1 con il confronto di componente** (analisi del grafo). Due metodi indipendenti, stesso
+verdetto — ed entrambi ora in telemetria, così una divergenza futura si legge da un numero invece che
+da mezza giornata d'indagine.
+
+### E ha già trovato qualcosa che non sapevamo
+Su Training Ground: **13 componenti connesse** — cioè **12 isole** — e **136 triangoli su 2173**
+fuori dalla zona raggiungibile dallo spawn. Una è il recinto Droid CT (KI #97); le altre **undici non
+le conosceva nessuno**, perché solo una di esse ospita una posizione tattica e quindi era l'unica che
+le sonde segnalavano.
+
+**Build-verified** Release e Debug, 0 warning. Training Ground: `--validate` 0 problemi, 1041
+poligoni, 6000 tick con 0 ERROR e 0 stalli.
+**Da verificare a mano**: il pulsante "Verifica navmesh", l'overlay verde/rosso nel viewport e
+l'elenco cliccabile.
+
+**Restano** gli altri due lavori chiesti: l'**editor strutture** come *tab* dentro il Map Editor
+(e poi lo stesso per i prefab), e l'**ordinamento in categorie** delle liste.
+
+---
+
+## 2026-08-05 (160) — G8: Training Ground non andava riparata, ma gli strumenti hanno trovato ciò che nessun dato vedeva
+
+Ultima fase di doc 47. Il suo presupposto originale — *"le sue scale sono sbagliate, rifalle con la
+primitiva"* — **era caduto** con la correzione del gate (changelog 147): `--validate` dà 0 problemi e
+tutti e 5 i command post sono raggiungibili. Quindi G8 è diventata un'altra cosa: **mettere alla
+prova gli strumenti su una mappa che conosciamo**.
+
+### Due correzioni applicate, piccole e verificate
+- **`Aplha` → `Alpha`.** Non era solo un refuso estetico: gli obiettivi `capture_alpha` e
+  `hold_alpha` cercano `"post": "Alpha"`, quindi su questa mappa il riferimento sarebbe stato
+  **rotto in silenzio**. (Oggi la sola missione esistente punta a `firebase`, che il post giusto ce
+  l'ha — era una trappola armata, non un guasto in corso.)
+- **Posizione tattica #166 spostata di 0,45 m verso l'interno.** Stava a **26 cm** dal bordo del
+  ripiano, dentro la fascia che il navmesh erode (0,40): irraggiungibile per una questione di
+  centimetri.
+
+### E una diagnosi che vale più delle correzioni (KI #97)
+Sondando ho scoperto che **l'intero recinto "Droid CT" è irraggiungibile sopra il suolo** — non solo
+quella posizione. Dal primo gradino (0,44) al ripiano (2,59), **nessuno** è raggiungibile; il suolo
+dentro il recinto invece sì, la porta funziona.
+
+E il punto che conta: **`--validate` dice 0 problemi**. Per i dati la scala è perfetta — alzate
+0,10-0,20 m, tutte ben sotto il massimo. È il navmesh a non costruirla, per **tre cause sovrapposte**:
+rampe larghe 1,50 m (sotto l'area minima di regione dopo cigli ed erosione), una giunzione fra due
+gradini di **3 cm**, e un muro che **attraversa la scala** con un varco di 17 cm.
+
+Verificato che non basta togliere una causa: aperto il muro su una copia di lavoro, resta chiuso.
+
+### Non l'ho riparato, e perché
+Rifare quella scala significa ridisegnare un angolo della mappa — rampe più larghe **e** un varco nel
+muro trasversale — e sono scelte di design. Ho provato il solo allargamento dei gradini (11 box) e
+l'ho **annullato**: da solo non sblocca nulla e cambia l'aspetto. In KI #97 c'è la ricetta esatta per
+quando vorrai farlo, con la primitiva **Scala** che rende inesprimibili tutte e tre le cause.
+Impatto reale basso: nel recinto non spawna nessuno e non ci sono obiettivi.
+
+### Il vero esito di G8
+> Gli strumenti hanno trovato, su una mappa "sana" e validata, un difetto che **nessun controllo sui
+> dati può vedere** — e lo hanno localizzato gradino per gradino. È esattamente ciò per cui la
+> sonda di raggiungibilità esiste, e la conferma sul campo di `ELEVATED_MIN_SPAN`: la stessa
+> aritmetica derivata in laboratorio spiega un difetto reale, autorato mesi fa.
+
+**Verificato**: `--validate` 0 problemi · 5/5 command post raggiungibili · 1/169 posizione
+irraggiungibile (#166, dentro il recinto di KI #97) · 6000 tick con **0 eventi ERROR e 0 stalli**
+(fermo massimo 1,0 s) · geometria **identica all'originale** (0 box modificati), 1 sola posizione
+spostata. Mappe di prova cancellate.
+
+**Con G8 il piano di doc 47 è COMPLETO (G1-G8).** Gli strumenti ci sono: si può costruire la
+300 × 200.
+
+---
+
+## 2026-08-05 (159) — Il gizmo agiva sull'oggetto sbagliato; e i minimi diventano una regola
+
+Quattro segnalazioni dell'utente, tutte centrate.
+
+### Bug: creando una struttura, il gizmo si disegnava sulla nuova e MUOVEVA la vecchia
+`addStructure` (e `addBox`) scrivevano `m_selStruct`/`m_selBox` **a mano**, lasciando vivo
+`m_multiSel` con la selezione precedente. Il bersaglio del gizmo guarda il primario, ma
+`applyMove` itera `selectionCodes()` — cioè l'insieme, ancora quello vecchio.
+
+Corretto passando da **`setSelection`**, che cambia primario e insieme **insieme**. È esattamente il
+motivo per cui quella funzione esiste: due strade per la stessa cosa e una si dimentica un pezzo.
+
+### La regola sui minimi, come l'ha formulata l'utente
+> *"devo poter modificare le grandezze che non rompono quella struttura"*
+
+Recepita alla lettera: si **clampa solo ciò che romperebbe** la struttura, e tutto il resto resta
+libero (allungare una passerella o un muro non ha limiti; stringerli sotto la soglia sì).
+
+E i minimi non sono scelti a occhio — si **derivano dai filtri del navmesh**. Nuova metrica
+**`ELEVATED_MIN_SPAN = 3,00 m`**, con il conto verificato: una superficie in quota perde una cella
+per lato allo sfoltimento dei cigli, `AGENT_RADIUS` (0,40) per lato all'erosione, e sotto ~2,56 m² la
+regione viene scartata del tutto. Per un ripiano quadrato di lato *s* resta (s − 1,20)² > 2,56
+→ **s ≥ 2,80**; arrotondato a 3,00.
+
+| struttura | clampato | libero |
+|---|---|---|
+| scala / rampa | larghezza ≥ 1,60 · alzata ≤ 0,55 · pedata ≥ 0,30 | dislivello, lunghezza |
+| muro / porta | spessore ≥ 0,20 (sotto la cella del navmesh non è un ostacolo continuo) | lunghezza, altezza |
+| **porta** | ≥ **1,80 × 2,40** (ci passa il gigante) | — |
+| finestra | ≥ 0,40 × 0,30 (non si attraversa: non serve il gigante) | parapetto |
+| stanza | interno ≥ corridoio (2,40) + spessore muri | tutto il resto |
+| **piattaforma** | lato ≥ **3,00** | quota |
+| **passerella** | larghezza ≥ **2,40** (è un corridoio in quota) | **lunghezza** |
+
+### Porta ↔ finestra come SCELTA, non come numero
+Erano due cose diverse — una si attraversa, l'altra è un riparo da cui sporgersi — travestite da
+"metti un valore nel parapetto". Ora sono due pulsanti: passando a *Finestra* arrivano il parapetto
+alla quota di copertura bassa e misure sensate; tornando a *Porta*, le misure normative. E i minimi
+cambiano con la scelta, perché a una finestra non serve farci passare il gigante.
+
+### Verificato che i clamp SALVINO davvero
+Mappa di prova con **tutto chiesto sotto misura**: piattaforma a 1,5 m di lato, passerella a 1,0 m,
+stanza da 1,0 × 1,0, porta 0,4 × 1,0. Tutte e tre le mete **raggiungibili** dopo il clamp — senza,
+sarebbero sparite dal navmesh restando perfette nei dati.
+
+**Build-verified** Release e Debug, 0 warning. Training Ground invariata (1043 poligoni, 5/5 command
+post, `--validate` 0 problemi). Mappa di prova cancellata.
+
+---
+
 ## 2026-08-05 (158) — Il vano scala: cinque difetti veri trovati, e la decisione di NON consegnarlo
 
 L'utente ha segnalato che la scala con pianerottolo *"non sarebbe funzionale"*: la seconda rampa

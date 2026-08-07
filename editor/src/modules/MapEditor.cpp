@@ -9,6 +9,9 @@
 #include "util/UiWidgets.hpp"
 #include "util/JsonSave.hpp"
 #include "util/DefinitionRename.hpp"
+#include "util/StartupOptions.hpp"
+#include "framework/Dialogs.hpp"     // finestre modali condivise (doc 52 F4)
+#include "mini/game/StructureJson.hpp" // una sola lettura/scrittura della ricetta
 // Esposizione mostrata al designer (ADR-033): si riusa la STESSA funzione del
 // runtime invece di duplicarne la regola nell'editor.
 #include "mini/game/data/Definitions.hpp"
@@ -26,6 +29,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -62,6 +66,19 @@ MapEditor::MapEditor()
         for (const auto& [id, def] : m_prefabReg.prefabs()) m_prefabIds.push_back(id);
         std::sort(m_prefabIds.begin(), m_prefabIds.end());
     }
+    // Tipi di struttura (ADR-055): stesso principio dei prefab — il loader del
+    // runtime, non un secondo parser.
+    {
+        m_prefabReg.loadStructureTypes(getDataDir());
+        refreshStructTypeIds();
+        // `--struct-tab <id>`: apre subito il tab, così il percorso si può eseguire
+        // e verificare da riga di comando invece che solo dichiarare.
+        if (editor::startup::g_structTabSet)
+        {
+            openStructTab(editor::startup::g_structTab);
+            if (!m_structTabs.empty()) checkStructType(m_structTabs.back());
+        }
+    }
     // CommanderDef per il combo del comandante (ADR-044: fuori dalle classi)
     {
         std::error_code ec;
@@ -81,7 +98,98 @@ MapEditor::MapEditor()
 // ── tick ─────────────────────────────────────────────────────────────────────
 void MapEditor::tick(float dt)
 {
-    m_viewport.tick(dt);
+    // `m_activeTab` lo scrivono i `BeginTabItem`, che in certi frame NON vengono
+    // eseguiti (finestra ridotta, barra dei tab che non si apre): il valore resta
+    // quello vecchio. Se resta puntato a un tab struttura che non c'è più, la
+    // viewport della mappa smette di avanzare e non rilascia mai il mouse — cioè
+    // l'editor si blocca. La verità qui è quante schede esistono davvero.
+    if (m_structTabs.empty() || m_activeTab > (int)m_structTabs.size() || m_activeTab < 0)
+        m_activeTab = 0;
+
+    tickAutosave(dt);
+
+    // ── Gizmo sulla PARTE selezionata di un assemblaggio ─────────────────
+    // Senza, le parti si potevano solo digitare a numeri: un assemblaggio non era
+    // componibile, era compilabile. Sposta/Ruota/Scala come in mappa, con la scala
+    // che agisce sulle dimensioni del box o sulla misura principale della primitiva.
+    if (m_activeTab > 0 && m_activeTab <= (int)m_structTabs.size())
+    {
+        auto& tb = m_structTabs[m_activeTab - 1];
+
+        // ── Selezione e gizmo dal componente CONDIVISO (doc 52 F1) ───────
+        // Qui prima c'erano ~50 righe che rifacevano a mano ciò che il Map Editor
+        // già faceva: leggere il picking, tirare i tre delta del gizmo, riposizionare
+        // il gizmo. Ora il modulo dichiara solo COME si legge e si scrive una parte.
+        ViewportEditing::Ops ops;
+        auto partPtr = [&tb](int i) -> mini::StructurePart* {
+            return (i >= 0 && i < (int)tb.def.parts.size()) ? &tb.def.parts[i] : nullptr;
+        };
+        auto pos = [&](int i) {
+            const auto* p = partPtr(i);
+            if (!p) return glm::vec3{0.0f};
+            return p->isBox ? glm::vec3{p->box.x, p->box.y, p->box.z}
+                            : glm::vec3{p->prim.x, p->prim.y, p->prim.z};
+        };
+        ops.valid  = [&](int i) { return partPtr(i) != nullptr; };
+        // Il gizmo al baricentro della selezione: con una parte sola coincide con lei.
+        ops.anchor = [&](const std::vector<int>& sel) {
+            glm::vec3 c{0.0f};
+            for (int i : sel) c += pos(i);
+            return sel.empty() ? c : c / (float)sel.size();
+        };
+        ops.move = [&](const std::vector<int>& sel, const glm::vec3& d) {
+            for (int i : sel)
+            {
+                auto* p = partPtr(i); if (!p) continue;
+                float* x = p->isBox ? &p->box.x : &p->prim.x;
+                float* y = p->isBox ? &p->box.y : &p->prim.y;
+                float* z = p->isBox ? &p->box.z : &p->prim.z;
+                *x += d.x; *y += d.y; *z += d.z;
+            }
+        };
+        ops.rotate = [&](const std::vector<int>& sel, const glm::vec3& euler) {
+            // Politica del MODULO: qui ogni parte gira su sé stessa attorno a Y.
+            // Solo Y perché un `MapGeometryBox` ha solo `ry`: fingere gli altri assi
+            // darebbe un gizmo che si muove senza che cambi nulla.
+            for (int i : sel)
+            {
+                auto* p = partPtr(i); if (!p) continue;
+                float* r = p->isBox ? &p->box.ry : &p->prim.ry;
+                *r += euler.y;
+                while (*r >  180.0f) *r -= 360.0f;
+                while (*r < -180.0f) *r += 360.0f;
+            }
+        };
+        ops.scale = [&](const std::vector<int>& sel, const glm::vec3& d) {
+            for (int i : sel)
+            {
+                auto* p = partPtr(i); if (!p) continue;
+                if (p->isBox)
+                {
+                    p->box.sx = (p->box.sx + d.x < 0.05f) ? 0.05f : p->box.sx + d.x;
+                    p->box.sy = (p->box.sy + d.y < 0.05f) ? 0.05f : p->box.sy + d.y;
+                    p->box.sz = (p->box.sz + d.z < 0.05f) ? 0.05f : p->box.sz + d.z;
+                }
+                else scalePrimitivePart(p->prim, d);
+            }
+        };
+        // La fotografia per l'annullamento: UNA per gesto, non una per delta.
+        ops.beginGesture = [&]() { tb.undo.push(tb.snapshot(m_selPart), "gizmo", m_editorClock); };
+
+        // La selezione del tab è un indice singolo: si presta al componente come
+        // insieme di uno e si riprende com'è tornato. Il giorno in cui servirà
+        // selezionare più parti, il componente è già pronto.
+        std::vector<int> sel;
+        if (m_selPart >= 0) sel.push_back(m_selPart);
+        const bool ch = m_structEdit.tick(m_structVp, sel, ops);
+        m_selPart = sel.empty() ? -1 : sel.back();
+        if (ch) { tb.dirty = true; rebuildStructTabPreview(tb); }
+    }
+
+    // Solo la viewport del tab ATTIVO avanza: due telecamere che si muovono insieme
+    // significa che tornando al tab Mappa la vista è cambiata da sola.
+    if (m_activeTab == 0) m_viewport.tick(dt);
+    else                  m_structVp.tick(dt);
     m_editorClock += dt;   // orologio per la coalescenza dell'undo
 
     // Gizmo Sposta: applica lo spostamento a TUTTA la selezione (G3).
@@ -605,36 +713,11 @@ void MapEditor::loadMap(const std::string& id)
     {
         for (auto& s : j["structures"])
         {
-            mini::StructureDef d;
-            d.kind  = mini::mapstructures::parseKind(s.value("kind", std::string("stair")));
-            d.label = s.value("label", std::string(""));
-            d.x = s.value("x", 0.f);  d.y = s.value("y", 0.f);  d.z = s.value("z", 0.f);
-            d.ry        = s.value("ry", 0.f);
-            d.rise      = s.value("rise", 2.f);
-            d.width     = s.value("width", 2.f);
-            d.riser     = s.value("riser", 0.f);
-            d.tread     = s.value("tread", 0.f);
-            d.length    = s.value("length", 4.f);
-            d.height    = s.value("height", 0.f);
-            d.thickness = s.value("thickness", 0.0f);
-            d.sizeX     = s.value("size_x", 6.f);
-            d.sizeZ     = s.value("size_z", 6.f);
-            d.baseY     = s.value("base_y", 0.f);
-            d.openW     = s.value("open_w", 0.f);
-            d.openH     = s.value("open_h", 0.f);
-            d.openSill  = s.value("open_sill", 0.f);
-            d.openOff   = s.value("open_off", 0.f);
-            d.flightRise= s.value("flight_rise", 0.f);
-            d.spacing   = s.value("spacing", 0.f);
-            d.ceiling   = s.value("ceiling", false);
-            d.railing   = s.value("railing", false);
-            if (s.contains("access") && s["access"].is_array())
-                for (size_t i = 0; i < 4 && i < s["access"].size(); ++i)
-                    d.access[i] = s["access"][i].get<bool>();
-            d.color[0] = s.value("r", 0.35f);
-            d.color[1] = s.value("g", 0.32f);
-            d.color[2] = s.value("b", 0.28f);
-            m_structures.push_back(d);
+            // UNA sola lettura della ricetta, condivisa col registry
+            // (mini::structjson). Qui c'era il secondo lettore, e gli mancava il
+            // campo : una composita perdeva il legame col tipo e al
+            // salvataggio successivo la perdita diventava permanente.
+            m_structures.push_back(mini::structjson::fromJson(s));
         }
     }
 
@@ -796,20 +879,22 @@ void MapEditor::loadMap(const std::string& id)
     m_dirty = false;
     // La pila di undo appartiene al DOCUMENTO: tenerla fra due mappe diverse
     // significherebbe poter "annullare" la mappa A dentro la mappa B.
-    m_undo.clear();
-    m_redo.clear();
-    m_lastUndoTag.clear();
+    m_hist.clear();
     rebuildStructurePreview();   // ADR-053: i box derivati esistono solo qui
     updateViewport();
 }
 
 // ── saveMap ───────────────────────────────────────────────────────────────────
-bool MapEditor::saveMap()
+bool MapEditor::saveMap(const std::string& overridePath)
 {
-    if (m_mapJsonPath.empty()) return false;
+    // Il percorso alternativo serve al salvataggio automatico, che scrive la STESSA
+    // serializzazione altrove. Un secondo scrittore per la copia di recupero avrebbe
+    // salvato qualcosa di diverso dal file vero — cioè un recupero che non recupera.
+    const std::string target = overridePath.empty() ? m_mapJsonPath : overridePath;
+    if (target.empty()) return false;
 
     // saveJsonRMW (ADR-010): unico canale di scrittura JSON dell'editor.
-    return editor::jsonsave::saveJsonRMW(m_mapJsonPath, [&](json& j) {
+    return editor::jsonsave::saveJsonRMW(target, [&](json& j) {
     j.erase("id"); // deprecato: id = nome file (ADR-001)
     // Nome visualizzato: se vuoto usa l'id, così il campo non resta un residuo
     // vecchio (era la causa del "il rename non cambia il nome", 2026-07-21).
@@ -847,25 +932,11 @@ bool MapEditor::saveMap()
     if (m_structures.empty()) j.erase("structures");
     else
     {
+        // UNA sola scrittura della ricetta, condivisa col lettore
+        // (mini::structjson): un campo aggiunto di la' compare qui senza che
+        // nessuno debba ricordarsene.
         json arr = json::array();
-        for (const auto& s : m_structures)
-        {
-            json o;
-            o["kind"]  = mini::mapstructures::kindName(s.kind);
-            o["label"] = s.label;
-            o["x"] = s.x;  o["y"] = s.y;  o["z"] = s.z;  o["ry"] = s.ry;
-            o["rise"] = s.rise;  o["width"] = s.width;
-            o["riser"] = s.riser;  o["tread"] = s.tread;
-            o["length"] = s.length;  o["height"] = s.height;  o["thickness"] = s.thickness;
-            o["size_x"] = s.sizeX;  o["size_z"] = s.sizeZ;  o["base_y"] = s.baseY;
-            o["open_w"] = s.openW;  o["open_h"] = s.openH;
-            o["open_sill"] = s.openSill;  o["open_off"] = s.openOff;
-            o["flight_rise"] = s.flightRise;  o["spacing"] = s.spacing;
-            o["ceiling"] = s.ceiling;  o["railing"] = s.railing;
-            o["access"] = json::array({s.access[0], s.access[1], s.access[2], s.access[3]});
-            o["r"] = s.color[0];  o["g"] = s.color[1];  o["b"] = s.color[2];
-            arr.push_back(o);
-        }
+        for (const auto& st : m_structures) arr.push_back(mini::structjson::toJson(st));
         j["structures"] = arr;
     }
 
@@ -1016,21 +1087,25 @@ void MapEditor::addBox()
     std::strncpy(b.type, "wall", sizeof(b.type) - 1);
     std::strncpy(b.label, "Nuovo Box", sizeof(b.label) - 1);
     m_boxes.push_back(b);
-    m_selBox = (int)m_boxes.size() - 1;
+    setSelection((int)m_boxes.size() - 1, /*additive=*/false);   // vedi addStructure
     m_dirty  = true;
     updateViewport();
 }
 
 // ── duplicateBox ─────────────────────────────────────────────────────────────
-void MapEditor::duplicateBox(int idx)
+// Restituisce l'INDICE della copia. Non è un dettaglio: la copia viene inserita
+// ACCANTO all'originale (così nella lista sta vicino a lui), quindi *non* è
+// l'ultima del vettore — e chi lo dava per scontato spostava un'altra box.
+int MapEditor::duplicateBox(int idx)
 {
-    if (idx < 0 || idx >= (int)m_boxes.size()) return;
+    if (idx < 0 || idx >= (int)m_boxes.size()) return -1;
     BoxEntry b = m_boxes[idx];
     b.x += 1.0f;
     m_boxes.insert(m_boxes.begin() + idx + 1, b);
     m_selBox = idx + 1;
     m_dirty  = true;
     updateViewport();
+    return idx + 1;
 }
 
 // ── duplicateSelected (F4, doc 39) ────────────────────────────────────────────
@@ -1039,15 +1114,15 @@ void MapEditor::duplicateBox(int idx)
 // l'authoring dei metadata era laborioso perché ogni nuovo elemento partiva dai
 // default e andava ri-regolato. Ora si autora una volta e si duplica in serie.
 // Copia spostata di +2 in XZ per non sovrapporre. Spawn e comandante (unici) no.
-void MapEditor::duplicateOne(int code)
+int MapEditor::duplicateOne(int code)
 {
     const float off = 2.0f;
     if (code >= 0 && code < (int)m_boxes.size())
-    { duplicateBox(code); return; }
+    { return duplicateBox(code); }
     else if (code <= -10 && code > -100)
     {
         int i = -10 - code;
-        if (i < 0 || i >= (int)m_posts.size()) return;
+        if (i < 0 || i >= (int)m_posts.size()) return -1;
         PostEntry p = m_posts[i]; p.x += off; p.z += off;
         m_posts.push_back(p);
         m_selBox = -10 - ((int)m_posts.size() - 1);
@@ -1055,7 +1130,7 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -200 && code > -300)
     {
         int i = -200 - code;
-        if (i < 0 || i >= (int)m_dangers.size()) return;
+        if (i < 0 || i >= (int)m_dangers.size()) return -1;
         DangerEntry d = m_dangers[i]; d.x += off; d.z += off;
         m_dangers.push_back(d);
         m_selBox = -200 - ((int)m_dangers.size() - 1);
@@ -1063,7 +1138,7 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -300 && code > -400)
     {
         int i = -300 - code;
-        if (i < 0 || i >= (int)m_routes.size()) return;
+        if (i < 0 || i >= (int)m_routes.size()) return -1;
         RouteEntry r = m_routes[i];
         std::snprintf(r.id, sizeof(r.id), "route_%d", (int)m_routes.size() + 1);
         for (auto& pt : r.points) { pt[0] += off; pt[2] += off; }
@@ -1074,7 +1149,7 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -400 && code > -500)
     {
         int i = -400 - code;
-        if (i < 0 || i >= (int)m_vehSpawns.size()) return;
+        if (i < 0 || i >= (int)m_vehSpawns.size()) return -1;
         VehicleSpawnEntry v = m_vehSpawns[i]; v.x += off; v.z += off;
         m_vehSpawns.push_back(v);
         m_selBox = -400 - ((int)m_vehSpawns.size() - 1);
@@ -1082,7 +1157,7 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -500 && code > -1000)
     {
         int i = -500 - code;
-        if (i < 0 || i >= (int)m_targets.size()) return;
+        if (i < 0 || i >= (int)m_targets.size()) return -1;
         TargetEntry t = m_targets[i]; t.x += off; t.z += off;
         m_targets.push_back(t);
         m_selBox = -500 - ((int)m_targets.size() - 1);
@@ -1090,7 +1165,7 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -1000 && code > -2000)
     {
         int i = -1000 - code;
-        if (i < 0 || i >= (int)m_positions.size()) return;
+        if (i < 0 || i >= (int)m_positions.size()) return -1;
         PositionEntry p = m_positions[i]; p.x += off; p.z += off;
         m_positions.push_back(p);
         m_selBox = -1000 - ((int)m_positions.size() - 1);
@@ -1106,14 +1181,20 @@ void MapEditor::duplicateOne(int code)
     else if (code <= -2000 && code > -3000)
     {
         int i = -2000 - code;
-        if (i < 0 || i >= (int)m_sectors.size()) return;
+        if (i < 0 || i >= (int)m_sectors.size()) return -1;
         SectorEntry s = m_sectors[i]; s.x += off; s.z += off;
         m_sectors.push_back(s);
         m_selBox = -2000 - ((int)m_sectors.size() - 1);
     }
-    else return;   // spawn team1/2 e comandante: unici, non duplicabili
+    else return -1;   // spawn team1/2 e comandante: unici, non duplicabili
 
     m_dirty = true;
+    // Ogni ramo non-box ha appena scritto il codice della copia su `m_selBox`
+    // (le strutture su `m_selStruct`): è quello il codice da restituire. Chi duplica
+    // deve SAPERE dove è finita la copia, non dedurlo dalla dimensione del vettore —
+    // era proprio quella deduzione a far spostare l'elemento sbagliato.
+    if (code <= -6000) return -6000 - ((int)m_structures.size() - 1);
+    return m_selBox;
 }
 
 // ── ARRAY: N copie con offset progressivo (doc 47 E4) ────────────────────────
@@ -1126,28 +1207,43 @@ void MapEditor::makeArray()
     if (codes.empty() || m_arrayCount < 1) return;
     pushUndo("array");
 
+    // Codici CORRENTI degli originali. Non sono costanti: inserire una copia in
+    // mezzo a `m_boxes` fa scalare di uno tutti gli indici superiori, quindi i
+    // codici raccolti all'inizio puntano altrove già dalla seconda copia. Si
+    // aggiornano dopo ogni inserimento — è lo stesso motivo per cui
+    // `deleteSelection` cancella in ordine decrescente.
+    std::vector<int> cur = codes;
+
     for (int k = 1; k <= m_arrayCount; ++k)
     {
         const glm::vec3 off = { m_arrayOff[0] * (float)k,
                                 m_arrayOff[1] * (float)k,
                                 m_arrayOff[2] * (float)k };
         const float yaw = m_arrayYawStep * (float)k;
-        for (int c : codes)
+        for (std::size_t ci = 0; ci < cur.size(); ++ci)
         {
+            const int c = cur[ci];
             // `duplicateOne` mette la copia a +2/+2 di default: la si riporta
             // sull'originale e poi si applica l'offset voluto, così l'unico
             // spostamento è quello dichiarato.
-            const int beforeBoxes  = (int)m_boxes.size();
-            const int beforeStruct = (int)m_structures.size();
-            duplicateOne(c);
-            int newCode = -1;
-            if ((int)m_boxes.size() > beforeBoxes)          newCode = (int)m_boxes.size() - 1;
-            else if ((int)m_structures.size() > beforeStruct) newCode = -6000 - ((int)m_structures.size() - 1);
-            else                                             newCode = m_selBox;
+            //
+            // Il codice della copia lo DICE `duplicateOne`. Prima lo si deduceva
+            // ("sarà l'ultima del vettore"), ma le box si inseriscono ACCANTO
+            // all'originale: la deduzione puntava a un'altra box, che veniva
+            // spostata e ruotata al posto della copia. Non una funzione inerte —
+            // una funzione che danneggiava un elemento sano (segnalato dall'utente).
+            const int newCode = duplicateOne(c);
+            if (newCode == -1) continue;
             glm::vec3 src, dst;
             if (codePosition(c, src) && codePosition(newCode, dst))
                 applyMove(newCode, src + off - dst);
             if (yaw != 0.0f) if (float* y = codeYaw(newCode)) *y += yaw;
+
+            // Una box inserita all'indice `newCode` fa salire di uno ogni box con
+            // indice >= newCode. I codici negativi (post, posizioni, strutture...)
+            // si accodano sempre, quindi non ne sono toccati.
+            if (newCode >= 0)
+                for (int& x : cur) if (x >= newCode) ++x;
         }
     }
     m_multiSel.clear();
@@ -1159,17 +1255,31 @@ void MapEditor::makeArray()
 bool MapEditor::filtersActive() const
 {
     for (bool b : m_showType) if (!b) return true;
-    return m_hideAboveY < 999.0f || !m_showStructures;
+    // Anche i marcatori nascosti contano: l'asterisco esiste perché una mappa che
+    // sembra vuota si spieghi da sé invece di far cercare l'elemento perduto.
+    return m_hideAboveY < 999.0f || !m_showStructures
+        || !m_showPositions || !m_showAreas || !m_showRoutes || !m_showGamePoints;
 }
 
-// Duplica TUTTA la selezione (G3). Le copie si accodano, quindi gli indici degli
-// elementi già selezionati restano validi mentre si itera.
+// Duplica TUTTA la selezione (G3).
+// ATTENZIONE: le copie NON si accodano tutte. Una box viene inserita ACCANTO al suo
+// originale, quindi ogni indice superiore scala di uno e i codici raccolti prima del
+// ciclo puntano all'elemento sbagliato dalla seconda copia in poi. Il commento che
+// stava qui affermava il contrario ed era falso: si duplicavano box diverse da quelle
+// selezionate.
 void MapEditor::duplicateSelected()
 {
     const auto codes = selectionCodes();
     if (codes.empty()) return;
     pushUndo("duplica");
-    for (int c : codes) duplicateOne(c);
+    std::vector<int> cur = codes;
+    for (std::size_t i = 0; i < cur.size(); ++i)
+    {
+        const int nc = duplicateOne(cur[i]);
+        if (nc >= 0)
+            for (std::size_t j = i + 1; j < cur.size(); ++j)
+                if (cur[j] >= nc) ++cur[j];
+    }
     // La selezione NON segue le copie: restare sugli originali renderebbe il
     // secondo "duplica" una copia della copia, che non è mai ciò che si vuole.
     // Si tiene il primario sull'ultima copia creata, come nel caso singolo.
@@ -1417,6 +1527,1455 @@ void MapEditor::recomputeExposure()
                      [](const TacticalIssue& a, const TacticalIssue& b) { return a.sev > b.sev; });
 }
 
+// ── VALIDAZIONE NAVMESH (doc 47) ─────────────────────────────────────────────
+// Costruisce il navmesh VERO, con lo stesso `NavManager` del motore, sullo stato
+// che stai editando ADESSO — box a mano **più** i box generati dalle primitive,
+// perché è quello che il gioco caricherà.
+//
+// Perché serve, in una riga: il gate sui dati non può vedere la voxelizzazione.
+// Su Training Ground dice "0 problemi" mentre un intero recinto è irraggiungibile
+// (KI #97): rampe da 1,50 m che, fra sfoltimento dei cigli, erosione del raggio
+// agente e area minima di regione, non diventano navmesh. L'unico modo di
+// accorgersene prima di giocare è **guardarlo**.
+std::size_t MapEditor::geometryFingerprint() const
+{
+    // Hash grossolano ma sufficiente: conta e coordinate di tutto ciò che entra
+    // nel navmesh. Non deve essere crittografico, deve solo cambiare quando la
+    // mappa cambia.
+    std::size_t h = m_boxes.size() * 1315423911u + m_structPreview.size() * 2654435761u;
+    auto mix = [&h](float v) {
+        const auto q = (std::size_t)(long long)(v * 100.0f);
+        h ^= q + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    };
+    for (const auto& b : m_boxes)
+    { mix(b.x); mix(b.y); mix(b.z); mix(b.sx); mix(b.sy); mix(b.sz); mix(b.ry);
+      mix(b.isCollider ? 1.0f : 0.0f); }
+    for (const auto& g : m_structPreview)
+    { mix(g.x); mix(g.y); mix(g.z); mix(g.sx); mix(g.sy); mix(g.sz); mix(g.ry); }
+    for (float v : m_spawnTeam1) mix(v);
+    return h;
+}
+
+void MapEditor::validateNavmesh()
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    m_navReport = NavReport{};
+    m_navTris.clear();
+
+    // Stato corrente → MapDef, compresi i box DERIVATI dalle primitive.
+    mini::MapDef tmp;
+    tmp.geometry.reserve(m_boxes.size() + m_structPreview.size());
+    for (const auto& b : m_boxes)
+    {
+        mini::MapGeometryBox g;
+        g.x = b.x; g.y = b.y; g.z = b.z; g.ry = b.ry;
+        g.sx = b.sx; g.sy = b.sy; g.sz = b.sz;
+        g.collider = b.isCollider;
+        g.type = mini::parseBoxType(b.type);
+        tmp.geometry.push_back(g);
+    }
+    for (const auto& g : m_structPreview) tmp.geometry.push_back(g);
+    tmp.spawnTeam1 = m_spawnTeam1;
+    tmp.spawnTeam2 = m_spawnTeam2;
+
+    const mini::NavBuildStats st = m_nav.build(tmp);
+    m_navReport.polys = st.polyCount;
+    m_navBuilt = st.ok;
+    m_navStale = false;
+    if (!st.ok)
+    {
+        m_navReport.buildSeconds =
+            std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        m_viewport.clearNavMesh();
+        return;
+    }
+
+    std::vector<mini::NavManager::DebugTri> tris;
+    int nComp = 0;
+    m_nav.debugTriangles(tris, &nComp);
+    m_navReport.components = nComp;
+
+    // La componente dello SPAWN alleato è il continente; tutto il resto è isola.
+    // Non "la più grande": ciò che conta è da dove si parte davvero.
+    const glm::vec3 spawn = {m_spawnTeam1[0], m_spawnTeam1[1], m_spawnTeam1[2]};
+    m_navReport.mainComponent = m_nav.componentAt(spawn);
+
+    m_navTris.reserve(tris.size());
+    for (const auto& t : tris)
+    {
+        const bool ok = (t.component == m_navReport.mainComponent);
+        if (!ok) ++m_navReport.islandTris;
+        FreeCameraViewport::NavTriDraw d;
+        d.ax = t.a.x; d.ay = t.a.y; d.az = t.a.z;
+        d.bx = t.b.x; d.by = t.b.y; d.bz = t.b.z;
+        d.cx = t.c.x; d.cy = t.c.y; d.cz = t.c.z;
+        if (ok) { d.r = 0.25f; d.g = 0.85f; d.b = 0.40f; }   // si arriva
+        else    { d.r = 0.95f; d.g = 0.30f; d.b = 0.25f; }   // isola
+        m_navTris.push_back(d);
+    }
+
+    // Elementi autorati che il navmesh non raggiunge. Sono i due che contano:
+    // una posizione tattica irraggiungibile è lavoro sprecato **e** un buco
+    // invisibile; un command post irraggiungibile è un obiettivo incatturabile.
+    for (int i = 0; i < (int)m_positions.size(); ++i)
+    {
+        const auto& p = m_positions[i];
+        if (!m_nav.isReachable(spawn, {p.x, p.y, p.z})) m_navReport.badPositions.push_back(i);
+    }
+    for (int i = 0; i < (int)m_posts.size(); ++i)
+    {
+        const auto& p = m_posts[i];
+        if (!m_nav.isReachable(spawn, {p.x, p.y, p.z})) m_navReport.badPosts.push_back(i);
+    }
+
+    m_navReport.buildSeconds =
+        std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+    m_navFingerprint = geometryFingerprint();
+    m_showNav = true;
+    updateViewport(/*recomputeDerived=*/false);
+}
+
+// I tetti derivano DIRETTAMENTE dagli intervalli usati in `codePosition`/`codeYaw`/
+// `applyMove`: post `-10…-100`, pericoli `-200…-300`, percorsi `-300…-400`, veicoli
+// `-400…-500`, bersagli `-500…-1000`, posizioni `-1000…-2000`, settori `-2000…-3000`,
+// multi-spawn `-3000/-3100`, prefab `-4000…-5000`. Se un intervallo cambia, questa
+// tabella va cambiata con lui — il collaudo lo verifica.
+std::vector<MapEditor::CapacityInfo> MapEditor::capacityReport() const
+{
+    return {
+        { "command post",       (int)m_posts.size(),        90   },
+        { "zone di pericolo",   (int)m_dangers.size(),      100  },
+        { "percorsi",           (int)m_routes.size(),       100  },
+        { "spawn veicoli",      (int)m_vehSpawns.size(),    100  },
+        { "bersagli",           (int)m_targets.size(),      500  },
+        { "posizioni tattiche", (int)m_positions.size(),    1000 },
+        { "settori",            (int)m_sectors.size(),      1000 },
+        { "multi-spawn T1",     (int)m_spawnPoints1.size(), 100  },
+        { "multi-spawn T2",     (int)m_spawnPoints2.size(), 100  },
+        { "istanze prefab",     (int)m_prefabInsts.size(),  1000 },
+    };
+}
+
+// ── SALVATAGGIO AUTOMATICO DI RECUPERO (doc 51) ─────────────────────────────
+// FUORI da `data/maps/`: quella cartella viene scandita per costruire l'elenco
+// delle mappe, e una copia lì dentro diventerebbe una mappa fantasma selezionabile
+// e modificabile per sbaglio.
+std::string MapEditor::unsavedSummary() const
+{
+    std::string s;
+    if (m_dirty) s = "la mappa \"" + m_mapId + "\"";
+    int n = 0;
+    for (const auto& t : m_structTabs) if (t.dirty) ++n;
+    if (n > 0)
+    {
+        if (!s.empty()) s += " e ";
+        s += std::to_string(n);
+        s += (n == 1) ? " tipo di struttura" : " tipi di struttura";
+    }
+    return s;
+}
+
+std::string MapEditor::autosaveDir()
+{
+    // `dir()` (con lo slash) e non `root()`: senza, il percorso diventava
+    // `.../data_autosave/` — una cartella sorella creata per errore di
+    // concatenazione. Dentro `data/` ma FUORI da `data/maps/`, che è il vincolo
+    // vero: dentro maps/ una copia diventerebbe una mappa fantasma nell'elenco.
+    return editor::datapath::dir() + "_autosave/";
+}
+
+void MapEditor::tickAutosave(float dt)
+{
+    // Solo se c'è davvero qualcosa da perdere e la mappa ha un nome.
+    if (!m_dirty || m_mapId.empty()) { m_autosaveTimer = 0.0f; return; }
+    m_autosaveTimer += dt;
+    if (m_autosaveTimer < kAutosaveSeconds) return;
+    m_autosaveTimer = 0.0f;
+
+    std::error_code ec;
+    fs::create_directories(autosaveDir(), ec);
+    const std::string path = autosaveDir() + m_mapId + ".json";
+    if (saveMap(path))
+    {
+        // NON si azzera `m_dirty`: la copia di recupero non è il salvataggio.
+        // Azzerarlo farebbe credere che il lavoro sia al sicuro nel file vero.
+        m_lastAutosave = path;
+        std::printf("[MapEditor] copia di recupero: %s\n", path.c_str());
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// COLLAUDO HEADLESS DELLE OPERAZIONI
+// ════════════════════════════════════════════════════════════════════════════
+// Perché esiste: "serie" ha spostato per settimane un elemento SBAGLIATO, e se ne
+// è accorto l'utente. Il difetto era banale — `makeArray` deduceva il codice della
+// copia dalla dimensione del vettore, mentre le box si inseriscono accanto
+// all'originale — ma nessuno poteva accorgersene senza mouse.
+//
+// Non è un framework di test: sono controlli su invarianti che si possono scrivere
+// in dieci righe e che, se avessero girato, avrebbero fermato il difetto al primo
+// build. Il criterio per aggiungerne uno è "questo si è già rotto una volta".
+int MapEditor::selfTest()
+{
+    int failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::printf("  [%s] %s\n", ok ? "OK  " : "FALL", what);
+        if (!ok) ++failed;
+    };
+
+    // Stato sintetico e deterministico: tre box a distanza nota. Niente mappa
+    // reale — un collaudo che dipende dal contenuto dell'utente fallisce quando
+    // l'utente modifica la mappa, e allora lo si smette di guardare.
+    // RICOSTRUITO da zero prima di ogni caso, non "troncato": un `resize` lascia
+    // in testa le copie del caso precedente, e il banco di prova comincia a
+    // misurare sé stesso invece del codice. È lo stesso errore che ha già fatto
+    // sbagliare tre diagnosi su questo progetto.
+    auto reset = [&]() {
+        m_boxes.clear(); m_structures.clear(); m_multiSel.clear();
+        m_hist.clear();
+        m_selBox = -1; m_selStruct = -1;
+        for (int i = 0; i < 3; ++i)
+        {
+            BoxEntry b; b.x = (float)i * 10.0f; b.y = 1.0f; b.z = 0.0f;
+            std::snprintf(b.label, sizeof(b.label), "box%d", i);
+            m_boxes.push_back(b);
+        }
+    };
+    reset();
+    const std::size_t base = m_boxes.size();
+
+    // ── SERIE su una sola box ────────────────────────────────────────────
+    // L'invariante che era rotto: le copie stanno a k*offset dall'originale, e
+    // NESSUN altro elemento si muove.
+    m_multiSel.clear(); m_selBox = 0; m_selStruct = -1;
+    m_arrayCount = 3; m_arrayOff[0] = 4.0f; m_arrayOff[1] = 0.0f; m_arrayOff[2] = 0.0f;
+    m_arrayYawStep = 0.0f;
+    const float otherXBefore = m_boxes[2].x;
+    makeArray();
+
+    check(m_boxes.size() == base + 3, "serie: crea esattamente 3 copie");
+    {
+        // Le copie di box0 sono quelle a x = 4, 8, 12: si contano, senza dipendere
+        // da DOVE finiscono nella lista (è proprio l'assunzione che ci ha fregato).
+        int found = 0;
+        for (int k = 1; k <= 3; ++k)
+            for (const auto& b : m_boxes)
+                if (std::fabs(b.x - 4.0f * (float)k) < 0.001f
+                    && std::fabs(b.z) < 0.001f) { ++found; break; }
+        check(found == 3, "serie: le copie stanno a k x offset dall'originale");
+    }
+    {
+        // Il difetto reale: un elemento NON coinvolto veniva trascinato via.
+        bool intact = false;
+        for (const auto& b : m_boxes)
+            if (std::strcmp(b.label, "box2") == 0)
+                intact = (std::fabs(b.x - otherXBefore) < 0.001f);
+        check(intact, "serie: non sposta elementi fuori dalla selezione");
+    }
+
+    // ── SERIE con rotazione ──────────────────────────────────────────────
+    reset();
+    m_multiSel.clear(); m_selBox = 0;
+    m_arrayCount = 2; m_arrayYawStep = 30.0f;
+    makeArray();
+    {
+        int rotated = 0;
+        for (const auto& b : m_boxes)
+            if (std::fabs(b.ry - 30.0f) < 0.001f || std::fabs(b.ry - 60.0f) < 0.001f)
+                ++rotated;
+        check(rotated == 2, "serie: applica la rotazione progressiva");
+    }
+    m_arrayYawStep = 0.0f;
+
+    // ── DUPLICA su selezione multipla ────────────────────────────────────
+    // L'inserimento accanto all'originale scala gli indici: duplicando due box si
+    // duplicavano box diverse da quelle scelte.
+    reset();
+    m_multiSel.clear();
+    m_multiSel.push_back(0);
+    m_multiSel.push_back(2);
+    duplicateSelected();
+    check(m_boxes.size() == base + 2, "duplica multiplo: crea 2 copie");
+    {
+        int c0 = 0, c2 = 0;
+        for (const auto& b : m_boxes)
+        {
+            if (std::strcmp(b.label, "box0") == 0) ++c0;
+            if (std::strcmp(b.label, "box2") == 0) ++c2;
+        }
+        check(c0 == 2 && c2 == 2, "duplica multiplo: duplica le box SELEZIONATE");
+    }
+
+    // ── ANNULLA ──────────────────────────────────────────────────────────
+    doUndo();
+    check(m_boxes.size() == base, "annulla: riporta al conteggio precedente");
+
+    // ── TETTI DEI CODICI (KI #100) ───────────────────────────────────────
+    // Che la tabella dei tetti dica il vero, e non diverga dagli intervalli veri
+    // usati da `codePosition`. Si riempie fino a UNO OLTRE il tetto e si verifica
+    // che l'ultimo indice lecito risolva ancora come posizione tattica, mentre
+    // quello successivo cade nell'intervallo dei settori — cioè che il tetto
+    // dichiarato sia esattamente quello reale.
+    reset();
+    {
+        const auto caps = capacityReport();
+        int posLimit = 0;
+        for (const auto& c : caps)
+            if (std::strcmp(c.name, "posizioni tattiche") == 0) posLimit = c.limit;
+        check(posLimit > 0, "tetti: la tabella conosce le posizioni tattiche");
+
+        m_positions.clear();
+        for (int i = 0; i < posLimit; ++i)
+        {
+            PositionEntry p; p.x = (float)i; p.y = 0.0f; p.z = 0.0f;
+            m_positions.push_back(p);
+        }
+        glm::vec3 tmp;
+        check(codePosition(-1000 - (posLimit - 1), tmp),
+              "tetti: l'ultimo indice lecito risolve ancora");
+        // Un indice oltre il tetto produce -2000, che è l'inizio dei SETTORI:
+        // se un giorno gli intervalli cambiano, questo controllo se ne accorge.
+        check((-1000 - posLimit) == -2000,
+              "tetti: il tetto dichiarato coincide con l'intervallo reale");
+
+        m_positions.clear();
+        for (int i = 0; i < posLimit + 1; ++i) m_positions.push_back(PositionEntry{});
+        bool flagged = false;
+        for (const auto& c : capacityReport())
+            if (std::strcmp(c.name, "posizioni tattiche") == 0) flagged = (c.used > c.limit);
+        check(flagged, "tetti: il superamento viene segnalato");
+        m_positions.clear();
+    }
+
+    // ── ASSEMBLAGGI (ADR-056) ────────────────────────────────────────────
+    // La trasformazione delle parti è il punto in cui un assemblaggio può sbagliare
+    // in silenzio: se la convenzione di rotazione qui non è quella delle primitive,
+    // le parti ruotano al CONTRARIO e il difetto si vede solo ruotando l'istanza.
+    {
+        mini::StructureTypeDef ty;
+        ty.kind = mini::StructureKind::Wall;
+        mini::StructurePart p;
+        p.isBox = true;
+        p.box.x = 4.0f; p.box.y = 1.0f; p.box.z = 0.0f;   // 4 m lungo +X, in locale
+        p.box.sx = 1.0f; p.box.sy = 2.0f; p.box.sz = 1.0f;
+        ty.parts.push_back(p);
+
+        check(mini::mapstructures::isAssembly(ty), "assemblaggio: riconosciuto come tale");
+
+        // Istanza senza rotazione: la parte trasla e basta.
+        mini::StructureDef inst;
+        inst.x = 10.0f; inst.y = 0.0f; inst.z = 20.0f; inst.ry = 0.0f;
+        std::vector<mini::MapGeometryBox> out;
+        mini::mapstructures::expandInstance(inst, &ty, out);
+        check(out.size() == 1, "assemblaggio: una parte -> un box");
+        const bool moved = !out.empty()
+            && std::fabs(out[0].x - 14.0f) < 0.001f
+            && std::fabs(out[0].z - 20.0f) < 0.001f
+            && std::fabs(out[0].y -  1.0f) < 0.001f;
+        check(moved, "assemblaggio: la posa dell'istanza si applica alla parte");
+
+        // Con ry = 90 la convenzione di `detail::Frame` è
+        //   wx = ox + lx·cos + lz·sin ,  wz = oz − lx·sin + lz·cos
+        // quindi una parte a (4, 0) locale, con origine (10, 20), finisce a
+        //   x = 10 + 4·0 + 0·1 = 10 ,  z = 20 − 4·1 + 0·0 = 16.
+        // Il valore ESATTO e non solo la distanza: col segno sbagliato la parte
+        // finirebbe a z = 24, cioè dall'altra parte — un difetto che si vede solo
+        // ruotando, e che a occhio sembra "quasi giusto".
+        out.clear();
+        inst.ry = 90.0f;
+        mini::mapstructures::expandInstance(inst, &ty, out);
+        const bool sameConvention = !out.empty()
+            && std::fabs(out[0].x - 10.0f) < 0.01f
+            && std::fabs(out[0].z - 16.0f) < 0.01f
+            && std::fabs(out[0].ry - 90.0f) < 0.01f;   // la parte ruota CON l'insieme
+        check(sameConvention,
+              "assemblaggio: la rotazione usa la convenzione delle primitive");
+
+        // Senza parti si torna al comportamento di ADR-053: nessuna regressione per
+        // i tipi gia' scritti.
+        mini::StructureTypeDef simple;
+        simple.kind = mini::StructureKind::Wall;
+        out.clear();
+        mini::StructureDef inst2; inst2.kind = mini::StructureKind::Wall;
+        inst2.length = 4.0f;
+        mini::mapstructures::expandInstance(inst2, &simple, out);
+        std::vector<mini::MapGeometryBox> plain;
+        mini::mapstructures::expand(inst2, plain);
+        check(out.size() == plain.size() && !plain.empty(),
+              "tipo senza parti: identico al comportamento di prima");
+    }
+
+    // ── ASSEMBLAGGIO IN MAPPA: espansione e giro salva→ricarica ──────────
+    // Due difetti veri, trovati dall'utente e non da me, che questo controllo
+    // avrebbe fermato al primo build:
+    //   1. l'anteprima espandeva con `expand` invece di `expandInstance`, quindi una
+    //      composita appariva come la sola primitiva di base;
+    //   2. il caricatore di mappe dell'editor non rileggeva il campo `type`: al
+    //      salvataggio successivo il legame col tipo spariva PER SEMPRE.
+    // Il secondo è perdita di dati, non un difetto di visualizzazione.
+    reset();
+    {
+        // Un tipo composito sintetico, registrato dove l'editor lo cerca davvero.
+        mini::StructureTypeDef ty;
+        ty.id = "_selftest_asm"; ty.label = "asm"; ty.kind = mini::StructureKind::Wall;
+        for (int k = 0; k < 3; ++k)
+        {
+            mini::StructurePart p;
+            p.isBox = true;
+            p.box.x = (float)k * 3.0f; p.box.y = 1.0f; p.box.z = 0.0f;
+            p.box.sx = 1.0f; p.box.sy = 2.0f; p.box.sz = 1.0f;
+            ty.parts.push_back(p);
+        }
+        m_prefabReg.addStructureTypeForTest(ty);
+
+        mini::StructureDef inst;
+        inst.kind = mini::StructureKind::Wall;
+        inst.type = "_selftest_asm";
+        inst.x = 5.0f; inst.z = 7.0f;
+        m_structures.clear();
+        m_structures.push_back(inst);
+
+        std::vector<mini::MapGeometryBox> out;
+        expandStructureAt(0, out);
+        check(out.size() == 3, "assemblaggio in mappa: si espande in TUTTE le parti");
+
+        rebuildStructurePreview();
+        check(m_structPreview.size() == 3,
+              "anteprima: mostra l'assemblaggio intero, non la sola primitiva");
+
+        // Il giro completo con la serializzazione VERA — quella che usano davvero
+        // `saveMap` e `loadMap`, non una sua copia scritta qui. Una copia avrebbe
+        // verificato il contratto e non il codice: è la trappola del banco che
+        // misura sé stesso, e su questo progetto ha già falsato tre diagnosi.
+        const mini::StructureDef back = mini::structjson::fromJson(
+                                            mini::structjson::toJson(inst));
+        check(back.type == "_selftest_asm",
+              "salva->ricarica: il legame col TIPO sopravvive al giro");
+        check(back.kind == inst.kind
+              && std::fabs(back.x - inst.x) < 0.001f
+              && std::fabs(back.z - inst.z) < 0.001f,
+              "salva->ricarica: la ricetta torna identica");
+
+        // E che l'istanza ricaricata si espanda ancora nell'assemblaggio intero:
+        // è l'invariante che l'utente ha visto rompersi ("appare solo una scala").
+        m_structures.clear();
+        m_structures.push_back(back);
+        std::vector<mini::MapGeometryBox> after;
+        expandStructureAt(0, after);
+        check(after.size() == 3,
+              "salva->ricarica: dopo il giro si espande ancora INTERO");
+
+        m_structures.clear();
+        m_structPreview.clear();
+        m_prefabReg.removeStructureTypeForTest("_selftest_asm");
+    }
+
+    // ── SCALABILITÀ: quanto costa una modifica al crescere della mappa ───
+    // Non è un controllo pass/fail, è una MISURA — e serve prima di costruire una
+    // mappa 300 × 200. `updateViewport()` ricalcola l'esposizione a OGNI modifica
+    // (default `recomputeDerived = true`), anche a ogni frame mentre si trascina col
+    // gizmo, e `buildTacticalLinks` è O(n²) sulle posizioni tattiche.
+    // Training Ground ne ha 169; la mappa grande, a parità di densità, ne avrà ~1500.
+    reset();
+    {
+        std::printf("  --- costo di UNA modifica al crescere delle posizioni ---\n");
+        const int sizes[] = { 169, 500, 1000, 1500 };
+        for (int n : sizes)
+        {
+            m_positions.clear();
+            m_positions.reserve(n);
+            // Sparse su una griglia realistica, non tutte nello stesso punto: la LOS
+            // fra posizioni coincidenti costerebbe molto meno del caso vero.
+            const int side = (int)std::ceil(std::sqrt((double)n));
+            for (int i = 0; i < n; ++i)
+            {
+                PositionEntry p;
+                p.x = (float)(i % side) * 4.0f;
+                p.z = (float)(i / side) * 4.0f;
+                p.y = 0.9f;
+                p.canShoot = true;
+                p.role = "cover";
+                m_positions.push_back(p);
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            recomputeExposure();
+            const float ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            std::printf("  %5d posizioni -> %8.1f ms per modifica%s\n", n, ms,
+                        ms > 100.0f ? "   <-- inutilizzabile" :
+                        (ms > 33.0f ? "   <-- si sente" : ""));
+        }
+        m_positions.clear();
+    }
+
+    std::printf("[selftest] %d controlli falliti\n", failed);
+    return failed;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EDITOR STRUTTURE (doc 48, ADR-055)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Espansione di un tipo COM'È NELL'EDITOR: nell'origine, senza posa d'istanza.
+// Passa dalla stessa `expandInstance` del registry — un secondo criterio per
+// decidere "assemblaggio o primitiva" avrebbe fatto divergere anteprima e gioco,
+// che è il difetto che ADR-018/032/053 esistono per impedire.
+void MapEditor::expandTypeForEdit(const mini::StructureTypeDef& def,
+                                  std::vector<mini::MapGeometryBox>& out)
+{
+    mini::StructureDef inst = def.defaults;
+    inst.x = 0.0f; inst.y = def.defaults.y; inst.z = 0.0f; inst.ry = 0.0f;
+    if (mini::mapstructures::isAssembly(def)) inst.y = 0.0f;   // le parti portano la loro quota
+    mini::mapstructures::expandInstance(inst, &def, out);
+}
+
+// La "scala" su una PRIMITIVA agisce sulle sue misure normative, mai su un fattore
+// moltiplicativo: scalare una scala del 30% produrrebbe alzate fuori norma, cioè
+// proprio l'errore che ADR-053 rende inesprimibile. Ogni misura resta clampata al
+// suo pavimento fisico.
+void MapEditor::scalePrimitivePart(mini::StructureDef& s, const glm::vec3& d)
+{
+    auto bump = [&](mini::StructureParam pm, float delta) {
+        if (std::fabs(delta) < 1e-5f) return;
+        float v = mini::mapstructures::getParam(s, pm);
+        if (v < 0.001f) return;                       // 0 = "normativo": non si scala
+        v += delta;
+        const float lo = mini::mapstructures::physicalMin(s.kind, pm, s);
+        const float hi = mini::mapstructures::physicalMax(s.kind, pm);
+        if (lo > 0.0f && v < lo) v = lo;
+        if (hi > 0.0f && v > hi) v = hi;
+        if (v < 0.01f) v = 0.01f;
+        mini::mapstructures::setParam(s, pm, v);
+    };
+    using P = mini::StructureParam;
+    switch (s.kind)
+    {
+        case mini::StructureKind::Stair:
+        case mini::StructureKind::Ramp:
+            // Anche la PEDATA: allungarla è lecito (una scala più dolce va sempre
+            // bene) e accorciarla è bloccato dal pavimento fisico. Ometterla
+            // rendeva la scala inallungabile col gizmo — segnalato dall'utente.
+            bump(P::Width, d.x); bump(P::Rise, d.y); bump(P::Tread, d.z); break;
+        case mini::StructureKind::Wall:
+        case mini::StructureKind::Doorway:
+        case mini::StructureKind::Barricade:
+            bump(P::Length, d.x); bump(P::Height, d.y); bump(P::Thickness, d.z); break;
+        case mini::StructureKind::Platform:
+        case mini::StructureKind::Room:
+            bump(P::SizeX, d.x); bump(P::SizeZ, d.z); bump(P::Height, d.y); break;
+        case mini::StructureKind::Catwalk:
+            bump(P::Length, d.x); bump(P::Width, d.z); break;
+        default: break;
+    }
+}
+
+// Una parte nuova nasce ACCANTO a quelle che ci sono, non sopra.
+// Prima nascevano tutte all'origine, una dentro l'altra: per separarle bisognava
+// spostarle a mano una per una, e finché non si erano separate non si capiva
+// nemmeno quante fossero. Si mette a destra dell'ingombro attuale, con un metro di
+// stacco: visibile, selezionabile e ovvia da trascinare al suo posto.
+void MapEditor::placePartClear(const StructTab& t, mini::StructurePart& p)
+{
+    std::vector<mini::MapGeometryBox> boxes;
+    expandTypeForEdit(t.def, boxes);
+    float maxX = 0.0f;
+    bool any = false;
+    for (const auto& b : boxes)
+    {
+        const float e = b.x + b.sx * 0.5f;
+        if (!any || e > maxX) { maxX = e; any = true; }
+    }
+    const float x = any ? (maxX + 1.0f) : 0.0f;
+    if (p.isBox) p.box.x  = x + p.box.sx * 0.5f;
+    else         p.prim.x = x + 2.0f;   // le primitive si sviluppano dalla loro origine
+}
+
+void MapEditor::refreshStructTypeIds()
+{
+    m_structTypeIds.clear();
+    const fs::path folder = fs::path(getDataDir()) / "structures";
+    std::error_code ec;
+    if (!fs::exists(folder, ec)) return;
+    for (const auto& e : fs::directory_iterator(folder, ec))
+        if (e.path().extension() == ".json")
+            m_structTypeIds.push_back(e.path().stem().string());
+    std::sort(m_structTypeIds.begin(), m_structTypeIds.end());
+}
+
+// L'impronta della RICETTA: se cambia, la verifica precedente non vale più. Stesso
+// principio di `geometryFingerprint` — un flag da alzare a mano nei venti punti che
+// modificano un parametro prima o poi resta basso.
+std::size_t MapEditor::structFingerprint(const mini::StructureTypeDef& d)
+{
+    std::size_t h = (std::size_t)d.kind * 2654435761u;
+    auto mix = [&h](float v) {
+        h ^= std::hash<int>{}((int)std::lround(v * 1000.0f)) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    };
+    for (const auto& info : mini::mapstructures::paramsOf(d.kind))
+        mix(mini::mapstructures::getParam(d.defaults, info.p));
+    mix(d.defaults.ceiling ? 1.0f : 0.0f);
+    mix(d.defaults.railing ? 1.0f : 0.0f);
+    for (bool a : d.defaults.access) mix(a ? 1.0f : 0.0f);
+    return h;
+}
+
+void MapEditor::openStructTab(const std::string& id)
+{
+    // Già aperto → ci si porta sopra invece di aprirne un secondo (regola dei tab
+    // di ogni browser: due schede sullo stesso documento sono un difetto).
+    for (int i = 0; i < (int)m_structTabs.size(); ++i)
+        if (m_structTabs[i].id == id && !id.empty())
+        { m_activeTab = i + 1; m_focusLastTab = false; return; }
+
+    StructTab t;
+    t.id = id;
+    if (id.empty())
+    {
+        t.def.label = "nuovo tipo";
+        t.def.kind  = mini::StructureKind::Stair;
+        t.dirty     = true;   // non esiste ancora su disco
+    }
+    else
+    {
+        // Si rilegge dal REGISTRY, cioè dallo stesso parser del gioco: un secondo
+        // lettore qui divergerebbe al primo campo aggiunto.
+        m_prefabReg.loadStructureTypes(getDataDir());
+        if (const auto* src = m_prefabReg.getStructureType(id)) t.def = *src;
+        else { t.def.id = id; t.def.label = id; }
+    }
+    t.def.id = id;
+    t.def.defaults.kind = t.def.kind;
+    m_structTabs.push_back(std::move(t));
+    rebuildStructTabPreview(m_structTabs.back());
+    m_focusLastTab = true;
+}
+
+// Ricetta → box → viewport isolata. UNA sola espansione (`mapstructures::expand`),
+// la stessa del registry e del gate: un'anteprima con codice proprio divergerebbe.
+void MapEditor::rebuildStructTabPreview(StructTab& t)
+{
+    // La struttura si guarda da sola, all'origine: è il senso dell'isolamento.
+    t.def.defaults.kind = t.def.kind;
+    t.def.defaults.x = 0.0f; t.def.defaults.z = 0.0f; t.def.defaults.ry = 0.0f;
+
+    std::vector<mini::MapGeometryBox> boxes;
+    expandTypeForEdit(t.def, boxes);
+    t.check.boxes = (int)boxes.size();
+
+    // Le box si generano PARTE PER PARTE, così ognuna porta il `pickId` della sua
+    // parte: cliccare nella viewport seleziona la parte, come in mappa. Il viewport
+    // condiviso sapeva già fare ray-picking (`popClickedMapBox`) — mancava solo di
+    // dirgli a chi appartiene ogni box.
+    std::vector<FreeCameraViewport::MapBoxDraw> draws;
+    draws.reserve(boxes.size() + 3);
+    auto emit = [&](const std::vector<mini::MapGeometryBox>& src, int pickId, bool sel) {
+        for (const auto& b : src)
+        {
+            FreeCameraViewport::MapBoxDraw d;
+            d.x = b.x; d.y = b.y; d.z = b.z; d.ry = b.ry;
+            d.sx = b.sx; d.sy = b.sy; d.sz = b.sz;
+            d.r = b.r; d.g = b.g; d.b = b.b;
+            d.selected = sel;
+            d.pickId = pickId;
+            draws.push_back(d);
+        }
+    };
+    if (t.def.parts.empty())
+        emit(boxes, FreeCameraViewport::MapBoxDraw::kNoPick, false);
+    else
+    {
+        std::vector<mini::MapGeometryBox> one;
+        mini::StructureDef origin;   // assemblaggio all'origine, non ruotato
+        for (int i = 0; i < (int)t.def.parts.size(); ++i)
+        {
+            one.clear();
+            const auto& p = t.def.parts[i];
+            if (p.isBox) one.push_back(p.box);
+            else         mini::mapstructures::expand(p.prim, one);
+            for (auto& b : one)
+                b = mini::mapstructures::transformPartBox(b, origin.x, 0.0f, origin.z, 0.0f);
+            emit(one, i, i == m_selPart);
+        }
+    }
+
+    // La figura di scala accanto, sempre: l'errore più comune del blockout è la
+    // scala, e qui non c'è una mappa attorno a dare la misura (doc 47 §E6).
+    auto figure = [&](float dx, float dz, float w, float hgt, float r, float g, float b) {
+        FreeCameraViewport::MapBoxDraw f;
+        f.x = dx; f.z = dz; f.ry = 0.0f;
+        f.sy = hgt; f.y = hgt * 0.5f;
+        f.sx = w;   f.sz = w * 0.6f;
+        f.r = r; f.g = g; f.b = b;
+        f.selected = false;
+        f.pickId = FreeCameraViewport::MapBoxDraw::kNoPick;
+        draws.push_back(f);
+    };
+    // Fuori ingombro, sul lato -X: accanto alla struttura, non dentro.
+    float minX = 0.0f;
+    for (const auto& b : boxes) minX = std::min(minX, b.x - b.sx * 0.5f);
+    figure(minX - 1.4f, 0.0f, 0.80f, 2.00f, 0.30f, 0.85f, 0.45f);
+    figure(minX - 2.6f, 0.0f, mini::mapmetrics::REF_UNIT_WIDTH,
+           mini::mapmetrics::REF_UNIT_HEIGHT, 0.95f, 0.65f, 0.25f);
+
+    m_structVp.setMapBoxes(draws);
+    t.fingerprint = structFingerprint(t.def);
+    t.check.stale = true;
+}
+
+// La verifica: il navmesh VERO sulla struttura ISOLATA, posata su un piano neutro.
+// È la domanda che in mappa non si riesce a fare — lì la risposta è mescolata ad
+// altre 167 box (KI #97). Qui è una struttura sola, quindi la risposta è netta.
+void MapEditor::checkStructType(StructTab& t)
+{
+    const auto t0 = std::chrono::steady_clock::now();
+    t.check = StructTab::Check{};
+    t.check.run = true;
+
+    std::vector<mini::MapGeometryBox> boxes;
+    expandTypeForEdit(t.def, boxes);
+    t.check.boxes = (int)boxes.size();
+
+    // Ingombro, per dimensionare il piano d'appoggio e piazzare lo spawn.
+    float minX = 0, maxX = 0, minZ = 0, maxZ = 0, minY = 0;
+    for (const auto& b : boxes)
+    {
+        minX = std::min(minX, b.x - b.sx * 0.5f); maxX = std::max(maxX, b.x + b.sx * 0.5f);
+        minZ = std::min(minZ, b.z - b.sz * 0.5f); maxZ = std::max(maxZ, b.z + b.sz * 0.5f);
+        minY = std::min(minY, b.y - b.sy * 0.5f);
+    }
+    const float pad = 6.0f;
+
+    mini::MapDef tmp;
+    tmp.geometry.reserve(boxes.size() + 1);
+    // Il piano: senza un suolo la struttura è sospesa e ogni gradino è un'isola —
+    // si misurerebbe un difetto inventato dal banco di prova, non dalla struttura.
+    // La quota del piano è la BASE della struttura, non il suo punto più basso: per
+    // una piattaforma sospesa a 3 m, "sotto il punto più basso" incollerebbe il
+    // pavimento sotto il ripiano e la renderebbe raggiungibile per finta. È
+    // esattamente il modo in cui un banco di prova inventa il risultato che misura.
+    const float groundTop = std::min(0.0f, minY);
+    mini::MapGeometryBox ground;
+    ground.x = (minX + maxX) * 0.5f;  ground.z = (minZ + maxZ) * 0.5f;
+    ground.sx = (maxX - minX) + pad * 2.0f;
+    ground.sz = (maxZ - minZ) + pad * 2.0f;
+    ground.sy = 0.5f;  ground.y = groundTop - 0.25f;
+    ground.type = mini::BoxType::Floor;
+    ground.collider = true;
+    tmp.geometry.push_back(ground);
+    for (const auto& b : boxes) tmp.geometry.push_back(b);
+
+    const glm::vec3 spawn = { minX - pad * 0.5f, groundTop + 0.4f, (minZ + maxZ) * 0.5f };
+    tmp.spawnTeam1 = { spawn.x, spawn.y, spawn.z };
+    tmp.spawnTeam2 = tmp.spawnTeam1;
+
+    const mini::NavBuildStats st = m_structNav.build(tmp);
+    if (!st.ok)
+    {
+        t.check.seconds =
+            std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        t.check.stale = false;
+        m_structVp.clearNavMesh();
+        return;
+    }
+
+    std::vector<mini::NavManager::DebugTri> tris;
+    int nComp = 0;
+    m_structNav.debugTriangles(tris, &nComp);
+    t.check.tris       = (int)tris.size();
+    t.check.components = nComp;
+    const int mainComp = m_structNav.componentAt(spawn);
+
+    std::vector<FreeCameraViewport::NavTriDraw> draw;
+    draw.reserve(tris.size());
+    for (const auto& tr : tris)
+    {
+        const bool ok = (tr.component == mainComp);
+        FreeCameraViewport::NavTriDraw d;
+        d.ax = tr.a.x; d.ay = tr.a.y; d.az = tr.a.z;
+        d.bx = tr.b.x; d.by = tr.b.y; d.bz = tr.b.z;
+        d.cx = tr.c.x; d.cy = tr.c.y; d.cz = tr.c.z;
+        if (ok) { d.r = 0.25f; d.g = 0.85f; d.b = 0.40f; }
+        else    { d.r = 0.95f; d.g = 0.30f; d.b = 0.25f; }
+        draw.push_back(d);
+    }
+    m_structVp.setNavMesh(draw);
+
+    // ── Il SINTOMO: quanta superficie dichiarata calpestabile sopravvive ──
+    // Non "quanti triangoli": quanti METRI QUADRI di ciò che l'autore ha dichiarato
+    // calpestabile si possono davvero raggiungere. È la cosa che si rompe.
+    // E la SINGOLA entità: quale box resta muto (doc 48 §Osservabilità).
+    for (std::size_t i = 0; i < boxes.size(); ++i)
+    {
+        const auto& b = boxes[i];
+        if (!mini::boxShouldBeReachable(b.type)) continue;
+        const float area = b.sx * b.sz;
+        t.check.declaredArea += area;
+        const glm::vec3 top = { b.x, b.y + b.sy * 0.5f + 0.1f, b.z };
+        if (m_structNav.isReachable(spawn, top)) t.check.navArea += area;
+        else
+        {
+            char m[96];
+            std::snprintf(m, sizeof(m), "box #%d  %.1f x %.1f a quota %.2f",
+                          (int)i, b.sx, b.sz, b.y + b.sy * 0.5f);
+            t.check.mute.emplace_back(m);
+        }
+    }
+
+    t.check.seconds =
+        std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+    t.check.stale = false;
+    t.fingerprint = structFingerprint(t.def);
+
+    // ── Cosa significa "verificata" dipende da COSA È la struttura ────────
+    // Un muro, una porta e una barricata non dichiarano superficie calpestabile:
+    // pretendere che ne abbiano li renderebbe **per sempre** non verificabili, e un
+    // marchio che non si può mai ottenere non è un controllo, è rumore.
+    // Per loro la domanda giusta è l'opposta: non ostruiscono tutto? Il piano di
+    // prova deve restare percorribile attorno.
+    // E il numero di componenti non è un difetto per loro: un muro che divide in due
+    // il piano sta facendo esattamente il suo mestiere.
+    t.check.hasWalkable = (t.check.declaredArea > 0.001f);
+    const bool wasVerified = t.def.verified;
+    t.def.verified = t.check.hasWalkable ? t.check.mute.empty()
+                                         : (t.check.tris > 0);
+
+    // L'esito si SALVA da solo, e il registry si ricarica.
+    // Prima l'esito restava in memoria: nella Libreria il tipo continuava a comparire
+    // in giallo "non verificata" anche dopo una verifica riuscita, perché il menu
+    // legge dal REGISTRY e il registry legge dal FILE. L'utente ha verificato e
+    // "non è cambiato nulla" — giustamente.
+    // `verified` è un RISULTATO, non una scelta d'autore: chiedere un salvataggio
+    // per conservarlo sarebbe un passo che nessuno indovina.
+    if (wasVerified != t.def.verified)
+    {
+        if (!t.id.empty()) saveStructType(t);   // salva + ricarica la libreria
+        else               t.dirty = true;      // tipo mai salvato: lo decide l'utente
+    }
+
+    // L'esito anche su stdout: la verifica è un'azione su richiesta, quindi una
+    // riga non costa nulla — e rende l'esito leggibile senza guardare lo schermo,
+    // cioè verificabile da riga di comando (§5-bis).
+    std::printf("[Struttura] %s (%s): %d box, %d tri, %d componenti, "
+                "%.1f/%.1f m2 raggiungibili, %d muti -> %s\n",
+                t.def.label.empty() ? "(senza nome)" : t.def.label.c_str(),
+                mini::mapstructures::kindName(t.def.kind),
+                t.check.boxes, t.check.tris, t.check.components,
+                t.check.navArea, t.check.declaredArea, (int)t.check.mute.size(),
+                t.def.verified ? "VERIFICATA" : "NON verificata");
+}
+
+// Salvataggio READ-MODIFY-WRITE (CLAUDE.md §2): si legge il file, si toccano solo i
+// propri campi, si riscrive. Costruire un json nuovo da zero ha già causato una
+// perdita dati reale su questo progetto.
+void MapEditor::saveStructType(StructTab& t)
+{
+    if (t.id.empty())
+    {
+        // Nome file dal label, normalizzato: id = filename stem (ADR-001).
+        std::string s;
+        for (char c : t.def.label)
+            s += (std::isalnum((unsigned char)c) ? (char)std::tolower((unsigned char)c)
+                                                 : '_');
+        while (!s.empty() && s.back() == '_') s.pop_back();
+        t.id = s.empty() ? "struttura" : s;
+    }
+    // Lo slash NON è opzionale: `getDataDir()` non ce l'ha, e senza il percorso
+    // diventava `.../datastructures/...`. Il salvataggio falliva e lo diceva solo su
+    // stderr — l'utente vedeva la verifica riuscire e il tipo restare "non
+    // verificata", senza nessun indizio del perché.
+    const std::string path = getDataDir() + "/structures/" + t.id + ".json";
+    std::error_code mkec;
+    fs::create_directories(fs::path(getDataDir()) / "structures", mkec);
+
+    const bool ok = editor::jsonsave::saveJsonRMW(path, [&](nlohmann::json& j) {
+        j["label"]    = t.def.label;
+        j["kind"]     = mini::mapstructures::kindName(t.def.kind);
+        j["note"]     = t.def.note;
+        j["category"] = t.def.category;
+        j["verified"] = t.def.verified;
+        // NESSUN "id" dentro il file: id = filename stem (ADR-001).
+        j.erase("id");
+
+        nlohmann::json& d = j["defaults"];
+        for (const auto& info : mini::mapstructures::paramsOf(t.def.kind))
+            d[info.key] = mini::mapstructures::getParam(t.def.defaults, info.p);
+        d["ceiling"] = t.def.defaults.ceiling;
+        d["railing"] = t.def.defaults.railing;
+        d["access"]  = { t.def.defaults.access[0], t.def.defaults.access[1],
+                         t.def.defaults.access[2], t.def.defaults.access[3] };
+
+        // ── Parti dell'assemblaggio (ADR-056) ────────────────────────────
+        // Si riscrive l'intero array: le parti sono un elenco ordinato, e una fusione
+        // "campo per campo" con quello su disco produrrebbe parti fantasma quando se
+        // ne cancella una. Il RMW protegge il RESTO del file, che è il suo scopo.
+        if (t.def.parts.empty()) j.erase("parts");
+        else
+        {
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& p : t.def.parts)
+            {
+                nlohmann::json o;
+                o["label"] = p.label;
+                // `part` e non `type`: `type` è già la semantica del box e l'id del
+                // tipo di una struttura. Vedi la nota nel loader.
+                o["part"]  = p.isBox ? "box" : "prim";
+                if (p.isBox)
+                {
+                    const auto& b = p.box;
+                    o["x"] = b.x; o["y"] = b.y; o["z"] = b.z; o["ry"] = b.ry;
+                    o["sx"] = b.sx; o["sy"] = b.sy; o["sz"] = b.sz;
+                    o["r"] = b.r; o["g"] = b.g; o["b"] = b.b;
+                    o["collider"] = b.collider;
+                    o["type"] = mini::boxTypeName(b.type);   // schema dei box normali
+                }
+                else
+                {
+                    const auto& s = p.prim;
+                    o["kind"] = mini::mapstructures::kindName(s.kind);
+                    o["x"] = s.x; o["y"] = s.y; o["z"] = s.z; o["ry"] = s.ry;
+                    for (const auto& info : mini::mapstructures::paramsOf(s.kind))
+                        o[info.key] = mini::mapstructures::getParam(s, info.p);
+                    o["ceiling"] = s.ceiling;
+                    o["railing"] = s.railing;
+                    o["access"]  = { s.access[0], s.access[1], s.access[2], s.access[3] };
+                }
+                arr.push_back(std::move(o));
+            }
+            j["parts"] = std::move(arr);
+        }
+
+        nlohmann::json& r = j["rules"];
+        for (const auto& info : mini::mapstructures::paramsOf(t.def.kind))
+        {
+            const auto& rule = t.def.rules[(std::size_t)info.p];
+            r[info.key]["editable"] = rule.editable;
+            r[info.key]["min"]      = rule.min;
+            r[info.key]["max"]      = rule.max;
+        }
+        return true;
+    });
+
+    // Un salvataggio fallito NON deve passare in silenzio: era il caso di
+    // `datastructures/`, dove l'errore finiva solo su stderr e dall'editor sembrava
+    // che la verifica non servisse a niente. Lo stato "modificato" resta acceso, così
+    // la stella nel titolo del tab continua a dire che c'è del lavoro non salvato.
+    if (!ok)
+    {
+        t.saveError = "Salvataggio FALLITO: " + path;
+        std::fprintf(stderr, "[MapEditor] %s\n", t.saveError.c_str());
+        return;
+    }
+    t.saveError.clear();
+
+    t.dirty = false;
+    refreshStructTypeIds();
+    // Il registry va RILETTO: la Libreria del menu `+ Struttura` mostra quello, non
+    // lo stato del tab. Senza, un tipo appena salvato continuava a comparire con i
+    // valori vecchi (compreso il giallo "non verificata") fino al riavvio.
+    m_prefabReg.loadStructureTypes(getDataDir());
+}
+
+// Il tab di un tipo: a sinistra i parametri e i loro vincoli, al centro la struttura
+// isolata, a destra la verifica. Nessuna mappa attorno — è l'isolamento di Prefab Mode.
+void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
+{
+    // ── Barra del tipo ────────────────────────────────────────────────────
+    char lbl[128];
+    std::snprintf(lbl, sizeof(lbl), "%s", t.def.label.c_str());
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::InputText("Nome del tipo", lbl, sizeof(lbl)))
+    { t.def.label = lbl; t.dirty = true; }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Come si chiamera' nella Libreria del menu \"+ Struttura\".\n"
+                          "Al primo salvataggio diventa anche il nome del file.");
+    ImGui::SameLine();
+    char cat[64];
+    std::snprintf(cat, sizeof(cat), "%s", t.def.category.c_str());
+    ImGui::SetNextItemWidth(150.0f);
+    if (ImGui::InputTextWithHint("Categoria", "es. Torri", cat, sizeof(cat)))
+    { t.def.category = cat; t.dirty = true; }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Raggruppa la Libreria. Scrivi quello che vuoi: una categoria\n"
+                          "nuova compare da sola, senza dover cambiare il codice.");
+
+    // Il combo della primitiva di base NON si mostra su un assemblaggio: lì ogni
+    // parte ha la sua, e quella "del tipo" non governa nulla. Lasciarlo visibile
+    // sembrava che aggiungere una parte SOSTITUISSE la primitiva scelta — confusione
+    // segnalata dall'utente, e giustamente: un comando che non fa nulla ma cambia
+    // aspetto è peggio di un comando assente.
+    ImGui::SameLine();
+    if (!t.def.parts.empty())
+    {
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "ASSEMBLAGGIO");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Ogni parte ha la sua primitiva: si scelgono qui sotto,\n"
+                              "nell'elenco delle parti.");
+        ImGui::SameLine();
+    }
+    else {
+    ImGui::SetNextItemWidth(180.0f);
+    const char* kn = mini::mapstructures::kindName(t.def.kind);
+    if (ImGui::BeginCombo("Primitiva", kn))
+    {
+        for (int k = 0; k <= (int)mini::StructureKind::Barricade; ++k)
+        {
+            const auto kk = (mini::StructureKind)k;
+            // Switchback resta fuori dal menu finché il vano scala non è risolto
+            // (doc 47: 3 torri su 6 non percorribili). Un tipo su una primitiva
+            // rotta sarebbe una libreria che promette ciò che non mantiene.
+            if (kk == mini::StructureKind::Switchback) continue;
+            const bool sel = (t.def.kind == kk);
+            if (ImGui::Selectable(mini::mapstructures::kindName(kk), sel))
+            {
+                t.def.kind = kk;
+                t.def.defaults.kind = kk;
+                t.dirty = true;
+                rebuildStructTabPreview(t);
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    }   // fine del ramo "tipo a primitiva singola"
+
+    if (ImGui::Button("Salva")) saveStructType(t);
+    if (!t.saveError.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "%s", t.saveError.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Verifica")) checkStructType(t);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Costruisce il navmesh VERO sulla struttura da sola,\n"
+                          "posata su un piano neutro. In mappa la stessa domanda\n"
+                          "ha la risposta mescolata ad altre 167 box.");
+
+    // Quante istanze in mappa userebbero questo tipo — la lezione di AutoCAD
+    // REFEDIT: ridefinire tocca ogni inserzione, e va detto PRIMA.
+    if (!t.id.empty())
+    {
+        int uses = 0;
+        for (const auto& s : m_structures) if (s.type == t.id) ++uses;
+        if (uses > 0)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
+                               "usato da %d strutture in questa mappa", uses);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Stringere un limite riporta nei nuovi limiti anche\n"
+                                  "le strutture gia' piazzate, al prossimo caricamento.");
+        }
+    }
+
+    const float remaining = totalH - ImGui::GetItemRectSize().y
+                          - ImGui::GetStyle().ItemSpacing.y * 2 - 8.0f;
+    static float s_checkW = 300.0f;
+    const float paramW = 320.0f;
+
+    ImGui::BeginChild("##struct_panels", ImVec2(totalW, remaining));
+
+    // ── Parametri e vincoli ───────────────────────────────────────────────
+    ImGui::BeginChild("##struct_params", ImVec2(paramW, 0), ImGuiChildFlags_Borders);
+
+    // ── PARTI DELL'ASSEMBLAGGIO (ADR-056) ─────────────────────────────────
+    // Un tipo senza parti resta quello di ADR-055 — una primitiva sola — e sotto si
+    // editano i suoi parametri. Appena si aggiunge una parte diventa un
+    // ASSEMBLAGGIO, e da lì si edita la parte selezionata.
+    {
+        const bool assembly = !t.def.parts.empty();
+        // SEMPRE APERTA. Era un'intestazione chiusa che diceva "Parti (0)": l'utente
+        // ha cercato gli assemblaggi e ha concluso *"nell'editor strutture non è
+        // cambiato nulla"*. Una capacità dietro un cassetto che nessuno apre non
+        // esiste — è la stessa lezione di ADR-023 sui dropdown incompleti.
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f),
+                           assembly ? "ASSEMBLAGGIO — %d parti"
+                                    : "Parti dell'assemblaggio", (int)t.def.parts.size());
+        if (!assembly)
+            ImGui::TextWrapped(
+                "Questo tipo e' una PRIMITIVA SOLA. Aggiungi una parte per farne una "
+                "struttura composta (torre, bunker, edificio): le parti si posizionano "
+                "una rispetto all'altra e la verifica navmesh gira sull'INSIEME.");
+        {
+            if (ImGui::Button("+ Primitiva")) ImGui::OpenPopup("##addpart");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Aggiunge una scala, un muro, una piattaforma...\n"
+                                  "Le misure restano garantite dalla primitiva.");
+            ImGui::SameLine();
+            if (ImGui::Button("+ Box"))
+            {
+                t.undo.push(t.snapshot(m_selPart), "+box", m_editorClock);
+                mini::StructurePart p;
+                p.isBox = true;
+                p.label = "box";
+                p.box.sx = 2.0f; p.box.sy = 2.0f; p.box.sz = 2.0f;
+                p.box.y  = 1.0f;
+                p.box.type = mini::BoxType::Wall;
+                placePartClear(t, p);
+                t.def.parts.push_back(std::move(p));
+                m_selPart = (int)t.def.parts.size() - 1;
+                t.dirty = true; rebuildStructTabPreview(t);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Un box libero: serve per cio' che nessuna primitiva\n"
+                                  "esprime — contrafforti, parapetti storti, feritoie.");
+            ImGui::SameLine();
+            if (ImGui::Button("- Parte") && m_selPart >= 0
+                && m_selPart < (int)t.def.parts.size())
+            {
+                t.undo.push(t.snapshot(m_selPart), "-parte", m_editorClock);
+                t.def.parts.erase(t.def.parts.begin() + m_selPart);
+                m_selPart = -1;
+                t.dirty = true; rebuildStructTabPreview(t);
+            }
+
+            if (ImGui::BeginPopup("##addpart"))
+            {
+                for (int k = 0; k <= (int)mini::StructureKind::Barricade; ++k)
+                {
+                    const auto kk = (mini::StructureKind)k;
+                    if (kk == mini::StructureKind::Switchback) continue;   // non consegnata
+                    if (ImGui::MenuItem(mini::mapstructures::kindName(kk)))
+                    {
+                        t.undo.push(t.snapshot(m_selPart), "+primitiva", m_editorClock);
+                        mini::StructurePart p;
+                        p.isBox = false;
+                        p.prim.kind = kk;
+                        p.label = mini::mapstructures::kindName(kk);
+                        placePartClear(t, p);
+                        t.def.parts.push_back(std::move(p));
+                        m_selPart = (int)t.def.parts.size() - 1;
+                        t.dirty = true; rebuildStructTabPreview(t);
+                    }
+                }
+                ImGui::EndPopup();
+            }
+
+            for (int i = 0; i < (int)t.def.parts.size(); ++i)
+            {
+                const auto& p = t.def.parts[i];
+                char lbl[128];
+                std::snprintf(lbl, sizeof(lbl), "%s %s##pt%d",
+                              p.isBox ? "[box]" : "[prim]",
+                              p.label.empty() ? "(senza nome)" : p.label.c_str(), i);
+                if (ImGui::Selectable(lbl, m_selPart == i)) m_selPart = i;
+            }
+        }
+        ImGui::Separator();
+
+        // Parte selezionata: posa locale + misure proprie.
+        if (assembly && m_selPart >= 0 && m_selPart < (int)t.def.parts.size())
+        {
+            // Fotografia PRIMA che un widget cominci a modificare, con l'etichetta
+            // che fa coalescere l'intero trascinamento in una voce sola — la stessa
+            // regola del Map Editor, ora nel componente condiviso.
+            if (ImGui::IsAnyItemActive())
+                t.undo.push(t.snapshot(m_selPart), "parte", m_editorClock);
+            auto& p = t.def.parts[m_selPart];
+            bool ch = false;
+            ImGui::TextDisabled("Parte selezionata (posizione LOCALE)");
+
+            char nb[64];
+            std::snprintf(nb, sizeof(nb), "%s", p.label.c_str());
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::InputText("##ptname", nb, sizeof(nb))) { p.label = nb; t.dirty = true; }
+
+            float* px = p.isBox ? &p.box.x : &p.prim.x;
+            float* py = p.isBox ? &p.box.y : &p.prim.y;
+            float* pz = p.isBox ? &p.box.z : &p.prim.z;
+            float* pr = p.isBox ? &p.box.ry : &p.prim.ry;
+            ch |= editor::ui::dragRow("X##pt", *px, 0.1f, -200.f, 200.f);
+            ch |= editor::ui::dragRow("Y##pt", *py, 0.1f, -50.f, 200.f);
+            ch |= editor::ui::dragRow("Z##pt", *pz, 0.1f, -200.f, 200.f);
+            ch |= editor::ui::dragRow("Rotazione##pt", *pr, 1.0f, -180.f, 180.f);
+
+            if (p.isBox)
+            {
+                ImGui::TextDisabled("Dimensioni");
+                ch |= editor::ui::dragRow("Larghezza##pt", p.box.sx, 0.1f, 0.05f, 200.f);
+                ch |= editor::ui::dragRow("Altezza##pt",   p.box.sy, 0.1f, 0.05f, 100.f);
+                ch |= editor::ui::dragRow("Profondita'##pt", p.box.sz, 0.1f, 0.05f, 200.f);
+                // La semantica conta: il navmesh e la derivazione dei metadata la
+                // leggono, e un pavimento dichiarato "muro" non genera superficie.
+                const char* types[] = { "floor", "wall", "platform", "cover", "decoration" };
+                int cur = (int)p.box.type;
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::Combo("##pttype", &cur, types, 5))
+                { p.box.type = (mini::BoxType)cur; ch = true; }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Semantica del box: la leggono il navmesh e la\n"
+                                      "derivazione dei metadata. Un pavimento dichiarato\n"
+                                      "\"muro\" non genera superficie calpestabile.");
+            }
+            else
+            {
+                ImGui::TextDisabled("Misure della primitiva");
+                for (const auto& info : mini::mapstructures::paramsOf(p.prim.kind))
+                {
+                    float v = mini::mapstructures::getParam(p.prim, info.p);
+                    const float phys = mini::mapstructures::physicalMin(p.prim.kind, info.p, p.prim);
+                    const float pmax = mini::mapstructures::physicalMax(p.prim.kind, info.p);
+                    ImGui::PushID(info.key);
+                    if (editor::ui::dragRow(info.label, v, 0.05f, 0.0f, 500.0f))
+                    {
+                        if (v > 0.001f)
+                        {
+                            if (phys > 0.0f && v < phys)  v = phys;
+                            if (pmax > 0.0f && v > pmax)  v = pmax;
+                        }
+                        if (v < 0.0f) v = 0.0f;
+                        mini::mapstructures::setParam(p.prim, info.p, v);
+                        ch = true;
+                    }
+                    // Il PAVIMENTO FISICO va detto anche qui. Nel tipo semplice
+                    // c'era; nelle parti no, e passando agli assemblaggi "sono
+                    // scomparse le indicazioni sulle metriche" — giustamente:
+                    // senza, un valore che non scende sembra un comando rotto.
+                    if (phys > 0.0f || pmax > 0.0f)
+                    {
+                        ImGui::Indent(12.0f);
+                        if (pmax > 0.0f) ImGui::TextDisabled("fisico: %.2f - %.2f m", phys, pmax);
+                        else             ImGui::TextDisabled("fisico: min %.2f m", phys);
+                        ImGui::Unindent(12.0f);
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.help);
+                    ImGui::PopID();
+                }
+                if (p.prim.kind == mini::StructureKind::Room)
+                    if (ImGui::Checkbox("Soffitto##pt", &p.prim.ceiling)) ch = true;
+                if (p.prim.kind == mini::StructureKind::Catwalk
+                 || p.prim.kind == mini::StructureKind::Platform)
+                    if (ImGui::Checkbox("Parapetto##pt", &p.prim.railing)) ch = true;
+                if (p.prim.kind == mini::StructureKind::Platform
+                 || p.prim.kind == mini::StructureKind::Room)
+                {
+                    ImGui::TextDisabled("Accessi / aperture");
+                    const char* side[4] = { "-Z", "+Z", "-X", "+X" };
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        ImGui::PushID(100 + i);
+                        if (ImGui::Checkbox(side[i], &p.prim.access[i])) ch = true;
+                        ImGui::PopID();
+                        if (i < 3) ImGui::SameLine();
+                    }
+                }
+            }
+            if (ch) { t.dirty = true; rebuildStructTabPreview(t); }
+            ImGui::Separator();
+        }
+
+    }
+
+    // Con le parti, i parametri della primitiva singola non si applicano più: le
+    // misure si autorano parte per parte. Mostrarli comunque darebbe comandi inerti.
+    const bool isAssembly = !t.def.parts.empty();
+    if (isAssembly)
+        ImGui::TextDisabled("Il tipo e' un ASSEMBLAGGIO: le misure si autorano\n"
+                            "parte per parte, qui sopra.");
+
+    bool changed = false;
+    if (!isAssembly) {
+    ImGui::TextDisabled("Misure e vincoli");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("La spunta decide se la misura si potra' toccare quando la\n"
+                          "struttura e' in mappa. Min/max la restringono ulteriormente.\n"
+                          "Il PAVIMENTO FISICO non si puo' allentare: sotto quello la\n"
+                          "struttura non genera navmesh (ADR-055).");
+    ImGui::Separator();
+
+    for (const auto& info : mini::mapstructures::paramsOf(t.def.kind))
+    {
+        auto& rule = t.def.rules[(std::size_t)info.p];
+        const float phys = mini::mapstructures::physicalMin(t.def.kind, info.p,
+                                                            t.def.defaults);
+        const float physMax = mini::mapstructures::physicalMax(t.def.kind, info.p);
+
+        ImGui::PushID(info.key);
+        if (ImGui::Checkbox("##edit", &rule.editable)) { t.dirty = true; }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Modificabile quando la struttura e' in mappa.");
+        ImGui::SameLine();
+
+        float v = mini::mapstructures::getParam(t.def.defaults, info.p);
+        ImGui::SetNextItemWidth(110.0f);
+        if (ImGui::DragFloat(info.label, &v, 0.05f, 0.0f, 0.0f, "%.2f"))
+        {
+            // Lo 0 resta lecito dove significa "normativo": è l'assenza di scelta.
+            const bool zeroMeansDefault =
+                (info.p == mini::StructureParam::Riser || info.p == mini::StructureParam::Tread ||
+                 info.p == mini::StructureParam::Height || info.p == mini::StructureParam::Thickness ||
+                 info.p == mini::StructureParam::OpenW || info.p == mini::StructureParam::OpenH ||
+                 info.p == mini::StructureParam::FlightRise || info.p == mini::StructureParam::Spacing);
+            if (!(zeroMeansDefault && v < 0.001f))
+            {
+                if (phys > 0.0f && v < phys)       v = phys;
+                if (physMax > 0.0f && v > physMax) v = physMax;
+            }
+            if (v < 0.0f) v = 0.0f;
+            mini::mapstructures::setParam(t.def.defaults, info.p, v);
+            t.dirty = true; changed = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.help);
+
+        // Il pavimento fisico, sempre visibile: è la ragione per cui un valore non
+        // scende, e senza dirla l'editor sembrerebbe rotto.
+        if (phys > 0.0f || physMax > 0.0f)
+        {
+            ImGui::Indent(24.0f);
+            if (physMax > 0.0f)
+                ImGui::TextDisabled("fisico: %.2f - %.2f m", phys, physMax);
+            else
+                ImGui::TextDisabled("fisico: min %.2f m", phys);
+            ImGui::Unindent(24.0f);
+        }
+
+        if (rule.editable)
+        {
+            ImGui::Indent(24.0f);
+            ImGui::SetNextItemWidth(70.0f);
+            if (ImGui::DragFloat("min", &rule.min, 0.05f, 0.0f, 0.0f, "%.2f"))
+            { if (rule.min < 0.0f) rule.min = 0.0f; t.dirty = true; }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70.0f);
+            if (ImGui::DragFloat("max", &rule.max, 0.05f, 0.0f, 0.0f, "%.2f"))
+            { if (rule.max < 0.0f) rule.max = 0.0f; t.dirty = true; }
+            // Un minimo autorato SOTTO il pavimento non si applica: dirlo, invece di
+            // accettarlo in silenzio e produrre una struttura che il navmesh scarta.
+            if (rule.min > 0.0f && rule.min < phys)
+                ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
+                                   "min sotto il fisico: vale %.2f", phys);
+            if (rule.max > 0.0f && rule.min > 0.0f && rule.max < rule.min)
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "max < min");
+            ImGui::Unindent(24.0f);
+        }
+        ImGui::PopID();
+        ImGui::Separator();
+    }
+
+    // Interruttori non dimensionali: non hanno min/max, solo un sì/no.
+    if (t.def.kind == mini::StructureKind::Room)
+        if (ImGui::Checkbox("Soffitto", &t.def.defaults.ceiling)) { t.dirty = true; changed = true; }
+    if (t.def.kind == mini::StructureKind::Catwalk || t.def.kind == mini::StructureKind::Platform)
+        if (ImGui::Checkbox("Parapetto", &t.def.defaults.railing)) { t.dirty = true; changed = true; }
+    if (t.def.kind == mini::StructureKind::Platform || t.def.kind == mini::StructureKind::Room)
+    {
+        ImGui::TextDisabled("Accessi / aperture per lato");
+        const char* side[4] = { "-Z", "+Z", "-X", "+X" };
+        for (int i = 0; i < 4; ++i)
+        {
+            ImGui::PushID(i);
+            if (ImGui::Checkbox(side[i], &t.def.defaults.access[i])) { t.dirty = true; changed = true; }
+            ImGui::PopID();
+            if (i < 3) ImGui::SameLine();
+        }
+    }
+    }   // fine del ramo "tipo a primitiva singola"
+    ImGui::EndChild();
+
+    if (changed) rebuildStructTabPreview(t);
+
+    ImGui::SameLine();
+
+    // ── Viewport isolata ──────────────────────────────────────────────────
+    const float vpW = totalW - paramW - s_checkW - ImGui::GetStyle().ItemSpacing.x * 2;
+    ImGui::BeginChild("##struct_vp", ImVec2(vpW < 160.0f ? 160.0f : vpW, 0),
+                      ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    m_structVp.draw(false);
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    // ── Verifica ──────────────────────────────────────────────────────────
+    ImGui::BeginChild("##struct_check", ImVec2(s_checkW, 0), ImGuiChildFlags_Borders);
+    // Il risultato invecchia da solo: la ricetta è cambiata → la verifica non vale.
+    if (t.check.run && structFingerprint(t.def) != t.fingerprint) t.check.stale = true;
+
+    ImGui::TextDisabled("Verifica");
+    ImGui::Separator();
+    if (!t.check.run)
+    {
+        ImGui::TextWrapped("Non ancora verificata. Il navmesh e' l'unico controllo "
+                           "che non puo' mentire: fra i box e le superfici "
+                           "percorribili ci sono erosione, sfoltimento dei cigli, "
+                           "altezza libera e area minima di regione.");
+    }
+    else
+    {
+        if (t.check.stale)
+            ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.30f, 1.0f),
+                               "La ricetta e' cambiata: rifare la verifica.");
+
+        // Il SINTOMO per primo, non l'esito lontano — ma il sintomo GIUSTO: per un
+        // ostacolo puro (muro, porta, barricata) "superficie persa" non vuol dire
+        // nulla, e mostrare 0% suonerebbe come una promessa non verificata.
+        if (t.check.hasWalkable)
+        {
+            const float lost = 100.0f * (1.0f - t.check.navArea / t.check.declaredArea);
+            const ImVec4 col = (lost < 0.5f) ? ImVec4(0.35f, 0.90f, 0.45f, 1.0f)
+                                             : ImVec4(0.95f, 0.35f, 0.30f, 1.0f);
+            ImGui::TextColored(col, "superficie persa: %.0f%%", lost);
+            ImGui::TextDisabled("%.1f di %.1f m2 raggiungibili",
+                                t.check.navArea, t.check.declaredArea);
+        }
+        else
+        {
+            ImGui::TextDisabled("Ostacolo puro: nessuna superficie calpestabile.");
+            if (t.check.tris > 0)
+                ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.45f, 1.0f),
+                                   "il terreno resta percorribile attorno");
+            else
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                                   "ostruisce TUTTO: nessun navmesh attorno");
+        }
+        ImGui::Separator();
+
+        // Il FUNNEL, coi suoi denominatori.
+        ImGui::Text("box espansi:   %d", t.check.boxes);
+        ImGui::Text("triangoli:     %d", t.check.tris);
+        ImGui::Text("componenti:    %d", t.check.components);
+        // Per un ostacolo, dividere il piano è il MESTIERE: segnalarlo come difetto
+        // sarebbe un falso allarme, e i falsi allarmi insegnano a ignorare il pannello.
+        if (t.check.components > 1)
+        {
+            if (t.check.hasWalkable)
+                ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                                   "la struttura si SPEZZA");
+            else
+                ImGui::TextDisabled("divide il terreno: atteso per un ostacolo");
+        }
+        ImGui::TextDisabled("costruito in %.2f s", t.check.seconds);
+        ImGui::Separator();
+
+        // La SINGOLA entità: quale box resta muto.
+        if (!t.check.hasWalkable)
+        {
+            ImGui::TextDisabled("Niente da raggiungere: si verifica solo che\n"
+                                "non ostruisca il passaggio.");
+        }
+        else if (t.check.mute.empty())
+        {
+            ImGui::TextColored(ImVec4(0.35f, 0.90f, 0.45f, 1.0f),
+                               "Ogni superficie dichiarata e' raggiungibile.");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                               "%d superfici irraggiungibili:", (int)t.check.mute.size());
+            for (const auto& m : t.check.mute) ImGui::BulletText("%s", m.c_str());
+            ImGui::Separator();
+            ImGui::TextWrapped("Cause possibili, in ordine di frequenza: larghezza "
+                               "sotto il minimo (erosione + area minima di regione), "
+                               "gradini che si sfiorano invece di sovrapporsi, "
+                               "altezza libera insufficiente sopra la superficie.");
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::EndChild();
+}
+
 // ── Ricarica degli asset prefab ───────────────────────────────────────────────
 // Un punto solo. Funziona perché dal 2026-08-05 `loadPrefabs` AZZERA il proprio
 // contenitore: prima sommava al vecchio stato, quindi un prefab cancellato dal
@@ -1468,53 +3027,52 @@ void MapEditor::applyState(const Snapshot& s)
     updateViewport();
 }
 
+// Le tre operazioni sono ora tre righe: la logica (coalescenza per gesto, taglio
+// del ramo di ripristino, profondità massima) vive in `UndoStack`, estratto proprio
+// da qui. Nulla cambia per chi usa l'editor — cambia chi lo implementa, e adesso
+// sono in tre moduli a beneficiarne invece di uno.
 void MapEditor::pushUndo(const char* tag)
 {
-    // Coalescenza: un trascinamento di gizmo genera una modifica per frame. Senza
-    // raggruppamento, un solo gesto riempirebbe la pila e "annulla" tornerebbe
-    // indietro di un pixel per volta — inutile.
-    if (m_lastUndoTag == tag && (m_editorClock - m_lastUndoTime) < 0.6f)
-    {
-        m_lastUndoTime = m_editorClock;
-        return;
-    }
-    m_lastUndoTag  = tag;
-    m_lastUndoTime = m_editorClock;
-
-    m_undo.push_back(captureState());
-    if (m_undo.size() > kUndoDepth) m_undo.erase(m_undo.begin());
-    m_redo.clear();   // una nuova azione taglia il ramo di ripristino
+    m_hist.push(captureState(), tag, m_editorClock);
 }
 
 void MapEditor::doUndo()
 {
-    if (m_undo.empty()) return;
-    m_redo.push_back(captureState());
-    const Snapshot s = m_undo.back();
-    m_undo.pop_back();
-    applyState(s);
-    m_lastUndoTag.clear();   // il prossimo push non si fonde con quello annullato
+    Snapshot s = captureState();
+    if (m_hist.undo(s)) applyState(s);
 }
 
 void MapEditor::doRedo()
 {
-    if (m_redo.empty()) return;
-    m_undo.push_back(captureState());
-    const Snapshot s = m_redo.back();
-    m_redo.pop_back();
-    applyState(s);
-    m_lastUndoTag.clear();
+    Snapshot s = captureState();
+    if (m_hist.redo(s)) applyState(s);
 }
 
 // ── Primitive parametriche (ADR-053) ──────────────────────────────────────────
 // L'anteprima usa `mapstructures::expand`, LA STESSA funzione che il motore chiama
 // al load. Non è pigrizia: due espansioni separate divergerebbero al primo campo
 // aggiunto, e l'editor mostrerebbe una scala diversa da quella che si gioca.
+// UN SOLO punto in cui l'editor espande una struttura della mappa.
+// `expandInstance` e non `expand`: la seconda ignora il TIPO e mostra solo la
+// primitiva di base — un assemblaggio appariva come la sola scala da cui era
+// partito (segnalato dall'utente). C'erano QUATTRO chiamate sparse e tre di loro
+// sbagliavano: anteprima, disegno nel viewport e conteggio in lista.
+// Una funzione sola perché la quinta chiamata, quando arriverà, non possa
+// dimenticarsene — è la stessa ragione per cui `expandInstance` esiste nel motore.
+void MapEditor::expandStructureAt(int idx, std::vector<mini::MapGeometryBox>& out) const
+{
+    if (idx < 0 || idx >= (int)m_structures.size()) return;
+    const auto& s = m_structures[idx];
+    const mini::StructureTypeDef* ty = s.type.empty() ? nullptr
+                                     : m_prefabReg.getStructureType(s.type);
+    mini::mapstructures::expandInstance(s, ty, out);
+}
+
 void MapEditor::rebuildStructurePreview()
 {
     m_structPreview.clear();
-    for (const auto& s : m_structures)
-        mini::mapstructures::expand(s, m_structPreview);
+    for (int i = 0; i < (int)m_structures.size(); ++i)
+        expandStructureAt(i, m_structPreview);
 }
 
 void MapEditor::addStructure(mini::StructureKind kind)
@@ -1567,8 +3125,13 @@ void MapEditor::addStructure(mini::StructureKind kind)
             d.height = mini::mapmetrics::COVER_LOW;      break;
     }
     m_structures.push_back(d);
-    m_selStruct = (int)m_structures.size() - 1;
-    m_selBox    = -1;
+    // Passa da `setSelection`, che azzera anche l'INSIEME multiplo. Scrivere
+    // `m_selStruct` a mano lasciava vivo `m_multiSel` con la selezione precedente:
+    // il gizmo si disegnava sulla struttura nuova ma agiva su quella vecchia
+    // (segnalato dall'utente). Il primario e l'insieme vanno cambiati insieme,
+    // sempre, ed è il motivo per cui `setSelection` esiste.
+    setSelection(-6000 - ((int)m_structures.size() - 1), /*additive=*/false);
+    m_dirty = true;
     rebuildStructurePreview();
     updateViewport();
 }
@@ -1643,8 +3206,10 @@ void MapEditor::updateViewport(bool recomputeDerived)
             || std::find(m_multiSel.begin(), m_multiSel.end(), i) != m_multiSel.end();
         d.pickId = i;
 
-        bool isFloor = (std::string(b.type) == "floor");
-
+        // L'overlay navmesh sostituisce la vecchia tinta verde "Area navigabile",
+        // che coloriva i box di tipo `floor` — cioè un'INTENZIONE dell'autore, non
+        // ciò che l'AI può davvero calpestare. Con il navmesh vero disegnato sopra,
+        // tingere anche i box confonderebbe le due cose.
         if (m_prefabZoneMode && inZone(i)) {
             // Incluso nel prefab: ciano pieno. Si legge a colpo d'occhio COSA entra,
             // senza rombi sospesi sopra gli oggetti.
@@ -1658,9 +3223,6 @@ void MapEditor::updateViewport(bool recomputeDerived)
         } else if (m_prefabZoneMode) {
             // Escluso: smorzato, così il contrasto con gli inclusi è netto.
             d.r = b.r * 0.45f; d.g = b.g * 0.45f; d.b = b.b * 0.45f;
-        } else if (m_showNavmesh && isFloor) {
-            // Overlay verde per area navigabile
-            d.r = 0.10f; d.g = 0.90f; d.b = 0.30f;
         } else {
             d.r = b.r; d.g = b.g; d.b = b.b;
         }
@@ -1677,7 +3239,9 @@ void MapEditor::updateViewport(bool recomputeDerived)
     for (int si = 0; si < (int)m_structures.size() && m_showStructures; ++si)
     {
         std::vector<mini::MapGeometryBox> own;
-        mini::mapstructures::expand(m_structures[si], own);
+        // Anche qui il TIPO va risolto: è il disegno vero e proprio nel viewport, e
+        // senza mostrava solo la primitiva di base dell'assemblaggio.
+        expandStructureAt(si, own);
         const bool selected = (si == m_selStruct)
             || std::find(m_multiSel.begin(), m_multiSel.end(), -6000 - si) != m_multiSel.end();
         for (const auto& b : own)
@@ -1735,6 +3299,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     }
 
     // Spawn team1 (blu) come croce
+    if (m_showGamePoints)
     {
         FreeCameraViewport::MapBoxDraw s;
         s.x = m_spawnTeam1[0]; s.y = m_spawnTeam1[1]; s.z = m_spawnTeam1[2];
@@ -1745,6 +3310,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
         draws.push_back(s);
     }
     // Spawn team2 (rosso)
+    if (m_showGamePoints)
     {
         FreeCameraViewport::MapBoxDraw s;
         s.x = m_spawnTeam2[0]; s.y = m_spawnTeam2[1]; s.z = m_spawnTeam2[2];
@@ -1755,7 +3321,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
         draws.push_back(s);
     }
     // Punti multi-spawn: croci più piccole, azzurro (team1) / arancio (team2).
-    for (int i = 0; i < (int)m_spawnPoints1.size(); ++i)
+    for (int i = 0; i < (int)m_spawnPoints1.size() && m_showGamePoints; ++i)
     {
         FreeCameraViewport::MapBoxDraw s;
         s.x = m_spawnPoints1[i][0]; s.y = m_spawnPoints1[i][1]; s.z = m_spawnPoints1[i][2];
@@ -1765,7 +3331,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
         s.pickId = -3000 - i;
         draws.push_back(s);
     }
-    for (int i = 0; i < (int)m_spawnPoints2.size(); ++i)
+    for (int i = 0; i < (int)m_spawnPoints2.size() && m_showGamePoints; ++i)
     {
         FreeCameraViewport::MapBoxDraw s;
         s.x = m_spawnPoints2[i][0]; s.y = m_spawnPoints2[i][1]; s.z = m_spawnPoints2[i][2];
@@ -1777,7 +3343,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     }
 
     // Command post: palo alto + area di cattura, colorati per team
-    for (int i = 0; i < (int)m_posts.size(); ++i)
+    for (int i = 0; i < (int)m_posts.size() && m_showGamePoints; ++i)
     {
         const auto& p = m_posts[i];
         float r = 0.75f, g = 0.75f, b = 0.75f;
@@ -1804,7 +3370,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
 
     // Comandante strategico (ADR-041): palo viola alto + disco del raggio di
     // leash (l'area da cui non esce). Se leash 0 il disco non si disegna (fermo).
-    if (m_commander.exists)
+    if (m_commander.exists && m_showGamePoints)
     {
         const bool sel = (m_selBox == kSelCommander);
         FreeCameraViewport::MapBoxDraw pole;
@@ -1832,7 +3398,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     // avranno in gioco. Prima erano disegnati con `ry = 0` e lato fisso 2.5:
     // ruotare o scalare cambiava il dato ma non si vedeva nulla, quindi
     // sembravano "non funzionare" (segnalato dall'utente).
-    for (int i = 0; i < (int)m_targets.size(); ++i)
+    for (int i = 0; i < (int)m_targets.size() && m_showGamePoints; ++i)
     {
         const auto& t = m_targets[i];
         const float sc = 2.5f * ((t.scale > 0.0001f) ? t.scale : 1.0f);
@@ -1918,7 +3484,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     // Chi ripara (protection > 0) è una lastra alta `height` (si vede cosa
     // copre); chi non ripara è un pilastro sottile. Naso = fronte; disco = raggio
     // d'influenza (solo per i ruoli d'area). pickId = -1000 - i.
-    for (int i = 0; i < (int)m_positions.size(); ++i)
+    for (int i = 0; i < (int)m_positions.size() && m_showPositions; ++i)
     {
         const auto& p = m_positions[i];
         const bool sel = (m_selBox == -1000 - i);
@@ -2001,7 +3567,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
 
     // Settore (ADR-034): disco ampio e tenue, colore per importanza. È l'area su
     // cui ragiona il comandante. pickId = -2000 - i.
-    for (int i = 0; i < (int)m_sectors.size(); ++i)
+    for (int i = 0; i < (int)m_sectors.size() && m_showAreas; ++i)
     {
         const auto& s = m_sectors[i];
         const bool sel = (m_selBox == -2000 - i);
@@ -2015,7 +3581,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     }
 
     // Danger zone: disco arancione (più rosso quanto più pericoloso)
-    for (int i = 0; i < (int)m_dangers.size(); ++i)
+    for (int i = 0; i < (int)m_dangers.size() && m_showAreas; ++i)
     {
         const auto& d = m_dangers[i];
         const bool sel = (m_selBox == -200 - i);
@@ -2029,7 +3595,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     }
 
     // Spawn veicoli: box arancio a misura di speeder + freccia direzione
-    for (int i = 0; i < (int)m_vehSpawns.size(); ++i)
+    for (int i = 0; i < (int)m_vehSpawns.size() && m_showGamePoints; ++i)
     {
         const auto& v = m_vehSpawns[i];
         const bool sel = (m_selBox == -400 - i);
@@ -2056,7 +3622,7 @@ void MapEditor::updateViewport(bool recomputeDerived)
     }
 
     // Patrol route: pilastrino viola per punto (quello attivo più alto)
-    for (int ri = 0; ri < (int)m_routes.size(); ++ri)
+    for (int ri = 0; ri < (int)m_routes.size() && m_showRoutes; ++ri)
     {
         const auto& r = m_routes[ri];
         const bool routeSel = (m_selBox == -300 - ri);
@@ -2076,6 +3642,9 @@ void MapEditor::updateViewport(bool recomputeDerived)
         }
     }
 
+    // Overlay navmesh: dopo i box, cosi il viewport lo disegna sopra.
+    if (m_showNav && m_navBuilt) m_viewport.setNavMesh(m_navTris);
+    else                         m_viewport.clearNavMesh();
     m_viewport.setMapBoxes(draws);
 
     // Gizmo sull'elemento selezionato (box o spawn point).
@@ -2234,15 +3803,45 @@ void MapEditor::draw()
         }
         else if (!active && s_wasActive && m_dirty && !s_dirtyBefore)
         {
-            m_undo.push_back(s_before);
-            if (m_undo.size() > kUndoDepth) m_undo.erase(m_undo.begin());
-            m_redo.clear();
+            // La fotografia è quella presa PRIMA che il widget diventasse attivo, non
+            // quella attuale: si consegna alla pila con un'etichetta univoca perché
+            // non venga fusa con nient'altro (è già un gesto concluso).
+            m_hist.push(s_before, "widget", m_editorClock, /*window=*/-1.0f);
         }
         s_wasActive = active;
     }
 
     // Scorciatoie: Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z, che molti si aspettano).
-    if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
+    // Solo sul tab Mappa: da un tab struttura, Ctrl+A "seleziona tutti i box"
+    // agirebbe su una mappa che non si sta guardando — la peggior specie di effetto,
+    // quella che non si vede accadere. `m_activeTab` è del frame precedente, che per
+    // l'input è il valore giusto.
+    // ── Annulla/Ripeti nel TAB STRUTTURE (doc 52 F2) ─────────────────────
+    // Stessa pila, stessi tasti: prima Ctrl+Z semplicemente non faceva nulla qui, e
+    // "funziona solo in un posto" è la cosa che rende una scorciatoia inaffidabile.
+    if (m_activeTab > 0 && m_activeTab <= (int)m_structTabs.size()
+        && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
+    {
+        auto& tb = m_structTabs[m_activeTab - 1];
+        const bool wantRedo = ImGui::IsKeyPressed(ImGuiKey_Y, false)
+            || (ImGui::IsKeyPressed(ImGuiKey_Z, false) && ImGui::GetIO().KeyShift);
+        const bool wantUndo = ImGui::IsKeyPressed(ImGuiKey_Z, false)
+            && !ImGui::GetIO().KeyShift;
+        if (wantUndo || wantRedo)
+        {
+            StructTab::UndoState st = tb.snapshot(m_selPart);
+            const bool did = wantRedo ? tb.undo.redo(st) : tb.undo.undo(st);
+            if (did)
+            {
+                tb.def    = st.def;
+                m_selPart = st.selPart;
+                tb.dirty  = true;
+                rebuildStructTabPreview(tb);
+            }
+        }
+    }
+
+    if (m_activeTab == 0 && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput)
     {
         if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
         {
@@ -2276,9 +3875,92 @@ void MapEditor::draw()
         }
     }
 
-    float totalW = ImGui::GetContentRegionAvail().x;
-    float totalH = ImGui::GetContentRegionAvail().y;
+    // Il risultato della verifica navmesh invecchia da solo appena la mappa cambia.
+    if (m_navBuilt) m_navStale = (geometryFingerprint() != m_navFingerprint);
 
+    const float totalW = ImGui::GetContentRegionAvail().x;
+    const float totalH = ImGui::GetContentRegionAvail().y;
+
+    // ── Barra dei tab (doc 48 S1) ─────────────────────────────────────────
+    // "Mappa" è sempre il primo e non si chiude; i tipi aperti gli si affiancano
+    // come tab chiudibili, in stile browser (richiesta esplicita dell'utente).
+    if (!ImGui::BeginTabBar("##mapeditor_tabs",
+                            ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll))
+        return;
+
+    const float tabsH = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+
+    if (ImGui::BeginTabItem("Mappa"))
+    {
+        m_activeTab = 0;
+        drawMapTab(totalW, totalH - tabsH);
+        ImGui::EndTabItem();
+    }
+
+    for (int i = 0; i < (int)m_structTabs.size(); )
+    {
+        auto& t = m_structTabs[i];
+        // Il pallino delle modifiche non salvate è nel titolo: è dove uno lo cerca,
+        // ed è l'unico posto che resta visibile anche quando il tab non è attivo.
+        char title[160];
+        std::snprintf(title, sizeof(title), "%s%s###stab%d",
+                      t.def.label.empty() ? "(nuovo tipo)" : t.def.label.c_str(),
+                      t.dirty ? " *" : "", i);
+        bool open = true;
+        ImGuiTabItemFlags fl = ImGuiTabItemFlags_None;
+        if (m_focusLastTab && i == (int)m_structTabs.size() - 1)
+        { fl |= ImGuiTabItemFlags_SetSelected; m_focusLastTab = false; }
+        if (ImGui::BeginTabItem(title, &open, fl))
+        {
+            m_activeTab = i + 1;
+            drawStructTab(t, totalW, totalH - tabsH);
+            ImGui::EndTabItem();
+        }
+        if (!open)
+        {
+            // Chiudere un tab con modifiche non salvate le perderebbe in silenzio:
+            // è il contratto esplicito di Unity Prefab Mode all'uscita.
+            // Qui si REGISTRA solo l'intenzione: `OpenPopup` va chiamata FUORI dalla
+            // barra dei tab, perché `BeginTabBar` spinge un proprio livello di ID
+            // (`PushOverrideID`, imgui_widgets.cpp) — aprire qui e disegnare là dà
+            // due identificatori diversi, e la finestra resta "aperta" senza essere
+            // mai disegnata: un modale invisibile che blocca i clic altrove.
+            if (t.dirty) m_pendingCloseTab = i;
+            else { m_structTabs.erase(m_structTabs.begin() + i); continue; }
+        }
+        ++i;
+    }
+    ImGui::EndTabBar();
+
+    // Finestra CONDIVISA (doc 52 F4): apertura e disegno nella stessa funzione,
+    // quindi nello stesso livello di ID per costruzione. Qui prima c'era un modale
+    // scritto a mano — ed era proprio da questa coppia sparsa che era nato il
+    // modale invisibile che bloccava i clic (changelog 164).
+    {
+        const int idx = m_pendingCloseTab;
+        const bool valid = (idx >= 0 && idx < (int)m_structTabs.size());
+        bool wanted = (m_pendingCloseTab >= 0);
+        const auto c = editor::dialogs::saveDiscardCancel(
+            "Tipo non salvato", wanted,
+            valid ? ("Il tipo \"" + (m_structTabs[idx].def.label.empty()
+                                     ? std::string("(senza nome)")
+                                     : m_structTabs[idx].def.label) + "\" ha modifiche non salvate.")
+                  : std::string("Tab non piu' disponibile."),
+            {}, valid && !m_structTabs[idx].id.empty());
+        if (c != editor::dialogs::Choice::None)
+        {
+            if (valid && c == editor::dialogs::Choice::Yes) saveStructType(m_structTabs[idx]);
+            if (valid && c != editor::dialogs::Choice::Cancel)
+            { m_structTabs.erase(m_structTabs.begin() + idx); m_activeTab = 0; }
+            m_pendingCloseTab = -1;
+        }
+        else if (!wanted) m_pendingCloseTab = -1;   // la finestra si è chiusa da sé
+    }
+}
+
+// Il tab Mappa: esattamente ciò che il Map Editor era prima dei tab.
+void MapEditor::drawMapTab(float totalW, float totalH)
+{
     drawToolbar();
 
     float toolbarH = ImGui::GetItemRectSize().y + ImGui::GetStyle().ItemSpacing.y;
@@ -2372,18 +4054,18 @@ void MapEditor::drawToolbar()
 
     ImGui::SameLine();
     // ── Annulla / Ripristina (doc 47 E1) ──────────────────────────────────
-    ImGui::BeginDisabled(m_undo.empty());
+    ImGui::BeginDisabled(!m_hist.canUndo());
     if (ImGui::Button("Annulla")) doUndo();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Ctrl+Z — annulla l'ultima modifica (%d in memoria)",
-                          (int)m_undo.size());
+                          (int)m_hist.undoCount());
     ImGui::SameLine();
-    ImGui::BeginDisabled(m_redo.empty());
+    ImGui::BeginDisabled(!m_hist.canRedo());
     if (ImGui::Button("Ripristina")) doRedo();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Ctrl+Y o Ctrl+Shift+Z (%d in memoria)", (int)m_redo.size());
+        ImGui::SetTooltip("Ctrl+Y o Ctrl+Shift+Z (%d in memoria)", (int)m_hist.redoCount());
     ImGui::SameLine();
 
     if (ImGui::Button("+ Box"))         addBox();
@@ -2441,6 +4123,102 @@ void MapEditor::drawToolbar()
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Barricata a intervalli. Emette box di tipo `cover`,\n"
                               "che e' cio' che la derivazione dei metadata cerca.");
+
+        // ── La LIBRERIA: tipi nominati e gia' verificati (ADR-055) ────────
+        // Sopra ci sono le primitive NUDE, da riparametrizzare ogni volta; qui le
+        // forme che qualcuno ha gia' tarato e collaudato. E' la differenza fra
+        // avere nove ricette e avere una libreria.
+        if (!m_structTypeIds.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("Libreria");
+
+            // Raggruppata per CATEGORIA, in sottomenu: con decine di tipi un elenco
+            // piatto è lo stesso problema che avevano le liste del Map Editor.
+            // Le categorie vengono dai DATI, così una nuova compare da sola.
+            std::vector<std::string> cats;
+            for (const auto& id : m_structTypeIds)
+            {
+                const auto* ty = m_prefabReg.getStructureType(id);
+                const std::string c = (ty && !ty->category.empty()) ? ty->category
+                                                                    : "Senza categoria";
+                if (std::find(cats.begin(), cats.end(), c) == cats.end()) cats.push_back(c);
+            }
+            std::sort(cats.begin(), cats.end());
+
+            for (const auto& cat : cats)
+            {
+            const bool single = (cats.size() == 1);
+            // Con una sola categoria il sottomenu sarebbe un clic in più a vuoto.
+            if (!single && !ImGui::BeginMenu(cat.c_str())) continue;
+            for (const auto& id : m_structTypeIds)
+            {
+                const auto* ty = m_prefabReg.getStructureType(id);
+                const std::string c = (ty && !ty->category.empty()) ? ty->category
+                                                                    : "Senza categoria";
+                if (c != cat) continue;
+                const bool composite = (ty && mini::mapstructures::isAssembly(*ty));
+                char item[192];
+                // Il segno distingue una COMPOSITA da un preset di primitiva: sono
+                // cose diverse da piazzare, e il nome da solo non lo dice.
+                std::snprintf(item, sizeof(item), "%s %s%s",
+                              composite ? "[+]" : "   ",
+                              (ty && !ty->label.empty()) ? ty->label.c_str() : id.c_str(),
+                              (ty && !ty->verified) ? "  (non verificata)" : "");
+                const bool unverified = (ty && !ty->verified);
+                if (unverified)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.30f, 1.0f));
+                if (ImGui::MenuItem(item) && ty)
+                {
+                    addStructure(ty->kind);
+                    // L'istanza nasce dai predefiniti del tipo e ne porta l'id: e'
+                    // il legame che rende il tipo una definizione e non un modello
+                    // copiato una volta e poi dimenticato.
+                    if (!m_structures.empty())
+                    {
+                        auto& s = m_structures.back();
+                        const float px = s.x, py = s.y, pz = s.z, pry = s.ry;
+                        s = ty->defaults;
+                        s.x = px; s.y = py; s.z = pz; s.ry = pry;
+                        s.type  = ty->id;
+                        s.label = ty->label;
+                        rebuildStructurePreview();
+                        updateViewport();
+                    }
+                }
+                if (unverified) ImGui::PopStyleColor();
+                if (unverified && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Questo tipo non ha superato la verifica navmesh:\n"
+                                      "puo' generare superfici su cui l'AI non cammina.");
+                else if (composite && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("[+] = struttura COMPOSITA: piu' parti in un pezzo solo.");
+            }
+            if (!single) ImGui::EndMenu();
+            }   // fine categorie
+        }
+
+        // ── L'ingresso all'editor, in fondo (richiesta esplicita) ─────────
+        // Si entra nella definizione DA DOVE la si usa: e' il gesto di Unity
+        // Prefab Mode, e il motivo per cui il tasto sta qui e non in un menu a parte.
+        ImGui::Separator();
+        if (ImGui::MenuItem("Editor strutture..."))
+        {
+            refreshStructTypeIds();
+            openStructTab("");
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Apre un TAB accanto a \"Mappa\". Da li' si crea:\n"
+                              " · un tipo SEMPLICE (una primitiva con i suoi limiti), oppure\n"
+                              " · un ASSEMBLAGGIO: piu' parti (primitive e box) che formano\n"
+                              "   una torre, un bunker, un edificio.\n"
+                              "In entrambi i casi si verifica il navmesh sulla struttura\n"
+                              "isolata prima di metterla in mappa.");
+        if (!m_structTypeIds.empty() && ImGui::BeginMenu("Modifica un tipo"))
+        {
+            for (const auto& id : m_structTypeIds)
+                if (ImGui::MenuItem(id.c_str())) { refreshStructTypeIds(); openStructTab(id); }
+            ImGui::EndMenu();
+        }
         ImGui::EndPopup();
     }
     ImGui::SameLine();
@@ -2498,6 +4276,37 @@ void MapEditor::drawToolbar()
                               nProb, nWarn);
     }
 
+    // ── Tetti dei codici di selezione (doc 49 R1, KI #100) ────────────────
+    // Compare SOLO quando serve: un avviso sempre acceso diventa arredamento.
+    // A 80% avverte, al tetto è un errore — oltre, il codice di un elemento
+    // cambia significato e si sposta un elemento di un altro tipo, in silenzio.
+    {
+        const auto caps = capacityReport();
+        int worstPct = 0; const CapacityInfo* worst = nullptr;
+        for (const auto& c : caps)
+        {
+            const int pct = (c.limit > 0) ? (c.used * 100 / c.limit) : 0;
+            if (pct > worstPct) { worstPct = pct; worst = &c; }
+        }
+        if (worst && worstPct >= 80)
+        {
+            ImGui::SameLine();
+            const bool over = (worst->used >= worst->limit);
+            ImGui::TextColored(over ? ImVec4{0.95f, 0.35f, 0.30f, 1.0f}
+                                    : ImVec4{0.90f, 0.75f, 0.35f, 1.0f},
+                               over ? "TETTO RAGGIUNTO: %s %d/%d"
+                                    : "vicino al tetto: %s %d/%d",
+                               worst->name, worst->used, worst->limit);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Ogni tipo di elemento ha un intervallo riservato di codici di\n"
+                    "selezione, e il codice E' l'indice nell'array. Oltre il tetto il\n"
+                    "codice ricade nell'intervallo di un ALTRO tipo: selezionare o\n"
+                    "spostare colpisce l'elemento sbagliato, senza alcun errore.\n"
+                    "Vedi doc 49 e KI #100.");
+        }
+    }
+
     ImGui::SameLine();
     // ── VISTA: filtri + figura di scala (E5/E6) ───────────────────────────
     const bool filtered = filtersActive();
@@ -2519,6 +4328,25 @@ void MapEditor::drawToolbar()
             if (ImGui::Checkbox(tn[i], &m_showType[i])) viewChanged = true;
         if (ImGui::Checkbox("Strutture (scale, rampe...)", &m_showStructures))
             viewChanged = true;
+
+        // ── Marcatori, separati dalla geometria ──────────────────────────
+        // Guardare il navmesh con 169 posizioni, i settori e i percorsi davanti
+        // è illeggibile: la verifica serve a vedere le SUPERFICI. "Solo
+        // geometria" è la scorciatoia che serve davvero — spegnerli a uno a uno
+        // ogni volta è la ragione per cui un filtro non si usa.
+        ImGui::SeparatorText("Marcatori");
+        if (ImGui::Checkbox("Posizioni tattiche", &m_showPositions)) viewChanged = true;
+        if (ImGui::Checkbox("Settori e zone di pericolo", &m_showAreas)) viewChanged = true;
+        if (ImGui::Checkbox("Percorsi di pattuglia", &m_showRoutes)) viewChanged = true;
+        if (ImGui::Checkbox("Spawn, post, bersagli, veicoli", &m_showGamePoints)) viewChanged = true;
+        if (ImGui::Button("Solo geometria", {150, 0}))
+        {
+            m_showPositions = m_showAreas = m_showRoutes = m_showGamePoints = false;
+            viewChanged = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Nasconde tutti i marcatori e lascia la sola geometria.\n"
+                              "È la vista giusta per leggere l'overlay del navmesh.");
         ImGui::Separator();
 
         // Estensione VERA della mappa in quota: uno slider da -5 a 1000 sarebbe
@@ -2581,6 +4409,7 @@ void MapEditor::drawToolbar()
             for (bool& b : m_showType) b = true;
             m_showStructures = true;
             m_hideAboveY = 1000.0f;
+            m_showPositions = m_showAreas = m_showRoutes = m_showGamePoints = true;
             viewChanged = true;
         }
         if (viewChanged) updateViewport(/*recomputeDerived=*/false);
@@ -2684,8 +4513,40 @@ void MapEditor::drawToolbar()
     }
 
     ImGui::SameLine(0, 16);
-    ImGui::Checkbox("Area navigabile", &m_showNavmesh);
-    if (m_showNavmesh) { updateViewport(); } // aggiorna colori floor
+    // ── VALIDAZIONE NAVMESH ───────────────────────────────────────────────
+    // Sostituisce la vecchia spunta "Area navigabile", che evidenziava i box di
+    // tipo `floor`: mostrava l'INTENZIONE dell'autore, non ciò su cui l'AI può
+    // davvero camminare. Le due cose divergono — è tutto KI #97.
+    {
+        const bool bad = m_navBuilt && (m_navReport.islandTris > 0
+                       || !m_navReport.badPositions.empty() || !m_navReport.badPosts.empty());
+        if (m_navBuilt) ImGui::PushStyleColor(ImGuiCol_Text,
+            bad ? ImVec4(0.95f, 0.45f, 0.35f, 1.0f) : ImVec4(0.45f, 0.85f, 0.50f, 1.0f));
+        if (ImGui::Button(m_navStale ? "Verifica navmesh" : "Ri-verifica navmesh"))
+            validateNavmesh();
+        if (m_navBuilt) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Costruisce il navmesh VERO (stesso codice del gioco) sullo\n"
+                              "stato che stai editando, primitive comprese, e mostra dove\n"
+                              "si cammina davvero.\n"
+                              "VERDE = si arriva dallo spawn · ROSSO = isola.\n"
+                              "Il gate sui dati NON puo' vederlo: dipende dalla\n"
+                              "voxelizzazione, non dalla geometria dichiarata.");
+        if (m_navBuilt)
+        {
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Mostra", &m_showNav))
+                updateViewport(/*recomputeDerived=*/false);
+            ImGui::SameLine();
+            if (m_navStale)
+                ImGui::TextColored({0.90f, 0.75f, 0.35f, 1.0f}, "(mappa cambiata)");
+            else if (bad)
+                ImGui::TextColored({0.95f, 0.45f, 0.35f, 1.0f}, "%d isole",
+                                   m_navReport.components > 0 ? m_navReport.components - 1 : 0);
+            else
+                ImGui::TextColored({0.45f, 0.85f, 0.50f, 1.0f}, "tutto connesso");
+        }
+    }
 
     ImGui::SameLine(0, 16);
     {
@@ -2776,6 +4637,57 @@ void MapEditor::drawToolbar()
 // ── drawBoxList ───────────────────────────────────────────────────────────────
 void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
 {
+    // ── DIMENSIONI DELLA MAPPA, SEMPRE IN VISTA (doc 50 M1) ──────────────
+    // Richiesta dell'utente: *"mi serve un modo per sapere le dimensioni tipo della
+    // mappa in maniera facile e chiara"*. Le figure di scala sono un surrogato:
+    // dicono "circa due metri", non "questo corridoio è 3,40".
+    // Prova a carico del fatto che serviva: io stesso ho sbagliato DUE VOLTE la
+    // dimensione di Training Ground (50 × 40, poi 154,9 × 91,9) prima di arrivare a
+    // 71,3 × 92,4 leggendo i limiti del navmesh. Era un dato che nessuno mostrava.
+    {
+        // Sui box a mano E su quelli generati dalle primitive: l'ingombro vero è
+        // quello che il gioco vedrà, non quello di ciò che si è disegnato a mano.
+        bool any = false;
+        float minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
+        // La ROTAZIONE conta. Un box ruotato di 90° scambia larghezza e profondità,
+        // e ignorarlo dà un ingombro grottescamente sbagliato: su Training Ground —
+        // che ha due passerelle da 90 m ruotate — ignorare `ry` dà 154,9 × 91,9
+        // invece di 71,3 × 92,4. È l'errore che ho fatto io la prima volta, quindi
+        // qui la formula è quella completa dell'AABB di un box ruotato attorno a Y.
+        auto acc = [&](float x, float y, float z, float ry,
+                       float sx, float sy, float sz) {
+            const float a = ry * 3.14159265f / 180.0f;
+            const float c = std::fabs(std::cos(a)), s = std::fabs(std::sin(a));
+            const float hx = (sx * 0.5f) * c + (sz * 0.5f) * s;
+            const float hz = (sx * 0.5f) * s + (sz * 0.5f) * c;
+            const float hy = sy * 0.5f;
+            if (!any) { minX = x-hx; maxX = x+hx; minY = y-hy; maxY = y+hy;
+                        minZ = z-hz; maxZ = z+hz; any = true; return; }
+            minX = std::min(minX, x-hx); maxX = std::max(maxX, x+hx);
+            minY = std::min(minY, y-hy); maxY = std::max(maxY, y+hy);
+            minZ = std::min(minZ, z-hz); maxZ = std::max(maxZ, z+hz);
+        };
+        for (const auto& b : m_boxes)         acc(b.x, b.y, b.z, b.ry, b.sx, b.sy, b.sz);
+        for (const auto& g : m_structPreview) acc(g.x, g.y, g.z, g.ry, g.sx, g.sy, g.sz);
+
+        if (any)
+        {
+            ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "%.1f x %.1f m",
+                               maxX - minX, maxZ - minZ);
+            ImGui::SameLine();
+            ImGui::TextDisabled("quota %.1f -> %.1f", minY, maxY);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Ingombro REALE della mappa: box a mano piu' quelli generati\n"
+                    "dalle primitive. Riferimenti: Training Ground e' 71 x 92 m,\n"
+                    "la mappa grande pianificata 300 x 200.\n"
+                    "X da %.1f a %.1f, Z da %.1f a %.1f.",
+                    minX, maxX, minZ, maxZ);
+        }
+        else ImGui::TextDisabled("mappa vuota");
+    }
+    ImGui::Separator();
+
     // ── SALUTE TATTICA (doc 41 B4) ───────────────────────────────────────
     // In CIMA e chiuso di default: si vede subito SE la mappa ha problemi senza che
     // rubi spazio quando non ne ha. Prima questi controlli esistevano ma andavano
@@ -2859,6 +4771,51 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         return typeIcons[4];
     };
 
+    // ── Esito della VERIFICA NAVMESH ──────────────────────────────────────
+    // Sopra a tutto: se il navmesh non collega qualcosa, è la prima cosa da
+    // sapere — e ogni voce è cliccabile, così si passa da "c'è un problema" a
+    // "guarda questo", che è la differenza fra un avviso e uno strumento.
+    if (m_navBuilt)
+    {
+        const int isole = m_navReport.components > 0 ? m_navReport.components - 1 : 0;
+        const bool bad = isole > 0 || !m_navReport.badPositions.empty()
+                       || !m_navReport.badPosts.empty();
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            bad ? ImVec4(0.95f, 0.50f, 0.40f, 1.0f) : ImVec4(0.50f, 0.85f, 0.55f, 1.0f));
+        char nh[96];
+        std::snprintf(nh, sizeof(nh), "Navmesh: %s###navhdr",
+                      m_navStale ? "da ri-verificare"
+                                 : (bad ? "ci sono zone scollegate" : "tutto connesso"));
+        if (bad) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        const bool open = ImGui::CollapsingHeader(nh);
+        ImGui::PopStyleColor();
+        if (open)
+        {
+            ImGui::TextDisabled("%d poligoni · %d isole · costruito in %.2f s",
+                                m_navReport.polys, isole, m_navReport.buildSeconds);
+            if (m_navReport.islandTris > 0)
+                ImGui::TextDisabled("%d triangoli fuori dalla zona dello spawn (in rosso)",
+                                    m_navReport.islandTris);
+            for (int i : m_navReport.badPosts)
+            {
+                if (i < 0 || i >= (int)m_posts.size()) continue;
+                char b[128];
+                std::snprintf(b, sizeof(b), "! post '%s' non raggiungibile##npp%d",
+                              m_posts[i].label, i);
+                if (ImGui::Selectable(b)) setSelection(-10 - i, false);
+            }
+            for (int i : m_navReport.badPositions)
+            {
+                if (i < 0 || i >= (int)m_positions.size()) continue;
+                char b[128];
+                std::snprintf(b, sizeof(b), "! posizione %d [%s] non raggiungibile##npz%d",
+                              i + 1, m_positions[i].role.c_str(), i);
+                if (ImGui::Selectable(b)) setSelection(-1000 - i, false);
+            }
+            if (!bad) ImGui::TextDisabled("nessun elemento isolato");
+        }
+    }
+
     // ── Le STRUTTURE per prime (ADR-053) ──────────────────────────────────
     // Stanno sopra i box perché sono l'unità di lavoro: una scala da 15 gradini è
     // UNA riga qui, non quindici nella lista dei box.
@@ -2877,9 +4834,15 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
                 // Il conto dei box generati è l'informazione che serve davvero:
                 // dice quanto costa quella riga.
                 std::vector<mini::MapGeometryBox> tmpb;
-                mini::mapstructures::expand(s, tmpb);
-                std::snprintf(sb, sizeof(sb), "%s  [%s, %d box]##st%d",
-                              nm, mini::mapstructures::kindName(s.kind), (int)tmpb.size(), i);
+                expandStructureAt(i, tmpb);
+                // Il segno `[+]` distingue una COMPOSITA anche in lista: due righe
+                // con lo stesso nome e conti diversi, senza, sono un enigma.
+                const bool composite = !s.type.empty()
+                    && m_prefabReg.getStructureType(s.type)
+                    && mini::mapstructures::isAssembly(*m_prefabReg.getStructureType(s.type));
+                std::snprintf(sb, sizeof(sb), "%s%s  [%s, %d box]##st%d",
+                              composite ? "[+] " : "", nm,
+                              mini::mapstructures::kindName(s.kind), (int)tmpb.size(), i);
                 const int code = -6000 - i;
                 const bool ssel = (m_selStruct == i)
                     || std::find(m_multiSel.begin(), m_multiSel.end(), code) != m_multiSel.end();
@@ -2889,20 +4852,72 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
         }
     }
 
-    for (int i = 0; i < (int)m_boxes.size(); ++i)
+    // ── BOX RAGGRUPPATE PER TIPO (doc 49 / richiesta utente) ─────────────
+    // Su Training Ground sono 167 in un elenco piatto, e su una mappa 300 × 200
+    // saranno molte di più: scorrerlo per trovare un muro non è lavoro, è attrito.
+    // Le categorie sono le stesse dei filtri di Vista e dei tipi di `BoxType` —
+    // un secondo vocabolario per dire le stesse cose farebbe solo confusione.
     {
-        const auto& b = m_boxes[i];
-        char buf[128];
-        const char* name = (b.label[0] != '\0') ? b.label : "(nessun nome)";
-        std::snprintf(buf, sizeof(buf), "%s %s##box%d", typeIcon(b.type), name, i);
+        // Il filtro per nome prima di tutto: quando sai come si chiama, la strada
+        // più corta non è la categoria giusta, è scriverlo.
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##boxfilter", "filtra per nome...",
+                                 m_listFilter, sizeof(m_listFilter));
+        const bool filtering = (m_listFilter[0] != '\0');
+        auto matches = [&](const char* name) {
+            if (!filtering) return true;
+            std::string a = name, b = m_listFilter;
+            std::transform(a.begin(), a.end(), a.begin(), ::tolower);
+            std::transform(b.begin(), b.end(), b.begin(), ::tolower);
+            return a.find(b) != std::string::npos;
+        };
 
-        const bool sel = (i == m_selBox)
-            || std::find(m_multiSel.begin(), m_multiSel.end(), i) != m_multiSel.end();
-        if (ImGui::Selectable(buf, sel))
-            setSelection(i, ImGui::GetIO().KeyCtrl);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("tipo: %s\npos: (%.1f, %.1f, %.1f)\ndim: %.1fx%.1fx%.1f",
-                              b.type, b.x, b.y, b.z, b.sx, b.sy, b.sz);
+        struct Cat { const char* label; mini::BoxType type; };
+        static const Cat cats[] = {
+            { "Pavimenti",   mini::BoxType::Floor      },
+            { "Muri",        mini::BoxType::Wall       },
+            { "Piattaforme", mini::BoxType::Platform   },
+            { "Coperture",   mini::BoxType::Cover      },
+            { "Decorazioni", mini::BoxType::Decoration },
+        };
+
+        for (const auto& cat : cats)
+        {
+            // Gli indici PRIMA dell'intestazione: il conteggio dev'essere quello
+            // filtrato, o l'intestazione promette righe che non ci sono.
+            std::vector<int> members;
+            for (int i = 0; i < (int)m_boxes.size(); ++i)
+            {
+                if (mini::parseBoxType(m_boxes[i].type) != cat.type) continue;
+                const char* nm = (m_boxes[i].label[0] != '\0') ? m_boxes[i].label : "";
+                if (!matches(nm)) continue;
+                members.push_back(i);
+            }
+            if (members.empty()) continue;
+
+            // Col filtro attivo le categorie si aprono da sole: cercare e poi dover
+            // anche aprire il cassetto giusto vanifica la ricerca.
+            if (filtering) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+            char hdr[64];
+            std::snprintf(hdr, sizeof(hdr), "%s (%d)###cat%d",
+                          cat.label, (int)members.size(), (int)cat.type);
+            if (!ImGui::CollapsingHeader(hdr)) continue;
+
+            for (int i : members)
+            {
+                const auto& b = m_boxes[i];
+                char buf[128];
+                const char* name = (b.label[0] != '\0') ? b.label : "(nessun nome)";
+                std::snprintf(buf, sizeof(buf), "  %s %s##box%d", typeIcon(b.type), name, i);
+                const bool sel = (i == m_selBox)
+                    || std::find(m_multiSel.begin(), m_multiSel.end(), i) != m_multiSel.end();
+                if (ImGui::Selectable(buf, sel))
+                    setSelection(i, ImGui::GetIO().KeyCtrl);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("tipo: %s\npos: (%.1f, %.1f, %.1f)\ndim: %.1fx%.1fx%.1f",
+                                      b.type, b.x, b.y, b.z, b.sx, b.sy, b.sz);
+                }
+            }
         }
     }
 
@@ -3250,21 +5265,56 @@ void MapEditor::drawBoxList(float /*panelW*/, float /*panelH*/)
     }
 
     ImGui::Separator();
-    // Posizioni tattiche (ADR-030): una sola lista, il ruolo è nell'etichetta.
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.75f, 1.0f));
-    for (int i = 0; i < (int)m_positions.size(); ++i)
+    // ── POSIZIONI TATTICHE RAGGRUPPATE PER RUOLO (ADR-030) ───────────────
+    // Erano 169 in un elenco piatto, distinguibili solo dal ruolo nell'etichetta:
+    // per trovare "le vantage" bisognava leggerle tutte. I ruoli si ricavano dai
+    // DATI, non da un elenco fisso, così un ruolo nuovo compare da solo invece di
+    // finire in un "altro" che nessuno guarda.
     {
-        // Marcatore "cieca" anche in lista: si trova la posizione difettosa senza
-        // doverle aprire una a una.
-        const bool blindPos = i < (int)m_vertPairs.size() && m_vertPairs[i] > 0
-                           && i < (int)m_vertSight.size() && m_vertSight[i] == 0;
-        char lbl[80];
-        std::snprintf(lbl, sizeof(lbl), "%s[%s] %d##tpos%d",
-                      blindPos ? "! " : "", m_positions[i].role.c_str(), i + 1, i);
-        if (ImGui::Selectable(lbl, m_selBox == -1000 - i))
-        { m_selBox = -1000 - i; updateViewport(); }
+        std::vector<std::string> roles;
+        for (const auto& p : m_positions)
+            if (std::find(roles.begin(), roles.end(), p.role) == roles.end())
+                roles.push_back(p.role);
+        std::sort(roles.begin(), roles.end());
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.9f, 0.75f, 1.0f));
+        for (const auto& role : roles)
+        {
+            std::vector<int> members;
+            int blind = 0;
+            for (int i = 0; i < (int)m_positions.size(); ++i)
+            {
+                if (m_positions[i].role != role) continue;
+                members.push_back(i);
+                if (i < (int)m_vertPairs.size() && m_vertPairs[i] > 0
+                    && i < (int)m_vertSight.size() && m_vertSight[i] == 0) ++blind;
+            }
+            if (members.empty()) continue;
+
+            // Il numero di posizioni CIECHE nell'intestazione: si vede da fuori
+            // quale gruppo ha un problema, senza aprirli tutti per scoprirlo.
+            char hdr[96];
+            if (blind > 0)
+                std::snprintf(hdr, sizeof(hdr), "%s (%d)  ! %d cieche###rl_%s",
+                              role.c_str(), (int)members.size(), blind, role.c_str());
+            else
+                std::snprintf(hdr, sizeof(hdr), "%s (%d)###rl_%s",
+                              role.c_str(), (int)members.size(), role.c_str());
+            if (!ImGui::CollapsingHeader(hdr)) continue;
+
+            for (int i : members)
+            {
+                const bool blindPos = i < (int)m_vertPairs.size() && m_vertPairs[i] > 0
+                                   && i < (int)m_vertSight.size() && m_vertSight[i] == 0;
+                char lbl[80];
+                std::snprintf(lbl, sizeof(lbl), "  %s#%d##tpos%d",
+                              blindPos ? "! " : "", i + 1, i);
+                if (ImGui::Selectable(lbl, m_selBox == -1000 - i))
+                { m_selBox = -1000 - i; updateViewport(); }
+            }
+        }
+        ImGui::PopStyleColor();
     }
-    ImGui::PopStyleColor();
     if (ImGui::SmallButton("+ Posizione"))
     {
         const glm::vec3 fp = m_viewport.groundFocusPoint();
@@ -3424,6 +5474,44 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
                             "pure. La SCALA resta al singolo: su un gruppo misto\n"
                             "un raggio e un'altezza non si scalano allo stesso modo.");
 
+        // ── INGOMBRO DELLA SELEZIONE (doc 50 M2) ──────────────────────────
+        // Larghezza x profondita' x altezza di TUTTO il gruppo: è il numero che si
+        // confronta con le metriche normative (corridoio 2,4 · porta 1,8 × 2,8 ·
+        // gigante 1,20 × 2,40) per sapere se ci si passa. Le sole misure del singolo
+        // box non lo dicono quando gli elementi sono più d'uno.
+        {
+            bool any = false;
+            float mnx=0, mxx=0, mny=0, mxy=0, mnz=0, mxz=0;
+            for (int code : m_multiSel)
+            {
+                // Solo le box hanno un ingombro dichiarato; per gli altri elementi
+                // vale il punto. Mescolarli darebbe una misura che non significa nulla.
+                if (code >= 0 && code < (int)m_boxes.size())
+                {
+                    const auto& b = m_boxes[code];
+                    const float hx=b.sx*0.5f, hy=b.sy*0.5f, hz=b.sz*0.5f;
+                    if (!any) { mnx=b.x-hx; mxx=b.x+hx; mny=b.y-hy; mxy=b.y+hy;
+                                mnz=b.z-hz; mxz=b.z+hz; any=true; continue; }
+                    mnx=std::min(mnx,b.x-hx); mxx=std::max(mxx,b.x+hx);
+                    mny=std::min(mny,b.y-hy); mxy=std::max(mxy,b.y+hy);
+                    mnz=std::min(mnz,b.z-hz); mxz=std::max(mxz,b.z+hz);
+                }
+            }
+            if (any)
+            {
+                ImGui::Separator();
+                ImGui::TextColored({0.55f, 0.85f, 1.0f, 1.0f}, "Ingombro selezione");
+                ImGui::Text("%.2f x %.2f x %.2f m", mxx-mnx, mxz-mnz, mxy-mny);
+                // Il confronto con la metrica che conta, detto invece che lasciato
+                // da calcolare a mente.
+                const float minSpan = std::min(mxx-mnx, mxz-mnz);
+                if (minSpan < mini::mapmetrics::CORRIDOR_MIN)
+                    ImGui::TextColored({0.95f, 0.75f, 0.35f, 1.0f},
+                        "lato minore %.2f m: sotto il corridoio (%.2f)",
+                        minSpan, mini::mapmetrics::CORRIDOR_MIN);
+            }
+        }
+
         // ── RIGHELLO (doc 47 E6) ──────────────────────────────────────────
         // Con ESATTAMENTE due elementi selezionati si misura la distanza fra loro.
         // Non serve uno strumento a parte: la selezione multipla è già il gesto
@@ -3572,8 +5660,10 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
             if (s.kind == SK::Catwalk)
             {
                 ImGui::SetNextItemWidth(sliderW);
-                if (ImGui::DragFloat("Larghezza##st", &s.width, 0.1f, 0.5f, 20.0f, "%.2f m"))
-                    changed = true;
+                if (ImGui::DragFloat("Larghezza##st", &s.width, 0.1f,
+                                     mini::mapmetrics::CORRIDOR_MIN, 40.0f, "%.2f m"))
+                { if (s.width < mini::mapmetrics::CORRIDOR_MIN) s.width = mini::mapmetrics::CORRIDOR_MIN;
+                  changed = true; }
                 ImGui::SetNextItemWidth(sliderW);
                 if (ImGui::DragFloat("Quota impalcato##st", &s.y, 0.1f, 0.0f, 40.0f, "%.2f m"))
                     changed = true;
@@ -3582,9 +5672,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
                     ImGui::SetTooltip("Riparano chi ci sta sopra, MA tolgono la visuale\n"
                                       "verso il basso: e' il difetto KI #83 (posizione cieca\n"
                                       "verso le altre quote). Da mettere con criterio.");
-                if (s.width < mini::mapmetrics::CORRIDOR_MIN - 0.01f)
-                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
-                        "Sotto il corridoio minimo (%.2f m).", mini::mapmetrics::CORRIDOR_MIN);
+                ImGui::TextDisabled("larghezza minima %.2f (e' un corridoio in quota);\n"
+                                    "la lunghezza e' libera", mini::mapmetrics::CORRIDOR_MIN);
             }
             else if (s.kind == SK::Barricade)
             {
@@ -3642,11 +5731,13 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
             if (ImGui::DragFloat("Quota ripiano##st", &s.y, 0.1f, 0.0f, 40.0f, "%.2f m"))
                 changed = true;
             ImGui::SetNextItemWidth(sliderW);
-            if (ImGui::DragFloat("Lato X##st", &s.sizeX, 0.1f, 1.0f, 60.0f, "%.2f m"))
-                changed = true;
+            const float pmin = mini::mapmetrics::ELEVATED_MIN_SPAN;
+            if (ImGui::DragFloat("Lato X##st", &s.sizeX, 0.1f, pmin, 80.0f, "%.2f m"))
+            { if (s.sizeX < pmin) s.sizeX = pmin; changed = true; }
             ImGui::SetNextItemWidth(sliderW);
-            if (ImGui::DragFloat("Lato Z##st", &s.sizeZ, 0.1f, 1.0f, 60.0f, "%.2f m"))
-                changed = true;
+            if (ImGui::DragFloat("Lato Z##st", &s.sizeZ, 0.1f, pmin, 80.0f, "%.2f m"))
+            { if (s.sizeZ < pmin) s.sizeZ = pmin; changed = true; }
+            ImGui::TextDisabled("lato minimo %.2f: sotto, il ripiano sparisce dal navmesh", pmin);
             ImGui::SetNextItemWidth(sliderW);
             if (ImGui::DragFloat("Quota di partenza##st", &s.baseY, 0.1f, -10.0f, 40.0f, "%.2f m"))
                 changed = true;
@@ -3666,38 +5757,54 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         if (hasOpening)
         {
             ImGui::Separator();
+            const bool isWindow = (s.openSill > 0.01f);
+            // PORTA o FINESTRA come SCELTA, non come "metti un numero nel parapetto".
+            // Sono due cose diverse — una si attraversa, l'altra è un riparo da cui
+            // sporgersi — e ognuna porta con sé le proprie misure sensate.
             ImGui::TextDisabled("Apertura");
-            ImGui::SetNextItemWidth(sliderW);
-            if (ImGui::DragFloat("Larghezza##op", &s.openW, 0.05f, 0.0f, 20.0f,
-                                 "%.2f m (0 = normativa)")) changed = true;
-            ImGui::SetNextItemWidth(sliderW);
-            if (ImGui::DragFloat("Altezza##op", &s.openH, 0.05f, 0.0f, 20.0f,
-                                 "%.2f m (0 = normativa)")) changed = true;
-            ImGui::SetNextItemWidth(sliderW);
-            if (ImGui::DragFloat("Parapetto##op", &s.openSill, 0.05f, 0.0f, 5.0f,
-                                 "%.2f m (0 = porta)")) changed = true;
+            if (ImGui::RadioButton("Porta", !isWindow) && isWindow)
+            {
+                s.openSill = 0.0f;
+                s.openW = mini::mapmetrics::DOOR_WIDTH;
+                s.openH = mini::mapmetrics::DOOR_HEIGHT;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Finestra", isWindow) && !isWindow)
+            {
+                s.openSill = mini::mapmetrics::COVER_LOW;   // parapetto = copertura bassa
+                s.openW = 2.0f;
+                s.openH = 1.40f;
+                changed = true;
+            }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Sopra zero diventa una FINESTRA, e il parapetto sotto\n"
-                                  "e' copertura vera: ci si ripara dietro e si spara sopra.\n"
-                                  "Bassa %.2f · alta %.2f",
-                                  mini::mapmetrics::COVER_LOW, mini::mapmetrics::COVER_HIGH);
+                ImGui::SetTooltip("Il parapetto sotto la finestra e' COPERTURA vera:\n"
+                                  "ci si ripara dietro e si spara sopra.");
+
+            ImGui::SetNextItemWidth(sliderW);
+            const float minW = mini::mapstructures::minOpenWidth(s);
+            const float minH = mini::mapstructures::minOpenHeight(s);
+            if (ImGui::DragFloat("Larghezza##op", &s.openW, 0.05f, minW, 20.0f, "%.2f m"))
+            { if (s.openW < minW) s.openW = minW; changed = true; }
+            ImGui::SetNextItemWidth(sliderW);
+            if (ImGui::DragFloat("Altezza##op", &s.openH, 0.05f, minH, 20.0f, "%.2f m"))
+            { if (s.openH < minH) s.openH = minH; changed = true; }
+            if (isWindow)
+            {
+                ImGui::SetNextItemWidth(sliderW);
+                if (ImGui::DragFloat("Parapetto##op", &s.openSill, 0.05f, 0.20f, 5.0f, "%.2f m"))
+                { if (s.openSill < 0.20f) s.openSill = 0.20f; changed = true; }
+                ImGui::TextDisabled("bassa %.2f (ci si spara sopra) · alta %.2f (ripara in piedi)",
+                                    mini::mapmetrics::COVER_LOW, mini::mapmetrics::COVER_HIGH);
+            }
             if (s.kind == SK::Doorway)
             {
                 ImGui::SetNextItemWidth(sliderW);
                 if (ImGui::DragFloat("Scostamento##op", &s.openOff, 0.05f, -50.0f, 50.0f, "%.2f m"))
                     changed = true;
             }
-            const float ew = (s.openW > 0.01f) ? s.openW : mini::mapmetrics::DOOR_WIDTH;
-            const float eh = (s.openH > 0.01f) ? s.openH : mini::mapmetrics::DOOR_HEIGHT;
-            if (s.openSill <= 0.01f)
-            {
-                if (ew < mini::mapmetrics::DOOR_WIDTH - 0.01f)
-                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
-                        "Piu' stretta della porta normativa (%.2f m).", mini::mapmetrics::DOOR_WIDTH);
-                if (eh < mini::mapmetrics::REF_UNIT_HEIGHT + 0.01f)
-                    ImGui::TextColored({1.0f, 0.75f, 0.35f, 1.0f},
-                        "Il gigante (%.2f m) non ci passa.", mini::mapmetrics::REF_UNIT_HEIGHT);
-            }
+            if (!isWindow)
+                ImGui::TextDisabled("minimo %.2f × %.2f: ci passa il gigante", minW, minH);
         }
 
         ImGui::Separator();
@@ -4243,6 +6350,32 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 // ── drawViewport ─────────────────────────────────────────────────────────────
 void MapEditor::drawViewport(float vpW, float vpH)
 {
+    // Il righello si aggancia alla STESSA griglia con cui si costruisce: misurare
+    // su un passo diverso da quello con cui si posiziona darebbe numeri che non
+    // corrispondono a nulla di piazzabile.
+    m_viewport.setGridSnap(m_gridSnap);
+
+    // L'ingombro del contenuto, così cambiare vista inquadra la MAPPA invece di
+    // puntare a caso. Ricalcolato qui perché è l'unico posto che conosce sia i box
+    // a mano sia quelli generati dalle primitive.
+    {
+        bool any = false;
+        glm::vec3 mn{0.0f}, mx{0.0f};
+        auto acc = [&](float x, float y, float z, float ry, float sx, float sy, float sz) {
+            const float a = ry * 3.14159265f / 180.0f;
+            const float c = std::fabs(std::cos(a)), s = std::fabs(std::sin(a));
+            const float hx = (sx * 0.5f) * c + (sz * 0.5f) * s;
+            const float hz = (sx * 0.5f) * s + (sz * 0.5f) * c;
+            const float hy = sy * 0.5f;
+            const glm::vec3 lo{x - hx, y - hy, z - hz}, hi{x + hx, y + hy, z + hz};
+            if (!any) { mn = lo; mx = hi; any = true; return; }
+            mn = glm::min(mn, lo); mx = glm::max(mx, hi);
+        };
+        for (const auto& b : m_boxes)         acc(b.x, b.y, b.z, b.ry, b.sx, b.sy, b.sz);
+        for (const auto& g : m_structPreview) acc(g.x, g.y, g.z, g.ry, g.sx, g.sy, g.sz);
+        if (any) m_viewport.setContentBounds(mn, mx);
+    }
+
     m_viewport.draw(false);
 
     // Selezione dal viewport (ray-picking): un click su un oggetto lo seleziona

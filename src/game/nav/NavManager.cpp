@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#include <utility>
 
 namespace mini
 {
@@ -516,6 +517,125 @@ float NavManager::agentSpeed(int idx) const
     // Velocità EFFETTIVA (`vel`), non quella desiderata (`dvel`): la differenza
     // fra le due è esattamente il caso "vuole andare ma non si muove".
     return std::sqrt(a->vel[0] * a->vel[0] + a->vel[2] * a->vel[2]);
+}
+
+// ── Ispezione del navmesh costruito (doc 47) ─────────────────────────────────
+// Componenti connesse sui poligoni: due superfici che il navmesh non collega
+// finiscono in componenti diverse, ed è così che un'ISOLA si riconosce a colpo
+// d'occhio invece che provando a camminarci. È anche il `componentId` che doc 46
+// M1 vuole come dato di primo livello: qui nasce, e resta una sola implementazione.
+static void buildComponents(const dtNavMesh* mesh, std::vector<int>& comp,
+                            std::vector<std::pair<int,int>>& index, int& nComp)
+{
+    comp.clear(); index.clear(); nComp = 0;
+    if (!mesh) return;
+
+    // Indice piatto: (tile, poly) → posizione in `comp`.
+    std::vector<std::vector<int>> base(mesh->getMaxTiles());
+    for (int t = 0; t < mesh->getMaxTiles(); ++t)
+    {
+        const dtMeshTile* tile = mesh->getTile(t);
+        if (!tile || !tile->header) continue;
+        base[t].resize(tile->header->polyCount);
+        for (int p = 0; p < tile->header->polyCount; ++p)
+        { base[t][p] = (int)comp.size(); comp.push_back(-1); index.push_back({t, p}); }
+    }
+
+    // Visita in ampiezza sui vicini INTERNI alla tile (`neis`) e sui collegamenti
+    // esterni (`links`), così il conteggio resta giusto anche a più tile.
+    std::vector<int> stack;
+    for (size_t s = 0; s < comp.size(); ++s)
+    {
+        if (comp[s] != -1) continue;
+        const int id = nComp++;
+        stack.clear(); stack.push_back((int)s); comp[s] = id;
+        while (!stack.empty())
+        {
+            const int cur = stack.back(); stack.pop_back();
+            const auto [ti, pi] = index[cur];
+            const dtMeshTile* tile = mesh->getTile(ti);
+            if (!tile || !tile->header) continue;
+            const dtPoly* poly = &tile->polys[pi];
+            for (int j = 0; j < (int)poly->vertCount; ++j)
+            {
+                if (!poly->neis[j]) continue;                       // bordo aperto
+                if (poly->neis[j] & DT_EXT_LINK) continue;          // gestito dai link
+                const int nb = base[ti][poly->neis[j] - 1];
+                if (comp[nb] == -1) { comp[nb] = id; stack.push_back(nb); }
+            }
+            for (unsigned int k = poly->firstLink; k != DT_NULL_LINK; k = tile->links[k].next)
+            {
+                const dtPolyRef ref = tile->links[k].ref;
+                if (!ref) continue;
+                const dtMeshTile* nt = nullptr; const dtPoly* np = nullptr;
+                if (dtStatusFailed(mesh->getTileAndPolyByRef(ref, &nt, &np))) continue;
+                const int npi = (int)(np - nt->polys);
+                for (int t2 = 0; t2 < mesh->getMaxTiles(); ++t2)
+                {
+                    if (mesh->getTile(t2) != nt) continue;
+                    const int nb = base[t2][npi];
+                    if (comp[nb] == -1) { comp[nb] = id; stack.push_back(nb); }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void NavManager::debugTriangles(std::vector<DebugTri>& out, int* outComponentCount) const
+{
+    out.clear();
+    if (outComponentCount) *outComponentCount = 0;
+    if (!m_navMesh) return;
+
+    //  non-const e privato in Detour: in un metodo const il membro
+    // resta un puntatore NON-const, quindi si passa esplicitamente da uno const.
+    const dtNavMesh* mesh = m_navMesh;
+    std::vector<int> comp; std::vector<std::pair<int,int>> index; int nComp = 0;
+    buildComponents(mesh, comp, index, nComp);
+    if (outComponentCount) *outComponentCount = nComp;
+
+    for (size_t s = 0; s < index.size(); ++s)
+    {
+        const auto [ti, pi] = index[s];
+        const dtMeshTile* tile = mesh->getTile(ti);
+        if (!tile || !tile->header) continue;
+        const dtPoly* poly = &tile->polys[pi];
+        if (poly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
+        // Ventaglio dal primo vertice: i poligoni Recast sono convessi, quindi basta.
+        for (int j = 2; j < (int)poly->vertCount; ++j)
+        {
+            const float* v0 = &tile->verts[poly->verts[0]     * 3];
+            const float* v1 = &tile->verts[poly->verts[j - 1] * 3];
+            const float* v2 = &tile->verts[poly->verts[j]     * 3];
+            out.push_back({ {v0[0], v0[1], v0[2]},
+                            {v1[0], v1[1], v1[2]},
+                            {v2[0], v2[1], v2[2]}, comp[s] });
+        }
+    }
+}
+
+int NavManager::componentAt(const glm::vec3& p) const
+{
+    if (!m_query || !m_navMesh) return -1;
+    dtQueryFilter filter;
+    filter.setAreaCost(kAreaDanger, kCostDanger);
+    const float ext[3] = {2.0f, 4.0f, 2.0f};
+    const float pt[3] = {p.x, p.y, p.z};
+    dtPolyRef ref = 0; float nearest[3];
+    m_query->findNearestPoly(pt, ext, &filter, &ref, nearest);
+    if (!ref) return -1;
+
+    const dtNavMesh* mesh = m_navMesh;
+    std::vector<int> comp; std::vector<std::pair<int,int>> index; int nComp = 0;
+    buildComponents(mesh, comp, index, nComp);
+    const dtMeshTile* tile = nullptr; const dtPoly* poly = nullptr;
+    if (dtStatusFailed(mesh->getTileAndPolyByRef(ref, &tile, &poly))) return -1;
+    const int pi = (int)(poly - tile->polys);
+    for (size_t s = 0; s < index.size(); ++s)
+        if (mesh->getTile(index[s].first) == tile && index[s].second == pi)
+            return comp[s];
+    return -1;
 }
 
 } // namespace mini

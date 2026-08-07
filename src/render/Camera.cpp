@@ -46,7 +46,33 @@ void Camera::processMouse(float dx, float dy, float sensitivity)
 }
 
 glm::mat4 Camera::getView()           const { return glm::lookAt(m_position, m_position + m_front, m_up); }
-glm::mat4 Camera::getProjection()     const { return glm::perspective(glm::radians(m_fov), m_aspect, m_near, m_far); }
+void Camera::setOrthographic(bool on, float halfHeight)
+{
+    m_ortho = on;
+    if (halfHeight > 0.01f) m_orthoHalfH = halfHeight;
+}
+
+void Camera::setOrthoHalfHeight(float h)
+{
+    // Limiti: sotto mezzo metro si perde il contesto, oltre 400 m si inquadrerebbe
+    // più del doppio della mappa grande pianificata (300 × 200).
+    m_orthoHalfH = glm::clamp(h, 0.5f, 400.0f);
+}
+
+glm::mat4 Camera::getProjection() const
+{
+    if (m_ortho)
+    {
+        // Il piano vicino NEGATIVO è deliberato: in ortografica la camera sta
+        // "sopra" la scena e senza di esso la geometria alle sue spalle (o alla sua
+        // stessa quota) verrebbe tagliata via — cioè guardando una mappa dall'alto
+        // sparirebbe tutto ciò che sta sopra la camera. Con una proiezione parallela
+        // non c'è nessun motivo per cui il piano vicino debba essere positivo.
+        const float hw = m_orthoHalfH * m_aspect;
+        return glm::ortho(-hw, hw, -m_orthoHalfH, m_orthoHalfH, -m_far, m_far);
+    }
+    return glm::perspective(glm::radians(m_fov), m_aspect, m_near, m_far);
+}
 glm::mat4 Camera::getViewProjection() const { return getProjection() * getView(); }
 
 const glm::vec3& Camera::getPosition() const { return m_position; }

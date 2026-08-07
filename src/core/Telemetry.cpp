@@ -40,6 +40,12 @@ std::shared_ptr<spdlog::logger> g_streams[6];
 // Soglia di verbosità degli EVENTI. Vedi setMinLevel() per il perché del default.
 Level g_minLevel = Level::Info;
 std::atomic<uint64_t>           g_frame{0};
+// Ultimo passaggio dichiarato prima del crash. Un puntatore a letterale, scritto
+// in modo atomico: leggerlo dentro un handler SEH è sicuro, e costa una store.
+// Serve perché uno stack trace dice DOVE si è fermato il processore, non COSA
+// stava facendo il programma — e su un crash dentro la DLL del driver grafico il
+// "dove" non ha nomi nostri (KI #98).
+std::atomic<const char*>        g_phase{"avvio"};
 std::chrono::steady_clock::time_point g_start;         // per il campo "time" del JSONL
 std::function<void()>           g_stateDumpCb;         // dump stato su crash (Phase 4)
 std::atomic<bool>               g_dumping{false};       // guardia ri-entranza
@@ -92,10 +98,12 @@ std::string resolveDir()
 void writeCrashReport(const std::string& reason)
 {
     const std::string trace = cpptrace::generate_trace().to_string();
+    const char* phase = g_phase.load();
+    if (!phase) phase = "(sconosciuto)";
 
     // Terminale (sempre)
-    fprintf(stderr, "\n========== CRASH: %s ==========\n%s\n",
-            reason.c_str(), trace.c_str());
+    fprintf(stderr, "\n========== CRASH: %s ==========\nfase: %s\n%s\n",
+            reason.c_str(), phase, trace.c_str());
     fflush(stderr);
 
     // File (best-effort: siamo in un contesto di crash)
@@ -109,6 +117,7 @@ void writeCrashReport(const std::string& reason)
             f << "GFEngine crash report\n"
               << "reason: " << reason << "\n"
               << "frame:  " << g_frame.load() << "\n"
+              << "fase:   " << phase << "\n"
               << "time:   " << now << " (unix)\n\n"
               << trace << "\n";
         }
@@ -381,6 +390,16 @@ void flushEvents()
 }
 
 void setStateDumpCallback(std::function<void()> cb) { g_stateDumpCb = std::move(cb); }
+
+void setPhase(const char* phase)
+{
+    g_phase.store(phase ? phase : "(sconosciuto)", std::memory_order_relaxed);
+}
+
+const char* ScopedPhase::current()
+{
+    return g_phase.load(std::memory_order_relaxed);
+}
 
 void beginFrame()
 {

@@ -551,10 +551,41 @@ enum class StructureKind : std::uint8_t
     Barricade     // linea di coperture a intervalli
 };
 
+// I parametri dimensionali di una ricetta, enumerati (ADR-055). Servono a parlare
+// di una misura **senza sapere quale primitiva sia**: l'editor la mostra, il tipo la
+// vincola, il clamp la applica — tutti dalla stessa tabella (`mapstructures::paramsOf`).
+// Senza questo elenco ogni parametro andrebbe ripetuto a mano in tre posti, ed è così
+// che i tre divergono.
+enum class StructureParam : std::uint8_t
+{
+    Rise, Width, Riser, Tread,
+    Length, Height, Thickness,
+    OpenW, OpenH, OpenSill, OpenOff,
+    FlightRise, Spacing,
+    SizeX, SizeZ, BaseY,
+    // Quota del piano calpestabile sopra la base. Per una piattaforma o una
+    // passerella è IL parametro che le rende quello che sono: senza, un tipo
+    // "passerella in quota" non è esprimibile e nasce appoggiato a terra.
+    Elev,
+    Count
+};
+
+// Vincolo autorato su un parametro (ADR-055). `min`/`max` a 0 = non autorato, vale
+// solo il **pavimento fisico** del codice, che un tipo non può allentare.
+struct StructureParamRule
+{
+    bool  editable = true;
+    float min = 0.0f;
+    float max = 0.0f;
+};
+
 struct StructureDef
 {
     StructureKind kind = StructureKind::Stair;
     std::string   label;
+    // Tipo di appartenenza (ADR-055). VUOTO = comportamento di prima, con i minimi
+    // per primitiva: il fallback documentato della transizione (CLAUDE.md §2).
+    std::string   type;
 
     // Origine e orientamento. `ry` = direzione di SALITA (scala/rampa), di sviluppo
     // (muro), del ripiano (piattaforma).
@@ -606,6 +637,54 @@ struct StructureDef
     bool access[4] = { true, false, false, false };
 
     std::array<float,3> color = { 0.35f, 0.32f, 0.28f };
+};
+
+// Una PARTE di un assemblaggio (ADR-056): o una primitiva parametrica, o un box
+// libero. Le coordinate della parte sono LOCALI all'origine dell'assemblaggio, e
+// vengono trasformate dalla posa dell'istanza al momento dell'espansione.
+//
+// Perché due casi e non uno: le primitive garantiscono le misure (un'alzata
+// sbagliata resta inesprimibile, ADR-053), ma non esprimono tutto — un parapetto
+// storto, un contrafforte, una feritoia sono box. Ammettere solo primitive avrebbe
+// reso inesprimibili proprio le "strutture un po' più complesse" che sono il motivo
+// per cui l'assemblaggio esiste.
+struct StructurePart
+{
+    bool             isBox = false;   // false = primitiva
+    StructureDef     prim;            // valida se !isBox (x,y,z,ry = posa LOCALE)
+    MapGeometryBox   box;             // valida se isBox  (idem)
+    std::string      label;
+};
+
+// Un TIPO di struttura: preset nominato di una primitiva, con i suoi vincoli
+// (ADR-055, doc 48). id = filename stem (ADR-001). Sta DOPO `StructureDef` perché lo
+// contiene per valore: i predefiniti sono una ricetta completa, non un frammento.
+//
+// ASSEMBLAGGIO (ADR-056): se `parts` non è vuoto il tipo è un assemblaggio e
+// `defaults` non viene espanso. Se è vuoto, il tipo resta quello di ADR-055 — una
+// sola primitiva — e nulla cambia per i tipi già scritti.
+// **Un assemblaggio non può contenere assemblaggi**: le parti sono primitive o box,
+// punto. È il limite preso dalla pratica delle famiglie annidate di Revit, e serve a
+// non moltiplicare i modi in cui il navmesh si rompe senza che si capisca dove.
+struct StructureTypeDef
+{
+    std::string   id;
+    std::string   label;
+    std::string   note;
+    // Categoria libera, decisa dall'autore ("Torri", "Difese", "Interni"...). Serve
+    // a raggruppare la libreria quando i tipi saranno decine. Vuota = "Senza
+    // categoria". Libera e non enum: un elenco fisso costringerebbe a ricompilare
+    // per aggiungere un raggruppamento, cioè a chiedere a me un cambio di codice per
+    // una decisione che è di chi costruisce.
+    std::string   category;
+    StructureKind kind = StructureKind::Stair;
+    StructureDef  defaults;      // valori con cui nasce un'istanza (tipo semplice)
+    std::vector<StructurePart> parts;   // non vuoto = ASSEMBLAGGIO (ADR-056)
+    std::array<StructureParamRule, (std::size_t)StructureParam::Count> rules{};
+    // `verified`: ha superato la verifica navmesh sulla struttura ISOLATA. Un tipo non
+    // verificato si salva lo stesso, ma resta marcato tale nella libreria — un dato che
+    // può essere sbagliato in silenzio è ciò che il gate esiste per impedire (ADR-050).
+    bool verified = false;
 };
 
 struct MapDef

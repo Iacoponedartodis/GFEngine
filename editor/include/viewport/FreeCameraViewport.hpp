@@ -46,6 +46,50 @@ public:
     };
     void setMapBoxes(const std::vector<MapBoxDraw>& boxes);
     void clearMapBoxes();
+
+    // ── Modo di vista (doc 50 M3) ────────────────────────────────────────
+    // Prospettiva per navigare, ORTOGRAFICA per misurare: in prospettiva una
+    // lunghezza sullo schermo non corrisponde a una lunghezza nel mondo.
+    enum class ViewMode : int { Perspective = 0, Top, Front, Side };
+    void setViewMode(ViewMode m);
+    [[nodiscard]] ViewMode viewMode() const { return m_viewMode; }
+    [[nodiscard]] bool isOrtho() const { return m_viewMode != ViewMode::Perspective; }
+    // Ingombro del CONTENUTO, dato da chi lo conosce (il modulo). Serve a inquadrare
+    // qualcosa invece di puntare a caso: cambiare vista senza sapere dov'è la roba
+    // è il modo sicuro di inquadrare il vuoto.
+    void setContentBounds(const glm::vec3& mn, const glm::vec3& mx);
+    void frameContent();   // "inquadra tutto" — il rimedio universale al perdersi
+    // Sola lettura, per il collaudo: permette di verificare che dopo un cambio di
+    // vista il contenuto sia DAVVERO inquadrato, invece di dichiararlo.
+    [[nodiscard]] const mini::Camera& camera() const { return *m_camera; }
+
+    // ── RIGHELLO LIBERO (doc 50 M4) ──────────────────────────────────────
+    // Due clic nel viewport, con aggancio alla griglia. Il righello che c'era
+    // misurava solo fra DUE ELEMENTI SELEZIONATI, quindi non poteva misurare uno
+    // spazio VUOTO — cioè il caso vero: la larghezza di un varco, la luce di un
+    // passaggio, la distanza fra due muri. Come in Unreal, dà il meglio in
+    // ortografica, dove una lunghezza sullo schermo è una lunghezza nel mondo.
+    void setRulerActive(bool on);
+    [[nodiscard]] bool rulerActive() const { return m_rulerActive; }
+    void setGridSnap(float s) { m_rulerSnap = (s > 0.001f) ? s : 0.0f; }
+    // Converte un punto dello SCHERMO in un punto sul piano orizzontale y = planeY.
+    // Vale sia in prospettiva sia in ortografica: si sproietta la matrice.
+    [[nodiscard]] bool screenToPlane(float sx, float sy, float planeY,
+                                     glm::vec3& out) const;
+
+    // ── Overlay NAVMESH (doc 47) ─────────────────────────────────────────
+    // Le superfici che l'AI può davvero calpestare, disegnate come sono: è la
+    // sola cosa che non mente, perché fra i box e il navmesh ci sono erosione,
+    // sfoltimento dei cigli e area minima di regione. Triangoli già in coordinate
+    // mondo, con il colore deciso dal chiamante (verde = raggiungibile dallo
+    // spawn, rosso = isola).
+    struct NavTriDraw
+    {
+        float ax, ay, az, bx, by, bz, cx, cy, cz;
+        float r, g, b;
+    };
+    void setNavMesh(const std::vector<NavTriDraw>& tris);
+    void clearNavMesh();
     // Facce piene ombreggiate oltre al wireframe: rende le SUPERFICI visibili
     // (muri/piattaforme/cover non più solo linee). Opaco + spigoli sopra: nessun
     // blending → zero rischio compat Intel (ADR-003).
@@ -104,6 +148,9 @@ public:
     void setGizmoCanRotateScale(bool rotate, bool scale)
     { m_gizmoCanRotate = rotate; m_gizmoCanScale = scale; }
 
+    // Il gizmo è afferrato adesso? Serve a chi tiene una pila di annullamento:
+    // la fotografia va presa quando il gesto COMINCIA, non a ogni delta.
+    [[nodiscard]] bool gizmoDragging() const { return m_gizmoActiveAxis >= 0; }
     bool popGizmoDelta(glm::vec3& outDelta);        // world, modalità Sposta
     bool popGizmoRotDelta(glm::vec3& outEulerDeg);  // delta euler (gradi) per asse
     bool popGizmoScaleDelta(glm::vec3& outDelta);   // world units per asse
@@ -138,7 +185,35 @@ private:
     std::vector<float> m_boxData;       int m_boxVertCount     = 0;
     std::vector<float> m_mapBoxData;    int m_mapBoxVertCount  = 0;
     std::vector<float> m_mapBoxFillData; int m_mapBoxFillVertCount = 0; // facce piene
+    // Overlay navmesh: facce + spigoli. Disegnato DOPO i box e leggermente alzato,
+    // così si vede sopra il pavimento senza z-fighting.
+    std::vector<float> m_navFillData; int m_navFillVertCount = 0;
+    std::vector<float> m_navEdgeData; int m_navEdgeVertCount = 0;
     bool m_showSolid = true;   // default: superfici visibili (richiesta utente)
+    ViewMode m_viewMode = ViewMode::Perspective;
+    // Stato della vista prospettica, conservato mentre si sta in ortografica: senza,
+    // tornandoci la camera restava dove l'aveva messa l'ortografica (centinaia di
+    // metri in aria) a inquadrare il nulla.
+    bool      m_perspSaved = false;
+    glm::vec3 m_perspPos{0.0f};
+    float     m_perspYaw = -90.0f, m_perspPitch = 0.0f;
+    // Ingombro del contenuto, comunicato dal modulo.
+    bool      m_contentValid = false;
+    glm::vec3 m_contentMin{0.0f}, m_contentMax{0.0f};
+    // Misure sempre in vista: barra di scala + coordinate ai bordi.
+    bool  m_showMeasures = true;
+    void  drawMeasureOverlay();
+    void  applyOrthoPlacement(ViewMode m, const glm::vec3& center);
+    [[nodiscard]] float frameHalfHeightFor(const glm::vec3& mn, const glm::vec3& mx,
+                                           ViewMode m) const;
+    // Righello: A fissato col primo clic, B segue il cursore fino al secondo.
+    bool      m_rulerActive = false;
+    bool      m_rulerHasA   = false;
+    bool      m_rulerFrozen = false;   // due punti fissati: il risultato resta leggibile
+    glm::vec3 m_rulerA{0.0f}, m_rulerB{0.0f};
+    float     m_rulerSnap   = 0.0f;    // 0 = nessun aggancio
+    std::vector<float> m_rulerData; int m_rulerVertCount = 0;
+    void buildRulerGeometry();
 
     void buildGrid(float size, int div);
     void drawArray(const std::vector<float>& data, int count,

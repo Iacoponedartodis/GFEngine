@@ -1,5 +1,30 @@
 # 10 — Project Memory (durable, code-verified facts)
 
+## Diagnosi dei crash (verificato sul codice 2026-08-05, KI #98)
+- **ASan non vede le letture del driver OpenGL.** Con ADR-003 la geometria vive in array
+  *client-side*: è il **driver** a leggere la nostra memoria durante `glDrawArrays`. ASan strumenta
+  il codice che compiliamo noi, non la DLL del driver — quindi un accesso oltre i dati per mano del
+  driver passa **pulito** sia in Debug+ASan sia in Release+ASan. "ASan non segnala nulla" non
+  significa "non è un problema di memoria": in questo progetto quella conclusione è invalida.
+- **Un crash che sparisce dopo una ricompilazione non è risolto**, è mascherato: cambia la
+  disposizione in memoria, non il difetto. Vale come dato (indica corruzione/lettura oltre i dati),
+  mai come chiusura.
+- **Riprodurre un modulo dell'editor non richiede il mouse**: `GFEditor.exe --module <a,b,c>`
+  (con `--module-frames N`) attraversa i moduli da solo. La forma a **lista** è quella utile — i
+  difetti di modulo stanno nel *passaggio* fra moduli, non nell'apertura.
+- **Il Release genera PDB** (`/Zi` + `/DEBUG`): un crash che capita solo in Release non è più
+  illeggibile. Prima lo era, ed era esattamente il caso peggiore. **Verificato** con `--crash-test`:
+  il report nomina funzione, file e riga.
+- **Il crash report porta la FASE** (`mini::telemetry::setPhase`): uno stack trace dice dove si è
+  fermato il processore, non cosa stava facendo il programma. Con gli array client-side il crash può
+  avvenire dentro la DLL del driver, dove i nostri nomi non esistono.
+- **Riprodurre un modulo non basta: bisogna riprodurne lo STATO.** Aprire Entity Editor senza
+  selezionare un'entità non carica alcun modello — per settimane ho collaudato una viewport vuota
+  credendo di collaudare il modulo. `--entity <id|indice>` esiste per questo.
+- Il build Debug ha ASan attivo e quindi **non parte** fuori da un ambiente Visual Studio senza
+  `clang_rt.asan_dynamic-x86_64.dll` (in `VC\Tools\MSVC\<ver>\bin\Hostx64\x64`), il DebugCRT e
+  `ucrtbased.dll` sul PATH. Un `exit code -1073741515` (0xC0000135) è quello, non un crash.
+
 ## Contesto di macchina (dichiarato dall'utente 2026-08-04)
 - **Il PC di sviluppo attuale è molto vecchio e verrà sostituito a breve.** Conseguenza per ogni
   misura di performance: i **numeri assoluti** (millisecondi, fps) sono specifici di questa
@@ -384,3 +409,26 @@
   aperti: due sole rampe (l'uscita finisce sopra l'ingresso, franco al limite), molte rampe,
   rotazioni non ortogonali. I cinque rimedi già trovati sono annotati nel codice. Nel frattempo
   una torre si costruisce con `platform` + `stair` per livello.
+- **`ELEVATED_MIN_SPAN = 3,00 m`**: lato minimo di una superficie SOPRAELEVATA perché sopravviva
+  al navmesh. Derivato, non scelto: sfoltimento dei cigli (1 cella per lato) + erosione
+  (`AGENT_RADIUS` 0,40 per lato) + `minRegionArea` (~2,56 m²) → per un quadrato di lato s resta
+  (s − 1,20)² ≥ 2,56 → s ≥ 2,80, arrotondato a 3,00. Un ripiano più piccolo **non esiste per
+  l'AI** pur essendo perfetto nei dati.
+- **Regola sui parametri delle primitive** (utente, 2026-08-05): *"devo poter modificare le
+  grandezze che non rompono quella struttura"* → si **clampa solo ciò che romperebbe**, il resto
+  resta libero. Allungare è sempre lecito; stringere sotto la soglia no.
+- **Nell'editor, primario e insieme di selezione si cambiano SEMPRE con `setSelection`.**
+  Scrivere `m_selBox`/`m_selStruct` a mano lascia vivo `m_multiSel`: il gizmo si disegna sul
+  nuovo elemento e muove quello vecchio (bug reale del 2026-08-05, creando una struttura).
+- **L'editor costruisce il NAVMESH VERO** (ADR-054, dal 2026-08-05): GFEditor linka `NavManager` +
+  Recast/Detour. La vecchia spunta "Area navigabile" (box di tipo `floor` colorati) è stata
+  **rimossa**: mostrava l'intenzione dell'autore, non ciò che l'AI calpesta.
+- **`NavManager::debugTriangles()` e `componentAt()`**: poligoni con la loro **componente
+  connessa**, e la componente di un punto. "È raggiungibile da qui?" diventa un confronto fra due
+  interi — ed è il `componentId` che doc 46 M1 vuole. Una sola implementazione.
+- **Training Ground ha 13 componenti connesse** (12 isole, 136 triangoli su 2173 fuori dalla zona
+  dello spawn). Solo una ospita una posizione tattica, per questo le sonde ne segnalavano una sola.
+- **Quando aggiungo un metodo di misura, lo confronto con quello che esiste già.** Le posizioni
+  irraggiungibili danno 1 sia con `isReachable` sia col confronto di componente: due metodi
+  indipendenti, stesso verdetto. Entrambi i numeri restano in telemetria, così una divergenza
+  futura si legge da un log. (Senza questa abitudine avevo gonfiato KI #96 da 1 a 8.)

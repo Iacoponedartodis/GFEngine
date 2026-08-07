@@ -9,6 +9,15 @@ namespace editor::ui
 {
 
 // Ritorna true se il valore è cambiato. labelW = spazio riservato all'etichetta.
+//
+// ADATTIVA (2026-08-06): sotto una certa larghezza la riga si RIORGANIZZA invece di
+// tagliare. Prima slider + campo + etichetta stavano sempre su una riga sola: stringendo
+// il pannello l'etichetta usciva dal bordo e spariva, cioè si perdeva il NOME del valore
+// che si sta modificando — la parte che serve di più.
+// Comportamento chiesto dall'utente e preso dal software serio: *"si restringono finché
+// c'è spazio e poi passano a un'impostazione più verticalizzata e meno ingombrante"*.
+// In Dear ImGui non esiste layout a vincoli: il ramo va scritto a mano interrogando
+// `GetContentRegionAvail` (confermato dalla discussione a monte, issue #6775).
 inline bool sliderRow(const char* label, float& v,
                       float vmin, float vmax, float dragSpeed,
                       const char* fmt = "%.3f", float labelW = 58.0f)
@@ -16,7 +25,33 @@ inline bool sliderRow(const char* label, float& v,
     bool changed = false;
     ImGui::PushID(label);
     const float avail = ImGui::GetContentRegionAvail().x;
-    float sliderW = avail - 66.0f - labelW;
+    // Il testo visibile è quello prima di "##": è quello che deve starci.
+    const char* end = label;
+    while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
+    const float textW = ImGui::CalcTextSize(label, end).x;
+
+    // Soglia: servono almeno il campo numerico (60), l'etichetta e uno slider
+    // ancora afferrabile (60). Sotto, si impila.
+    const float needed = 60.0f + textW + 60.0f + 12.0f;
+    if (avail < needed)
+    {
+        // Impilata: etichetta sopra (mai tagliata), poi slider e campo sotto.
+        ImGui::TextUnformatted(label, end);
+        float w = avail - 64.0f;
+        if (w < 40.0f) w = 40.0f;
+        ImGui::SetNextItemWidth(w);
+        if (ImGui::SliderFloat("##sl", &v, vmin, vmax, fmt)) changed = true;
+        ImGui::SameLine(0, 4);
+        ImGui::SetNextItemWidth(60.0f);
+        if (ImGui::DragFloat("##dg", &v, dragSpeed, vmin, vmax, fmt)) changed = true;
+        ImGui::PopID();
+        return changed;
+    }
+
+    // La larghezza dell'etichetta è quella VERA, non un 58 fisso: con un'etichetta
+    // lunga il valore fisso lasciava comunque uscire il testo.
+    const float lw = (textW > labelW) ? textW : labelW;
+    float sliderW = avail - 66.0f - lw;
     if (sliderW < 40.0f) sliderW = 40.0f;
 
     ImGui::SetNextItemWidth(sliderW);
@@ -25,9 +60,28 @@ inline bool sliderRow(const char* label, float& v,
     ImGui::SetNextItemWidth(60.0f);
     if (ImGui::DragFloat("##dg", &v, dragSpeed, vmin, vmax, fmt)) changed = true;
     ImGui::SameLine(0, 4);
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(label, end);
     ImGui::PopID();
     return changed;
+}
+
+// ── Splitter di pannello (2026-08-06) ────────────────────────────────────────
+// `ImGuiChildFlags_ResizeX` mette il grip sul bordo DESTRO del child. Quando quel
+// bordo coincide col bordo della finestra — cioè per ogni pannello di destra — una
+// volta stretto non c'è più nulla da afferrare e il pannello non si riallarga più.
+// Il Map Editor l'aveva già risolto con uno splitter esplicito a SINISTRA; qui la
+// soluzione diventa condivisa, così non va riscoperta modulo per modulo.
+// Da chiamare PRIMA del pannello di destra, fra `SameLine()`.
+inline void panelSplitter(const char* id, float& width, float height,
+                          float minW = 180.0f, float maxW = 0.0f)
+{
+    ImGui::InvisibleButton(id, ImVec2(6.0f, height));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive())
+        width -= ImGui::GetIO().MouseDelta.x;   // trascinando a sinistra si ALLARGA
+    if (width < minW) width = minW;
+    if (maxW > 0.0f && width > maxW) width = maxW;
 }
 
 // Riga "etichetta a sinistra + campo che riempie il resto". L'etichetta è

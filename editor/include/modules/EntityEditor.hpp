@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include "util/RigReader.hpp"
+#include "framework/UndoStack.hpp"   // annullamento condiviso (doc 52 F2)
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include <glm/glm.hpp>
 
@@ -71,6 +72,13 @@ public:
     EntityEditor();
     void draw();
     void tick(float dt);
+    // Lavoro non salvato (doc 52 F3). Prima lo teneva per sé: uscendo da GFEditor
+    // con un'entità modificata le modifiche sparivano senza una domanda.
+    [[nodiscard]] bool hasUnsavedChanges() const { return m_dirty; }
+    [[nodiscard]] std::string unsavedWhat() const
+    { return (m_sel >= 0 && m_sel < (int)m_entries.size())
+             ? ("l'entita' \"" + m_entries[m_sel].id + "\"") : std::string("un'entita'"); }
+    void savePending() { if (m_dirty) saveSelected(); }
     // Rilascia la cattura del mouse quando questo modulo cessa di essere attivo
     // (EditorApp lo chiama al cambio modulo): senza, il mouse resterebbe
     // invisibile e non liberabile. Vedi FreeCameraViewport::releaseMouseCapture.
@@ -102,6 +110,26 @@ private:
     // Hitbox editing state
     std::vector<EntityEntry::InlineHitZone> m_hitboxZones;
     int m_selZone = -1;
+
+    // ── ANNULLAMENTO (doc 52 F2) ─────────────────────────────────────────
+    // Questo modulo NON aveva annullamento: si spostava una zona hitbox o un attach
+    // point col gizmo e non c'era modo di tornare indietro. Non è stato scritto qui:
+    // è la pila condivisa, la stessa del Map Editor e del tab strutture. Il costo
+    // dell'adozione è questa dichiarazione più tre chiamate — che è esattamente la
+    // promessa del framework di ADR-049.
+    struct UndoState
+    {
+        std::unordered_map<std::string, AttachPointEntry> attach;
+        std::vector<EntityEntry::InlineHitZone>           zones;
+        std::string selAttach;
+        int         selZone = -1;
+        float       rotX = 0.0f, scale = 1.0f;
+    };
+    UndoStack<UndoState> m_undo;
+    float m_clock = 0.0f;   // orologio del modulo, per la coalescenza dei gesti
+    [[nodiscard]] UndoState snapshot() const
+    { return { m_attachPoints, m_hitboxZones, m_selAttachPoint, m_selZone, m_rotX, m_scale }; }
+    void applyUndoState(const UndoState& s);
 
     // ── Arma in mano (preview/posa) ──────────────────────────────────────
     std::string m_weaponId;                 // arma mostrata ("" = nessuna)

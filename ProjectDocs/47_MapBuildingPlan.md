@@ -1,8 +1,8 @@
 # 47 — Map building e geometrie: IL PIANO (Planned Feature)
 
-> **Stato: STRUMENTI COMPLETI — G1-G7 implementate e verificate (2026-08-05, changelog 149-156).**
-> Resta **G8** (riparazione di Training Ground con i nuovi strumenti), poi l.utente puo costruire la
-> mappa 300 x 200. Documento di scope (CLAUDE.md §5).
+> **Stato: PIANO COMPLETO — G1-G8 implementate e verificate (2026-08-05, changelog 149-160).**
+> Gli strumenti ci sono: si può costruire la mappa 300 × 200.
+> Documento di scope (CLAUDE.md §5).
 > È il **prerequisito** di [46_MetadataPlan.md](46_MetadataPlan.md): serve a mettere l'utente in
 > condizione di costruire la mappa **300 × 200 m** su cui poi si svilupperanno i metadata.
 >
@@ -219,6 +219,15 @@ Ognuna si **salva come parametri** e si **espande in box al load** (mai salvati,
 | **Passerella** ✅ | lunghezza, larghezza, quota, parapetti | impalcato (+ parapetti `cover`) | un **corridoio in quota**: corsia tattica che domina il piano di sotto |
 | **Linea di coperture** ✅ | lunghezza, lungh. elemento, varco, altezza | N box `cover` | terreno tattico da campo di battaglia, già nel formato che la derivazione (doc 46) cerca |
 
+> **Regola sui parametri (utente, 2026-08-05)**: *"devo poter modificare le grandezze che non
+> rompono quella struttura"*. Si **clampa solo ciò che romperebbe**, il resto resta libero — una
+> passerella si allunga a piacere, non si stringe sotto il minimo. E i minimi si **derivano dai
+> filtri del navmesh**, non si scelgono a occhio: nuova metrica **`ELEVATED_MIN_SPAN = 3,00 m`**
+> (lato minimo di una superficie sopraelevata perché sopravviva a sfoltimento dei cigli + erosione +
+> area minima di regione). Porta ≥ **1,80 × 2,40** (ci passa il gigante); finestra libera, perché non
+> si attraversa. Verificato: una mappa con **tutto** chiesto sotto misura resta percorribile grazie
+> ai clamp.
+
 > **Regola generale emersa dall'implementazione (2026-08-05)**: due superfici che devono restare
 > **connesse** vanno **sovrapposte**, non accostate. Recast erode `kAgentRadius` (0,40) da ogni bordo
 > non camminabile: due ripiani a quote diverse che si toccano solo sul bordo restano separati da
@@ -430,7 +439,7 @@ cresce **più che linearmente** (12,3× per 9,1× di area), quindi:
 | **G5** ✅ | **`type` letto dal runtime** (§3.5) | `MapGeometryBox.type` popolato su Training Ground senza toccare i dati (è già scritto); nessun cambio di comportamento |
 | **G6** ✅ | **Array/duplica con offset + livelli + figura di scala** (E4-E6) | una fila di 12 elementi in un comando; la mappa resta leggibile con 1.500 box |
 | **G7** ✅ | **Validazione dal vivo nel viewport** (§6, E7) | i box difettosi si colorano (rosso = problema, ambra = avviso) mentre si costruisce, dalla **stessa `analyzeTacticalHealth`** del gate `--validate`; contatore di salute sempre visibile in toolbar. I due controlli su **navmesh** (connettività dallo spawn, tempo di cammino) restano al motore: l'editor non linka Recast (ADR-002), e le sonde `objective reachability` / `posizioni irraggiungibili` (changelog 147) li riportano già al load |
-| **G8** | **Riparazione di Training Ground con i nuovi strumenti** | le sue scale rifatte con la primitiva: 0 violazioni, e le AI salgono sulle piattaforme (misurato con `--sim-ticks`, non a occhio) |
+| **G8** ✅ | **Collaudo su Training Ground** | il presupposto ("le scale sono sbagliate, rifalle") era **caduto** con la correzione del gate: la mappa è validata a 0 problemi e tutti i post sono raggiungibili. Applicate due correzioni piccole (refuso `Aplha` che avrebbe rotto in silenzio `capture_alpha`/`hold_alpha`; posizione #166 a 26 cm dal bordo, dentro la fascia erosa) e trovato un difetto che **nessun controllo sui dati vede**: il recinto Droid CT è irraggiungibile sopra il suolo per **tre cause sovrapposte** (KI #97). Non riparato: è un ridisegno, e sono scelte di design |
 
 > **G8 è il vero collaudo.** Riparare la mappa che ci ha insegnato il problema, con gli strumenti
 > nati per non farlo ripetere, è la prova che gli strumenti funzionano — e lo fa su una mappa che

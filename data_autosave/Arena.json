@@ -1,0 +1,37 @@
+{
+    "command_posts": [],
+    "danger_zones": [],
+    "geometry": [
+        {
+            "b": 0.30000001192092896,
+            "collider": true,
+            "g": 0.36000001430511475,
+            "label": "Pavimento",
+            "r": 0.4000000059604645,
+            "ry": 0.0,
+            "sx": 50.0,
+            "sy": 0.4000000059604645,
+            "sz": 40.0,
+            "type": "floor",
+            "x": 0.0,
+            "y": -0.10000000149011612,
+            "z": 0.0
+        }
+    ],
+    "name": "Arena",
+    "patrol_routes": [],
+    "sectors": [],
+    "spawn_team1": [
+        0.0,
+        0.8600000143051147,
+        8.0
+    ],
+    "spawn_team2": [
+        0.0,
+        0.8600000143051147,
+        -8.0
+    ],
+    "strategic_targets": [],
+    "tactical_positions": [],
+    "vehicle_spawns": []
+}

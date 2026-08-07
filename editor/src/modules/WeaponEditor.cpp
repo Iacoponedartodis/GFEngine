@@ -494,10 +494,17 @@ void WeaponEditor::draw()
 
     ImGui::SameLine();
 
-    // Pannello destra con tab Mesh / Statistiche (ridimensionabile: il grip
-    // è sul bordo destro; la larghezza effettiva viene riletta ogni frame)
-    ImGui::BeginChild("##wpanel", ImVec2(s_panelW, 0),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
+    // Maniglia ESPLICITA a sinistra del pannello: `ImGuiChildFlags_ResizeX` mette il
+    // grip sul bordo DESTRO, che qui coincide col bordo della finestra — una volta
+    // stretto non c'era più nulla da afferrare e il pannello non si riallargava
+    // (segnalato dall'utente). Stessa riparazione già fatta nel Map Editor, ora
+    // condivisa in `editor::ui::panelSplitter` per non riscoprirla modulo per modulo.
+    editor::ui::panelSplitter("##wpsplit", s_panelW, totalH, 180.0f,
+                              (totalW > 400.0f) ? totalW * 0.5f : 200.0f);
+    ImGui::SameLine();
+
+    // Pannello destra con tab Mesh / Statistiche
+    ImGui::BeginChild("##wpanel", ImVec2(s_panelW, 0), ImGuiChildFlags_Borders);
     {
         const float panelW = ImGui::GetContentRegionAvail().x;
         if (ImGui::BeginTabBar("##wtabs"))
