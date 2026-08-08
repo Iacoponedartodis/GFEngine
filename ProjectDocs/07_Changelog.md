@@ -2,6 +2,62 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-08 (184) — Editor strutture: comandi tagliati e pannelli non ridimensionabili
+
+Tre segnalazioni, una sola causa di fondo: **avevo scritto gli strumenti condivisi e poi non li
+avevo usati proprio qui**.
+
+- **"Centra origine" non si vedeva.** Non era assente: stava sulla stessa riga di un testo che
+  riempiva già la larghezza del pannello, quindi veniva spinto oltre il bordo. Ora il testo va **a
+  capo** (`TextWrapped`, e più corto) e il pulsante sta su una **riga sua**.
+- **La riga di intestazione tagliava.** Nome, categoria, primitiva, Salva, Salva come copia,
+  Verifica e la spunta del navmesh: **otto controlli in fila** in un pannello che non li contiene.
+  Separati in due righe — identità sopra, comandi sotto. È la regola d'uso già confermata
+  dall'utente: *mai far tagliare i comandi*.
+- **I pannelli laterali non si ridimensionavano.** Larghezze fisse (320 e 300), quindi un testo
+  lungo restava tagliato senza rimedio. Ora usano `editor::ui::panelSplitter` — che esiste dal
+  changelog 169 e che **non avevo applicato a questo tab**, pur avendolo scritto proprio per
+  chiudere questa classe di difetto.
+
+Nota su di me: è la seconda volta in tre giorni che un componente condiviso esiste e il codice
+nuovo non lo adotta. Il framework riduce i difetti solo dove viene usato, e ricordarsene è
+disciplina — cioè la cosa che funziona peggio. Vale come voce per il prossimo giro di audit.
+
+## 2026-08-08 (183) — Le parti nascono dove guardi; e l'ORIGINE di un assemblaggio
+
+Due richieste dell'utente che si sono rivelate **lo stesso difetto**.
+
+### La causa comune
+`placePartClear` metteva ogni parte nuova **a destra dell'ingombro esistente**, con un metro di
+stacco. Risolveva il problema per cui nascevano tutte una dentro l'altra — ma ne creava uno
+peggiore: **l'assemblaggio cresceva sempre verso destra**, e il suo centro finiva lontano
+dall'origine.
+
+In mappa l'origine è il **perno di rotazione** e il punto in cui compare il **gizmo**. Da qui il
+sintomo riferito: *"mi considera il centro della struttura tre metri fuori dalla struttura stessa,
+con quindi la rotazione sballata e le freccette del gizmo messe in punti scomodi"*.
+
+### 1. Le parti nascono dove si guarda
+Come ogni elemento del Map Editor (che usava già `groundFocusPoint` in 12 punti). Costruendo
+attorno all'origine, l'assemblaggio resta centrato da solo — la causa sparisce invece di essere
+compensata.
+
+### 2. L'origine, visibile e correggibile
+- Una **croce ciano** a terra nel viewport della struttura: un perno invisibile è un concetto
+  astratto finché non ci si sbatte contro.
+- Sopra l'elenco delle parti, quando serve: *"origine a 3,2 m dal centro della struttura"*.
+- **"Centra origine"** sposta tutte le parti insieme. **Non cambia la forma**: cambia dove sta il
+  perno. È l'*Origin to Geometry* di Blender, stesso gesto e stesso motivo.
+
+**Esplicito e non automatico al salvataggio**: spostare i dati dell'autore senza che l'abbia chiesto
+è il tipo di sorpresa che fa perdere fiducia nello strumento.
+
+### Collaudo
+Cinque controlli, di cui il più importante è *"la FORMA non cambia, cambia solo dove sta il perno"*:
+un centraggio che deformasse la struttura sarebbe molto peggio del problema che risolve. Più
+l'ingombro calcolato **con la rotazione**, che sulle parti ruotate darebbe altrimenti un centro
+sbagliato — lo stesso errore che avevo già fatto sulle dimensioni della mappa.
+
 ## 2026-08-08 (182) — "Salva come copia": varianti di una composita senza rifarla da zero
 
 Richiesta dell'utente, che ne aveva proposte due forme e ha chiesto di scegliere la migliore.

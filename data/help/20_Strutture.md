@@ -91,8 +91,8 @@ produrrebbe alzate fuori norma, cioe' proprio l'errore che le primitive rendono 
 Ogni misura resta comunque bloccata al suo pavimento fisico. Le misure che valgono 0 ("normativo")
 partono dal loro valore reale: la pedata a 0 vale 0,30 e da li' si allunga.
 
-Le parti nuove nascono ACCANTO a quelle esistenti, non sovrapposte: si vedono subito e si
-trascinano al loro posto.
+Le parti nuove nascono **dove stai guardando** nel viewport, come gli oggetti nel Map Editor:
+inquadra il punto dove la vuoi e premi il pulsante.
 
 ## Salvare e la marcatura "verificata"
 **Verifica** salva da sola l'esito sul file e ricarica la Libreria: un tipo appena verificato
@@ -134,3 +134,19 @@ Cosa succede esattamente:
 
 Accanto a **Salva** il suggerimento dice sempre quale file stai per sovrascrivere: e' l'unica difesa
 contro il "volevo farne una variante e ho salvato sull'originale".
+
+## L'ORIGINE di un assemblaggio (e perche' conta)
+Nel viewport della struttura vedi una **croce ciano** a terra: e' l'origine dell'assemblaggio,
+il punto (0,0,0).
+
+Non e' un dettaglio estetico. Quando piazzi la struttura in mappa, l'origine e':
+- il **perno di rotazione** — la struttura gira attorno a quel punto;
+- il posto dove compare il **gizmo**.
+
+Se l'origine cade fuori dalla struttura, in mappa ruoti attorno al vuoto e ti ritrovi le frecce
+lontane dall'oggetto. Sopra l'elenco delle parti l'editor te lo dice
+(*"origine a 3,2 m dal centro"*) e il pulsante **Centra origine** sposta tutte le parti insieme
+finche' l'origine non cade al centro. **Non cambia la forma**: cambia dove sta il perno.
+
+Le parti nuove nascono **dove stai guardando** nel viewport, quindi se costruisci attorno
+all'origine resta centrata da sola.

@@ -1970,6 +1970,43 @@ int MapEditor::selfTest()
         m_prefabReg.removeStructureTypeForTest("_selftest_asm");
     }
 
+    // ── ORIGINE DI UN ASSEMBLAGGIO ───────────────────────────────────────
+    // L'origine è il perno di rotazione e il punto del gizmo in mappa. Un
+    // assemblaggio costruito "verso destra" finiva con l'origine fuori da sé —
+    // segnalato dall'utente su una torre. Qui si verifica che il centraggio la
+    // riporti al centro SENZA cambiare la forma.
+    {
+        StructTab tb;
+        tb.def.kind = mini::StructureKind::Wall;
+        // Tre box in fila da x=10 a x=20: centro a 15, quindi origine fuori di 15 m.
+        for (int k = 0; k < 3; ++k)
+        {
+            mini::StructurePart p;
+            p.isBox = true;
+            p.box.x = 10.0f + (float)k * 5.0f; p.box.y = 1.0f; p.box.z = 4.0f;
+            p.box.sx = 1.0f; p.box.sy = 2.0f; p.box.sz = 1.0f;
+            tb.def.parts.push_back(p);
+        }
+        check(std::fabs(assemblyOriginOffset(tb) - std::sqrt(15.0f*15.0f + 4.0f*4.0f)) < 0.01f,
+              "origine: lo scostamento si misura in pianta");
+
+        // La FORMA prima e dopo: le distanze fra le parti non devono cambiare.
+        std::vector<mini::MapGeometryBox> before;
+        expandTypeForEdit(tb.def, before);
+        const float spanBefore = before.back().x - before.front().x;
+
+        centerAssemblyOrigin(tb);
+        check(assemblyOriginOffset(tb) < 0.01f, "origine: dopo il centraggio cade sul centro");
+
+        std::vector<mini::MapGeometryBox> after;
+        expandTypeForEdit(tb.def, after);
+        check(after.size() == before.size(), "origine: il centraggio non perde parti");
+        check(std::fabs((after.back().x - after.front().x) - spanBefore) < 0.001f,
+              "origine: la FORMA non cambia, cambia solo dove sta il perno");
+        check(std::fabs(after.front().x + after.back().x) < 0.01f,
+              "origine: le parti risultano simmetriche attorno allo zero");
+    }
+
     // ── ID DA NOME: la regola che decide su quale FILE si scrive ─────────
     // Se due nomi diversi producessero lo stesso id, "Salva come copia"
     // sovrascriverebbe l'originale invece di affiancarlo — cioè farebbe
@@ -2084,25 +2121,87 @@ void MapEditor::scalePrimitivePart(mini::StructureDef& s, const glm::vec3& d)
     }
 }
 
-// Una parte nuova nasce ACCANTO a quelle che ci sono, non sopra.
-// Prima nascevano tutte all'origine, una dentro l'altra: per separarle bisognava
-// spostarle a mano una per una, e finché non si erano separate non si capiva
-// nemmeno quante fossero. Si mette a destra dell'ingombro attuale, con un metro di
-// stacco: visibile, selezionabile e ovvia da trascinare al suo posto.
+// Una parte nuova nasce DOVE STAI GUARDANDO, come ogni elemento del Map Editor.
+//
+// Prima la mettevo a destra dell'ingombro esistente, con un metro di stacco. Serviva
+// a non farle nascere una dentro l'altra, e quel problema lo risolveva — ma ne
+// creava uno peggiore: l'assemblaggio **cresceva sempre verso destra**, e il suo
+// centro finiva lontano dall'origine. In mappa l'origine è il perno di rotazione e
+// il punto del gizmo, quindi ci si ritrovava a ruotare una torre attorno a un punto
+// tre metri fuori dalla torre (segnalato dall'utente, ed era questa la causa).
 void MapEditor::placePartClear(const StructTab& t, mini::StructurePart& p)
 {
+    (void)t;
+    const glm::vec3 fp = m_structVp.groundFocusPoint();
+    const float x = snap(fp.x), z = snap(fp.z);
+    if (p.isBox) { p.box.x  = x; p.box.z  = z; }
+    else         { p.prim.x = x; p.prim.z = z; }
+}
+
+// Sposta TUTTE le parti così che il centro dell'ingombro in pianta finisca
+// sull'origine. L'origine di un assemblaggio non è un dettaglio: in mappa è il perno
+// di rotazione e il punto in cui compare il gizmo. Averla fuori dalla struttura
+// significa ruotare attorno al vuoto.
+// Esplicito e non automatico al salvataggio: spostare i dati dell'autore senza che
+// l'abbia chiesto è il tipo di sorpresa che fa perdere fiducia nello strumento.
+// (È l'"Origin to Geometry" di Blender, stesso gesto e stesso motivo.)
+void MapEditor::centerAssemblyOrigin(StructTab& t)
+{
+    if (t.def.parts.empty()) return;
     std::vector<mini::MapGeometryBox> boxes;
     expandTypeForEdit(t.def, boxes);
-    float maxX = 0.0f;
+    if (boxes.empty()) return;
+
     bool any = false;
+    float mnx = 0, mxx = 0, mnz = 0, mxz = 0;
     for (const auto& b : boxes)
     {
-        const float e = b.x + b.sx * 0.5f;
-        if (!any || e > maxX) { maxX = e; any = true; }
+        // Ingombro con la rotazione, come per le dimensioni della mappa: ignorarla
+        // darebbe un centro sbagliato proprio sulle parti ruotate.
+        const float a = b.ry * 3.14159265f / 180.0f;
+        const float c = std::fabs(std::cos(a)), s = std::fabs(std::sin(a));
+        const float hx = (b.sx * 0.5f) * c + (b.sz * 0.5f) * s;
+        const float hz = (b.sx * 0.5f) * s + (b.sz * 0.5f) * c;
+        if (!any) { mnx = b.x-hx; mxx = b.x+hx; mnz = b.z-hz; mxz = b.z+hz; any = true; continue; }
+        mnx = std::min(mnx, b.x-hx); mxx = std::max(mxx, b.x+hx);
+        mnz = std::min(mnz, b.z-hz); mxz = std::max(mxz, b.z+hz);
     }
-    const float x = any ? (maxX + 1.0f) : 0.0f;
-    if (p.isBox) p.box.x  = x + p.box.sx * 0.5f;
-    else         p.prim.x = x + 2.0f;   // le primitive si sviluppano dalla loro origine
+    const float cx = (mnx + mxx) * 0.5f, cz = (mnz + mxz) * 0.5f;
+    if (std::fabs(cx) < 0.001f && std::fabs(cz) < 0.001f) return;   // già centrato
+
+    t.undo.push(t.snapshot(m_selPart), "centra origine", m_editorClock, -1.0f);
+    for (auto& p : t.def.parts)
+    {
+        float* x = p.isBox ? &p.box.x : &p.prim.x;
+        float* z = p.isBox ? &p.box.z : &p.prim.z;
+        *x -= cx; *z -= cz;
+    }
+    t.dirty = true;
+    rebuildStructTabPreview(t);
+}
+
+// Quanto è lontana l'origine dal centro dell'ingombro, in pianta. Serve a dirlo
+// invece di lasciarlo scoprire piazzando la struttura in mappa.
+float MapEditor::assemblyOriginOffset(const StructTab& t) const
+{
+    if (t.def.parts.empty()) return 0.0f;
+    std::vector<mini::MapGeometryBox> boxes;
+    expandTypeForEdit(t.def, boxes);
+    if (boxes.empty()) return 0.0f;
+    bool any = false;
+    float mnx = 0, mxx = 0, mnz = 0, mxz = 0;
+    for (const auto& b : boxes)
+    {
+        const float a = b.ry * 3.14159265f / 180.0f;
+        const float c = std::fabs(std::cos(a)), s = std::fabs(std::sin(a));
+        const float hx = (b.sx * 0.5f) * c + (b.sz * 0.5f) * s;
+        const float hz = (b.sx * 0.5f) * s + (b.sz * 0.5f) * c;
+        if (!any) { mnx = b.x-hx; mxx = b.x+hx; mnz = b.z-hz; mxz = b.z+hz; any = true; continue; }
+        mnx = std::min(mnx, b.x-hx); mxx = std::max(mxx, b.x+hx);
+        mnz = std::min(mnz, b.z-hz); mxz = std::max(mxz, b.z+hz);
+    }
+    const float cx = (mnx + mxx) * 0.5f, cz = (mnz + mxz) * 0.5f;
+    return std::sqrt(cx * cx + cz * cz);
 }
 
 // Il viewport delle strutture è UNO solo, condiviso da tutti i tab: l'overlay va
@@ -2239,6 +2338,24 @@ void MapEditor::rebuildStructTabPreview(StructTab& t)
     figure(minX - 1.4f, 0.0f, 0.80f, 2.00f, 0.30f, 0.85f, 0.45f);
     figure(minX - 2.6f, 0.0f, mini::mapmetrics::REF_UNIT_WIDTH,
            mini::mapmetrics::REF_UNIT_HEIGHT, 0.95f, 0.65f, 0.25f);
+
+    // ── L'ORIGINE, visibile ──────────────────────────────────────────────
+    // Un perno invisibile è un concetto astratto finché non si sbaglia; disegnato,
+    // si vede subito se cade fuori dalla struttura. Croce bassa e sottile
+    // sull'origine dell'assemblaggio, in ciano.
+    {
+        auto mark = [&](float sx, float sz) {
+            FreeCameraViewport::MapBoxDraw m;
+            m.x = 0.0f; m.y = 0.05f; m.z = 0.0f; m.ry = 0.0f;
+            m.sx = sx; m.sy = 0.10f; m.sz = sz;
+            m.r = 0.35f; m.g = 0.90f; m.b = 1.00f;
+            m.selected = false;
+            m.pickId = FreeCameraViewport::MapBoxDraw::kNoPick;
+            draws.push_back(m);
+        };
+        mark(3.0f, 0.12f);
+        mark(0.12f, 3.0f);
+    }
 
     m_structVp.setMapBoxes(draws);
     t.fingerprint = structFingerprint(t.def);
@@ -2601,7 +2718,6 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Ogni parte ha la sua primitiva: si scelgono qui sotto,\n"
                               "nell'elenco delle parti.");
-        ImGui::SameLine();
     }
     else {
     ImGui::SetNextItemWidth(180.0f);
@@ -2627,8 +2743,14 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
         }
         ImGui::EndCombo();
     }
-    ImGui::SameLine();
     }   // fine del ramo "tipo a primitiva singola"
+
+    // ── I COMANDI su una riga LORO ────────────────────────────────────────
+    // Prima nome, categoria, primitiva, Salva, Salva come copia, Verifica e la
+    // spunta del navmesh stavano tutti in fila: otto controlli che il pannello non
+    // può contenere, quindi gli ultimi finivano tagliati fuori dal bordo. È la
+    // regola d'uso già confermata dall'utente — mai far tagliare i comandi.
+    ImGui::Separator();
 
     // Il tipo che si sta SOVRASCRIVENDO, sempre in chiaro accanto al pulsante: è
     // l'unica difesa contro il "volevo farne una variante e ho salvato sull'originale".
@@ -2698,8 +2820,13 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
 
     const float remaining = totalH - ImGui::GetItemRectSize().y
                           - ImGui::GetStyle().ItemSpacing.y * 2 - 8.0f;
+    // Larghezze RIDIMENSIONABILI, come nel tab Mappa. Erano fisse (320 e 300) e
+    // quindi il pannello dei parametri tagliava i testi lunghi senza che si potesse
+    // fare nulla — segnalato dall'utente. `panelSplitter` esiste dal changelog 169
+    // e non l'avevo usato proprio qui.
+    static float s_paramW = 320.0f;
     static float s_checkW = 300.0f;
-    const float paramW = 320.0f;
+    const float paramW = s_paramW;
 
     ImGui::BeginChild("##struct_panels", ImVec2(totalW, remaining));
 
@@ -2724,6 +2851,33 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
                 "Questo tipo e' una PRIMITIVA SOLA. Aggiungi una parte per farne una "
                 "struttura composta (torre, bunker, edificio): le parti si posizionano "
                 "una rispetto all'altra e la verifica navmesh gira sull'INSIEME.");
+        else
+        {
+            // L'origine è il perno: se è fuori dalla struttura, in mappa si ruota
+            // attorno al vuoto e il gizmo compare in un punto scomodo. Lo si dice
+            // QUI, dove si può ancora rimediare con un clic.
+            const float off = assemblyOriginOffset(t);
+            if (off > 0.5f)
+            {
+                // TESTO A CAPO e pulsante su una RIGA SUA. Prima erano sulla stessa
+                // riga: il testo riempiva già la larghezza del pannello, quindi si
+                // tagliava e spingeva il pulsante fuori dal bordo — il comando
+                // esisteva e non si vedeva (segnalato dall'utente).
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.75f, 0.30f, 1.0f));
+                ImGui::TextWrapped("origine a %.1f m dal centro", off);
+                ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "In mappa l'origine e' il PERNO di rotazione e il punto dove\n"
+                        "compare il gizmo. Lontana dalla struttura significa ruotarla\n"
+                        "attorno a un punto vuoto e avere le frecce fuori posto.");
+            }
+            if (ImGui::Button("Centra origine")) centerAssemblyOrigin(t);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Sposta tutte le parti insieme, cosi' l'origine cade\n"
+                                  "al centro della struttura. Non cambia la forma:\n"
+                                  "cambia dove sta il perno.");
+        }
         {
             if (ImGui::Button("+ Primitiva")) ImGui::OpenPopup("##addpart");
             if (ImGui::IsItemHovered())
@@ -3038,19 +3192,29 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
     if (changed) rebuildStructTabPreview(t);
 
     ImGui::SameLine();
+    // Maniglia fra parametri e viewport: si trascina per allargare i parametri.
+    editor::ui::panelSplitter("##stparamsplit", s_paramW, remaining, 200.0f,
+                              (totalW > 500.0f) ? totalW * 0.45f : 240.0f);
+    ImGui::SameLine();
 
     // L'overlay appartiene a QUESTO tab: si riporta a ogni disegno, così passando
     // da una struttura all'altra non si eredita il navmesh di quella prima.
     applyStructNavOverlay(t);
 
     // ── Viewport isolata ──────────────────────────────────────────────────
-    const float vpW = totalW - paramW - s_checkW - ImGui::GetStyle().ItemSpacing.x * 2;
+    const float vpW = totalW - paramW - s_checkW
+                    - ImGui::GetStyle().ItemSpacing.x * 4 - 12.0f;
     ImGui::BeginChild("##struct_vp", ImVec2(vpW < 160.0f ? 160.0f : vpW, 0),
                       ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     m_structVp.draw(false);
     ImGui::EndChild();
 
+    ImGui::SameLine();
+    // Maniglia a SINISTRA del pannello di destra: `ChildFlags_ResizeX` metterebbe il
+    // grip sul bordo finestra, e una volta stretto non si riallargherebbe più.
+    editor::ui::panelSplitter("##stchecksplit", s_checkW, remaining, 200.0f,
+                              (totalW > 500.0f) ? totalW * 0.45f : 240.0f);
     ImGui::SameLine();
 
     // ── Verifica ──────────────────────────────────────────────────────────

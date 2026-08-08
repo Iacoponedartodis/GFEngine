@@ -495,6 +495,10 @@ private:
                                   std::vector<mini::MapGeometryBox>& out);
     int  m_selPart = -1;   // parte selezionata nel tab assemblaggio
     void placePartClear(const StructTab& t, mini::StructurePart& p);
+    // L'origine di un assemblaggio è il perno di rotazione e il punto del gizmo in
+    // mappa: averla fuori dalla struttura significa ruotare attorno al vuoto.
+    void  centerAssemblyOrigin(StructTab& t);
+    [[nodiscard]] float assemblyOriginOffset(const StructTab& t) const;
     static void scalePrimitivePart(mini::StructureDef& s, const glm::vec3& d);
     [[nodiscard]] static std::size_t structFingerprint(const mini::StructureTypeDef& d);
 
