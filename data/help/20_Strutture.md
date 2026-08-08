@@ -116,3 +116,21 @@ come non salvato.
 Dopo **Verifica** il verde si accende da solo. La spunta **Mostra navmesh** accanto al pulsante lo
 spegne senza perdere l'esito, che resta scritto nel pannello di destra. Ogni tab ha il suo: cambiando
 struttura non ti ritrovi il navmesh di quella precedente.
+
+## Fare VARIANTI di una struttura complessa
+Una volta che hai una composita che funziona (una torre, un bunker), le varianti non si rifanno da
+zero: si aprono e si salvano come copia.
+
+1. **+ Struttura → Modifica un tipo → Tower**
+2. modifichi quello che vuoi
+3. **Salva come copia...** — scegli il nome della variante
+
+Cosa succede esattamente:
+- l'originale su disco **non viene toccato**: e' tutto il punto;
+- il tab passa a lavorare sulla **copia**, quindi il "Salva" successivo scrive sulla variante e non
+  sull'originale (e' la trappola classica del salva-con-nome, qui non c'e');
+- la copia nasce **non verificata**, perche' la sua geometria puo' gia' essere diversa da quella che
+  era stata verificata: premi **Verifica** quando sei soddisfatto.
+
+Accanto a **Salva** il suggerimento dice sempre quale file stai per sovrascrivere: e' l'unica difesa
+contro il "volevo farne una variante e ho salvato sull'originale".

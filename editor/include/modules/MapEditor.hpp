@@ -481,6 +481,13 @@ private:
     void drawStructTab(StructTab& t, float totalW, float totalH);
     void openStructTab(const std::string& id);         // vuoto = nuovo tipo
     void saveStructType(StructTab& t);
+    // "Salva come copia": crea una VARIANTE lasciando intatto l'originale, e il tab
+    // passa a lavorare sulla copia (semantica di un Salva-con-nome fatto bene).
+    void drawSaveAsCopyPopup(StructTab& t);
+    [[nodiscard]] static std::string idFromLabel(const std::string& label);
+    bool m_copyOpen = false;
+    char m_copyName[96] = "";
+    std::string m_copyError;
     void checkStructType(StructTab& t);
     void refreshStructTypeIds();
     void rebuildStructTabPreview(StructTab& t);

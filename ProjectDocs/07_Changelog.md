@@ -2,6 +2,39 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-08 (182) — "Salva come copia": varianti di una composita senza rifarla da zero
+
+Richiesta dell'utente, che ne aveva proposte due forme e ha chiesto di scegliere la migliore.
+
+### Scelta: UNA strada, "Salva come copia" nel tab
+L'altra ipotesi era un secondo pulsante *"Modifica come copia"* accanto a "Modifica un tipo".
+Scartata perché **due modi per la stessa cosa** sono ciò che l'utente stesso ha già chiesto di
+evitare (*"almeno non si fa confusione"*, sul Ctrl+Esc), e perché "Salva come copia" copre
+entrambi i momenti:
+- **prima** di modificare (apri e salvi subito come copia);
+- **dopo** aver modificato — che è il caso in cui serve davvero, perché è l'unico in cui
+  l'alternativa sarebbe sovrascrivere l'originale.
+
+Riferimenti: è la stessa scelta di Revit (*Duplicate* sul tipo) e del *Save As* di qualunque
+editor; la duplicazione dal browser è una scorciatoia di un passo, non una capacità in più.
+
+### Semantica del salva-con-nome, che è meno ovvia di quanto sembri
+- l'**originale su disco non si tocca** — è tutto il punto;
+- il **tab passa a lavorare sulla copia**: senza, il salvataggio successivo tornerebbe a
+  sovrascrivere l'originale, che è la trappola classica;
+- la copia nasce **non verificata**: la sua geometria può già essere diversa da quella verificata, e
+  marcarla verificata sarebbe una dichiarazione che nessuno ha controllato;
+- la **cronologia di annullamento si azzera**: era dell'originale.
+
+Accanto a **Salva** il suggerimento dice ora **quale file si sta per sovrascrivere** — l'unica difesa
+contro il "volevo una variante e ho salvato sull'originale".
+
+### La regola dell'id, condivisa e collaudata
+`idFromLabel` è ora una sola funzione (la usavano in due, il primo salvataggio e la copia): due
+normalizzazioni diverse porterebbero lo stesso nome a due file diversi. **Sei controlli** nuovi,
+fra cui *"due nomi diversi restano due file diversi"* — se collidessero, "Salva come copia"
+sovrascriverebbe l'originale invece di affiancarlo, cioè farebbe il danno da cui deve proteggere.
+
 ## 2026-08-08 (181) — I campi a zero dicono quanto valgono; e la Y non significa la stessa cosa
 
 ### Uno 0 non diceva QUANTO

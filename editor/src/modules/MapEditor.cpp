@@ -1970,6 +1970,20 @@ int MapEditor::selfTest()
         m_prefabReg.removeStructureTypeForTest("_selftest_asm");
     }
 
+    // ── ID DA NOME: la regola che decide su quale FILE si scrive ─────────
+    // Se due nomi diversi producessero lo stesso id, "Salva come copia"
+    // sovrascriverebbe l'originale invece di affiancarlo — cioè farebbe
+    // esattamente il danno da cui deve proteggere.
+    {
+        check(idFromLabel("Tower") == "tower", "id: minuscolo");
+        check(idFromLabel("Tower variante") == "tower_variante", "id: spazi -> underscore");
+        check(idFromLabel("Torre A/B") == "torre_a_b", "id: simboli -> underscore");
+        check(idFromLabel("Tower   ") == "tower", "id: niente underscore in coda");
+        check(idFromLabel("") == "struttura", "id: un nome vuoto non produce un file senza nome");
+        check(idFromLabel("Tower") != idFromLabel("Tower 2"),
+              "id: due nomi diversi restano due file diversi");
+    }
+
     // ── SCALABILITÀ: quanto costa una modifica al crescere della mappa ───
     // Non è un controllo pass/fail, è una MISURA — e serve prima di costruire una
     // mappa 300 × 200. `updateViewport()` ricalcola l'esposizione a OGNI modifica
@@ -2378,21 +2392,84 @@ void MapEditor::checkStructType(StructTab& t)
                 t.def.verified ? "VERIFICATA" : "NON verificata");
 }
 
+// Un id da un nome leggibile: minuscole, e tutto ciò che non è alfanumerico
+// diventa `_`. È la stessa regola del primo salvataggio (id = filename stem,
+// ADR-001), estratta perché ora la usano in due.
+std::string MapEditor::idFromLabel(const std::string& label)
+{
+    std::string s;
+    for (char c : label)
+        s += std::isalnum((unsigned char)c) ? (char)std::tolower((unsigned char)c) : '_';
+    while (!s.empty() && s.back() == '_') s.pop_back();
+    return s.empty() ? std::string("struttura") : s;
+}
+
+// ── SALVA COME COPIA ────────────────────────────────────────────────────────
+// Semantica di un "Salva con nome" fatto bene, che è meno ovvia di quanto sembri:
+//   · l'ORIGINALE su disco non viene toccato — è tutto il punto;
+//   · il TAB passa a lavorare sulla copia, altrimenti il salvataggio successivo
+//     tornerebbe a sovrascrivere l'originale, che è la trappola classica;
+//   · la copia nasce NON VERIFICATA, perché la sua geometria può già essere diversa
+//     da quella che era stata verificata. Marcarla verificata sarebbe una
+//     dichiarazione che nessuno ha controllato.
+void MapEditor::drawSaveAsCopyPopup(StructTab& t)
+{
+    // Apertura e disegno nella stessa funzione (doc 52 F4): l'ID non può divergere.
+    if (m_copyOpen && !ImGui::IsPopupOpen("Salva come copia"))
+        ImGui::OpenPopup("Salva come copia");
+    if (!m_copyOpen) return;
+
+    if (ImGui::BeginPopupModal("Salva come copia", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Nome della variante:");
+        ImGui::SetNextItemWidth(320.0f);
+        ImGui::InputText("##copyname", m_copyName, sizeof(m_copyName));
+        const std::string newId = idFromLabel(m_copyName);
+        ImGui::TextDisabled("file: %s.json", newId.c_str());
+        if (!t.id.empty())
+            ImGui::TextDisabled("l'originale \"%s\" resta invariato", t.id.c_str());
+        if (!m_copyError.empty())
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "%s", m_copyError.c_str());
+
+        ImGui::Separator();
+        if (ImGui::Button("Crea la copia", {150, 0}))
+        {
+            std::error_code ec;
+            const std::string path = getDataDir() + "/structures/" + newId + ".json";
+            if (newId == t.id)
+                m_copyError = "E' lo stesso nome dell'originale: cambialo.";
+            else if (fs::exists(path, ec))
+                m_copyError = "Esiste gia' un tipo con questo nome.";
+            else
+            {
+                t.id            = newId;
+                t.def.id        = newId;
+                t.def.label     = m_copyName;
+                t.def.verified  = false;   // la geometria puo' essere gia' cambiata
+                t.undo.clear();            // la cronologia era dell'originale
+                saveStructType(t);
+                m_copyOpen = false;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Annulla", {110, 0}))
+        { m_copyOpen = false; ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+    else m_copyOpen = false;   // rete di sicurezza: nessuna intenzione appesa
+}
+
 // Salvataggio READ-MODIFY-WRITE (CLAUDE.md §2): si legge il file, si toccano solo i
 // propri campi, si riscrive. Costruire un json nuovo da zero ha già causato una
 // perdita dati reale su questo progetto.
 void MapEditor::saveStructType(StructTab& t)
 {
-    if (t.id.empty())
-    {
-        // Nome file dal label, normalizzato: id = filename stem (ADR-001).
-        std::string s;
-        for (char c : t.def.label)
-            s += (std::isalnum((unsigned char)c) ? (char)std::tolower((unsigned char)c)
-                                                 : '_');
-        while (!s.empty() && s.back() == '_') s.pop_back();
-        t.id = s.empty() ? "struttura" : s;
-    }
+    // Nome file dal label, normalizzato: id = filename stem (ADR-001). Una sola
+    // regola, condivisa con "Salva come copia": due normalizzazioni diverse
+    // porterebbero lo stesso nome a due file diversi.
+    if (t.id.empty()) t.id = idFromLabel(t.def.label);
     // Lo slash NON è opzionale: `getDataDir()` non ce l'ha, e senza il percorso
     // diventava `.../datastructures/...`. Il salvataggio falliva e lo diceva solo su
     // stderr — l'utente vedeva la verifica riuscire e il tipo restare "non
@@ -2553,7 +2630,33 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
     ImGui::SameLine();
     }   // fine del ramo "tipo a primitiva singola"
 
+    // Il tipo che si sta SOVRASCRIVENDO, sempre in chiaro accanto al pulsante: è
+    // l'unica difesa contro il "volevo farne una variante e ho salvato sull'originale".
     if (ImGui::Button("Salva")) saveStructType(t);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(t.id.empty() ? "Primo salvataggio: crea il file dal nome."
+                                       : "Sovrascrive '%s'.", t.id.c_str());
+    ImGui::SameLine();
+    // ── SALVA COME COPIA (richiesta utente 2026-08-08) ───────────────────
+    // *"devo poter prendere quella struttura e poterla modificare ma in una copia,
+    // per poter creare facilmente variazioni"*.
+    // UNA sola strada e non due: l'utente ha già chiesto in passato di non avere due
+    // modi per la stessa cosa ("almeno non si fa confusione"). Questa le copre
+    // entrambe — si può decidere di fare una variante PRIMA di aprire (apri, salva
+    // subito come copia) o DOPO averla modificata, che è il caso in cui serve
+    // davvero, perché è quello in cui altrimenti si sovrascriverebbe l'originale.
+    if (ImGui::Button("Salva come copia..."))
+    {
+        std::snprintf(m_copyName, sizeof(m_copyName), "%s variante",
+                      t.def.label.empty() ? "tipo" : t.def.label.c_str());
+        m_copyError.clear();
+        m_copyOpen = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Crea una VARIANTE: l'originale resta com'e' su disco e il\n"
+                          "tab passa a lavorare sulla copia. E' il modo per fare piu'\n"
+                          "versioni di una struttura complessa senza rifarle da zero.");
+    drawSaveAsCopyPopup(t);
     if (!t.saveError.empty())
     {
         ImGui::SameLine();
