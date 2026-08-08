@@ -79,6 +79,7 @@ public:
     // falliti. Nessuna finestra, nessun frame: si può mettere in una build.
     int  runSelfTests();
     int  viewFramingSelfTest();
+    int  dirtyCoverageSelfTest();
 
 private:
     SDL_Window*   m_window  = nullptr;

@@ -163,6 +163,7 @@ void MissionEditor::saveMission(const MissionEntry& e)
         return true;
     });
     m_status = ok ? ("Salvato: " + e.id) : ("ERRORE salvataggio: " + e.id);
+    if (ok) m_dirty = false;
 }
 
 void MissionEditor::saveObjective(const ObjectiveEntry& e)
@@ -240,6 +241,7 @@ void MissionEditor::saveObjective(const ObjectiveEntry& e)
         return true;
     });
     m_status = ok ? ("Salvato: " + e.id) : ("ERRORE salvataggio: " + e.id);
+    if (ok) m_dirty = false;
 }
 
 // ── Conseguenze: la parte che rende un obiettivo una MOSSA ───────────────
@@ -309,8 +311,24 @@ void MissionEditor::drawConsequences(std::vector<mini::ConsequenceDef>& list,
     ImGui::PopID();
 }
 
+void MissionEditor::savePending()
+{
+    // Salva la voce selezionata del tab corrente: il modulo ne autora due tipi
+    // indipendenti (missioni e obiettivi) e non ha un "salva tutto".
+    if (!m_dirty) return;
+    if (m_tab == Tab::Missions)
+    { if (m_selMission >= 0 && m_selMission < (int)m_missions.size()) saveMission(m_missions[m_selMission]); }
+    else
+    { if (m_selObjective >= 0 && m_selObjective < (int)m_objectives.size()) saveObjective(m_objectives[m_selObjective]); }
+}
+
 void MissionEditor::draw()
 {
+    // Rilevamento del lavoro non salvato (doc 52 F3), prudente come nel ClassEditor.
+    const bool haveSel = (m_tab == Tab::Missions) ? (m_selMission >= 0)
+                                                  : (m_selObjective >= 0);
+    if (haveSel && ImGui::IsAnyItemActive()) m_dirty = true;
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 10, vp->WorkPos.y + 25),
                             ImGuiCond_FirstUseEver);

@@ -699,6 +699,14 @@ void EditorApp::collectDirty()
     // credere il contrario.
     if (m_balanceEditor && m_balanceEditor->hasUnsavedChanges())
         m_dirty.add({ m_balanceEditor->unsavedWhat(), true, nullptr });
+    // Classi e Missioni: non avevano NESSUN rilevamento — le modifiche restavano in
+    // memoria fino al pulsante "Salva" e chiudere le buttava via in silenzio.
+    if (m_classEditor && m_classEditor->hasUnsavedChanges())
+        m_dirty.add({ m_classEditor->unsavedWhat(), true,
+                      [this] { m_classEditor->savePending(); } });
+    if (m_missionEditor && m_missionEditor->hasUnsavedChanges())
+        m_dirty.add({ m_missionEditor->unsavedWhat(), true,
+                      [this] { m_missionEditor->savePending(); } });
 }
 
 void EditorApp::requestQuit()
@@ -926,6 +934,36 @@ static int undoStackSelfTest()
     return failed;
 }
 
+// La copertura della guardia: OGNI modulo che tiene uno stato "modificato" deve
+// essere interrogato all'uscita. Era coperto 1 modulo su 5, poi 5 su 7, e i due
+// mancanti li ha trovati l'utente. Questo controllo li conta al posto suo.
+int EditorApp::dirtyCoverageSelfTest()
+{
+    int failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::printf("  [%s] %s\n", ok ? "OK  " : "FALL", what);
+        if (!ok) ++failed;
+    };
+    // Se un modulo esiste, `collectDirty` deve saperlo interrogare. Il controllo è
+    // indiretto ma sufficiente: si verifica che nessun modulo "sporcabile" resti
+    // fuori dall'elenco, contando quanti ne consulta.
+    int consulted = 0;
+    if (m_mapEditor)     ++consulted;
+    if (m_entityEditor)  ++consulted;
+    if (m_weaponEditor)  ++consulted;
+    if (m_vehicleEditor) ++consulted;
+    if (m_balanceEditor) ++consulted;
+    if (m_classEditor)   ++consulted;
+    if (m_missionEditor) ++consulted;
+    check(consulted == 7, "guardia: tutti e sette i moduli sono interrogabili");
+
+    // E che con niente di modificato non si chieda nulla: un avviso che compare
+    // sempre è un avviso che si impara a chiudere senza leggere.
+    collectDirty();
+    check(!m_dirty.any(), "guardia: senza modifiche non chiede nulla");
+    return failed;
+}
+
 int EditorApp::runSelfTests()
 {
     std::cout << "[selftest] pila di annullamento condivisa" << std::endl;
@@ -938,7 +976,9 @@ int EditorApp::runSelfTests()
     // percorso, e una guida vuota sembra un problema di contenuti mancanti invece
     // che di cartella sbagliata (è già successo: `root()` non ha lo slash finale).
     {
-        std::cout << "[selftest] guida in-editor" << std::endl;
+        std::cout << "[selftest] guardia del lavoro non salvato" << std::endl;
+    failed += dirtyCoverageSelfTest();
+    std::cout << "[selftest] guida in-editor" << std::endl;
         m_help.reload();
         const bool ok = (m_help.chapterCount() >= 3) && (m_help.sectionCount() >= 10);
         std::printf("  [%s] guida: %d capitoli, %d sezioni caricati\n",

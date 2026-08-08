@@ -446,6 +446,10 @@ private:
         } check;
         std::size_t fingerprint = 0;
         std::string saveError;   // non vuoto = l'ultimo salvataggio è fallito
+        // I triangoli del navmesh restano nel TAB, non nel viewport: il viewport è
+        // uno solo e condiviso, quindi tenerli lì li faceva sopravvivere al cambio
+        // di tab (si vedeva il navmesh della struttura precedente).
+        std::vector<FreeCameraViewport::NavTriDraw> navTris;
         // Annullamento PROPRIO del tab (doc 52 F2): la pila condivisa, non una
         // seconda implementazione. Lo stato fotografato è la definizione del tipo
         // più la parte selezionata — annullare e ritrovarsi un'altra parte scelta
@@ -468,6 +472,8 @@ private:
     // Viewport SEPARATA, una sola riusata dal tab attivo: mostra la sola struttura.
     FreeCameraViewport m_structVp;
     ViewportEditing    m_structEdit;   // selezione + gizmo, dal componente condiviso
+    bool m_structShowNav = false;      // overlay navmesh acceso nel tab struttura
+    void applyStructNavOverlay(const StructTab& t);
     mini::NavManager   m_structNav;
     std::vector<std::string> m_structTypeIds;   // libreria su disco, per i menu
 

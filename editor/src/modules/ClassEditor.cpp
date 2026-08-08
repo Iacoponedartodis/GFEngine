@@ -88,10 +88,16 @@ void ClassEditor::save(const Entry& e)
         return true;
     });
     m_status = ok ? ("Salvato: " + e.id) : ("ERRORE salvataggio: " + e.id);
+    if (ok) m_dirty = false;
 }
 
 void ClassEditor::draw()
 {
+    // Rilevamento del lavoro non salvato (doc 52 F3). Prudente di proposito: vedi la
+    // nota nell'header — fra un falso "vuoi salvare?" e un falso "niente da salvare"
+    // si sceglie quello che non fa danni.
+    if (m_sel >= 0 && ImGui::IsAnyItemActive()) m_dirty = true;
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 10, vp->WorkPos.y + 25),
                             ImGuiCond_FirstUseEver);

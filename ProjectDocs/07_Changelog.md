@@ -2,6 +2,73 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-08 (181) — I campi a zero dicono quanto valgono; e la Y non significa la stessa cosa
+
+### Uno 0 non diceva QUANTO
+Molti campi valgono 0 per dire *"usa la misura normativa"*, ma il campo mostrava solo `0`: l'altezza
+di una porta non faceva capire che vale 2,80. Ora il formato del campo scrive il valore reale
+(`normativo: 2.80`) **senza cambiarlo** — si sa da cosa si parte prima di toccarlo. Usa la
+`effectiveParam` introdotta per il gizmo, quindi una verità sola.
+
+### La causa vera delle "piccole differenze" accostando un box a un muro
+Non è la lunghezza — quella è esatta: un muro `length = 6` emette un box con `sx = 6`.
+**È la Y, che non significa la stessa cosa:**
+- un **box** ha la Y al **centro** (`slab` converte base→centro con `y = baseY + sy/2`);
+- una **primitiva** (muro, scala, stanza) ha la Y alla **base**;
+- una **piattaforma/passerella** ha la Y al **ripiano calpestabile**.
+
+Un box alto 2 m a `y = 0` è **mezzo sottoterra**; un muro a `y = 0` poggia. Tre convenzioni
+coesistono per buone ragioni (ognuna è la più naturale per il suo oggetto), ma **nessuna era
+scritta nell'interfaccia**.
+
+Ora l'etichetta del campo lo dice — `Y (centro)` · `Y (base)` · `Y (ripiano)` — e sotto è scritto
+da dove a dove arriva davvero (`a y=1.00 va da 0.00 a 2.00`).
+
+### Unità: verificate, non affermate
+Controllato sul codice: **tutto è in metri**, senza conversioni fra moduli — metriche, righello,
+barra di scala, celle del navmesh (0,20 m), raggio dell'unità (0,40 m). Documentato in
+`data/help/30_NavmeshEMetriche.md` insieme alle tre convenzioni della Y.
+
+## 2026-08-08 (180) — Pedata, overlay navmesh, e gli ultimi tre moduli scoperti
+
+Tre segnalazioni dall'uso reale, tutte confermate.
+
+### La pedata non si allungava col gizmo
+`scalePrimitivePart` rifiutava di scalare un parametro che valesse 0 — e **0 significa
+"normativo"**, che è il valore predefinito della pedata. Larghezza (2.0) e dislivello (2.0)
+funzionavano, la pedata no: esattamente il sintomo riferito.
+
+Aggiunta `mapstructures::effectiveParam`, che risolve lo 0 nel valore realmente in uso (pedata
+0,30 · alzata 0,20 · muro 3,20 · spessore 0,25 · porta …). Ora si parte da lì e si somma il delta,
+col clamp al pavimento fisico. Vale per **tutti** i campi "0 = normativo", non solo la pedata.
+
+### Il navmesh non si spegneva più
+I triangoli venivano dati al viewport e mai tolti. E il viewport delle strutture è **uno solo**,
+condiviso da tutti i tab: cambiando struttura si vedeva il navmesh di quella precedente.
+
+Ora i triangoli vivono nel **tab**, non nel viewport, con un interruttore **"Mostra navmesh"**
+(acceso da solo dopo una verifica) e un riporto dell'overlay a ogni disegno. Spegnerlo non perde
+l'esito, che resta scritto nel pannello. *Un risultato che non si può togliere smette di essere
+un'informazione e diventa un ostacolo.*
+
+### Gli ultimi tre moduli senza avviso di uscita
+- **Classi** e **Missioni e obiettivi** non avevano **nessun** rilevamento: le modifiche restavano
+  in memoria fino al pulsante "Salva", e chiudere le buttava via in silenzio. Aggiunto, con
+  `savePending` che salva la voce del tab corrente.
+- **Balance Editor** era già collegato, e il suo stato si sporca solo sui valori di gameplay: armi,
+  profili e abilità li scrive **subito**. Quindi lì il silenzio era corretto — ma non era
+  distinguibile da un difetto, e adesso lo è.
+
+Il rilevamento di Classi e Missioni è **volutamente prudente**: basta che un campo diventi attivo
+per marcare il modulo. Fra un falso *"vuoi salvare?"* (costa un clic) e un falso *"niente da
+salvare"* (costa il lavoro), si sceglie l'errore che non fa danni.
+
+### Il controllo che conta i moduli al posto dell'utente
+La copertura della guardia era 1 su 5, poi 5 su 7, e **i due mancanti li ha trovati l'utente**.
+Ora un controllo automatico verifica che tutti e sette i moduli siano interrogabili, e che senza
+modifiche non venga chiesto nulla — *un avviso che compare sempre è un avviso che si impara a
+chiudere senza leggere*.
+
 ## 2026-08-07 (179) — Composita in mappa: PERDITA DI DATI riparata, e chiusa la classe di difetto
 
 Segnalazione dell'utente: *"ho creato una struttura composita ma una volta salvata se la carico in

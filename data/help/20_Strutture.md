@@ -88,7 +88,8 @@ esattamente come in mappa:
 Su un **box** la scala cambia le sue tre dimensioni. Su una **primitiva** agisce sulle sue
 MISURE (larghezza, dislivello, lunghezza...), non su un fattore: scalare una scala del 30%
 produrrebbe alzate fuori norma, cioe' proprio l'errore che le primitive rendono impossibile.
-Ogni misura resta comunque bloccata al suo pavimento fisico.
+Ogni misura resta comunque bloccata al suo pavimento fisico. Le misure che valgono 0 ("normativo")
+partono dal loro valore reale: la pedata a 0 vale 0,30 e da li' si allunga.
 
 Le parti nuove nascono ACCANTO a quelle esistenti, non sovrapposte: si vedono subito e si
 trascinano al loro posto.
@@ -110,3 +111,8 @@ come non salvato.
   sola nella Libreria, raggruppata in sottomenu. Le strutture COMPOSITE hanno il segno `[+]`.
 - Chiudendo l'editor con un tipo modificato l'avviso dice cosa non e' salvato, e
   "Salva ed esci" salva la mappa **e** i tipi.
+
+## Nascondere il navmesh
+Dopo **Verifica** il verde si accende da solo. La spunta **Mostra navmesh** accanto al pulsante lo
+spegne senza perdere l'esito, che resta scritto nel pannello di destra. Ogni tab ha il suo: cambiando
+struttura non ti ritrovi il navmesh di quella precedente.

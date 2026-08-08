@@ -48,3 +48,26 @@ Sono le misure con cui e' costruita la libreria, e i controlli le usano come rif
    sovrapporsi, altezza libera insufficiente, accesso mancante.
 4. Se e' una scala fatta a mano, valuta di rifarla con la primitiva **Scala**: rende
    inesprimibili tutte e tre le cause piu' comuni.
+
+## Unita' di misura e convenzioni della quota
+**Tutto l'editor e tutto il motore lavorano in METRI.** Una unita' = 1 metro, ovunque: geometria,
+metriche, righello, barra di scala, celle del navmesh (0,20 m), raggio dell'unita' (0,40 m).
+Non ci sono conversioni nascoste fra moduli.
+
+Quello che NON e' uguale ovunque e' il significato della **Y**:
+
+- un **BOX** ha la Y al **CENTRO**. Un box alto 2 m messo a `y = 0` va da −1 a +1, quindi meta'
+  sta sotto terra. Per appoggiarlo a terra: `y = altezza / 2`.
+- una **PRIMITIVA** (muro, scala, rampa, stanza) ha la Y alla **BASE**. Un muro a `y = 0` poggia
+  a terra e sale fino alla sua altezza.
+- una **PIATTAFORMA** o una **PASSERELLA** hanno la Y al **RIPIANO CALPESTABILE**, cioe' la quota
+  su cui si cammina.
+
+E' il motivo per cui accostando un box a un muro "lungo 6" si trovano piccole differenze: la
+LUNGHEZZA e' identica (6 = 6), a scostarsi e' la quota. Nell'editor strutture l'etichetta del campo
+lo dice — `Y (centro)`, `Y (base)`, `Y (ripiano)` — e sotto e' scritto da dove a dove arriva.
+
+## Le misure "normative" (i campi a zero)
+Molti campi valgono **0** per dire *"usa la misura normativa"*. Non e' un campo vuoto: e' una scelta.
+Il campo mostra il valore reale (`normativo: 2.80`) cosi' sai da cosa parti prima di toccarlo, e
+appena scrivi un numero quello sostituisce la norma.

@@ -23,7 +23,22 @@ public:
     ClassEditor();
     void draw();
 
+    // ── Lavoro non salvato (doc 52 F3) ───────────────────────────────────
+    // Questo modulo non aveva NESSUN rilevamento: le modifiche restano in memoria
+    // fino al pulsante "Salva", e chiudere l'editor le buttava via in silenzio.
+    // Il rilevamento è volutamente PRUDENTE — basta che un campo diventi attivo per
+    // marcare il modulo come modificato, anche se poi il valore non cambia. Un falso
+    // "vuoi salvare?" costa un clic; un falso "non c'è niente da salvare" costa il
+    // lavoro. Fra i due errori possibili si sceglie quello che non fa danni.
+    [[nodiscard]] bool hasUnsavedChanges() const { return m_dirty; }
+    [[nodiscard]] std::string unsavedWhat() const
+    { return (m_sel >= 0 && m_sel < (int)m_entries.size())
+             ? ("la classe \"" + m_entries[m_sel].id + "\"") : std::string("una classe"); }
+    void savePending()
+    { if (m_dirty && m_sel >= 0 && m_sel < (int)m_entries.size()) save(m_entries[m_sel]); }
+
 private:
+    bool m_dirty = false;
     struct Entry { std::string id, jsonPath; mini::ClassDef def; };
     std::vector<Entry> m_entries;
     int m_sel = -1;

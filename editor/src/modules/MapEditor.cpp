@@ -2037,9 +2037,10 @@ void MapEditor::scalePrimitivePart(mini::StructureDef& s, const glm::vec3& d)
 {
     auto bump = [&](mini::StructureParam pm, float delta) {
         if (std::fabs(delta) < 1e-5f) return;
-        float v = mini::mapstructures::getParam(s, pm);
-        if (v < 0.001f) return;                       // 0 = "normativo": non si scala
-        v += delta;
+        // Si parte dal valore EFFETTIVO: molti campi valgono 0 per dire "normativo",
+        // e rifiutarli rendeva certe misure immodificabili col gizmo — è il motivo
+        // per cui la pedata di una scala non si allungava (segnalato dall'utente).
+        float v = mini::mapstructures::effectiveParam(s, pm) + delta;
         const float lo = mini::mapstructures::physicalMin(s.kind, pm, s);
         const float hi = mini::mapstructures::physicalMax(s.kind, pm);
         if (lo > 0.0f && v < lo) v = lo;
@@ -2088,6 +2089,14 @@ void MapEditor::placePartClear(const StructTab& t, mini::StructurePart& p)
     const float x = any ? (maxX + 1.0f) : 0.0f;
     if (p.isBox) p.box.x  = x + p.box.sx * 0.5f;
     else         p.prim.x = x + 2.0f;   // le primitive si sviluppano dalla loro origine
+}
+
+// Il viewport delle strutture è UNO solo, condiviso da tutti i tab: l'overlay va
+// riportato a ogni cambio di tab, o si vede il navmesh della struttura precedente.
+void MapEditor::applyStructNavOverlay(const StructTab& t)
+{
+    if (m_structShowNav && !t.navTris.empty()) m_structVp.setNavMesh(t.navTris);
+    else                                       m_structVp.clearNavMesh();
 }
 
 void MapEditor::refreshStructTypeIds()
@@ -2298,7 +2307,12 @@ void MapEditor::checkStructType(StructTab& t)
         else    { d.r = 0.95f; d.g = 0.30f; d.b = 0.25f; }
         draw.push_back(d);
     }
-    m_structVp.setNavMesh(draw);
+    // I triangoli si CONSERVANO nel tab, così l'interruttore può riaccenderli senza
+    // ricostruire il navmesh (che costa ~0,1 s). Prima venivano dati al viewport e
+    // basta: il viewport è uno solo, quindi restavano addosso anche cambiando tab.
+    t.navTris = std::move(draw);
+    m_structShowNav = true;      // appena verificato, si guarda
+    applyStructNavOverlay(t);
 
     // ── Il SINTOMO: quanta superficie dichiarata calpestabile sopravvive ──
     // Non "quanti triangoli": quanti METRI QUADRI di ciò che l'autore ha dichiarato
@@ -2551,6 +2565,16 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
         ImGui::SetTooltip("Costruisce il navmesh VERO sulla struttura da sola,\n"
                           "posata su un piano neutro. In mappa la stessa domanda\n"
                           "ha la risposta mescolata ad altre 167 box.");
+    // Il verde del navmesh si SPEGNE. Prima restava acceso per sempre — anche
+    // cambiando tab e aprendo un'altra struttura, che mostrava il navmesh di quella
+    // precedente. Un risultato di verifica che non si può togliere smette di essere
+    // un'informazione e diventa un ostacolo alla costruzione.
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Mostra navmesh", &m_structShowNav))
+        applyStructNavOverlay(t);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Spegne il verde senza perdere l'esito della verifica,\n"
+                          "che resta scritto nel pannello di destra.");
 
     // Quante istanze in mappa userebbero questo tipo — la lezione di AutoCAD
     // REFEDIT: ridefinire tocca ogni inserzione, e va detto PRIMA.
@@ -2686,9 +2710,24 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
             float* pz = p.isBox ? &p.box.z : &p.prim.z;
             float* pr = p.isBox ? &p.box.ry : &p.prim.ry;
             ch |= editor::ui::dragRow("X##pt", *px, 0.1f, -200.f, 200.f);
-            ch |= editor::ui::dragRow("Y##pt", *py, 0.1f, -50.f, 200.f);
+            // La Y NON significa la stessa cosa per tutti: un BOX ha la Y al centro,
+            // una primitiva alla BASE, una piattaforma al ripiano calpestabile.
+            // Non dirlo produceva "piccole differenze" inspiegabili accostando un box
+            // a un muro — segnalato dall'utente, ed era questo.
+            const char* yLabel =
+                p.isBox ? "Y (centro)##pt"
+                : (p.prim.kind == mini::StructureKind::Platform
+                   || p.prim.kind == mini::StructureKind::Catwalk)
+                  ? "Y (ripiano)##pt" : "Y (base)##pt";
+            ch |= editor::ui::dragRow(yLabel, *py, 0.1f, -50.f, 200.f);
             ch |= editor::ui::dragRow("Z##pt", *pz, 0.1f, -200.f, 200.f);
             ch |= editor::ui::dragRow("Rotazione##pt", *pr, 1.0f, -180.f, 180.f);
+            if (p.isBox)
+                ImGui::TextDisabled("un box ha la Y al CENTRO: a y=%.2f va da %.2f a %.2f",
+                                    p.box.y, p.box.y - p.box.sy * 0.5f,
+                                    p.box.y + p.box.sy * 0.5f);
+            else
+                ImGui::TextDisabled("una primitiva ha la Y alla BASE: appoggia a %.2f", *py);
 
             if (p.isBox)
             {
@@ -2717,7 +2756,17 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
                     const float phys = mini::mapstructures::physicalMin(p.prim.kind, info.p, p.prim);
                     const float pmax = mini::mapstructures::physicalMax(p.prim.kind, info.p);
                     ImGui::PushID(info.key);
-                    if (editor::ui::dragRow(info.label, v, 0.05f, 0.0f, 500.0f))
+                    // Uno 0 sul campo significa "normativo", ma da solo non dice
+                    // QUANTO: l'altezza di una porta a 0 non fa capire che vale 2,80.
+                    // Il formato lo scrive dentro il campo stesso, senza cambiare il
+                    // valore — così si sa da cosa si parte prima di toccarlo.
+                    const float eff = mini::mapstructures::effectiveParam(p.prim, info.p);
+                    char fmt[48];
+                    if (v < 0.001f && eff > 0.001f)
+                        std::snprintf(fmt, sizeof(fmt), "normativo: %.2f", eff);
+                    else
+                        std::snprintf(fmt, sizeof(fmt), "%.2f");
+                    if (editor::ui::dragRow(info.label, v, 0.05f, 0.0f, 500.0f, fmt))
                     {
                         if (v > 0.001f)
                         {
@@ -2799,7 +2848,16 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
 
         float v = mini::mapstructures::getParam(t.def.defaults, info.p);
         ImGui::SetNextItemWidth(110.0f);
-        if (ImGui::DragFloat(info.label, &v, 0.05f, 0.0f, 0.0f, "%.2f"))
+        // Come nelle parti: uno 0 dice "normativo" ma non dice quanto. Il valore
+        // effettivo si legge nel campo, senza cambiarlo.
+        {
+            const float eff = mini::mapstructures::effectiveParam(t.def.defaults, info.p);
+            static char s_fmt[48];
+            if (v < 0.001f && eff > 0.001f)
+                std::snprintf(s_fmt, sizeof(s_fmt), "normativo: %.2f", eff);
+            else
+                std::snprintf(s_fmt, sizeof(s_fmt), "%.2f");
+            if (ImGui::DragFloat(info.label, &v, 0.05f, 0.0f, 0.0f, s_fmt))
         {
             // Lo 0 resta lecito dove significa "normativo": è l'assenza di scelta.
             const bool zeroMeansDefault =
@@ -2816,6 +2874,7 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
             mini::mapstructures::setParam(t.def.defaults, info.p, v);
             t.dirty = true; changed = true;
         }
+        }   // fine del blocco che calcola il formato "normativo: X"
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.help);
 
         // Il pavimento fisico, sempre visibile: è la ragione per cui un valore non
@@ -2876,6 +2935,10 @@ void MapEditor::drawStructTab(StructTab& t, float totalW, float totalH)
     if (changed) rebuildStructTabPreview(t);
 
     ImGui::SameLine();
+
+    // L'overlay appartiene a QUESTO tab: si riporta a ogni disegno, così passando
+    // da una struttura all'altra non si eredita il navmesh di quella prima.
+    applyStructNavOverlay(t);
 
     // ── Viewport isolata ──────────────────────────────────────────────────
     const float vpW = totalW - paramW - s_checkW - ImGui::GetStyle().ItemSpacing.x * 2;

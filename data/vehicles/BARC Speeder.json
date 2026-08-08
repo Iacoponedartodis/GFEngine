@@ -12,7 +12,7 @@
     "hit_half_y": 0.3499999940395355,
     "hit_half_z": 2.5,
     "hit_offset_y": 0.4000000059604645,
-    "hp": 120.0,
+    "hp": 150.0,
     "max_speed": 16.0,
     "mesh": "C:\\Users\\HP\\Desktop\\iacopo\\GFProject\\GFEngine\\assets\\models\\vehicles\\star_wars_battlefront_2_-_barc_speeder.glb",
     "mesh_offset_y": -0.5,

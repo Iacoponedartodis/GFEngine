@@ -31,7 +31,18 @@ public:
 
     void draw();
 
+    // ── Lavoro non salvato (doc 52 F3) ───────────────────────────────────
+    // Come il ClassEditor, questo modulo non aveva rilevamento: le modifiche
+    // restano in memoria fino al salvataggio esplicito. Il rilevamento è
+    // volutamente PRUDENTE: un falso "vuoi salvare?" costa un clic, un falso
+    // "niente da salvare" costa il lavoro.
+    [[nodiscard]] bool hasUnsavedChanges() const { return m_dirty; }
+    [[nodiscard]] std::string unsavedWhat() const
+    { return (m_tab == Tab::Missions) ? "una missione" : "un obiettivo"; }
+    void savePending();
+
 private:
+    bool m_dirty = false;
     // Due liste indipendenti: una missione COMPONE obiettivi che esistono di per sé
     // (un obiettivo può essere usato da più missioni). Rispecchia i due tipi di
     // definizione del registry.

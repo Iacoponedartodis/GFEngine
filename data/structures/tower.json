@@ -1,0 +1,135 @@
+{
+    "category": "Buildings",
+    "defaults": {
+        "access": [
+            true,
+            false,
+            false,
+            false
+        ],
+        "ceiling": false,
+        "railing": false,
+        "rise": 2.0,
+        "riser": 0.0,
+        "tread": 0.0,
+        "width": 2.0
+    },
+    "kind": "stair",
+    "label": "Tower",
+    "note": "",
+    "parts": [
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.460862874984741,
+            "riser": 0.0,
+            "ry": 0.0,
+            "tread": 0.0,
+            "width": 2.0062990188598633,
+            "x": 3.0050230026245117,
+            "y": 0.0,
+            "z": 6.083058834075928
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 2.0,
+            "sy": 2.448662281036377,
+            "sz": 2.0,
+            "type": "wall",
+            "x": 3.0062544345855713,
+            "y": 1.2339094877243042,
+            "z": 10.991547584533691
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 3.9530320167541504,
+            "sy": 2.455404281616211,
+            "sz": 2.0,
+            "type": "wall",
+            "x": 5.98405647277832,
+            "y": 1.2363723516464233,
+            "z": 11.010452270507813
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.5323126316070557,
+            "riser": 0.0,
+            "ry": 90.0,
+            "tread": 0.0,
+            "width": 1.984345555305481,
+            "x": 4.067174911499023,
+            "y": 2.4672534465789795,
+            "z": 11.00839614868164
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 2.0,
+            "sy": 5.013426303863525,
+            "sz": 2.0,
+            "type": "wall",
+            "x": 8.966667175292969,
+            "y": 2.502454996109009,
+            "z": 10.998005867004395
+        }
+    ],
+    "rules": {
+        "rise": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "riser": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "tread": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "width": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        }
+    },
+    "verified": true
+}

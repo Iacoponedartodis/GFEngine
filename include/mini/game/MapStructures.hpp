@@ -420,6 +420,28 @@ inline void setParam(StructureDef& s, Param p, float v)
     }
 }
 
+// Il valore EFFETTIVAMENTE in uso per un parametro: molti campi usano 0 per dire
+// "vale la misura normativa", e chi li modifica deve partire da quella.
+// Senza, un gizmo che somma un delta a 0 o non fa nulla (se rifiuta lo zero) o
+// produce una pedata di 5 cm (se ci somma sopra). È il difetto per cui la pedata di
+// una scala non si poteva allungare col gizmo: valeva 0, quindi "non si tocca".
+inline float effectiveParam(const StructureDef& s, Param p)
+{
+    const float raw = getParam(s, p);
+    if (raw > 0.001f) return raw;
+    switch (p)
+    {
+        case Param::Riser:      return defaultRiser(s.kind);
+        case Param::Tread:      return defaultTread(s.kind);
+        case Param::Height:     return mapmetrics::WALL_HEIGHT;
+        case Param::Thickness:  return mapmetrics::WALL_THICKNESS;
+        case Param::OpenW:      return minOpenWidth(s);
+        case Param::OpenH:      return minOpenHeight(s);
+        case Param::FlightRise: return 3.0f;    // un piano
+        default:                return raw;     // 0 qui significa davvero zero
+    }
+}
+
 // Il PAVIMENTO FISICO di un parametro: sotto questo valore la struttura non è più
 // quella struttura, e nessun tipo può autorare un minimo più basso (ADR-055).
 // 0 = nessun pavimento. Lo 0 di un campo "0 = normativo" resta sempre lecito: è
