@@ -1,0 +1,93 @@
+{
+    "category": "Tacticals",
+    "defaults": {
+        "access": [
+            true,
+            false,
+            false,
+            false
+        ],
+        "ceiling": false,
+        "railing": false,
+        "rise": 2.0,
+        "riser": 0.0,
+        "tread": 0.0,
+        "width": 2.0
+    },
+    "kind": "stair",
+    "label": "Basic Barricades",
+    "note": "",
+    "parts": [
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 4.0,
+            "sy": 1.25,
+            "sz": 0.5,
+            "type": "cover",
+            "x": -0.002167289610952139,
+            "y": 0.625,
+            "z": -0.9172934889793396
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 20.0,
+            "sx": 4.0,
+            "sy": 1.25,
+            "sz": 0.5,
+            "type": "wall",
+            "x": -5.958355903625488,
+            "y": 0.625,
+            "z": 0.24638330936431885
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": -20.0,
+            "sx": 4.0,
+            "sy": 1.25,
+            "sz": 0.5,
+            "type": "wall",
+            "x": 5.958355903625488,
+            "y": 0.625,
+            "z": 0.24833017587661743
+        }
+    ],
+    "rules": {
+        "rise": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "riser": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "tread": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "width": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        }
+    },
+    "verified": true
+}

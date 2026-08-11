@@ -2,6 +2,881 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-11 (200) — Il modulo è una PAGINA, non una finestra + le isole hanno una distanza
+
+### Il tremolio, terzo e ultimo episodio: `Begin` annidato
+Le prime due correzioni erano giuste ma incomplete. Restava la causa strutturale: la finestra
+Problemi nasceva **dentro** `Begin("Map Editor")`, perché `MapEditor::draw()` è chiamata fra il
+`Begin` e l'`End` del modulo. `Begin` annidato in un altro `Begin` è lecito in ImGui ma fragile:
+con entrambe a schermo intero le due si contendevano il layout.
+
+Due cambiamenti, entrambi strutturali:
+- **`MapEditor::drawFloatingWindows()`**, chiamata da `EditorApp` **dopo** `ImGui::End()` del
+  modulo. La finestra Problemi è una pari, non un'ospite.
+- **Il modulo diventa una PAGINA**: `NoMove | NoResize | NoTitleBar | NoBringToFrontOnFocus`,
+  ancorata all'area di lavoro con `ImGuiCond_Always`. Prima era una finestra mobile posata sopra
+  a GFEditor: ingrandendola diventava "una finestra dentro una finestra" e passare fra lei e i
+  Problemi era confusionario (segnalato dall'utente). Ora non c'è niente da spostare e le finestre
+  vere ci galleggiano sopra — che è la relazione giusta.
+
+### Le isole: la misura che mancava, e la mia sbagliata
+L'utente: *"segna anche delle isole normali, che in realtà sono comunque sotto delle box"*.
+**Misurato con `--navcheck`: sono 0% coperte.** Non stanno sotto i cubi — stanno **fra** i cubi.
+
+Mancava il numero che distingue i due casi, e l'ho aggiunto: **distanza dal navmesh buono**.
+- sotto il metro → **sacca**: la separa solo l'erosione (il navmesh si ritira di 0,40 m per lato
+  da ogni ostacolo, e fra due cubi vicini la striscia in mezzo resta scollegata pur essendo a un
+  passo). Rimedio: allargare il varco di pochi centimetri.
+- molti metri → **zona** davvero staccata: serve un accesso.
+
+**La prima versione della misura era sbagliata** e va detto: calcolavo la distanza solo in pianta,
+quindi ogni chiazza sopra o sotto un'altra superficie dava `0,00 m` — con attaccata l'etichetta
+"basta allargare il varco" su zone che stanno quattro metri più in alto. Un numero sbagliato con
+un consiglio sopra è peggio di nessun numero. Ora è distanza 3D.
+
+### Training Ground, coi numeri
+```
+isole: 12 (359 m2), 3 sotto un ostacolo e 9 vere
+  ISOLA VERA  43.4 m2 a  31.2, 0.0,  41.0  (0% coperta, 1.00 m)  ← SACCA
+  ISOLA VERA  43.2 m2 a -31.6, 0.0, -41.0  (0% coperta, 1.00 m)  ← SACCA
+  ISOLA VERA  42.2 m2 a  31.2, 0.0, -41.3  (0% coperta, 1.00 m)  ← SACCA
+  ISOLA VERA  42.0 m2 a -31.5, 0.0,  41.6  (0% coperta, 1.00 m)  ← SACCA
+  ISOLA VERA   7.8 m2 a   0.9, 3.8,  42.6  (0% coperta, 3.97 m)
+```
+**I quattro angoli della mappa hanno ~43 m² di terreno ciascuno a UN METRO dal navmesh buono**:
+170 m² recuperabili allargando quattro varchi. Non è geometria sbagliata, è erosione — e senza il
+numero sembravano difetti gravi quanto una zona irraggiungibile vera.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+**Resta**: la distanza è per ora solo in `--navcheck`; nel pannello Problemi c'è l'area ma non la
+distanza. Da allineare.
+
+---
+
+## 2026-08-11 (199) — Timbro di build nell'editor: "è rimasto tutto uguale" ora è una domanda con risposta
+
+**Due volte in due giorni** la conversazione si è impantanata sulla stessa frase — *"mi sembra sia
+rimasto tutto uguale"* — e sulla stessa impossibilità: da fuori, **codice giusto ma binario
+vecchio** e **codice che non funziona** sono indistinguibili.
+
+- 2026-08-10: avevo costruito solo la Debug, l'utente lanciava la Release (changelog 187 §0).
+- 2026-08-11: binario giusto e aggiornato (verificato cercando le stringhe nuove **dentro**
+  l'eseguibile: `Problemi della mappa`, `Prova da qui`, `Isole del navmesh` c'erano tutte), ma
+  l'editor non era stato riavviato dopo l'ultima build.
+
+Nessuno dei due casi si può escludere ragionando, e chiedere all'utente di ricordare quando ha
+riavviato non è un metodo.
+
+**Rimedio**: `build <data> <ora>` in fondo alla barra dei menu, da `__DATE__`/`__TIME__` di
+`EditorApp.cpp` (ricompilato a ogni build). Un timbro in un angolo, con il suggerimento che spiega
+a cosa serve. Lo stesso timbro esce da `--editor-selftest`, così posso **confrontare** quello che
+l'utente legge a schermo con quello del binario che ho appena costruito.
+
+È la stessa regola di tutto questo giro (CLAUDE.md §6-ter): quando una domanda su cui si blocca il
+lavoro non ha uno strumento che le risponda, **lo strumento viene prima della correzione**. Qui la
+domanda era *"quale binario sta girando?"*, e costava due scambi ogni volta.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+
+---
+
+## 2026-08-11 (198) — `--navcheck`: adesso il navmesh lo guardo io. E la mappa aveva ragione lei
+
+### Il blocco (secondo episodio, causa diversa)
+Il tremolio era rimasto, in nero. **Causa vera**, trovata sul codice:
+
+```cpp
+drawToolbar();
+drawProblemsWindow();                      // ← inserita qui da me
+float toolbarH = ImGui::GetItemRectSize().y;   // ← misura l'ULTIMO elemento disegnato
+```
+
+`GetItemRectSize()` ritorna l'ultimo elemento **di chiunque**. Con la finestra Problemi disegnata
+in mezzo, `toolbarH` prendeva l'altezza di un suo widget: a schermo intero diventava enorme,
+`remaining` negativo, e il pannello sotto oscillava di frame in frame.
+
+Due regole, entrambe scritte in CLAUDE.md §6-ter:
+- **la misura di un layout si prende immediatamente dopo ciò che si misura**;
+- **le finestre a sé si disegnano per ultime**, mai in mezzo al layout di un'altra.
+
+### Il rimedio strutturale: `--navcheck`
+Testuale dell'utente: *"il fatto che tu non riesca ad esaminare bene cose come il navmesh è un
+problema … meno vedi più fai cose su basi sbagliate e quindi commetti errori"*. **Ha ragione, ed è
+la causa di tutti gli errori dei due giri precedenti.**
+
+`GFEngine.exe --navcheck [--map "X"]` costruisce il navmesh **vero** (stesso `NavManager` del
+gioco e dell'editor, nessuna terza costruzione) e stampa, per mappa: poligoni, m² navigabili,
+componenti, e **ogni isola con area, posizione, e quanta della sua superficie sta sotto un
+ostacolo**. Più posizioni tattiche e command post irraggiungibili. Exit code ≠ 0 se ci sono isole
+vere o post incatturabili — usabile anche come gate.
+
+### Cosa ho scoperto appena ho potuto guardare
+```
+[navcheck] Warfare Ground: 281 poligoni, 30426 m2 navigabili, 12 componenti
+           isole: 11 (624 m2), 7 sotto un ostacolo e 4 vere
+             ISOLA VERA      566.4 m2 a  0.0, 0.1, -0.6   (  0% coperta)
+             sotto-ostacolo    7.0 m2 a -50.3, 0.1, -27.3 (100% coperta)
+             …
+```
+**L'osservazione dell'utente era giusta per le piccole e sbagliata per la grande.** Le sette da
+5-7 m² sono davvero terreno chiuso sotto i cubi. Ma la più grossa è **566 m² di terreno scoperto
+al centro della mappa** (0% coperto): mezzo migliaio di metri quadri dove nessuna AI arriverà mai.
+Senza `--navcheck` avrei archiviato anche quella come "terreno sotto i cubi", perché è quello che
+mi era stato riferito e non avevo modo di verificarlo.
+
+### La classificazione, sbagliata due volte prima di funzionare
+Distinguere "pavimento sotto un cubo" da "isola vera" sembra facile e non lo è:
+1. **baricentro dell'isola** → un'isola ad ANELLO ha il baricentro nel buco in mezzo: 566 m²
+   classificati male da un punto solo;
+2. **maggioranza dei baricentri dei triangoli** → su un navmesh grossolano un triangolo vale 94 m²,
+   quindi "un triangolo un voto" pesa un fazzoletto quanto un piazzale.
+3. ✅ **campionamento dentro ogni triangolo, pesato per AREA** → una frazione 0..1, stampata
+   accanto al verdetto (`79% coperta`) così la soglia si può giudicare invece di crederle.
+
+La stessa funzione (`navcheck::coveredFraction`) la usa **anche l'editor**: se la classificazione
+vivesse in due posti, la riga di comando e il pannello direbbero cose diverse sulla stessa mappa.
+Nel pannello Problemi il pavimento sotto un ostacolo ha ora un **gruppo suo**, come avviso e con
+la ragione scritta — resta in elenco (sparire sarebbe una bugia) ma non manda a caccia di niente.
+
+### Fotografia iniziale di tutte le mappe
+| mappa | poligoni | m² navigabili | isole | di cui vere |
+|---|---|---|---|---|
+| Arena | 17 | 1 893 | 0 | 0 |
+| Warfare Ground | 281 | 30 426 | 11 (624 m²) | 4 |
+| firebase | 269 | 1 608 | 9 (205 m²) | 9 |
+| Training Ground | 1 041 | 7 166 | 12 (359 m²) | 9 |
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti in entrambe, `--validate` 0 errori.
+
+---
+
+## 2026-08-11 (197) — L'editor si bloccava aprendo Problemi a schermo intero (mio, grave)
+
+### Il difetto
+*"La finestra dei problemi se la metto tipo schermo intero … inizia a fare una luce intermittente
+bianca molto velocemente e non funziona più nulla, non posso nemmeno più chiudere l'editor se non
+da gestione attività."*
+
+**Causa, individuata sul codice.** Avevo scritto la riga cliccabile così:
+`Selectable("##row", …, ImVec2(0, h))` + `SameLine(0,0)` + `TextWrapped`.
+Un `Selectable` con larghezza 0 occupa **tutta** la riga: `SameLine` portava quindi il cursore al
+bordo destro, e a `TextWrapped` restava una larghezza di wrap ≈ 0 → una parola per riga, poi una
+lettera per riga → migliaia di righe per voce. Il tempo di frame esplodeva: lampeggio e blocco
+totale. Ingrandire la finestra peggiorava perché mostrava più voci insieme.
+
+**Non è un difetto estetico: è un difetto di perdita dati.** L'utente ha dovuto terminare il
+processo, e ciò che non era nell'autosalvataggio se n'è andato con lui.
+
+**Correzione**: il testo sta DENTRO l'etichetta del `Selectable` — ImGui la ritaglia al bordo
+senza mandarla a capo, quindi il costo è fisso qualunque sia la lunghezza — e per esteso nel
+suggerimento, dove il wrap si dichiara con `PushTextWrapPos(520)`, una larghezza **esplicita**.
+
+**Regola scritta** in CLAUDE.md §6-ter e in memoria: mai `TextWrapped` dopo `SameLine`; mai
+`PushTextWrapPos` senza larghezza esplicita in un contenitore la cui larghezza dipende dal
+contenuto. È la seconda trappola di layout in due giorni, e questa bloccava il programma.
+
+### "Ci clicco sopra e non c'è niente dove mi porta la telecamera"
+Due cause, entrambe mie:
+1. **Un'isola non è un elemento**: non si può selezionare, quindi arrivando sul posto non c'era
+   niente di evidenziato — solo geometria come tutta l'altra. Ora cliccando un problema di navmesh
+   si **accende l'overlay**: il rosso *è* l'isola.
+2. **Raggio d'inquadratura fisso a 8 m** per zone che possono essere di 40 m²: se ne vedeva un
+   pezzo, e "non c'è niente qui" è la conclusione naturale. Ora il raggio viene dall'area.
+
+### Mi ero sbagliato a chiamarle "schegge"
+Il navmesh è **grossolano**: una mappa intera sta in ~500 triangoli, quindi un triangolo può
+valere decine di metri quadri. "24 triangoli su 484" — che avevo letto come schegge — erano in
+realtà **centinaia di metri quadri** distribuiti su dieci zone. Il conteggio dei triangoli come
+misura di grandezza è fuorviante e **l'ho tolto dal testo**: resta solo l'area, che è l'unica
+grandezza che significhi qualcosa. È esattamente l'errore contro cui il progetto ha già una
+regola (*un numero senza denominatore è un aneddoto*) — commesso da me, nel giro successivo.
+
+### Sul "ci sono più errori di prima"
+Il conteggio in barra ora **aggrega tre sorgenti** che prima erano contate in tre posti diversi
+(salute tattica, navmesh, gate). Il numero è più alto perché è completo, non perché la mappa sia
+peggiorata. Le isole ≥ 6 m² sono problemi veri: superficie in cui l'AI può stare ma non arrivare.
+
+**Limite dichiarato**: non posso verificare da solo le isole di una mappa: `validateNavmesh` vive
+nell'editor e richiede una finestra. È il motivo per cui questo giro è dipeso dalla tua
+descrizione. **Portare la verifica navmesh in `--validate`** (headless, per mappa) è la prossima
+cosa da fare di L5 — vedi doc 53.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti in entrambe, `--validate` 0 errori.
+
+---
+
+## 2026-08-11 (196) — Un solo posto per i problemi: l'ecosistema, non la singola funzione
+
+Richiesta dell'utente, testuale: *"è abbastanza fastidioso avere la scritta rossa dei problemi
+sempre in alto per delle schegge … si potrebbe fare un piccolo menu espandibile … la lista
+organizzata per tipo di problema un po' come la salute tattica … Sistemiamo, puliamo e rifiniamo
+per bene non la singola funzione ma l'ecosistema di cui fa parte."*
+
+### Il difetto vero: TRE risposte alla stessa domanda
+"Cosa non va in questa mappa?" si chiedeva in tre posti, con tre presentazioni diverse:
+la **salute tattica** nel pannello di sinistra (raggruppata, cliccabile), l'**esito del navmesh**
+scritto in barra (una riga rossa permanente), il **gate dei dati** in fondo all'elenco (lista
+piatta). Tre modi di dire la stessa cosa sono tre cose da imparare — e quello in barra restava
+rosso per sempre, anche per 24 triangoli su 484. **Un avviso sempre acceso smette di essere un
+avviso e diventa arredamento.**
+
+### Cosa c'è ora
+**Una finestra sola**, `Problemi`, aperta da una voce compatta in barra che porta il conteggio e
+il colore del grado. Dentro, tutte e tre le famiglie raggruppate per tipo, con i due pulsanti per
+rifare le verifiche in cima. Ogni voce: clic → **seleziona e inquadra**.
+
+`collectProblems()` **raccoglie, non ricalcola**: le tre analisi restano dove sono e restano
+condivise col gate. Una quarta analisi "per la finestra" sarebbe stata la quarta verità sullo
+stesso mondo — il difetto che è già costato di più.
+
+Rimossi: il blocco salute tattica dal pannello di sinistra (rubava spazio all'elenco anche a mappa
+sana) e il riepilogo per esteso in barra. In barra resta `Verifica navmesh`, `Mostra` e — quando
+c'è qualcosa — un rimando alla finestra.
+
+### La gravità delle isole viene dall'AREA, non dall'esistenza
+Le isole ora riportano **m²**, non solo triangoli: un triangolo può essere grande quanto una
+stanza, quindi "3 triangoli" non dice niente. Sotto **6 m²** l'isola è un **avviso**, sopra un
+**problema**. Prima ogni isola contribuiva al rosso, ed è il motivo per cui l'indicatore era
+inchiodato.
+
+### Sulla domanda di merito: le schegge agli spigoli
+Il caso dell'utente — spigolo di una piattaforma dove convergono due scale — **non è un difetto
+del navmesh, e non va risolto alzando le soglie.** Verificato sul codice: `minRegionArea` è già
+`rcSqr(8)` = 64 celle × 0,04 m² = **2,56 m²**, cioè Recast scarta da solo le regioni più piccole.
+Una chiazza che sopravvive è pavimento vero, largo abbastanza da starci in piedi, da cui però non
+si esce. Nasce perché l'erosione toglie `AGENT_RADIUS` (0,40 m) **per lato**: due superfici che si
+toccano solo in un angolo, dopo l'erosione non si toccano più.
+
+Alzare `minRegionArea` per farle sparire cancellerebbe anche superficie piccola ma **legittima**
+altrove: si silenzierebbe il rapporto peggiorando il navmesh. `mergeRegionArea` non aiuta —
+unisce solo regioni che condividono un bordo, e queste per definizione non ce l'hanno.
+
+La correzione è di **authoring**, ed è scritta nella guida in ordine di preferenza: allargare il
+pianerottolo dove le scale incontrano la piattaforma (le superfici si sovrappongono invece di
+sfiorarsi), oppure accostare con `Precisione → Appoggia`, oppure **lasciarla stare** — che ora è
+una scelta legittima e non un rosso permanente, perché sotto 6 m² è un avviso.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti in entrambe, `--validate` 0 errori.
+
+---
+
+## 2026-08-11 (195) — "Tutto verde ma 10 isole": un numero senza grandezza è un aneddoto
+
+### La domanda dell'utente, e la risposta
+*"Su Warfare Ground la verifica del navmesh mi dà tutto verde, però mi segna comunque 10 isole."*
+
+Non è una contraddizione nei dati: **le isole ci sono davvero**. `debugTriangles` emette un
+triangolo per ogni poligono col suo componente, quindi 11 componenti significano necessariamente
+triangoli fuori dalla componente dello spawn — cioè rossi. Dieci schegge da pochi triangoli in
+mezzo a migliaia di verdi non si notano guardando.
+
+**Il difetto era nell'indicatore, non nella mappa**, ed erano due:
+
+1. **Un numero senza grandezza.** "10 isole" diceva la stessa cosa per dieci schegge da tre
+   triangoli e per dieci stanze scollegate. È esattamente la trappola dell'aggregato senza
+   denominatore su cui questo progetto è già scivolato (KI #86).
+2. **Un'etichetta che non corrispondeva alla causa.** `bad` diventava vero per **tre** condizioni
+   diverse — isole, posizioni irraggiungibili, post irraggiungibili — ma il testo stampava sempre
+   e solo `componenti − 1` isole. Bastava una posizione irraggiungibile per leggere "isole".
+
+### Cosa c'è adesso
+- `N isole (M tri su T)`, e sotto l'1% del navmesh l'indicatore scrive **"schegge"** e passa dal
+  rosso al giallo: una scheggia è quasi sempre un angolo di geometria, non una zona tagliata fuori.
+- Pulsante **Vai**: inquadra l'**isola più grande** (`islands` ordinate per dimensione, con il
+  centroide). Un numero che non dice dove sono le isole non si può usare.
+- Le altre due cause dette per quello che sono: `N posizioni irraggiungibili`,
+  `N post irraggiungibili`. Non sono la stessa cosa e non vanno tradotte in "isole": una posizione
+  irraggiungibile è lavoro sprecato, un post irraggiungibile è un obiettivo **incompletabile**.
+
+### Sull'altra segnalazione (piattaforma centrale senza coperture)
+Confermata la lettura dell'utente: è `UnmarkedCover` — un ostacolo che taglia le linee di tiro
+senza nessuna copertura autorata vicina ha il peggio dei due mondi (toglie il tiro come una
+copertura, ma nessuna AI sa usarlo). **Autorando una posizione di copertura vicina la segnalazione
+sparisce**, ed è il comportamento voluto: il difetto non è la piattaforma, è che nessuno l'ha
+ancora dichiarata utilizzabile.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+Guida: nuova sezione *"Verifica navmesh: cosa vuol dire 10 isole"* con le tre voci separate.
+
+---
+
+## 2026-08-11 (194) — L5: portami lì, due difetti muti in meno, e il gate dentro il Map Editor
+
+### "Portami lì"
+Cliccando una voce dell'elenco Salute tattica ora l'elemento **si seleziona e la telecamera lo
+inquadra** (`FreeCameraViewport::focusOn`, che non tocca l'ingombro del contenuto — `F` continua
+a inquadrare tutta la mappa). Prima selezionava soltanto: su una mappa 300 × 200 "il box 147" non
+è un indirizzo, è un enigma, e un elenco di problemi si smette di usare al terzo che non si trova.
+
+L'inquadratura arriva da una direzione leggermente dall'alto e non "indietreggiando" lungo la
+direzione attuale: con la telecamera in orizzontale, indietreggiare la lascerebbe dentro un muro.
+
+### Due modi di perdere una superficie IN SILENZIO
+Aggiunti ad `analyzeTacticalHealth`, quindi **li vede anche `--validate`** — nessuna analisi
+separata per l'editor. Soglie prese da `MapMetrics`, che le ricava dai filtri di Recast: nessun
+numero scelto a occhio.
+
+- **`TooSmallElevated`** — un ripiano sopraelevato perde una cella di strapiombo per lato, poi
+  `AGENT_RADIUS` di erosione per lato, poi le regioni sotto 2,56 m² vengono scartate: sotto
+  `ELEVATED_MIN_SPAN` (3,00 m) non resta niente. Sotto su **entrambi** i lati = problema; su uno
+  solo = avviso (può essere una passerella voluta).
+- **`NarrowGap`** — due ripiani complanari separati da meno di `2 × AGENT_RADIUS` (0,80 m): si
+  vede un varco e non ci passa nessuno. Nasce accostando due box a occhio.
+
+### Il controllo che si è corretto da solo, prima di arrivare all'utente
+La prima versione ha prodotto **412 segnalazioni** su Warfare Ground — tutte pedate di scala da
+`2,01 × 0,30`, cioè esattamente *"l'elenco lungo e indifferenziato che si smette di leggere"* che
+questo controllo doveva evitare. Un gradino non è un ripiano.
+
+Il criterio corretto era già nel progetto: sotto la larghezza dell'unità di riferimento
+(`REF_UNIT_WIDTH` = 1,20 m) non è un posto dove stare — è una pedata, un cordolo, un parapetto.
+Le scale hanno già il loro controllo, che ragiona sull'**alzata**.
+Dopo il filtro: **da 412 a 14 voci**, e le due che contano sono piattaforme `2,00 × 2,00` a 2,46 m
+e 5,01 m su Warfare Ground che **sparirebbero davvero dal navmesh** — difetti reali che l'utente
+non avrebbe mai visto.
+
+**La rete è stata provocata in entrambi i versi** prima di fidarsene (mappa di prova, poi
+rimossa): due ripiani a 1,00 m di distanza → **nessuna segnalazione**; gli stessi a 0,50 m →
+segnalati con la misura esatta e l'azione da fare.
+
+### Il gate dei dati, da dentro il Map Editor
+Pulsante **Controlla i dati...** nel pannello: lo **stesso** `validateContent` di `--validate` e
+del pannello Validazione, filtrato su questa mappa e sulle strutture. Ogni voce porta il
+**suggerimento**, non solo la diagnosi. Gira **su richiesta**: ricarica l'intero registry, e non è
+un costo da pagare mentre si trascina un box.
+
+La salute tattica guarda la **forma** della mappa, il gate guarda i suoi **riferimenti**: due
+famiglie di difetti diverse, e servono entrambe.
+
+### Collaudi
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+Conteggi dopo il cambio: Warfare Ground 11 problemi / 39 avvisi (era 9/35), Training Ground 0/31
+(era 0/23) — un aumento leggibile, non rumore.
+Guida: nuova sezione nel capitolo *Navmesh e metriche* con i due difetti, il "portami lì" e il
+perché i gradini non vengono segnalati.
+
+---
+
+## 2026-08-11 (193) — "Prova da qui" ora rispetta la QUOTA: sopra una passerella si nasce sopra
+
+### Il fatto
+*"Ho provato a posizionarmi con la telecamera su una passerella rialzata di Warfare Ground, ma
+sono spawnato comunque sotto."* Corretto, e valeva la pena: su una mappa a più livelli è proprio
+lì che serve provare a piedi, ed è lì che il comando serviva a metà.
+
+### Due difetti, non uno
+1. **Si usava il punto GUARDATO, non quello dove si è.** `groundFocusPoint()` proietta lo sguardo
+   sul piano y=0: su una mappa piatta coincide con l'intuizione, su una passerella no — e
+   guardando in orizzontale il punto finisce a decine di metri di distanza. Ora si usa la
+   **posizione della telecamera**: è l'unica lettura senza casi speciali. *Mi porto dove voglio
+   comparire, e ci compaio.*
+2. **La quota non viaggiava.** `--at` portava solo x,z, e il motore prendeva la superficie **più
+   alta** a quelle coordinate. Su più livelli "la più alta" e "quella su cui sono" non coincidono
+   quasi mai — e nel caso dell'utente il pavimento vinceva perché la passerella non era sopra al
+   punto proiettato.
+
+### La soluzione
+`--at` accetta ora **due forme**: `x,z` (come prima, invariata) e `x,y,z`. Con la quota si nasce
+sulla superficie più alta **al di sotto** di essa.
+
+Il meccanismo esisteva già: `groundHeightAt` ha da sempre un parametro `maxWalkableTop` che
+nessuno usava. È bastato farlo passare da `groundedSpawn` (valore di riporto `1e9` = nessun
+filtro, quindi **zero cambiamenti** per ogni chiamante esistente) e portarlo dalle impostazioni
+di partita, come `sandboxDummies`: non serializzato, perché è una scelta di avvio.
+
+**Lo leggono ENTRAMBI i game mode**, Sandbox e Conquest. Metterlo in uno solo avrebbe prodotto di
+nuovo il difetto "funziona in una modalità e tace nell'altra" — la stessa ragione per cui `--at`
+agisce sullo spawn della MapDef e non dentro i mode.
+
+### Osservabilità
+`[Sandbox] Giocatore a x, y, z (piano più alto sotto quota Q)` a ogni avvio. Senza, "sono nato
+sulla passerella" e "sono nato sotto" sono indistinguibili da fuori — ed è esattamente la
+differenza che questo cambio deve garantire. È anche come l'ho verificato.
+
+### Verificato con esecuzioni vere su Warfare Ground, stesso punto in pianta
+| comando | esito |
+|---|---|
+| `--at 0,1.5,0` (telecamera bassa) | `Giocatore a 0, 0.85, 0` → **a terra** |
+| `--at 0,12,0` (telecamera alta) | `Giocatore a 0, 3.85, 0` → **sul piano a 3 m** |
+| `--at 0,0` (forma vecchia) | `Giocatore a 0, 3.85, 0` → **invariata** |
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+
+---
+
+## 2026-08-11 (192) — "Prova da qui" apriva un menu: ora è `--walk`, la sandbox senza manichini
+
+### Il difetto
+Segnalato appena l'utente ha potuto usarlo: *"apre l'engine sul prematch menu … per il prova da
+qui devo semplicemente poter camminare per la mappa"*. Avevo passato `--direct-prematch`, cioè
+**un menu fra lui e la mappa** — che toglie a questo comando l'unica cosa che deve avere,
+l'immediatezza.
+
+### La soluzione, come suggerito dall'utente: riusare la sandbox
+Nuovo argomento **`--walk`**: si entra direttamente nella mappa, da soli. Tecnicamente è la
+**sandbox con zero manichini**, e non un terzo game mode — la sandbox porta già geometria,
+strutture, veicoli, controller del giocatore, nessun menu e nessuna condizione di vittoria, cioè
+tutto ciò che serve a camminare in una mappa. L'unica cosa che non serve a una prova di
+percorribilità sono i bersagli. Un mode nuovo avrebbe duplicato il resto e sarebbe rimasto
+indietro al primo cambio (ADR-014).
+
+Effetto collaterale gradito: il pannello della sandbox resta disponibile in partita, quindi se a
+metà prova serve un bersaglio lo si fa comparire da lì.
+
+### Il tranello trovato PROVANDO, non ragionando
+Mettere `team1AiCount = team2AiCount = 0` **non basta**: la sandbox spawna deliberatamente
+**almeno un manichino per ogni definizione registrata** (`std::max(count, ids.size())`), così ogni
+unità autorata è subito provabile. È una scelta giusta per la sandbox e sbagliata per `--walk`, e
+i conteggi a zero non la disattivano — li **ignora**.
+
+Serviva un interruttore esplicito: `SandboxMode::spawnDummies`, portato da
+`MatchSettings::sandboxDummies`. Quel campo è **deliberatamente non serializzato**: è una scelta
+di come si è avviato *questo* processo, non una preferenza; scriverla nel file la renderebbe
+appiccicosa e la sandbox resterebbe vuota per sempre senza che nessuno sappia perché.
+
+Avrei consegnato un `--walk` con dieci manichini in mezzo se non l'avessi eseguito. È la stessa
+lezione di [[verify-effect-not-data]]: "il flag è passato" non è "la funzione fa quello che dice".
+
+### Osservabilità aggiunta perché serviva a me
+`[Sandbox] Manichini: N nemici, M alleati` a ogni avvio. Senza quella riga, "zero manichini" e
+"manichini spawnati altrove" sono indistinguibili da fuori — ed è esattamente la differenza che
+`--walk` deve garantire.
+
+### Verificato con esecuzioni vere, non solo compilato
+- `--walk --map "Training Ground" --at 12.5,-8.25` → `Manichini: 0 nemici, 0 alleati (disattivati)`
+- `--sandbox --map "Training Ground"` (controprova) → `Manichini: 6 nemici, 4 alleati`, invariato.
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+Guida: `15_Costruire.md` dice cosa Prova da qui **non** fa e in cosa differisce dalla Sandbox;
+`90_RigaDiComando.md` documenta `--walk` accanto a `--sandbox` con la differenza fra i due.
+
+---
+
+## 2026-08-11 (191) — La barra non può più tagliare, e adesso posso accorgermene da solo
+
+### Il fatto
+*"Il tasto Prova da qui non l'ho trovato, e con le nuove opzioni altri tasti sono stati tagliati
+fuori."* Consegnato ieri, dichiarato fatto, invisibile.
+
+**È la terza volta.** "Mai far tagliare i comandi" è una regola del progetto da luglio, ed è stata
+violata sempre allo stesso modo: si aggiunge un comando utile, la barra supera la larghezza del
+pannello, l'ultimo comando smette di esistere per chi lo usa.
+
+**La causa non è la distrazione: io non vedo lo schermo.** Una regola la cui verifica richiede di
+guardare il risultato non posso rispettarla, per quante volte la si riscriva. L'utente l'ha
+inquadrato meglio di me: *"magari un modo per far sì che tu possa renderti conto da solo di cosa
+viene tagliato e cosa no"*.
+
+### La risposta: strutturale + misurabile, non una regola in più
+`editor/include/framework/Toolbar.hpp`. La barra si **dichiara** come elenco di voci; il
+componente le **misura** e manda l'eccedenza in un menu `...` invece che oltre il bordo.
+L'ordine dell'elenco è la priorità: la prima voce è l'ultima a finire nel menu. È il pattern
+*priority+* (PatternFly, Brad Frost), scelto perché **nessun comando sparisce**: cambia solo dove
+si trova, e il suggerimento del `...` dice quanti ne contiene.
+
+**Il pezzo che conta per me** è la separazione: la decisione di layout sta in `toolbar::fitCount`,
+una funzione **pura** senza ImGui, quindi collaudabile headless. Nove controlli nuovi in
+`--editor-selftest`, fra cui l'invariante centrale — *a ogni larghezza, ciò che resta in barra,
+**compreso il pulsante «...»**, ci sta davvero*. È l'errore classico di questo pattern: si riserva
+lo spazio del menu a occhio e il menu finisce fuori, portandosi via i comandi che doveva salvare.
+Il collaudo ha **effettivamente trovato** un caso al primo giro (sotto la larghezza del `...`
+stesso non c'è niente da fare): l'ho **dichiarato come caso degenere noto** invece di allargare la
+soglia fino a nascondere quelli veri.
+
+### Raggruppamento (richiesta esplicita dell'utente)
+Da **18 controlli in fila** a **4 menu + 5 voci sempre visibili**:
+
+| Menu | Voci |
+|---|---|
+| **Mappa** | Salva (Ctrl+S), Rinomina..., Nuova mappa... |
+| **Crea** | Box, Struttura parametrica..., Disegna sulla griglia (+ altezza e quota) |
+| **Modifica** | Duplica, Serie..., Precisione..., Elimina |
+| **Vista** | filtri, taglio in quota, figura di scala, difetti, Solido |
+
+Sempre fuori: **quale mappa**, l'**asterisco** delle modifiche non salvate, il **passo di
+aggancio**, **Annulla/Ripristina**, **Prova da qui**, e la **verifica navmesh** col suo esito.
+Criterio da PatternFly: restano visibili solo il contesto e ciò che si usa di continuo.
+
+### Ctrl+S
+Salva **quello che stai guardando**: la mappa dal tab Mappa, il tipo da un tab struttura,
+l'istanza da un tab "solo questa". Una scorciatoia che salva "qualcosa" e non "quello che stai
+guardando" è peggio di non averla. Niente popup di conferma — sarebbe una finestra da chiudere a
+ogni salvataggio, cioè un premio per aver usato la scorciatoia: compare *Salvato* in verde accanto
+al nome e sfuma da solo.
+
+### La regola, per non ripetere il giro
+Nuovo **CLAUDE.md §6-ter**: *una regola di layout che non ha un controllo eseguibile non è una
+regola, è una speranza*. Ogni volta che una regola dell'interfaccia dipende da "quanto spazio
+c'è" vanno prodotti **entrambi**: un meccanismo che rende la violazione inesprimibile, e un
+controllo headless che io possa eseguire. Vale oltre le barre — testi troncati, finestre più
+piccole del contenuto, sovrapposizioni.
+
+### Collaudi
+`--editor-selftest` 0 falliti in Debug **e** Release, `--validate` 0 errori. Guida aggiornata:
+nuova sezione *"La barra dei comandi: dove sta cosa"* con la tabella dei menu, il `...` e Ctrl+S;
+i percorsi in `15_Costruire.md` corretti (`Crea → Disegna`, `Modifica → Precisione...`).
+
+---
+
+## 2026-08-11 (190) — Provare camminando + appoggia senza fessura (doc 53 L4 / L2)
+
+### `Prova da qui` — il ciclo di costruzione si chiude
+Un pulsante nella barra del Map Editor: **salva la mappa** e avvia il gioco **con il giocatore nel
+punto che la telecamera sta guardando**.
+
+Non è una comodità. La raccomandazione numero uno della letteratura di level design è *"cammina,
+non volare"*: l'errore più frequente in assoluto è la **scala**, e non si vede dall'alto — si vede
+attraversando lo spazio con gravità, collisione e velocità vere. Finora l'editor lanciava il gioco
+**senza mappa e senza posizione**, quindi quel controllo costava di fatto troppo per farlo spesso.
+
+- **Motore, `--at x,z`**: applicato **sullo spawn della MapDef**, non dentro i game mode.
+  `spawnTeam1` lo leggono in due posti (Conquest e Sandbox): un override in uno solo avrebbe dato
+  "Prova da qui" funzionante in una modalità e muto nell'altra. L'unico punto di scrittura è
+  `DefinitionRegistry::overrideSpawn`, dichiarato come override di sviluppo, valido per la durata
+  del processo, nessun file toccato.
+- **Il flag dice se ha avuto effetto**, su stderr. Un flag che tace è indistinguibile da un flag
+  ignorato — è il difetto già trovato in `--stress`.
+- **Chi lancia il processo**: `EditorApp`. Il modulo dichiara solo l'intenzione
+  (`takePlaytestRequest`), che si svuota leggendola — una richiesta appesa rilancerebbe il gioco
+  a ogni frame. Un modulo che avvia eseguibili sarebbe il secondo posto da cui parte il gioco.
+- **Provato con esecuzioni vere**, non solo compilato: percorso riuscito, argomento malformato
+  (`--at 12.5`), mappa inesistente. Tutti e tre riportano cosa è successo.
+
+### `Appoggia` — fino a toccare, senza fessura
+Sei direzioni (Giù/Su, ±X, ±Z) nella tendina Precisione. La selezione si muove finché **tocca** la
+geometria davanti: non compenetra e non lascia spazio. Il suolo conta come superficie, altrimenti
+"Appoggia giù" non farebbe niente su una mappa vuota.
+
+**Perché serve nonostante l'aggancio alla griglia**: un box a 3 cm da terra *sembra* appoggiato, a
+schermo non si distingue. Ma 3 cm stanno **sotto la soglia di erosione del navmesh**: la superficie
+non viene generata, l'AI non ci sale, e la causa non è visibile da nessuna parte. La griglia riduce
+il problema e non lo elimina — due box con passi diversi, o uno ruotato, restano sfalsati.
+
+Due decisioni: la selezione si muove come **un corpo unico** (spostare ognuno fino al proprio
+contatto smonterebbe la forma di ciò che si è selezionato), e **se davanti non c'è niente non si
+muove nulla** invece di mandare la geometria verso il nulla.
+
+### Due cose di L2 NON fatte, con motivazione
+- **Restrizione d'asse (Alt) + linee di traccia**: qui si sposta afferrando una freccia del gizmo,
+  che è **già** vincolata a un asse. Risolverebbe un problema che questo editor non ha. Quello che
+  manca davvero è il **numero durante il trascinamento** ("sto spostando di 4,00 m") — è quello da
+  fare al suo posto.
+- **Pivot modificabile**: introduce una modalità nuova con il suo stato, e la rotazione di gruppo
+  usa già il baricentro. Da fare su un caso concreto, non per completezza dell'elenco.
+
+### Collaudi
+6 controlli nuovi in `--editor-selftest` (totale 0 falliti, Debug **e** Release): cade a terra
+senza fessura, si ferma sul *top* di ciò che sta sotto, accosta al muro senza compenetrare, **la
+forma della selezione non cambia** durante l'accostamento, e senza ostacoli davanti non muove
+niente. `--validate` 0 errori.
+
+### Guida
+`data/help/15_Costruire.md` esteso con **Appoggia** (compresa la ragione dei 3 cm) e **Prova da
+qui** (come si usa nel ciclo di lavoro, e cosa dice il messaggio accanto al pulsante).
+`90_RigaDiComando.md` documenta `--at x,z`, il formato con la virgola e il fatto che un formato
+sbagliato viene segnalato invece che ignorato.
+
+---
+
+## 2026-08-10 (189) — L1 e mezza L2: disegna, tira la faccia, allinea (doc 53)
+
+Implementate le fasi che valgono di più per la mappa grande. Il criterio dichiarato in doc 53 era
+**gesti per box**: da sei (crea a misura fissa → tre misure → posizione) a due.
+
+### Prerequisito — i derivati non si ricalcolano durante il trascinamento
+`recomputeExposure` è O(n²) sulle posizioni tattiche e girava **a ogni frame** del trascinamento:
+21–34 ms alla stima di 1500 posizioni della mappa grande (misura di doc 51 §1). Il risultato
+intermedio non lo guarda nessuno — si guarda dove finisce l'oggetto — quindi si paga **una volta,
+al rilascio**. Sparisce il caso peggiore misurato.
+
+### Passo di griglia con Ctrl+rotella
+Sette passi da 0,10 a 8,0 m. È il parametro che si cambia più spesso costruendo (grande per le
+stanze, piccolo per la rifinitura) e finora richiedeva di andare a cercare un combo nella barra.
+Convenzione di CubeGrid e TrenchBroom. La rotella viene **consumata**: se cambiasse anche lo zoom,
+un gesto solo farebbe due cose. L'elenco è **lo stesso** del combo — due elenchi divergenti
+mostrerebbero valori che la rotella non raggiunge.
+
+### `Disegna`: un box in un gesto
+Strumento modale che **resta acceso** (si costruisce di seguito). Si traccia l'impronta sul piano
+di lavoro e **le misure si leggono durante il gesto**, che è ciò che rende inutile misurare dopo.
+Nella barra: `h` (altezza dei box nuovi) e `quota` (il piano, cioè la **base** dei box — alzalo e
+stai costruendo il primo piano).
+
+Due decisioni dichiarate: il clic **appartiene allo strumento** e non seleziona (altrimenti a fine
+gesto il pannello di destra mostrerebbe un oggetto a caso), e un clic senza trascinamento **non
+crea nulla** invece di creare un box di lato zero, che sparirebbe dal navmesh in silenzio.
+
+### `Faccia`: il gesto con cui si costruisce davvero
+Quarta modalità del gizmo, sei maniglie sull'ingombro della selezione. Si tira una faccia e **la
+opposta resta ferma**.
+
+È la differenza che vale il lavoro: la Scala muove entrambe le facce, quindi allungare un muro di
+2 m costa due gesti (scala, poi ricentra) e mezzo metro di errore ogni volta che ci si distrae.
+Tre riferimenti su quattro (CubeGrid, TrenchBroom, "A Simpler 3D Level Editor") hanno questo gesto
+come strumento **primario**, non accessorio.
+
+- **E / Q** spingono la faccia attiva di un passo — costruzione da tastiera, ripetibile ed esatta.
+  Solo quando **non** si sta volando: in volo restano salita e discesa, come sono sempre stati. Un
+  tasto che cambia significato senza dirlo è peggio di due tasti.
+- La faccia attiva ha il **contorno bianco**: senza, premere E è un tiro a indovinare.
+- **Aggancio obbligatorio**: si emette solo a multipli interi del passo. Il grezzo darebbe muri da
+  3,47 m, e le fessure che ne nascono stanno **sotto la soglia di erosione del navmesh** — cioè
+  non si vedono e rompono.
+- Su una struttura parametrica tira la **misura della ricetta**, non i box: una scala allungata
+  resta a norma. Stessa regola del gizmo di scala, non una seconda.
+
+### `Precisione...`: numeri, allineamento, distribuzione
+In una tendina e non in fila — la barra non deve crescere.
+
+- **Sposta di** X/Y/Z esatti, con "Un passo" che riempie il passo corrente.
+- **Allinea** min/centro/max sui tre assi, calcolato **sui bordi e non sui centri**. È la
+  differenza che conta: due muri di spessore diverso allineati al centro restano sfalsati, ed è
+  esattamente la fessura che il navmesh non attraversa.
+- **Distribuisci**: spazio uguale, estremi fermi. Da tre elementi in su.
+
+### Il prerequisito che NON ho fatto, e perché
+Avevo dichiarato in doc 53 che L1 richiedeva prima la **migrazione del gizmo del Map Editor a
+`ViewportEditing`**. Non l'ho fatta, e lo scrivo invece di lasciarlo credere.
+
+Il rischio che la motivava era *"una terza via ad hoc per i gesti nuovi"* — e quel rischio si
+evita mettendo i gesti nuovi **dentro `FreeCameraViewport`**, con lo stesso protocollo `pop…Delta`
+e la stessa coalescenza di `pushUndo` del gizmo esistente. Cosa fatta. Non richiedeva di
+riscrivere il percorso di interazione più usato dell'editor **subito prima** di settimane di uso
+intensivo: è il profilo esatto delle regressioni di doc 49. **Resta un debito aperto**, da fare
+quando l'utente non sta costruendo. Motivazione estesa in doc 53 §L1.
+
+### Collaudi
+13 controlli nuovi in `--editor-selftest` (0 falliti, in Debug **e** Release). Fra questi
+l'invariante che distingue il gesto: **tirando una faccia, la opposta non si muove** — verificato
+su entrambe le facce di un asse, perché il segno è il posto naturale in cui sbagliare. Più: il
+clamp a spessore minimo, la base del box disegnato che appoggia sul piano di lavoro, l'allineamento
+a filo con spessori diversi, gli estremi fermi nella distribuzione.
+
+### Guida
+Nuovo capitolo F1 **"Costruire velocemente"** (`data/help/15_Costruire.md`): ogni strumento con il
+gesto, i campi, cosa NON fa e perché, la differenza fra Faccia e Scala, la tabella delle
+scorciatoie, e l'ordine di lavoro consigliato (passo grande → alza → **cammina** → passo piccolo →
+verifica navmesh). Rimando in cima al capitolo Map Editor.
+
+---
+
+## 2026-08-10 (188) — Ricerca e piano: portare il Map Editor a livello professionale (doc 53)
+
+Richiesta dell'utente: ricerca su ProBuilder e strumenti simili per capire come migliorare
+davvero Map Editor ed editor strutture. **Nessun codice**: è un documento di pianificazione
+(Planned Feature, CLAUDE.md §4). Nuovo `ProjectDocs/53_LevelBuildingTools.md`.
+
+**La conclusione controintuitiva**: ProBuilder è lo strumento sbagliato da copiare. È editing di
+mesh, e romperebbe le tre cose su cui poggia questo motore — navmesh diagnosticabile **per box**,
+semantica `BoxType` letta da navmesh e metadata, collisione a scatole. Il modello giusto è
+**CubeGrid di Unreal 5** (il sostituto ufficiale delle BSP brush), che lavora su scatole allineate
+alla griglia — cioè esattamente il nostro mondo — più le **interazioni** di TrenchBroom, che sono
+indipendenti dal motore.
+
+**Il divario vero, misurato sul codice**: non mancano funzioni, **costa troppo ogni box**. Oggi
+sei gesti (`+ Box` → tre misure → posizione), negli editor di riferimento due (disegna il
+rettangolo, tira su la faccia). Su una mappa 300 × 200 è la differenza fra giorni e settimane.
+
+Sei fasi, ordinate per tempo risparmiato sulla mappa grande: **L1** disegna-e-tira (push/pull,
+estrusione trascinando la faccia, passo di griglia con Ctrl+rotellina), **L2** precisione (offset
+numerico, allinea/distribuisci, appoggia su faccia, restrizione d'asse), **L3** organizzazione
+(gruppi, isolamento, blocco, copia/incolla), **L4** provare camminando (`--at x,z`), **L5**
+pannello Problemi con lo **stesso** gate di `--validate`, **L6** ponte con Blender.
+
+Due prerequisiti dichiarati: togliere il ricalcolo dei derivati *durante* il trascinamento
+(doc 51 §1) e **migrare finalmente il gizmo del Map Editor a `ViewportEditing`** (doc 52) — L1 va
+costruita sul pezzo condiviso, non accanto.
+
+Fuori scope con motivazione scritta: editing di mesh, CSG sottrattivo (le primitive `Doorway`/
+`Room` lo fanno già **con le misure garantite**, e due modi per la stessa cosa sono un vincolo che
+l'utente ha già posto), punti di aggancio tipizzati (la fonte stessa dice di non arrivarci sotto i
+~50 pezzi di kit), quattro viste affiancate (TrenchBroom le tiene spente per difetto).
+
+---
+
+## 2026-08-10 (187) — La consegna 186 non era arrivata all'utente + modifica di UNA copia sola
+
+### 0 — "È rimasto tutto uguale a prima"
+La risposta alla consegna precedente. **Non era un dubbio infondato: per lui era letteralmente
+vero.** Avevo costruito e collaudato solo `build/windows-debug`, come dice CLAUDE.md §1.6. Ma
+quel binario è compilato con AddressSanitizer e **non parte** senza
+`clang_rt.asan_dynamic-x86_64.dll` nel PATH — cosa che l'utente non ha. Il binario che lancia è
+la **Release**, che era ferma a un'ora prima.
+
+Avevo scritto "build-verified" ed era vero della compilazione e falso di ciò che conta: **il
+codice non era nel programma che lui apre.** È la stessa lezione di ADR-023 e di §6-bis su un
+altro asse — una funzione che non arriva nel binario dell'utente non esiste, esattamente come una
+che non si trova nel menu.
+
+**Da ora**: ogni change set costruisce **entrambe** le configurazioni, e la verifica include
+`LastWriteTime` della Release. Annotato anche nella memoria di progetto.
+
+### 1 — Modificare UNA copia sola (ADR-056, parti locali)
+Richiesta: *"uso la composita Tactic Bunker, ne piazzo 4 diverse, ma su una devo fare una modifica
+specifica ... appare sempre come Tactic Bunker ma con magari un segnetto per indicare che è una
+versione modificata"*.
+
+`Esplodi` non copriva questo caso: risolve "cambio un pezzo qui" ma perde il confine e il nome —
+dopo non è più un bunker, sono dodici box sciolti. Le altre due strade erano peggiori: duplicare
+il tipo (libreria di varianti indistinguibili) o modificare il tipo (rovinare gli altri tre).
+
+**`StructureDef::localParts` / `StructurePart::localParts`** (JSON `local_parts`): non vuoto = le
+parti locali **vincono sul tipo**. Il `type` resta scritto, e serve a dire da cosa deriva e a
+poterci tornare. Assente = niente cambia. È il modello degli override d'istanza di Unity: le
+decisioni che valgono per un punto solo vivono nel documento di quel punto — il file della mappa.
+
+- **`Modifica solo QUESTA...`** e **`Modifica il TIPO (tutte le copie)`**, uno accanto all'altro
+  nel pannello, con la portata **nel testo del pulsante**. Sbagliare porta costa tre bunker.
+- Il tab si apre in modo `Instance`: stessa interfaccia, bersaglio diverso. `Applica alla
+  struttura` invece di `Salva`, fascia gialla in cima, `(solo questa)` nel titolo del tab.
+- **Segno**: `[+] Tactic Bunker *` in elenco, `[rif]*` fra le parti.
+- **`Ripristina dall'originale`** e **`Promuovi a tipo di libreria...`**: le due porte di uscita.
+- **Guardia KI #100**: `applyInstanceTab` scrive per indice, e fra apertura e applicazione la
+  struttura può essere sparita. Indice **+** tipo di origine come controprova; se non combaciano
+  si rifiuta con un messaggio invece di modificare quella sbagliata.
+
+### 2 — `Isola e modifica` nell'editor strutture
+Stessa cosa un livello dentro: si entra in una parte-riferimento, si modifica *quella copia*
+(togliendo, aggiungendo, cambiando box e primitive), e con **Fine** si richiude in un oggetto solo.
+
+Differenza da `Esplodi`, tenuta esplicita perché è la confusione naturale: **esplodere demolisce
+il confine, isolare lo tiene e cambia cosa c'è dentro.** Due verbi diversi, accanto, con i due
+effetti scritti.
+
+Implementato con `StructTab::parts()` — un accessore solo per le parti attive. Un comando nuovo
+non può dimenticarsi dell'isolamento, che è il modo esatto in cui una modalità si rompe.
+
+### 3 — Una sola regola di espansione, di nuovo
+Le parti da espandere ora vengono da tre sorgenti (un tipo, le parti locali di un'istanza, quelle
+di un riferimento isolato). `expandParts` è stata estratta da `expandAssembly` e le serve tutte e
+tre. Tre copie sarebbero divergute al primo caso nuovo — che è, letteralmente, la storia di questo
+sottosistema.
+
+**Collaudato** (`--editor-selftest`, 0 falliti; `--validate` 0 errori): quattro copie, se ne
+modifica una, **le altre tre restano identiche**; il tipo di libreria non cambia; `local_parts`
+sopravvive al giro su disco; il ripristino riporta all'originale; l'espansione isolata usa le
+parti locali e non il tipo. **Costruite entrambe le configurazioni.**
+
+---
+
+## 2026-08-08 (186) — Quattro correzioni: griglia ferma, un tasto solo, composite VERE, esplodi/raggruppa
+
+Quattro correzioni al giro precedente, tutte dall'utente. Due erano scelte mie sbagliate.
+
+### 1 — La griglia non deve seguire la vista
+Testuale: *"la griglia deve prolungarsi all'infinito, se si muove seguendo dove sto guardando fa
+solo casino e mi confonde"*. Avevo risolto il problema sbagliato: "infinita" per me significava
+"sempre presente sotto la telecamera", e per farlo la ricostruivo centrata sullo sguardo con
+passo adattivo. Il risultato è un pavimento che scorre e un passo che cambia da solo — cioè il
+contrario di un riferimento fisso. **Una griglia serve a sapere dove si è**: se si muove con te,
+non lo dice più.
+
+Ora è **ancorata al mondo**, costruita una volta sola: passo fisso 2 m, ±1000 m, linea più chiara
+ogni 10 m, assi marcati. 4008 vertici, nessuna ricostruzione per frame.
+
+### 2 — Un solo tasto invece di tre
+`+ Primitiva`, `+ Box`, `+ Composita` erano tre pulsanti in fila, e la fila cresceva a ogni tipo
+nuovo di parte: il modo garantito per far tagliare i comandi quando il pannello si stringe —
+proprio la regola che l'utente aveva già dato. Uno solo, **`+ Aggiungi`**, con la tendina
+Primitiva ▸ / Box libero / Composita ▸.
+
+### 3 — Le composite sono RIFERIMENTI, non copie (ADR-056 revisionato)
+Testuale: *"preferirei le lasciassi normali, mettendo al massimo la limitazione per cui puoi
+aggiungere composite solo se sono state verificate"*.
+
+Ieri avevo appiattito le parti per rispettare il divieto di annidamento di ADR-056, e avevo
+dichiarato la conseguenza nella UI. L'utente l'ha letta e ha scelto il contrario — **con
+ragione**: appiattire risolve l'espansione e crea un problema peggiore a monte, una libreria di
+copie che divergono. Correggere una torre non correggeva i suoi usi. È lo stesso difetto che
+ADR-001 e il comando di rinomina esistono per impedire altrove.
+
+Il rischio del divieto era reale e si paga in quattro modi invece che vietando:
+1. catena anti-ciclo + tetto `kMaxAssemblyDepth = 4` in `expandAssembly`;
+2. **solo composite verificate** si possono riferire (il limite chiesto dall'utente): le altre si
+   vedono comunque in grigio, **col motivo** — non verificata / si annidderebbe in sé stessa /
+   troppi livelli;
+3. gate `--validate`, nuova categoria `Struct`: ref inesistente, ref a un tipo non composito,
+   ref non verificato, ciclo, annidamento eccessivo, più l'istanza in mappa con un `type` sparito.
+   Erano tutti errori **muti** — la parte spariva dall'espansione e basta;
+4. `Esplodi` come via d'uscita quando l'annidamento diventa difficile da diagnosticare.
+
+**Prima di aggiungere `ref`**: le parti avevano DUE serializzatori — lettore nel registry,
+scrittore nell'editor. È la configurazione esatta che ha già perso il campo `type` con perdita
+dati permanente (changelog 180). Sono diventati uno (`mini::structjson::partFromJson`/`partToJson`,
+`boxFromJson`/`boxToJson`) **prima** del campo nuovo, non dopo. `ref` sarebbe stato il quarto.
+
+### 4 — Esplodi / Raggruppa, nei due editor
+Testuale: *"una funzione per le composite che ti permette di passare da un oggetto unico, alla
+struttura come insieme di parti, funzione utile anche nel map editor normale in caso di bisogno di
+modifiche ad hoc per delle situazioni specifiche"*.
+
+È il complemento necessario del riferimento. Il riferimento è giusto finché la struttura va bene
+com'è; per cambiarne un pezzo **in quel punto e solo lì** — la barricata storta perché c'è una
+roccia — l'alternativa era duplicare l'intero tipo per mezzo metro di differenza. Stesso gesto di
+*Explode* in CAD e *Unpack Prefab* in Unity.
+
+- **Editor strutture**: `Esplodi` su una parte `[rif]` la sostituisce con le parti vere del
+  sottotipo, alla stessa posa.
+- **Map Editor**: `Esplodi in parti` su un'istanza composita. Le primitive **restano primitive**
+  (conservano la ricetta e i vincoli di ADR-053 — appiattirle a box butterebbe via la garanzia
+  sulle alzate); i riferimenti restano composite, un livello sotto.
+- **Il ritorno**: `Raggruppa in una composita...` su una selezione multipla crea il TIPO (origine
+  al baricentro) e sostituisce gli elementi con una sola istanza. Senza, esplodere sarebbe una
+  porta a senso unico.
+
+**Collaudato** (`--editor-selftest`, 47 controlli, 0 falliti): esplodere non sposta la geometria di
+un millimetro, in entrambi gli editor; il ciclo termina; `ref` sopravvive al giro su disco;
+Ctrl+Z rimette l'istanza.
+
+### Corollario: un'istanza composita non è una primitiva
+Il pannello del Map Editor le mostrava alzate, pedate e larghezze **di una scala** — su una torre
+di dodici parti. Leve che si muovono e geometria che non cambia. Ora ha il suo pannello: nome,
+posa, "Apri il tipo nell'editor strutture", "Esplodi in parti".
+
+---
+
+## 2026-08-08 (185) — Sei richieste: griglia infinita, composite come parti, e una regressione mia
+
+### 5 — I valori mostravano 0, o un numero sbagliato che diventava 0 modificandolo
+**Regressione mia di ieri.** Per dire quanto vale uno 0 avevo scritto il valore DENTRO il campo,
+col formato `"normativo: 2.80"`. Ma ImGui usa lo **stesso formato** per il campo di modifica del
+doppio clic, e `"normativo: 2.80"` non è un numero: rileggendolo tornava zero o un valore sballato.
+
+Il formato è tornato numerico puro (`%.2f`) e il valore effettivo si dice **su una riga a parte**
+(`0 = normativo, cioe' 2.80 m`), dove non può interferire con la lettura. Lezione: un formato di
+visualizzazione che è anche formato di INPUT non può contenere prosa.
+
+### 1 — Griglia infinita
+Era costruita una volta a 120 m con passo 2: su una mappa 300 × 200 finisce. Ora **segue la vista**
+(ricostruita centrata su dove si guarda, agganciata al passo così le linee non strisciano) e
+**adatta il passo** a valori tondi (1/2/5 × 10ⁿ) — allontanandosi, un passo fisso diventerebbe una
+massa grigia illeggibile. Il numero di linee resta limitato: una griglia davvero infinita non si
+disegna, la si simula. Gli assi del mondo restano marcati, o una griglia che segue la vista non
+direbbe più dove si è. Si ricostruisce solo quando cella o passo cambiano.
+> **Corretto il giorno stesso (186)**: seguire la vista era il problema, non la soluzione.
+
+### 2 — Composite dentro un assemblaggio: `+ Composita`
+ADR-056 **vieta l'annidamento** (lezione delle famiglie Revit). Il divieto resta e la richiesta è
+soddisfatta lo stesso: il comando **copia le parti** dell'altro tipo, appiattite, mantenendo le
+posizioni relative. Si riusa l'authoring senza creare un riferimento annidabile all'infinito, e la
+verifica continua a poter indicare la singola parte muta.
+**Detto nella UI**: sono copie, non istanze — modificando l'originale, queste non cambiano.
+> **Ribaltato il giorno stesso (186)**: l'utente ha letto la conseguenza e ha scelto i
+> riferimenti veri. ADR-056 è stato revisionato.
+
+### 3 — Duplica
+Sulla parte selezionata, spostata di un metro: sovrapposta all'originale sembrerebbe non aver
+funzionato.
+
+### 4 — Via le figure di scala dall'editor strutture
+*"Sono solo un ingombro"*. Avevano senso quando non c'era altro; da allora sono arrivate barra di
+scala, coordinate ai bordi e righello, che danno le misure in **numeri** invece che per confronto
+visivo. Restano nel Map Editor, dove si attivano su richiesta.
+
+### 6 — Via le scorciatoie 1/2/3 del gizmo
+Rimosse, non rese opzionali: un tasto che intercetta 1/2/3 mentre si lavora è un ostacolo, e un
+interruttore per spegnerlo sarebbe un'altra cosa da scoprire. I pulsanti restano in cima al viewport.
+
 ## 2026-08-08 (184) — Editor strutture: comandi tagliati e pannelli non ridimensionabili
 
 Tre segnalazioni, una sola causa di fondo: **avevo scritto gli strumenti condivisi e poi non li

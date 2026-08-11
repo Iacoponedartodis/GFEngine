@@ -1,5 +1,12 @@
 # Riga di comando e diagnostica
 
+## Sto guardando la versione giusta?
+
+In fondo alla barra dei menu c'e' scritto **`build <data> <ora>`**: e' quando questo eseguibile e'
+stato compilato. Se dopo una modifica "non e' cambiato niente", **guarda prima quel timbro**: se
+non corrisponde all'ultima compilazione, stai lanciando un eseguibile vecchio oppure l'editor non
+e' stato riavviato. Sono i due casi che da fuori sembrano identici a "il codice non funziona".
+
 ## GFEditor
 - `--module <nome>` apre subito un modulo: `map`, `entity`, `weapon`, `vehicle`, `balance`,
   `mission`, `class`, `validate`, `viewport`, `home`.
@@ -18,6 +25,28 @@
 - `--map "Nome Mappa"` sceglie la mappa. **Le virgolette servono** se il nome ha spazi.
 - `--sim-ticks N` simula N tick e esce: e' deterministico, quindi e' la forma giusta per
   CONFRONTARE due versioni.
+- `--at x,z` fa nascere il giocatore in quel punto invece che allo spawn della mappa. Il valore e'
+  in **metri**, con la virgola a separare (non lo spazio): `--at 12.5,-8.25`. Se il formato e'
+  sbagliato o la mappa non esiste, il gioco parte lo stesso e **te lo dice** invece di far nascere
+  il giocatore altrove in silenzio.
+- `--at x,y,z` aggiunge la **quota**: si nasce sulla superficie piu' alta *al di sotto* di quella
+  quota. Serve nelle mappe a piu' livelli — con `--at 0,12,0` nasci sulla passerella a 3 m,
+  con `--at 0,1.5,0` nello stesso punto in pianta ma **a terra**. Senza la quota (forma a due
+  valori) vale la regola di prima: la superficie piu' alta a quelle coordinate, qualunque sia.
+- `--navcheck [--map "Nome"]` costruisce il **navmesh vero** (stesso codice del gioco) senza
+  aprire una finestra e stampa, per mappa: poligoni, m² navigabili, componenti, e **ogni isola**
+  con area, posizione e quanta della sua superficie sta **sotto un ostacolo** — che e' la
+  differenza fra "terreno chiuso sotto un cubo" (normale) e "zona scollegata" (da correggere).
+  Piu' le posizioni tattiche e i command post irraggiungibili. Esce con codice diverso da zero se
+  ci sono isole vere o post incatturabili, quindi vale anche come controllo automatico.
+- `--walk` entra **direttamente nella mappa, da solo**: niente menu, niente manichini, niente
+  simulazione. Serve a provare com'e' percorrere uno spazio. Tecnicamente e' la **sandbox con zero
+  manichini**, non una modalita' a parte: stessa geometria, stesse strutture, stessi veicoli, e il
+  pannello della sandbox resta disponibile se a meta' prova ti serve un bersaglio.
+  **Prova da qui** del Map Editor lancia esattamente `--walk --map "..." --at x,z`.
+- `--sandbox` e' l'altra cosa: la sandbox completa, con i manichini di **ogni** unita' registrata
+  (almeno uno per definizione, cosi' ogni unita' autorata e' subito provabile) e gli strumenti di
+  simulazione.
 
 ## Quando qualcosa va storto
 In `_telemetry_data/` trovi:

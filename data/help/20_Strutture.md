@@ -17,8 +17,8 @@ Il pulsante **+ Struttura** apre un menu con tre parti:
 
 ## Creare un TIPO
 **+ Struttura → "Editor strutture..."** apre un tab accanto a "Mappa",
-con una viewport tutta sua che mostra la struttura DA SOLA, con due sagome di riferimento
-accanto (un clone da 2,0 m e un "gigante" da 2,40 x 1,20).
+con una viewport tutta sua che mostra la struttura DA SOLA. Le misure si leggono dalla barra di
+scala, dalle coordinate ai bordi e dal righello — in numeri, non per confronto visivo.
 
 In alto: il **nome del tipo** (come si chiamera' nella Libreria), la **primitiva** di base,
 **Salva** e **Verifica**. Appena il tipo diventa un assemblaggio, il menu della primitiva di
@@ -36,22 +36,27 @@ allentare: viene dai filtri del navmesh, e sotto quella soglia la struttura non 
 superficie calpestabile. Un minimo autorato piu' basso viene alzato e l'editor te lo dice.
 
 ## ASSEMBLAGGI: strutture di piu' parti
-In cima al pannello di sinistra c'e' **"Parti dell'assemblaggio"** con due pulsanti:
+In cima al pannello di sinistra c'e' **"Parti dell'assemblaggio"**. Tutto cio' che si puo'
+aggiungere sta sotto **un solo tasto: "+ Aggiungi"**, che apre una tendina con tre voci.
 
-### + Primitiva
-Aggiunge una scala, un muro, una piattaforma... Le misure restano garantite dalla primitiva.
+### + Aggiungi → Primitiva
+Una scala, un muro, una piattaforma... Le misure restano garantite dalla primitiva.
 
-### + Box
-Aggiunge un box libero. Serve per cio' che nessuna primitiva esprime: contrafforti, parapetti
-storti, feritoie, insegne. Ricordati di dargli il TIPO giusto (`floor`, `wall`, `platform`,
-`cover`, `decoration`): lo leggono il navmesh e la derivazione dei metadata, e un pavimento
-dichiarato "muro" non genera superficie.
+### + Aggiungi → Box libero
+Serve per cio' che nessuna primitiva esprime: contrafforti, parapetti storti, feritoie, insegne.
+Ricordati di dargli il TIPO giusto (`floor`, `wall`, `platform`, `cover`, `decoration`): lo
+leggono il navmesh e la derivazione dei metadata, e un pavimento dichiarato "muro" non genera
+superficie.
+
+### + Aggiungi → Composita
+Un'altra struttura intera. Vedi "Riusare una composita dentro un'altra", piu' sotto.
 
 Appena aggiungi una parte, il tipo diventa un ASSEMBLAGGIO e le misure si autorano parte per
 parte. Le posizioni delle parti sono LOCALI: (0,0,0) e' l'origine dell'assemblaggio, e tutto
 ruota insieme quando lo piazzi in mappa.
 
-> Un assemblaggio non puo' contenere altri assemblaggi. Le parti sono primitive o box, punto.
+Nell'elenco delle parti ognuna ha la sua sigla: `[prim]` primitiva, `[box]` box libero,
+`[rif]` riferimento a un'altra composita.
 
 ## Verificare — la parte che conta
 **Verifica** costruisce il navmesh VERO sulla struttura isolata, posata su un piano neutro.
@@ -81,9 +86,9 @@ Nessun controllo sui dati poteva vederlo — le tre parti erano legali. Solo il 
 - **accessi mancanti**: una piattaforma senza lati d'accesso dichiarati e' un'isola.
 
 ## Comporre le parti nella viewport
-Selezionando una parte nell'elenco compare il GIZMO nella viewport della struttura,
-esattamente come in mappa:
-- **1** Sposta · **2** Ruota · **3** Scala
+Selezionando una parte nell'elenco compare il GIZMO nella viewport della struttura, esattamente
+come in mappa. I pulsanti **Sposta / Ruota / Scala** sono in cima al viewport (le scorciatoie
+1/2/3 sono state tolte: intercettavano i tasti mentre si lavora).
 
 Su un **box** la scala cambia le sue tre dimensioni. Su una **primitiva** agisce sulle sue
 MISURE (larghezza, dislivello, lunghezza...), non su un fattore: scalare una scala del 30%
@@ -150,3 +155,44 @@ finche' l'origine non cade al centro. **Non cambia la forma**: cambia dove sta i
 
 Le parti nuove nascono **dove stai guardando** nel viewport, quindi se costruisci attorno
 all'origine resta centrata da sola.
+
+## Riusare una composita dentro un'altra
+**+ Aggiungi → Composita** mette dentro questa struttura un'altra struttura intera, come
+**RIFERIMENTO**: correggendo la torre originale, cambia anche qui e in ogni altro posto dove
+l'hai usata. Non e' una copia — e' la stessa cosa, vista da piu' punti.
+
+**Si possono riferire solo composite gia' VERIFICATE.** Le altre restano visibili nella tendina,
+in grigio, col motivo scritto quando ci passi sopra: non verificata, oppure contiene questa
+struttura (si annidderebbe in se stessa), oppure troppi livelli. Il limite serve perche' un
+riferimento porta dentro geometria che non puoi piu' controllare da qui: almeno deve essere
+geometria di cui si sa gia' che il navmesh la attraversa.
+
+Selezionando una parte `[rif]` il pannello mostra a quale struttura rimanda, quante parti ha, e
+**Apri la struttura originale** per andarci a lavorare (si apre nel suo tab).
+
+### Isola e modifica: cambiare SOLO questa copia
+Seleziona la parte `[rif]` e premi **Isola e modifica**: entri dentro quella copia, la vedi da
+sola, e la modifichi pezzo per pezzo — togliendo, aggiungendo o cambiando box e primitive. In
+cima compare una fascia gialla con scritto dove sei. Quando hai finito, **Fine — richiudi in un
+oggetto solo**: torna a essere un oggetto unico, e nell'elenco porta un asterisco (`[rif]*`) che
+dice "questa copia e' diversa dall'originale".
+
+La struttura in libreria **non cambia**, e nemmeno le sue altre copie. Se ci ripensi,
+**Annulla le modifiche** la fa tornare un riferimento puro.
+
+### Esplodi: sciogliere il riferimento
+**Esplodi** e' un'altra cosa e conviene non confonderli:
+
+- **Isola** tiene il confine e il nome, e cambia cosa c'e' dentro *questa copia*.
+- **Esplodi** scioglie il riferimento: le parti si sparpagliano dentro questa struttura, alla
+  stessa identica posizione, e da quel momento non sono piu' "una copia di X" — sono parti come
+  tutte le altre.
+
+Il primo e' una variante, il secondo una demolizione. **Ctrl+Z** torna indietro da entrambi.
+
+**Duplica** copia la parte selezionata spostandola di un metro.
+
+## La griglia
+Non finisce mai e **non si muove**: e' ancorata al mondo, con il passo fisso di 2 m e una linea
+piu' chiara ogni cinque (10 m). Gli assi del mondo (rosso = X, blu = Z) restano marcati: sono
+l'origine della mappa, ed e' li' che nasce l'origine di quello che costruisci.

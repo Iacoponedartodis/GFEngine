@@ -51,11 +51,14 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     // fuori dagli ostacoli. Prima nasceva a Y=0.86 coi piedi a 0 mentre il
     // "Pavimento" ha il top a y>0 -> incastrato -> lo step-up lo lanciava in
     // aria ("respawn sospeso sopra un muro"). Y-occhi = suolo + PLAYER_HALF_Y.
+    // `spawnCeiling` (0 = nessuno) arriva da `--at x,y,z`: nascere sulla superficie
+    // più alta SOTTO la telecamera dell'editor, non sulla più alta in assoluto.
     m_spawnPos = map
         ? mapquery::groundedSpawn(map, p1x, p1z,
                                   config::PLAYER_HALF_X, config::PLAYER_HALF_Y,
                                   config::PLAYER_HALF_Z, config::PLAYER_HALF_Y,
-                                  0.0f, (p1z > 0.0f ? -1.0f : 1.0f))
+                                  0.0f, (p1z > 0.0f ? -1.0f : 1.0f),
+                                  spawnCeiling > 0.0f ? spawnCeiling : 1e9f)
         : glm::vec3{p1x, SPAWN_Y, p1z};
 
     // ── Giocatore ─────────────────────────────────────────────────────────
@@ -146,7 +149,7 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
     const auto& spawnPts1 = map ? map->spawnPointsTeam1 : noPts;
     const auto& spawnPts2 = map ? map->spawnPointsTeam2 : noPts;
 
-    const int nEnemies = enemyIds.empty() ? 0
+    const int nEnemies = (!spawnDummies || enemyIds.empty()) ? 0
                        : std::max(enemyCount, (int)enemyIds.size());
     spawnDistributed(nEnemies, spawnPts2, p2x, p2z, (p1z > p2z ? 1.0f : -1.0f), enemyIds, 2);
 
@@ -165,9 +168,24 @@ void SandboxMode::start(World& world, Mesh* mesh, Texture* tex,
                      "nessun manichino alleato.\n";
 
     const float dirZ = (p2z > p1z) ? 1.0f : -1.0f; // verso il campo
-    const int nAllies = allyIds.empty() ? 0
+    const int nAllies = (!spawnDummies || allyIds.empty()) ? 0
                       : std::max(allyCount, (int)allyIds.size());
     spawnDistributed(nAllies, spawnPts1, p1x, p1z, dirZ, allyIds, 1);
+
+    // Quanti ne sono stati messi davvero. Senza questa riga "zero manichini" e
+    // "manichini spawnati altrove" sono indistinguibili da fuori — ed è la
+    // differenza che `--walk` deve garantire.
+    std::cout << "[Sandbox] Manichini: " << nEnemies << " nemici, "
+              << nAllies << " alleati"
+              << (spawnDummies ? "" : "  (disattivati: --walk)") << "\n";
+    // DOVE è nato il giocatore, e su quale piano. Senza questa riga "sono nato sulla
+    // passerella" e "sono nato sotto" sono indistinguibili da fuori — ed è esattamente
+    // la differenza che `--at x,y,z` deve garantire.
+    std::cout << "[Sandbox] Giocatore a " << m_spawnPos.x << ", " << m_spawnPos.y
+              << ", " << m_spawnPos.z;
+    if (spawnCeiling > 0.0f) std::cout << "  (piano piu' alto sotto quota "
+                                       << spawnCeiling << ")";
+    std::cout << "\n";
 }
 
 EntityId SandboxMode::spawnDummy(World& world, const DummyInfo& info)

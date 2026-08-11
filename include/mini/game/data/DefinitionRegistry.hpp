@@ -68,6 +68,22 @@ public:
     [[nodiscard]] const auto& missions()       const { return m_missions; }
     [[nodiscard]] const auto& unknownKeys()    const { return m_unknownKeys; }
 
+    // ── Override di SVILUPPO dello spawn (`--at`, doc 53 L4) ─────────────
+    // L'unica scrittura ammessa su una MapDef caricata, e sta qui invece che nei
+    // game mode di proposito: `spawnTeam1` lo leggono in due punti diversi, e un
+    // override applicato in uno solo darebbe "Prova da qui" funzionante in una
+    // modalità e muto nell'altra. Non tocca il file: vive per la durata del
+    // processo. Ritorna false se la mappa non esiste, così il chiamante lo dice
+    // invece di far nascere il giocatore altrove senza spiegazione.
+    bool overrideSpawn(const std::string& mapId, float x, float z)
+    {
+        auto it = m_maps.find(mapId);
+        if (it == m_maps.end()) return false;
+        it->second.spawnTeam1[0] = x;
+        it->second.spawnTeam1[2] = z;
+        return true;
+    }
+
     // Filtra armi per fazione (Neutral = tutte)
     [[nodiscard]] std::vector<const WeaponDef*> weaponsForFaction(Faction f) const
     {

@@ -114,6 +114,31 @@ primitive esprime, sarà una richiesta esplicita e un ADR a sé.
 4. **Una sola espansione.** Il tab struttura usa `mapstructures::expand`, la stessa del
    registry, del Map Editor e del gate. Un'anteprima con codice proprio divergerebbe.
 5. **Il rename passa dal comando di rename** (ADR-010), non da "salva con altro nome".
+6. **Un riferimento non ha misure proprie** (ADR-056 rivisto 2026-08-08). Una parte con `ref`
+   porta solo una POSA: le misure sono dell'altra struttura, e si cambiano nel suo tab. Il
+   pannello non mostra i parametri della primitiva per una parte-riferimento, e il gizmo non la
+   scala — leve che si muovono senza che la geometria cambi sono la bugia peggiore che uno
+   strumento possa dire.
+7. **Solo composite VERIFICATE si possono riferire.** È il limite posto dall'utente al posto del
+   divieto di annidamento. Le altre restano visibili nella tendina, in grigio, **col motivo**
+   (ADR-023: una voce che sparisce insegna che la capacità non esiste).
+8. **Esplodere non sposta la geometria.** Sciogliere un riferimento (o un'istanza in mappa) deve
+   lasciare ogni box esattamente dov'era: collaudato in `--editor-selftest` in entrambi gli
+   editor. Uno strumento che rompe la mappa mentre la aiuta se ne accorgerebbe solo guardando.
+9. **Un solo serializzatore per le parti.** `mini::structjson::partFromJson` / `partToJson`,
+   usati dal registry E dall'editor. Le parti ne avevano due — ed è la configurazione che aveva
+   già perso il campo `type` con perdita dati permanente.
+10. **Le parti locali vincono sul tipo** (2026-08-10). Ovunque si decida cosa espandere —
+    `expandInstance`, `expandParts`, `explodeStructure`, l'anteprima, il gate — `localParts` si
+    guarda **prima** del tipo. Guardare il tipo per primo annullerebbe in silenzio la modifica
+    proprio dove l'utente l'ha chiesta.
+11. **Un accessore solo per le parti attive** (`StructTab::parts()`). In isolamento i comandi
+    devono agire sulle parti della copia, non su quelle della struttura: con l'accesso diretto a
+    `def.parts` il primo comando aggiunto dopo l'isolamento avrebbe scritto nel posto sbagliato.
+12. **Scrivere su un'istanza richiede la controprova** (KI #100). `applyInstanceTab` ha in mano
+    un indice, che è identità posizionale: si verifica indice **e** tipo di origine, e se non
+    combaciano si rifiuta con un messaggio. Modificare la struttura sbagliata è peggio che non
+    modificare niente.
 
 ## Osservabilità (ADR-050, §5-bis — nasce con il sistema)
 
@@ -127,6 +152,15 @@ primitive esprime, sarà una richiesta esplicita e un ADR a sé.
 - **Gate di authoring**: un tipo che non passa la verifica si può salvare, ma resta **marcato
   non verificato** nella libreria — e il menu `+ Struttura` lo mostra come tale. Un dato
   sbagliato in silenzio è il difetto che il gate esiste per impedire.
+- **Gate `--validate` sui riferimenti** (dal 2026-08-08, categoria `Struct`). L'annidamento ha
+  introdotto una classe di errori completamente muta: un `ref` che non risolve fa **saltare
+  quella parte** e basta — nessun crash, nessun messaggio, una torre che arriva senza il suo
+  secondo piano. Saltare in silenzio resta giusto a runtime (meglio una parte in meno che un
+  blocco); dirlo è il mestiere del gate. Coperti: riferimento inesistente (Error), a un tipo
+  non composito (Error), a un tipo non verificato (Warn), ciclo (Error), annidamento oltre il
+  tetto (Warn), e in mappa l'istanza con un `type` che non esiste più (Error).
+  **La rete è stata provocata prima di fidarsene**: un tipo di prova con un `ref` rotto e un
+  ciclo, e il gate ha prodotto i due Error attesi.
 
 ## Dependencies
 
@@ -147,8 +181,11 @@ primitive esprime, sarà una richiesta esplicita e un ADR a sé.
 - **S4 ✅** — Verifica integrata (navmesh isolato) con sintomo, funnel e box muto.
 - **S5 ✅** — `+ Struttura` si popola dai tipi, con i non verificati in giallo.
 - **S6 ✅** — ProjectDocs + verifica (changelog 163).
-- **Gate `--validate` sui tipi non verificati**: NON fatto. Oggi la marcatura vive nel menu
-  dell'editor; portarla anche nel gate serve quando i tipi saranno davvero in uso su una mappa.
+- **Gate `--validate` sui tipi non verificati**: fatto **in parte** il 2026-08-08. Il gate segnala
+  un tipo non verificato **quando è riferito da un'altra composita** (categoria `Struct`), perché
+  lì l'errore è muto e il danno si propaga. Un tipo non verificato che sta per conto suo resta
+  solo marcato nel menu dell'editor: è visibile a chi lo sceglie, e bloccare il gate su di esso
+  fermerebbe la partita per una struttura mai messa in mappa.
 
 ## Cosa è emerso implementando (da non ri-scoprire)
 

@@ -65,6 +65,18 @@ Derivati dai problemi reali già visti, non teorici:
   → Warning (è un sistema della sola Repubblica); più di una torre per fazione → Warning; una sola
   fazione con torre di comunicazione → Warning (asimmetria non dichiarata).
   Sono tutti errori **silenziosi a runtime**: la struttura nasce, si vede, e non fa il suo mestiere.
+- **Strutture composite** (aggiunto 2026-08-08, categoria `Struct`, ADR-056 rivisto): da quando
+  una composita può contenerne un'altra per **riferimento**, un `ref` che non risolve fa saltare
+  quella parte e basta — nessun crash, nessun messaggio, una torre che arriva senza il suo secondo
+  piano. Saltare in silenzio resta la scelta giusta a runtime (meglio una parte in meno che un
+  blocco); **dirlo è il mestiere del gate**. Coperti: `ref` a un tipo inesistente → **Errore**;
+  `ref` a un tipo che non è un assemblaggio → **Errore** (non produce nulla); `ref` a un tipo non
+  verificato → Warning; struttura che contiene sé stessa, anche indirettamente → **Errore**;
+  annidamento oltre `kMaxAssemblyDepth` → Warning. In mappa: istanza con un `type` che non esiste
+  più → **Errore** (ricade sulla primitiva nuda — il difetto già visto dall'utente, *"appare solo
+  una scala"*).
+  **Provocato prima di fidarsene**: un tipo di prova con un `ref` rotto e un ciclo produce i due
+  Errori attesi (verificato 2026-08-08).
 - **Arma:** i campi consumati dal runtime sono presenti e sensati (rateo > 0, gittata > 0).
 - **Unità:** ha hitbox profile valido, mesh risolvibile, profilo AI valido.
 - **Abilità:** i `param` usati dal tipo di abilità sono presenti.

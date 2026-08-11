@@ -619,6 +619,7 @@ void ConquestMode::applySettings(const MatchSettings& s)
     team2AiCount        = s.team2AiCount;
     respawnDelay        = s.respawnDelay;
     playerHp            = s.playerHp;
+    m_spawnCeiling      = s.spawnCeiling;   // `--at x,y,z`: nascere sul piano giusto
 }
 
 void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
@@ -649,7 +650,8 @@ void ConquestMode::start(World& world, Mesh* mesh, Texture* tex,
         ? mapquery::groundedSpawn(m_map, playerX, playerZ,
                                   config::PLAYER_HALF_X, config::PLAYER_HALF_Y,
                                   config::PLAYER_HALF_Z, config::PLAYER_HALF_Y,
-                                  0.0f, (playerZ > 0.0f ? -1.0f : 1.0f))
+                                  0.0f, (playerZ > 0.0f ? -1.0f : 1.0f),
+                                  m_spawnCeiling > 0.0f ? m_spawnCeiling : 1e9f)
         : glm::vec3{playerX, SPAWN_Y, playerZ};
 
     m_team1Tickets = initialTeam1Tickets;

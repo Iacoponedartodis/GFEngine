@@ -4,6 +4,7 @@
 // incidente hitbox 2026-07-09, ADR-007 id di fallback hardcoded).
 #include "mini/core/GameConfig.hpp"   // STEP_HEIGHT: lo scalino che il navmesh sa salire
 #include "mini/game/MapMetrics.hpp"   // metriche normative (doc 47 §4): sorgente unica
+#include "mini/game/MapStructures.hpp"  // riferimenti fra composite (ADR-056 rivisto)
 #include "mini/game/data/ContentValidation.hpp"
 #include "mini/game/data/DefinitionRegistry.hpp"
 #include "mini/game/ClassResolve.hpp"   // ADR-022: arma effettiva = quella della classe
@@ -456,10 +457,86 @@ Diagnostics validateContent(const DefinitionRegistry& reg, const std::string& da
         return false;
     };
 
+    // ── Strutture composite: i riferimenti fra tipi (ADR-056 rivisto) ─────
+    // Da quando una composita può contenerne un'altra per RIFERIMENTO, esiste una
+    // nuova classe di errori completamente muta: il riferimento non risolve e
+    // `expandAssembly` semplicemente **salta quella parte**. Nessun crash, nessun
+    // messaggio — una torre che in mappa arriva senza il suo secondo piano.
+    // Saltare in silenzio è la scelta giusta a runtime (meglio una parte in meno che
+    // un blocco); dirlo è il mestiere del gate.
+    {
+        const auto resolve = [&reg](const std::string& tid) { return reg.getStructureType(tid); };
+        for (const auto& [tid, t] : reg.structureTypes())
+        {
+            const std::string f = "structures/" + tid + ".json";
+            for (const auto& p : t.parts)
+            {
+                if (!p.isRef()) continue;
+                // Isolata e modificata: porta le sue parti, il tipo non la governa
+                // più. Non c'è niente da risolvere, quindi niente da segnalare.
+                if (!p.localParts.empty()) continue;
+                const StructureTypeDef* sub = reg.getStructureType(p.refType);
+                if (!sub)
+                {
+                    add(d, L::Error, "Struct", f,
+                        "la parte '" + (p.label.empty() ? p.refType : p.label)
+                        + "' rimanda a '" + p.refType + "', che non esiste "
+                        "→ sparisce dall'espansione, in silenzio",
+                        "Ricrea data/structures/" + p.refType + ".json, oppure togli "
+                        "la parte dall'editor strutture.");
+                    continue;
+                }
+                if (sub->parts.empty())
+                    add(d, L::Error, "Struct", f,
+                        "la parte rimanda a '" + p.refType + "', che NON e' un "
+                        "assemblaggio → non produce nulla",
+                        "Un riferimento vale solo verso una struttura composita. Usa "
+                        "una primitiva se ti serve un tipo semplice.");
+                else if (!sub->verified)
+                    add(d, L::Warn, "Struct", f,
+                        "la parte rimanda a '" + p.refType + "', che non ha superato "
+                        "la verifica navmesh",
+                        "Apri '" + p.refType + "' nell'editor strutture e premi "
+                        "\"Verifica\": una parte impercorribile lo resta anche qui.");
+            }
+            if (mapstructures::assemblyUses(t, tid, resolve))
+                add(d, L::Error, "Struct", f,
+                    "la struttura contiene se stessa (anche indirettamente) "
+                    "→ l'espansione si ferma a meta', sempre",
+                    "Togli il riferimento circolare: una composita non puo' essere "
+                    "una propria parte.");
+            else if (mapstructures::assemblyDepth(t, resolve)
+                     >= mapstructures::kMaxAssemblyDepth)
+                add(d, L::Warn, "Struct", f,
+                    "annidamento a " + std::to_string(mapstructures::assemblyDepth(t, resolve))
+                    + " livelli: oltre " + std::to_string(mapstructures::kMaxAssemblyDepth)
+                    + " le parti piu' interne vengono saltate",
+                    "Esplodi uno dei livelli intermedi nell'editor strutture.");
+        }
+    }
+
     // ── Mappe ─────────────────────────────────────────────────────────────
     for (const auto& [id, m] : reg.maps())
     {
         const std::string f = "maps/" + id + ".json";
+
+        // Un'istanza che dichiara un `type` inesistente ricade sulla primitiva nuda:
+        // in mappa compare una scala al posto di una torre. È il difetto che l'utente
+        // ha già visto ("appare solo una scala"), stavolta detto invece che scoperto.
+        for (const auto& st : m.structures)
+        {
+            // Un'istanza MODIFICATA porta la sua geometria: il tipo può anche essere
+            // sparito, lei si disegna lo stesso. Segnalarla sarebbe un falso allarme
+            // — e i falsi allarmi sono il modo in cui un gate smette di essere letto.
+            if (st.type.empty() || !st.localParts.empty()) continue;
+            if (reg.getStructureType(st.type) == nullptr)
+                add(d, L::Error, "Map", f,
+                    "la struttura '" + (st.label.empty() ? st.type : st.label)
+                    + "' usa il tipo '" + st.type + "', che non esiste "
+                    "→ viene disegnata come la primitiva nuda",
+                    "Ricrea data/structures/" + st.type + ".json, oppure riassegna "
+                    "la struttura dal Map Editor.");
+        }
         if (m.geometry.empty())
             add(d, L::Error, "Map", f, "geometry vuota → nessun pavimento",
                 "Aggiungi almeno un box 'floor'. Senza geometria non esiste navmesh "
@@ -757,6 +834,8 @@ const char* tacticalDefectKindName(TacticalDefect::Kind k)
         case TacticalDefect::Kind::EmptySector:   return "Settori senza posizioni";
         case TacticalDefect::Kind::UnmarkedCover: return "Ostacoli che tagliano il tiro ma non sono coperture";
         case TacticalDefect::Kind::UnreachablePoint: return "Punti che il gioco chiede di raggiungere ma la navigazione no";
+        case TacticalDefect::Kind::TooSmallElevated: return "Ripiani troppo piccoli: spariscono dal navmesh";
+        case TacticalDefect::Kind::NarrowGap:        return "Fessure che il navmesh non attraversa";
         default:                                   return "Altro";
     }
 }
@@ -1128,6 +1207,87 @@ std::vector<TacticalDefect> analyzeTacticalHealth(const MapDef& map)
             out.push_back({TacticalDefect::Target::Geometry,
                            TacticalDefect::Kind::UnreachablePoint, (int)g, 1, buf});
             ++reported;
+        }
+    }
+
+    // ── DUE MODI DI PERDERE UNA SUPERFICIE IN SILENZIO (doc 53 L5) ────────
+    // Entrambi producono geometria perfetta nei dati e inesistente per l'AI, e
+    // nessuno dei due si vede guardando la mappa. Le soglie vengono da `MapMetrics`,
+    // che le ricava dai filtri di Recast: nessun numero scelto a occhio, perché una
+    // soglia inventata qui produrrebbe un elenco che si smette di leggere.
+    {
+        // Superfici calpestabili SOPRAELEVATE (a terra i filtri non mordono allo
+        // stesso modo: non c'è strapiombo attorno).
+        struct Top { int idx; float x, z, sx, sz, top; };
+        std::vector<Top> tops;
+        for (std::size_t g = 0; g < map.geometry.size(); ++g)
+        {
+            const auto& b = map.geometry[g];
+            if (!b.collider || !boxShouldBeReachable(b.type)) continue;
+            const float top = b.y + b.sy * 0.5f;
+            if (top <= config::STEP_HEIGHT + 0.01f) continue;   // è il suolo
+            // È un RIPIANO o un GRADINO? Sotto la larghezza dell'unità di
+            // riferimento (1,20 m) non è un posto dove stare: è una pedata, un
+            // parapetto, un cordolo. La prima versione di questo controllo non lo
+            // distingueva e produceva **412 segnalazioni**, tutte pedate di scala da
+            // 2,01 × 0,30 — cioè esattamente l'elenco che si smette di leggere, il
+            // difetto che questo controllo doveva evitare. Le scale hanno già il
+            // loro controllo (`UnreachablePoint`, che ragiona sull'alzata).
+            if (b.sx < mapmetrics::REF_UNIT_WIDTH || b.sz < mapmetrics::REF_UNIT_WIDTH)
+                continue;
+            tops.push_back({(int)g, b.x, b.z, b.sx, b.sz, top});
+        }
+
+        // 1) TROPPO PICCOLO. Sotto `ELEVATED_MIN_SPAN` su ENTRAMBI i lati non resta
+        // nulla dopo erosione e area minima: è un problema. Sotto su UN lato solo è
+        // una striscia — può essere una passerella voluta, quindi avviso.
+        const float span = mapmetrics::ELEVATED_MIN_SPAN;
+        for (const auto& t : tops)
+        {
+            const bool nx = t.sx < span, nz = t.sz < span;
+            if (!nx && !nz) continue;
+            const int sev = (nx && nz) ? 1 : 0;
+            std::snprintf(buf, sizeof(buf),
+                          "[geometria %d] ripiano a %.2f m, %.2f x %.2f: sotto il minimo di "
+                          "%.2f m %s. Il navmesh toglie una cella di strapiombo per lato piu' "
+                          "%.2f di erosione, poi scarta le regioni sotto 2,56 m2 → %s. "
+                          "Allargalo ad almeno %.2f m.",
+                          t.idx + 1, t.top, t.sx, t.sz, span,
+                          (nx && nz) ? "su ENTRAMBI i lati" : "su un lato",
+                          mapmetrics::AGENT_RADIUS,
+                          (nx && nz) ? "non ci cammina nessuno"
+                                     : "resta una striscia sottile o niente",
+                          span);
+            out.push_back({TacticalDefect::Target::Geometry,
+                           TacticalDefect::Kind::TooSmallElevated, t.idx, sev, buf});
+        }
+
+        // 2) FESSURA. Due ripiani alla STESSA quota, affiancati, separati da meno del
+        // diametro dell'agente: l'erosione mangia i due bordi e il passaggio non si
+        // forma. Sotto 1 mm sono a contatto (nessuna fessura), quindi si ignora.
+        const float minGap = 2.0f * mapmetrics::AGENT_RADIUS;
+        for (std::size_t i = 0; i < tops.size(); ++i)
+        for (std::size_t j = i + 1; j < tops.size(); ++j)
+        {
+            const Top& a = tops[i];
+            const Top& b2 = tops[j];
+            if (std::fabs(a.top - b2.top) > 0.02f) continue;    // quote diverse
+            const float gapX = std::fabs(a.x - b2.x) - (a.sx + b2.sx) * 0.5f;
+            const float gapZ = std::fabs(a.z - b2.z) - (a.sz + b2.sz) * 0.5f;
+            // Affiancati su un asse e sovrapposti sull'altro: altrimenti sono
+            // diagonali e la "fessura" non è un passaggio mancato.
+            const bool alongX = (gapX > 0.001f && gapX < minGap && gapZ < -0.05f);
+            const bool alongZ = (gapZ > 0.001f && gapZ < minGap && gapX < -0.05f);
+            if (!alongX && !alongZ) continue;
+            const float gap = alongX ? gapX : gapZ;
+            std::snprintf(buf, sizeof(buf),
+                          "[geometria %d] e [geometria %d]: due ripiani a %.2f m separati da "
+                          "%.2f m. Sotto %.2f m (il diametro dell'agente) l'erosione chiude il "
+                          "passaggio: si vede un varco e nessuno ci passa. Accostali "
+                          "(Precisione > Appoggia) o allarga oltre %.2f m.",
+                          a.idx + 1, b2.idx + 1, a.top, gap, minGap, minGap);
+            out.push_back({TacticalDefect::Target::Geometry,
+                           TacticalDefect::Kind::NarrowGap, a.idx, 1, buf});
         }
     }
 

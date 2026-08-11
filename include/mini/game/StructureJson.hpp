@@ -20,6 +20,13 @@
 namespace mini::structjson
 {
 
+// Dichiarate qui perché una struttura può portare le sue PARTI LOCALI (istanza
+// modificata, ADR-056 rivisto) e una parte porta uno StructureDef: le due funzioni
+// si chiamano a vicenda. La ricorsione termina perché la posa dentro una parte non
+// ha mai parti locali proprie.
+inline StructurePart partFromJson(const nlohmann::json& pj);
+inline nlohmann::json partToJson(const StructurePart& p);
+
 inline StructureDef fromJson(const nlohmann::json& s)
 {
     StructureDef d;
@@ -52,6 +59,10 @@ inline StructureDef fromJson(const nlohmann::json& s)
     d.color[0] = s.value("r", 0.35f);
     d.color[1] = s.value("g", 0.32f);
     d.color[2] = s.value("b", 0.28f);
+    // Parti LOCALI: questa istanza è una versione modificata del suo tipo. Assente =
+    // istanza normale, e nessuna mappa esistente cambia di un byte.
+    if (s.contains("local_parts") && s["local_parts"].is_array())
+        for (const auto& pj : s["local_parts"]) d.localParts.push_back(partFromJson(pj));
     return d;
 }
 
@@ -74,6 +85,87 @@ inline nlohmann::json toJson(const StructureDef& s)
     o["ceiling"] = s.ceiling;  o["railing"] = s.railing;
     o["access"] = { s.access[0], s.access[1], s.access[2], s.access[3] };
     o["r"] = s.color[0];  o["g"] = s.color[1];  o["b"] = s.color[2];
+    if (!s.localParts.empty())
+    {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& p : s.localParts) arr.push_back(partToJson(p));
+        o["local_parts"] = std::move(arr);
+    }
+    return o;
+}
+
+// ── UN BOX ⇄ JSON ───────────────────────────────────────────────────────────
+// Stesso schema che stia in una mappa, in un prefab o dentro una parte di
+// assemblaggio: era già la regola (ADR-048), ma il lettore stava nel registry e lo
+// scrittore nell'editor. Qui stanno accanto, così un campo nuovo si vede mancante.
+inline MapGeometryBox boxFromJson(const nlohmann::json& gb)
+{
+    MapGeometryBox b;
+    b.x  = gb.value("x",  0.0f);   b.y  = gb.value("y",  0.0f);
+    b.z  = gb.value("z",  0.0f);   b.ry = gb.value("ry", 0.0f);
+    b.sx = gb.value("sx", 2.0f);   b.sy = gb.value("sy", 2.0f);
+    b.sz = gb.value("sz", 2.0f);
+    b.r  = gb.value("r", 0.35f);   b.g  = gb.value("g", 0.32f);
+    b.b  = gb.value("b", 0.28f);
+    b.collider = gb.value("collider", true);
+    b.type = parseBoxType(gb.value("type", std::string("wall")));
+    return b;
+}
+
+inline nlohmann::json boxToJson(const MapGeometryBox& b)
+{
+    nlohmann::json o;
+    o["x"] = b.x;  o["y"] = b.y;  o["z"] = b.z;  o["ry"] = b.ry;
+    o["sx"] = b.sx;  o["sy"] = b.sy;  o["sz"] = b.sz;
+    o["r"] = b.r;  o["g"] = b.g;  o["b"] = b.b;
+    o["collider"] = b.collider;
+    o["type"] = boxTypeName(b.type);
+    return o;
+}
+
+// ── UNA PARTE DI ASSEMBLAGGIO ⇄ JSON ────────────────────────────────────────
+// Le parti avevano DUE serializzatori (registry in lettura, editor in scrittura):
+// la stessa configurazione che ha già causato la perdita del campo `type`. Sono
+// diventati uno solo prima di aggiungere `ref` — perché `ref` sarebbe stato il
+// quarto campo ad arrivare in un lettore su due.
+//
+// Discriminatore `part`, NON `type`: `type` è già preso due volte — dalla semantica
+// del box (`floor`/`wall`/...) e dall'id del tipo di una struttura.
+inline StructurePart partFromJson(const nlohmann::json& pj)
+{
+    StructurePart p;
+    p.label   = pj.value("label", std::string(""));
+    p.isBox   = (pj.value("part", std::string("prim")) == "box");
+    // Le parti locali di un riferimento ISOLATO E MODIFICATO stanno accanto al `ref`,
+    // non dentro la posa: `fromJson` legge la posa e non deve vederle due volte.
+    if (pj.contains("local_parts") && pj["local_parts"].is_array())
+        for (const auto& sp : pj["local_parts"]) p.localParts.push_back(partFromJson(sp));
+    // `ref` = questa parte È un altro tipo composito, non una copia delle sue parti
+    // (ADR-056 rivisto). La posa sta comunque in `prim.x/y/z/ry`, che si rileggono
+    // con il parser di sempre: un riferimento è una primitiva con un nome sopra.
+    p.refType = pj.value("ref", std::string(""));
+    if (p.isBox) p.box  = boxFromJson(pj);
+    else         p.prim = fromJson(pj);
+    // La posa di una parte condivide l'oggetto JSON con la parte stessa, quindi
+    // `fromJson` ha appena riletto le STESSE `local_parts` dentro `prim`. Lì non
+    // significano niente e le espanderebbero due volte: si azzerano subito. È il
+    // prezzo di riusare un solo parser invece di scriverne un secondo.
+    p.prim.localParts.clear();
+    return p;
+}
+
+inline nlohmann::json partToJson(const StructurePart& p)
+{
+    nlohmann::json o = p.isBox ? boxToJson(p.box) : toJson(p.prim);
+    o["label"] = p.label;
+    o["part"]  = p.isBox ? "box" : "prim";
+    if (!p.refType.empty()) o["ref"] = p.refType;
+    if (!p.localParts.empty())
+    {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& sp : p.localParts) arr.push_back(partToJson(sp));
+        o["local_parts"] = std::move(arr);
+    }
     return o;
 }
 

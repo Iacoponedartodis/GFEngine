@@ -1,5 +1,40 @@
 # 06 — Todo (reality-based, prioritized)
 
+## ▶ PROSSIMO BLOCCO PROPOSTO — strumenti di costruzione (doc 53, 2026-08-10)
+
+Ricerca fatta e piano scritto in `53_LevelBuildingTools.md`. **Planned Feature: zero codice.**
+Da implementare nell'ordine, quando l'utente lo chiede:
+
+0. **Prerequisiti** — (a) ✅ **fatto** (changelog 189): niente ricalcolo dei derivati durante il
+   trascinamento; (b) ⏸ **rimandato con motivazione scritta**: migrare il gizmo del Map Editor a
+   `ViewportEditing` (doc 52 F1). Non era necessario a L1 — i gesti nuovi stanno dentro
+   `FreeCameraViewport` — e un rifacimento non collaudabile senza mouse subito prima di settimane
+   d'uso è il profilo delle regressioni di doc 49. **Resta un debito**: da fare in un momento in
+   cui l'utente non sta costruendo. Vedi doc 53 §L1.
+1. ✅ **L1 — disegna e tira** (changelog 189): `Disegna`, modalità `Faccia` con la faccia opposta
+   ferma, `E`/`Q` push-pull, passo griglia con Ctrl+rotella. **Resta fuori**: la griglia proiettata
+   sulla faccia su cui si lavora (è disegno, non interazione: si aggiunge senza toccare il resto).
+2. ⚠ **L2 — precisione, quasi tutta** (changelog 189-190): fatti sposta-di-offset, allinea a filo,
+   distribuisci, **appoggia/accosta** su sei direzioni. **Restano, con motivazione scritta**:
+   il **numero durante il trascinamento** (al posto della restrizione d'asse, che qui non serve —
+   il gizmo è già vincolato) e il **pivot modificabile** (da fare su un caso concreto).
+3. ✅ **L4 — provare camminando** (changelog 190): `Prova da qui` + `--at x,z` nel motore.
+   **Resta fuori**: `Torna all'editor` (la posizione di uscita si ritrova con `F`).
+4. **L3 — organizzazione**: gruppi (riusando le parti locali di ADR-056), isolamento, blocco,
+   selezione a trapano, copia/incolla anche fra mappe.
+5. ⚠ **L5 — pannello Problemi, quasi tutto** (changelog 194): "portami lì" con inquadratura, due
+   controlli geometrici nuovi condivisi col gate, `Controlla i dati...` nel pannello.
+   ✅ **`--navcheck` fatto** (changelog 198): navmesh vero headless, per mappa, con area delle
+   isole e classificazione sotto-ostacolo. **Resta**: l'attribuzione per-box (quale box non
+   produce superficie) sull'intera mappa — esiste per la singola struttura, doc 48.
+   **Da guardare, dati alla mano**: Warfare Ground ha un'isola VERA da **566 m² scoperti** al
+   centro (0,1, −0,6) e firebase ne ha 9 per 205 m². Sono difetti di mappa, non di codice.
+   Le **correzioni rapide** sono state escluse di proposito: per questi difetti non esiste *una*
+   azione corretta, e un pulsante che sceglie per l'autore gli cambia la geometria in un modo che
+   non ha deciso.
+6. **L6 — ponte Blender** (`mesh_id` che sostituisce il disegno, non la collisione). Bloccato
+   finché le mesh non esistono.
+
 ## ▶ I TRE LAVORI SUGLI STRUMENTI chiesti dall'utente il 2026-08-05
 
 1. ✅ **Validazione navmesh** nell'editor (changelog 161, ADR-054).

@@ -160,6 +160,74 @@ come criterio di completamento:
 - Nel dichiarare cosa resta da verificare a mano, dire **dove si clicca**, non solo cosa
   provare.
 
+## 6-ter. Non posso vedere lo schermo: le regole visive vanno rese STRUTTURALI
+
+"Mai far tagliare i comandi" era una regola dal 2026-07. **È stata violata tre volte**, sempre
+allo stesso modo: si aggiunge un comando utile, la barra supera la larghezza del pannello, e
+l'ultimo comando smette di esistere per chi lo usa. L'ultima volta è toccato a "Prova da qui",
+consegnato e dichiarato fatto — l'utente non l'ha trovato.
+
+**La causa non è la distrazione: è che io non vedo lo schermo.** Una regola la cui verifica
+richiede di guardare il risultato non posso rispettarla, per quante volte la si riscriva. La
+conseguenza generale, valida oltre le barre:
+
+> **Una regola di layout che non ha un controllo eseguibile non è una regola: è una speranza.**
+> Ogni volta che una regola dell'interfaccia dipende da "quanto spazio c'è", vanno prodotti
+> ENTRAMBI: (a) un meccanismo che rende la violazione **inesprimibile**, e (b) un **controllo
+> headless** che io possa eseguire.
+
+Come si applica, in concreto:
+
+- **Le barre di comandi si DICHIARANO, non si disegnano a mano.** Elenco di voci →
+  `editor::toolbar::draw` (`editor/include/framework/Toolbar.hpp`), che misura e manda
+  l'eccedenza in un menu «...». L'ordine dell'elenco è la priorità: la prima voce è l'ultima a
+  finire nel menu. Una fila di `ImGui::Button` + `SameLine()` in un pannello di larghezza
+  variabile è un difetto da correggere, non uno stile alternativo.
+- **La decisione di layout sta in una funzione PURA** (`toolbar::fitCount`), separata dal
+  disegno, così si collauda in `--editor-selftest` senza finestre. È l'unico modo in cui io possa
+  verificarla.
+- **Raggruppare prima di aggiungere.** Prima di mettere un pulsante nuovo in una barra, chiedersi
+  in quale menu esistente sta (`Mappa`, `Crea`, `Modifica`, `Vista`). Riferimento professionale
+  (PatternFly, priority+): **al massimo 1-2 azioni visibili per gruppo, il resto in un menu**.
+  Restano sempre visibili solo il contesto (quale mappa, se ci sono modifiche non salvate) e ciò
+  che si usa di continuo (il passo di aggancio).
+- **Ogni comando frequente ha una scorciatoia**, e la scorciatoia fa la cosa giusta per il
+  contesto attivo (Ctrl+S salva la mappa, il tipo o l'istanza a seconda del tab).
+- **Quando consegno una funzione dichiaro DOVE si clicca** (§6-bis) — e adesso anche **in quale
+  menu**, perché "è nella barra" ha già smesso di essere un indirizzo sufficiente.
+
+Lo stesso ragionamento vale per ogni altra proprietà che si vede e non si misura: testi troncati,
+finestre più piccole del loro contenuto, elementi sovrapposti. Se non c'è un modo di chiederlo al
+programma, il difetto tornerà.
+
+**Trappole di layout già pagate — non ripeterle:**
+
+- **Mai `TextWrapped` dopo `SameLine`.** Un `Selectable`/`Button` con larghezza 0 occupa TUTTA la
+  riga: `SameLine` porta il cursore al bordo destro e al testo resta una larghezza di wrap ≈ 0 →
+  una lettera per riga → migliaia di righe per voce → **l'editor lampeggia e si blocca**
+  (2026-08-11, l'utente ha dovuto chiuderlo da Gestione attività). Se serve testo lungo in una
+  riga cliccabile, va DENTRO l'etichetta del `Selectable` (ImGui la ritaglia, non la manda a capo)
+  e per esteso nel suggerimento, dove il wrap si dichiara con `PushTextWrapPos(<larghezza>)`.
+- **`PushTextWrapPos` sempre con una larghezza esplicita**, mai con il valore di riporto dentro un
+  contenitore la cui larghezza dipende dal contenuto: è la stessa spirale.
+- **La misura di un layout si prende IMMEDIATAMENTE dopo ciò che si misura.**
+  `ImGui::GetItemRectSize()` ritorna l'ultimo elemento **di chiunque**: basta disegnare qualcosa
+  in mezzo (anche un'altra finestra) e si misura quello. Con una finestra a schermo intero fra la
+  barra e la sua misura, l'altezza calcolata esplode, lo spazio residuo diventa negativo e il
+  pannello oscilla di frame in frame — **secondo blocco dell'editor in un giorno**, 2026-08-11.
+- **Le finestre a sé (`ImGui::Begin` top-level) si disegnano per ULTIME**, dopo il layout di tutto
+  il resto. Mai in mezzo.
+- Un difetto di layout che **blocca** l'editor è un difetto di perdita dati, non di estetica:
+  l'utente chiude il processo e perde ciò che non è nell'autosalvataggio.
+
+**E la regola generale che li racchiude tutti** (dall'utente, 2026-08-11): *"meno vedi più fai
+cose su basi sbagliate e quindi commetti errori"*. Quando un sottosistema si può osservare solo
+aprendo una finestra, **io non lo posso osservare** — e finisco a ragionare su descrizioni di
+seconda mano. Il rimedio non è chiedere all'utente di descrivere meglio: è **portare l'analisi
+fuori dall'interfaccia**, headless, sullo stesso codice (`--validate`, `--navcheck`,
+`--editor-selftest`). Ogni volta che mi trovo a dedurre lo stato di un sistema da ciò che mi viene
+riferito, quello è il segnale che manca uno strumento, e lo strumento viene prima della correzione.
+
 ## 7. Aggiornamento della documentazione
 
 Ogni change set che modifica comportamento, schema, o convenzione deve aggiornare

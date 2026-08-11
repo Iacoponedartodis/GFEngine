@@ -134,7 +134,7 @@ FreeCameraViewport::FreeCameraViewport()
     m_camera->lookAt({0.0f, 0.0f, 0.0f});
     m_camera->setSpeed(m_camSpeed);
 
-    buildGrid(120.0f, 60);   // 120 m, passo 2 m: copre anche mappe grandi (2026-07-21)
+    updateInfiniteGrid();   // fissa, ancorata al mondo, 1000 m di lato (changelog 186)
     SDL_Log("[Viewport] Grid vertici=%d", m_gridVertCount);
 
     resizeFBO(4, 4);
@@ -163,6 +163,58 @@ bool FreeCameraViewport::isReady() const
 }
 
 // ── Grid ─────────────────────────────────────────────────────────────────────
+// ── GRIGLIA "INFINITA" (richiesta utente 2026-08-08) ────────────────────────
+// La griglia era costruita UNA volta a 120 m con passo 2: su una mappa 300 × 200
+// finisce, e oltre il bordo si costruisce senza riferimenti.
+//
+// "Infinita" in pratica significa due cose insieme:
+//   · **segue la vista** — si ricostruisce centrata su dove si guarda, agganciata al
+//     passo così le linee non strisciano mentre ci si sposta;
+//   · **adatta il passo** — allontanandosi, un passo fisso diventerebbe una massa
+//     grigia illeggibile e migliaia di linee inutili. Passi "tondi" (1/2/5 × 10ⁿ),
+//     come sulle carte e come già fa la barra di scala.
+// Il numero di linee resta LIMITATO: è la ragione per cui una griglia davvero
+// infinita non si disegna, la si simula.
+void FreeCameraViewport::updateInfiniteGrid()
+{
+    // FISSA e ANCORATA AL MONDO. Costruita una volta sola.
+    //
+    // Il primo tentativo (changelog 185) la faceva seguire la vista e adattare il
+    // passo. Sulla carta era la soluzione "corretta"; all'uso era peggio del
+    // problema: *"se si muove seguendo dove sto guardando fa solo casino e mi
+    // confonde"*. E aveva ragione — cambiando il passo, TUTTE le linee saltano di
+    // posto insieme, e una griglia che salta non è più un riferimento.
+    //
+    // Una griglia serve a dare un riferimento STABILE. Quindi: passo fisso di 2 m,
+    // estensione 1000 m (la mappa grande pianificata è 300 × 200, quindi la copre
+    // tre volte in ogni direzione), linee sempre negli stessi punti del mondo.
+    // Costa ~12.000 float una volta sola: non vale la pena di essere furbi.
+    if (!m_gridData.empty()) return;
+
+    constexpr float kStep = 2.0f;
+    constexpr float kHalf = 1000.0f;
+    const int n = (int)(kHalf / kStep);
+
+    auto ln = [&](float x0, float z0, float x1, float z1, float y,
+                  float r, float g, float b) {
+        m_gridData.insert(m_gridData.end(),
+            {x0, y, z0, r, g, b, x1, y, z1, r, g, b});
+    };
+    for (int i = -n; i <= n; ++i)
+    {
+        const float o = i * kStep;
+        // Una linea più chiara ogni 10 m: dà il senso della scala senza etichette.
+        const float c = ((i % 5) == 0) ? 0.40f : 0.22f;
+        ln(-kHalf, o, kHalf, o, 0.0f, c, c, c);
+        ln(o, -kHalf, o, kHalf, 0.0f, c, c, c);
+    }
+    // Gli assi del mondo: rosso = X, blu = Z. Sono l'origine della mappa.
+    ln(-kHalf, 0.0f, kHalf, 0.0f, 0.02f, 0.95f, 0.25f, 0.25f);
+    ln(0.0f, -kHalf, 0.0f, kHalf, 0.02f, 0.25f, 0.55f, 1.00f);
+
+    m_gridVertCount = (int)(m_gridData.size() / 6);
+}
+
 void FreeCameraViewport::buildGrid(float size, int div)
 {
     m_gridData.clear();
@@ -343,6 +395,7 @@ void FreeCameraViewport::renderScene()
 
     const glm::mat4 vp = m_camera->getViewProjection();
 
+    updateInfiniteGrid();   // costruita una volta sola: ritorna subito se già pronta
     drawArray(m_gridData, m_gridVertCount, GL_LINES, vp);
 
     if (m_modelVertCount > 0)
@@ -593,6 +646,211 @@ bool FreeCameraViewport::popGizmoScaleDelta(glm::vec3& outDelta)
     m_gizmoScaleDelta  = {0,0,0};
     m_gizmoScaleDragged = false;
     return true;
+}
+
+// ── MODALITÀ FACCIA e DISEGNA BOX (doc 53 L1) ────────────────────────────────
+void FreeCameraViewport::setGizmoBounds(const glm::vec3& mn, const glm::vec3& mx, bool valid)
+{
+    m_boundsMin = mn; m_boundsMax = mx; m_boundsValid = valid;
+}
+
+bool FreeCameraViewport::popGizmoFaceDelta(int& outFace, float& outDelta)
+{
+    if (!m_faceHas) return false;
+    outFace  = m_faceLast;
+    outDelta = m_facePending;
+    m_facePending = 0.0f;
+    m_faceHas = false;
+    return true;
+}
+
+void FreeCameraViewport::setDrawBoxActive(bool on)
+{
+    m_drawActive   = on;
+    m_drawDragging = false;
+    m_drawHas      = false;
+    // Il righello e il disegno vogliono lo stesso clic: due strumenti modali accesi
+    // insieme sono un clic che fa due cose, cioè nessuna delle due in modo
+    // prevedibile. Accendere l'uno spegne l'altro.
+    if (on) setRulerActive(false);
+}
+
+bool FreeCameraViewport::popDrawnRect(glm::vec3& outMin, glm::vec3& outMax)
+{
+    if (!m_drawHas) return false;
+    outMin = m_drawMin; outMax = m_drawMax;
+    m_drawHas = false;
+    return true;
+}
+
+bool FreeCameraViewport::popGridStepRequest(int& outDir)
+{
+    if (m_gridStepReq == 0) return false;
+    outDir = m_gridStepReq;
+    m_gridStepReq = 0;
+    return true;
+}
+
+bool FreeCameraViewport::worldToScreen(const glm::vec3& w, ImVec2& out) const
+{
+    const glm::vec4 c = m_camera->getViewProjection() * glm::vec4(w, 1.0f);
+    if (c.w <= 0.0001f) return false;
+    const float nx = c.x / c.w, ny = c.y / c.w;
+    out = { (nx * 0.5f + 0.5f) * m_imgSize.x + m_imgMin.x,
+            (1.0f - (ny * 0.5f + 0.5f)) * m_imgSize.y + m_imgMin.y };
+    return true;
+}
+
+// Le sei maniglie sulle facce dell'ingombro della selezione. Tirare una maniglia
+// muove QUELLA faccia: la opposta resta ferma. È la differenza con la scala, che
+// muove entrambe e costringe a ricentrare.
+void FreeCameraViewport::drawFaceGizmo()
+{
+    if (!m_boundsValid) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 mp = ImGui::GetMousePos();
+    const glm::vec3 c = (m_boundsMin + m_boundsMax) * 0.5f;
+
+    // Centro di ogni faccia e sua normale uscente.
+    glm::vec3 fc[6], fn[6];
+    fc[0] = {m_boundsMin.x, c.y, c.z};  fn[0] = {-1, 0, 0};
+    fc[1] = {m_boundsMax.x, c.y, c.z};  fn[1] = { 1, 0, 0};
+    fc[2] = {c.x, m_boundsMin.y, c.z};  fn[2] = { 0,-1, 0};
+    fc[3] = {c.x, m_boundsMax.y, c.z};  fn[3] = { 0, 1, 0};
+    fc[4] = {c.x, c.y, m_boundsMin.z};  fn[4] = { 0, 0,-1};
+    fc[5] = {c.x, c.y, m_boundsMax.z};  fn[5] = { 0, 0, 1};
+
+    static const ImU32 faceCol[6] = {
+        IM_COL32(235, 70, 70,220), IM_COL32(235, 70, 70,220),   // X rosso
+        IM_COL32( 80,220, 80,220), IM_COL32( 80,220, 80,220),   // Y verde
+        IM_COL32( 80,130,255,220), IM_COL32( 80,130,255,220),   // Z blu
+    };
+
+    ImVec2 sp[6]; bool ok[6];
+    for (int f = 0; f < 6; ++f) ok[f] = worldToScreen(fc[f], sp[f]);
+
+    // Direzione SCHERMO della normale: serve a proiettare il movimento del mouse.
+    ImVec2 sdir[6];
+    for (int f = 0; f < 6; ++f)
+    {
+        sdir[f] = {0, 0};
+        if (!ok[f]) continue;
+        ImVec2 tip;
+        if (!worldToScreen(fc[f] + fn[f] * 0.5f, tip)) continue;
+        float dx = tip.x - sp[f].x, dy = tip.y - sp[f].y;
+        const float len = std::sqrt(dx*dx + dy*dy);
+        if (len > 0.001f) { dx /= len; dy /= len; sdir[f] = {dx, dy}; }
+    }
+
+    for (int f = 0; f < 6; ++f)
+    {
+        if (!ok[f]) continue;
+        const bool act = (m_faceActive == f);
+        const ImU32 col = act ? IM_COL32(255,255,0,255) : faceCol[f];
+        dl->AddRectFilled({sp[f].x - 7, sp[f].y - 7}, {sp[f].x + 7, sp[f].y + 7}, col, 2.0f);
+        dl->AddRect({sp[f].x - 7, sp[f].y - 7}, {sp[f].x + 7, sp[f].y + 7},
+                    IM_COL32(20,20,20,200), 2.0f);
+        // L'ultima faccia usata è quella su cui agiscono E/Q: se non si vede quale,
+        // premere E diventa un tiro a indovinare.
+        if (f == m_faceLast && !act)
+            dl->AddRect({sp[f].x - 10, sp[f].y - 10}, {sp[f].x + 10, sp[f].y + 10},
+                        IM_COL32(255,255,255,200), 3.0f, 0, 1.5f);
+    }
+
+    if (ImGui::IsMouseClicked(0) && m_faceActive < 0)
+        for (int f = 0; f < 6; ++f)
+            if (ok[f] && std::abs(mp.x - sp[f].x) < 9 && std::abs(mp.y - sp[f].y) < 9)
+            { m_faceActive = f; m_faceLast = f; m_faceAccum = 0.0f; break; }
+
+    for (int f = 0; f < 6; ++f)
+        if (ok[f] && std::abs(mp.x - sp[f].x) < 9 && std::abs(mp.y - sp[f].y) < 9)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+    if (m_faceActive >= 0)
+    {
+        if (ImGui::IsMouseDown(0))
+        {
+            const int f = m_faceActive;
+            const float distToCamera = glm::length(fc[f] - m_camera->getPosition());
+            const float pixelToWorld = 2.0f * std::tan(glm::radians(30.0f))
+                                     * distToCamera / (m_imgSize.y > 1 ? m_imgSize.y : 1.0f);
+            const ImVec2 md = ImGui::GetIO().MouseDelta;
+            m_faceAccum += (md.x * sdir[f].x + md.y * sdir[f].y) * pixelToWorld;
+
+            // AGGANCIO: si emette solo a passi interi di griglia. Emettere il grezzo
+            // darebbe muri lunghi 3,47 m — e le fessure che ne nascono stanno sotto
+            // la soglia di erosione del navmesh, cioè non si vedono e rompono.
+            const float step = (m_rulerSnap > 0.001f) ? m_rulerSnap : 0.0f;
+            if (step > 0.0f)
+            {
+                const float n = std::trunc(m_faceAccum / step);
+                if (std::fabs(n) >= 1.0f)
+                { m_facePending += n * step; m_faceAccum -= n * step; m_faceHas = true; }
+            }
+            else if (std::fabs(m_faceAccum) > 0.0001f)
+            { m_facePending += m_faceAccum; m_faceAccum = 0.0f; m_faceHas = true; }
+        }
+        else { m_faceActive = -1; m_faceAccum = 0.0f; }
+    }
+}
+
+// Trascinamento sul piano di lavoro: l'impronta in pianta di un box nuovo.
+void FreeCameraViewport::drawBoxTool(bool hovered)
+{
+    if (!m_drawActive) return;
+    const float step = (m_rulerSnap > 0.001f) ? m_rulerSnap : 0.0f;
+    auto snap = [&](float v) { return step > 0.0f ? std::round(v / step) * step : v; };
+
+    if (hovered)
+    {
+        const ImVec2 mp = ImGui::GetMousePos();
+        glm::vec3 hit;
+        if (screenToPlane(mp.x, mp.y, m_drawPlaneY, hit))
+        {
+            hit.x = snap(hit.x); hit.z = snap(hit.z); hit.y = m_drawPlaneY;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            { m_drawA = hit; m_drawB = hit; m_drawDragging = true; }
+            else if (m_drawDragging) m_drawB = hit;
+        }
+    }
+    if (m_drawDragging && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+        m_drawDragging = false;
+        // Ternari e non std::min/max: <windows.h> definisce `min` e `max` come macro
+        // e qui il compilatore le espande prima di vedere `std::`. È già costato due
+        // volte in questo progetto.
+        const float ax = m_drawA.x, bx = m_drawB.x, az = m_drawA.z, bz = m_drawB.z;
+        m_drawMin = { (ax < bx ? ax : bx), m_drawPlaneY, (az < bz ? az : bz) };
+        m_drawMax = { (ax > bx ? ax : bx), m_drawPlaneY, (az > bz ? az : bz) };
+        // Un clic senza trascinamento non è un box da zero metri: è un clic. Si
+        // scarta invece di creare geometria degenere che poi sparisce dal navmesh
+        // senza spiegazione.
+        const float w = m_drawMax.x - m_drawMin.x, d = m_drawMax.z - m_drawMin.z;
+        m_drawHas = (w > 0.001f && d > 0.001f);
+    }
+
+    // Anteprima: il rettangolo e le sue misure, MENTRE si trascina. Il numero
+    // durante il gesto è ciò che rende inutile misurare dopo.
+    if (m_drawDragging)
+    {
+        const float ax = m_drawA.x, bx = m_drawB.x, az = m_drawA.z, bz = m_drawB.z;
+        const float x0 = (ax < bx ? ax : bx), x1 = (ax > bx ? ax : bx);
+        const float z0 = (az < bz ? az : bz), z1 = (az > bz ? az : bz);
+        const glm::vec3 corner[4] = { {x0, m_drawPlaneY, z0}, {x1, m_drawPlaneY, z0},
+                                      {x1, m_drawPlaneY, z1}, {x0, m_drawPlaneY, z1} };
+        ImVec2 s[4]; bool allOk = true;
+        for (int i = 0; i < 4; ++i) if (!worldToScreen(corner[i], s[i])) allOk = false;
+        if (allOk)
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (int i = 0; i < 4; ++i)
+                dl->AddLine(s[i], s[(i + 1) % 4], IM_COL32(255, 210, 80, 240), 2.0f);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.2f x %.2f m", x1 - x0, z1 - z0);
+            const ImVec2 mid = { (s[0].x + s[2].x) * 0.5f, (s[0].y + s[2].y) * 0.5f };
+            dl->AddText({mid.x + 8, mid.y}, IM_COL32(255, 230, 140, 255), buf);
+        }
+    }
 }
 
 // ── Pan ───────────────────────────────────────────────────────────────────────
@@ -916,6 +1174,31 @@ void FreeCameraViewport::frameContent()
     m_camera->lookAt(center, {0.0f, 1.0f, 0.0f});
 }
 
+// ── PORTAMI LÌ (doc 53 L5) ───────────────────────────────────────────────────
+// Inquadra UN punto, senza toccare l'ingombro del contenuto (che serve a `F` per
+// inquadrare tutto). Un elenco di problemi in cui bisogna poi cercare a mano
+// l'elemento segnalato è un elenco che si smette di usare: su una mappa 300 × 200
+// "il box 147" non è un indirizzo, è un enigma.
+void FreeCameraViewport::focusOn(const glm::vec3& center, float radius)
+{
+    if (radius < 1.0f) radius = 1.0f;
+    if (isOrtho())
+    {
+        // In ortografica si sposta l'inquadratura, non ci si avvicina: avvicinarsi
+        // non vuol dire niente quando la proiezione è parallela.
+        m_camera->setOrthoHalfHeight(radius * 2.5f);
+        applyOrthoPlacement(m_viewMode, center);
+        return;
+    }
+    const float d = radius / std::tan(glm::radians(m_camera->getFov() * 0.5f)) * 2.0f;
+    // Si arriva da una direzione un po' dall'alto invece che dalla direzione attuale:
+    // se la telecamera guardava esattamente in orizzontale, "indietreggiare" la
+    // lascerebbe dentro un muro — e l'elemento segnalato resterebbe invisibile.
+    const glm::vec3 dir = glm::normalize(glm::vec3(0.45f, -0.55f, 0.70f));
+    m_camera->setPosition(center - dir * d);
+    m_camera->lookAt(center, {0.0f, 1.0f, 0.0f});
+}
+
 void FreeCameraViewport::setContentBounds(const glm::vec3& mn, const glm::vec3& mx)
 {
     m_contentMin = mn; m_contentMax = mx;
@@ -1129,24 +1412,31 @@ void FreeCameraViewport::drawGizmoOverlay()
         toolBtn("Ruota", GizmoMode::Rotate, m_gizmoCanRotate);
         ImGui::SameLine();
         toolBtn("Scala", GizmoMode::Scale, m_gizmoCanScale);
+        ImGui::SameLine();
+        // "Faccia" è disponibile dove lo è la scala: sono due modi di cambiare le
+        // misure, e ciò che non si può scalare non si può nemmeno tirare.
+        toolBtn("Faccia", GizmoMode::Face, m_gizmoCanScale && m_boundsValid);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Tira una FACCIA: la opposta resta ferma.\n"
+                              "E = tira fuori, Q = spingi dentro, di un passo di griglia.");
         ImGui::EndGroup();
         m_gizmoBarHovered = ImGui::IsItemHovered();
     }
 
-    // ── Scorciatoie modalità (solo viewport hover, mouse libero) ─────────
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && !m_mouseCapture)
-    {
-        if (ImGui::IsKeyPressed(ImGuiKey_1)) m_gizmoMode = GizmoMode::Translate;
-        if (ImGui::IsKeyPressed(ImGuiKey_2) && m_gizmoCanRotate)
-            m_gizmoMode = GizmoMode::Rotate;
-        if (ImGui::IsKeyPressed(ImGuiKey_3) && m_gizmoCanScale)
-            m_gizmoMode = GizmoMode::Scale;
-    }
+    // Le scorciatoie 1/2/3 per la modalità del gizmo sono state RIMOSSE su richiesta
+    // dell'utente (2026-08-08): *"è un impiccio ed è una scorciatoia che non utilizzo
+    // quasi mai, tanto i pulsanti sono sempre facilmente raggiungibili"*.
+    // Rimosse e non disattivate con un'opzione: un tasto che intercetta 1/2/3 mentre
+    // si lavora è un ostacolo, e un interruttore per spegnerlo sarebbe un'altra cosa
+    // da scoprire. I pulsanti della modalità restano in cima al viewport.
 
     // Modalità non consentita per il target corrente → ripiega su Sposta
     GizmoMode mode = m_gizmoMode;
     if (mode == GizmoMode::Rotate && !m_gizmoCanRotate) mode = GizmoMode::Translate;
     if (mode == GizmoMode::Scale  && !m_gizmoCanScale)  mode = GizmoMode::Translate;
+    if (mode == GizmoMode::Face   && (!m_gizmoCanScale || !m_boundsValid))
+        mode = GizmoMode::Translate;
+    if (mode == GizmoMode::Face) { drawFaceGizmo(); return; }
 
     glm::mat4 vp = m_camera->getViewProjection();
     glm::vec4 clip = vp * glm::vec4(m_gizmoPos, 1.0f);
@@ -1505,11 +1795,11 @@ void FreeCameraViewport::draw(bool showLoadBar)
 
     if (isOrtho())
         ImGui::TextDisabled(
-            "Tasto destro o centrale = sposta  |  Rotella = ingrandisci  |  1/2/3 = gizmo");
+            "Tasto destro o centrale = sposta  |  Rotella = ingrandisci");
     else
         ImGui::TextDisabled(
             "Tasto destro = guarda + WASD/QE vola (Shift veloce, rotella = velocita')  |  "
-            "Rotella = zoom  |  Tasto centrale = pan  |  1/2/3 = gizmo");
+            "Rotella = zoom  |  Tasto centrale = pan");
 
     ImGui::Separator();
 
@@ -1563,6 +1853,17 @@ void FreeCameraViewport::draw(bool showLoadBar)
     // perde senso l'unica cosa per cui esiste: misurare. Quindi il tasto destro
     // TRASCINA invece di girare, e la rotella cambia l'inquadratura invece della
     // velocità di volo.
+    // ── Ctrl+rotella = PASSO DI GRIGLIA, in tutte le viste ────────────────
+    // Prima di ogni altro uso della rotella, e la CONSUMA: se cambiasse anche lo
+    // zoom, un gesto solo farebbe due cose e nessuna delle due in modo prevedibile.
+    // È la convenzione di CubeGrid e TrenchBroom, ed è il parametro che si cambia
+    // più spesso costruendo (grande per le stanze, piccolo per la rifinitura).
+    if (imgHovered && io.KeyCtrl && io.MouseWheel != 0.0f)
+    {
+        m_gridStepReq = (io.MouseWheel > 0.0f) ? 1 : -1;
+        io.MouseWheel = 0.0f;
+    }
+
     if (isOrtho())
     {
         m_rmbLook = false;
@@ -1645,11 +1946,33 @@ void FreeCameraViewport::draw(bool showLoadBar)
     }
     if (m_rulerActive) buildRulerGeometry();
 
+    // Disegna box. La soppressione del clic di selezione sta più sotto, DOPO che
+    // `m_imgClicked` è stato posato: qui verrebbe sovrascritta subito.
+    drawBoxTool(imgHovered);
+
     // F = inquadra tutto. Mai mentre si scrive in un campo, o "F" diventerebbe
     // un salto di camera invece di una lettera.
     if (imgHovered && !ImGui::GetIO().WantTextInput
         && ImGui::IsKeyPressed(ImGuiKey_F, false))
         frameContent();
+
+    // ── E / Q: spingi e tira la faccia attiva di UN passo ─────────────────
+    // Costruzione da tastiera, ripetibile e misurabile: tre pressioni = tre passi,
+    // esatti. Col mouse la stessa cosa richiede di mirare una maniglia.
+    // Solo quando NON si sta volando: in volo E/Q sono salita e discesa, ed erano
+    // lì prima. Un tasto che cambia significato senza dirlo è peggio di due tasti.
+    {
+        const bool flying = m_mouseCapture || m_rmbLook;
+        if (imgHovered && !flying && !io.WantTextInput && m_gizmoEnabled
+            && m_gizmoMode == GizmoMode::Face && m_boundsValid)
+        {
+            const float step = (m_rulerSnap > 0.001f) ? m_rulerSnap : 0.5f;
+            if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+            { m_facePending += step;  m_faceHas = true; }
+            if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+            { m_facePending -= step;  m_faceHas = true; }
+        }
+    }
 
     // Check click (selezione: solo LMB, mai durante la navigazione)
     if (ImGui::IsItemClicked(0) && !m_mouseCapture && !m_rmbLook)
@@ -1665,6 +1988,10 @@ void FreeCameraViewport::draw(bool showLoadBar)
     // Se il click è caduto sulla barra modalità (Sposta/Ruota/Scala) dell'overlay,
     // NON trattarlo come selezione a raggio: cambia solo la modalità del gizmo.
     if (m_gizmoBarHovered) m_imgClicked = false;
+    // Con "Disegna box" acceso il clic sinistro APPARTIENE allo strumento: se
+    // selezionasse anche, ogni rettangolo tracciato cambierebbe la selezione sotto,
+    // e il pannello di destra mostrerebbe un oggetto a caso a fine gesto.
+    if (m_drawActive) m_imgClicked = false;
     handleViewportClick();
     drawMarkerLabels();
 }

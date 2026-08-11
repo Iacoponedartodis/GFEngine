@@ -306,24 +306,10 @@ void DefinitionRegistry::loadEnemies(const std::string& dir)
 // Uno schema solo: un box e una posizione tattica si scrivono allo STESSO modo che
 // stiano in una mappa o in un prefab. Estratti dalle lambda locali di `loadMaps`
 // proprio per evitare due parser che divergono al primo campo aggiunto.
+// Anche il box viene da `mini::structjson`: lo scrittore sta nell'editor, e finché
+// il lettore stava qui i due potevano divergere in silenzio — è già successo.
 static MapGeometryBox parseGeometryBox(const json& gb)
-{
-    MapGeometryBox box;
-    box.x  = getf(gb, "x",  0.0f);
-    box.y  = getf(gb, "y",  0.0f);
-    box.z  = getf(gb, "z",  0.0f);
-    box.ry = getf(gb, "ry", 0.0f);
-    box.sx = getf(gb, "sx", 2.0f);
-    box.sy = getf(gb, "sy", 2.0f);
-    box.sz = getf(gb, "sz", 2.0f);
-    box.r  = getf(gb, "r",  0.35f);
-    box.g  = getf(gb, "g",  0.32f);
-    box.b  = getf(gb, "b",  0.28f);
-    box.collider = getb(gb, "collider", true);
-    // Semantica autorata (ADR-053): l'editor la scriveva già, il runtime la scartava.
-    box.type = parseBoxType(gets(gb, "type", "wall"));
-    return box;
-}
+{ return mini::structjson::boxFromJson(gb); }
 
 // Primitiva parametrica (ADR-053). Si salva la RICETTA; i box li genera
 // `mapstructures::expand` al load — mai su file.
@@ -419,18 +405,7 @@ void DefinitionRegistry::loadStructureTypes(const std::string& dir)
         if ((*j).contains("parts") && (*j)["parts"].is_array())
         {
             for (const auto& pj : (*j)["parts"])
-            {
-                StructurePart p;
-                p.label = gets(pj, "label", "");
-                // Discriminatore `part`, NON `type`: `type` è già preso due volte —
-                // dalla semantica del box (`floor`/`wall`/...) e dall'id del tipo di
-                // una struttura. Riusarlo avrebbe fatto leggere a `parseGeometryBox`
-                // la parola "box" come semantica, cioè un box sempre di tipo muro.
-                p.isBox = (gets(pj, "part", "prim") == "box");
-                if (p.isBox) p.box  = parseGeometryBox(pj);
-                else         p.prim = parseStructure(pj);
-                t.parts.push_back(std::move(p));
-            }
+                t.parts.push_back(mini::structjson::partFromJson(pj));
         }
         if ((*j).contains("rules") && (*j)["rules"].is_object())
         {
@@ -750,7 +725,8 @@ void DefinitionRegistry::loadMaps(const std::string& dir)
                                                             : getStructureType(s.type);
                 if (!s.type.empty() && !ty) ++brokenType;
                 if (ty && mapstructures::isAssembly(*ty)) ++assemblies;
-                mapstructures::expandInstance(s, ty, m.geometry);
+                mapstructures::expandInstance(s, ty, m.geometry,
+                    [this](const std::string& id) { return getStructureType(id); });
             }
             std::cout << "[Registry]   primitive espanse: " << m.structures.size()
                       << " (" << assemblies << " assemblaggi) → "

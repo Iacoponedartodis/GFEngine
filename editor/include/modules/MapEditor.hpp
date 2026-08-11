@@ -3,8 +3,10 @@
 #include "mini/game/data/DefinitionRegistry.hpp"   // prefab per il piazzamento (ADR-048)
 #include "mini/game/MapStructures.hpp"             // primitive parametriche (ADR-053)
 #include "mini/game/nav/NavManager.hpp"            // validazione navmesh (doc 47)
+#include "mini/game/nav/NavCheck.hpp"              // classificazione isole, condivisa con --navcheck
 #include "framework/UndoStack.hpp"                 // annullamento condiviso (doc 52 F2)
 #include "framework/ViewportEditing.hpp"           // selezione + gizmo condivisi (doc 52 F1)
+#include "framework/Toolbar.hpp"                   // barra che non puo. tagliare (doc 53)
 #include <string>
 #include <vector>
 #include <array>
@@ -55,6 +57,18 @@ public:
     // Cosa c'è di non salvato, in chiaro: "la mappa", "2 tipi di struttura"...
     [[nodiscard]] std::string unsavedSummary() const;
     [[nodiscard]] const std::string& currentMapId() const { return m_mapId; }
+
+    // ── PROVARE CAMMINANDO (doc 53 L4) ───────────────────────────────────
+    // Il modulo non lancia processi: dichiara l'intenzione, e chi possiede
+    // l'applicazione la esegue. Ritorna gli argomenti per GFEngine, vuoto se
+    // nessuno l'ha chiesto. Si svuota leggendo: una richiesta che resta appesa
+    // rilancerebbe il gioco a ogni frame.
+    // Finestre a sé del modulo (Problemi). Le chiama EditorApp DOPO aver chiuso la
+    // finestra del modulo: una finestra top-level creata dentro un altro Begin è
+    // lecita ma fragile, e a schermo intero le due si contendono il layout.
+    void drawFloatingWindows();
+    [[nodiscard]] std::string takePlaytestRequest()
+    { std::string a; a.swap(m_playtestArgs); return a; }
     // Copia di recupero periodica, FUORI da `data/maps/` (altrimenti diventerebbe
     // una mappa fantasma nell'elenco). Non tocca il file dell'utente.
     void tickAutosave(float dt);
@@ -66,8 +80,15 @@ public:
     // salva solo una parte è peggio di non offrirlo.
     void saveAllPending()
     {
+        // PRIMA le modifiche d'istanza: finiscono dentro la mappa, quindi vanno
+        // applicate prima di scriverla. Applicarle dopo le avrebbe perse in silenzio
+        // — un "salva ed esci" che ne salva una parte è peggio di non offrirlo.
+        for (auto& t : m_structTabs)
+            if (t.dirty && t.target == StructTab::Target::Instance) applyInstanceTab(t);
         if (m_dirty) saveMap();
-        for (auto& t : m_structTabs) if (t.dirty && !t.id.empty()) saveStructType(t);
+        for (auto& t : m_structTabs)
+            if (t.dirty && t.target == StructTab::Target::Library && !t.id.empty())
+                saveStructType(t);
     }
 
     // ── TETTI DEI CODICI DI SELEZIONE (doc 49 R1, KI #100) ───────────────
@@ -160,6 +181,15 @@ private:
         std::string text;
     };
     std::vector<TacticalIssue> m_issues;
+    // ── IL GATE DEI DATI, VISTO DA QUI (doc 53 L5) ───────────────────────
+    // Lo STESSO `validateContent` di `--validate` e del pannello Validazione: non
+    // una seconda analisi. Le voci qui sono filtrate su QUESTA mappa, perché
+    // costruendo interessa sapere se ho appena rotto questa — non l'intero
+    // contenuto. Su richiesta e non a ogni frame: richiede di ricaricare l'intero
+    // registry, che non è un costo da pagare mentre si trascina un box.
+    std::vector<std::pair<int, std::string>> m_gateLines;   // <gravità, testo>
+    bool m_gateRun = false;
+    void runDataGate();
     // Settori / Combat Areas (ADR-034): autorati, pochi, scelte di design.
     struct SectorEntry { std::string label="Settore"; float x=0, z=0;
                          float radius=12.0f; float importance=0.5f; };
@@ -224,6 +254,12 @@ private:
     // il tipo (ADR-056). Vedi la nota sull'implementazione: tre chiamate sparse su
     // quattro sbagliavano.
     void expandStructureAt(int idx, std::vector<mini::MapGeometryBox>& out) const;
+    // Da oggetto unico a insieme di parti, e ritorno. Vedi la nota estesa nel .cpp.
+    void explodeStructure(int idx);
+    void groupSelectionIntoType(const std::string& label);
+    bool m_groupOpen = false;          // finestra "Raggruppa in composita"
+    char m_groupName[64] = "Composita";
+    std::string m_groupError;
     void addStructure(mini::StructureKind kind);
 
     int                       m_selRoutePt = 0;   // punto attivo della route sel.
@@ -257,6 +293,40 @@ private:
     float* codeYaw(int code);                     // orientamento, se ne ha uno
     void applyMove(int code, const glm::vec3& delta);
     void applyGizmoRotateScale();
+    // ── COSTRUZIONE (doc 53 L1) ──────────────────────────────────────────
+    // Tirare una faccia dell'ingombro della selezione: la faccia opposta resta
+    // ferma. Il gesto primario di costruzione secondo tutti i riferimenti.
+    void applyFaceDrag();
+    void applyFaceDelta(int face, float delta);   // 0=-X 1=+X 2=-Y 3=+Y 4=-Z 5=+Z
+    // Ingombro della selezione, comunicato al viewport per posare le sei maniglie.
+    [[nodiscard]] bool selectionBounds(glm::vec3& mn, glm::vec3& mx) const;
+    // Il box appena disegnato col trascinamento sul piano di lavoro.
+    void createDrawnBox(const glm::vec3& mn, const glm::vec3& mx);
+    bool  m_wasDragging   = false;   // per ricalcolare i derivati UNA volta, al rilascio
+    float m_drawHeight    = 3.0f;    // altezza dei box disegnati (muro standard)
+    float m_drawPlaneY    = 0.0f;    // quota del piano di lavoro
+    // ── PRECISIONE (doc 53 L2) ───────────────────────────────────────────
+    void  moveSelectionBy(const glm::vec3& d);
+    void  alignSelection(int axis, int mode);       // mode 0=min 1=centro 2=max
+    void  distributeSelection(int axis);
+    bool  m_offsetOpen = false;
+    float m_offsetVal[3] = {0.0f, 0.0f, 0.0f};
+    std::string m_playtestArgs;      // doc 53 L4: richiesta di "Prova da qui"
+    std::string m_playtestNote;      // esito dell'ultima richiesta, detto all'utente
+    void  requestPlaytest();
+    // ── BARRA CHE NON PUÒ TAGLIARE (doc 53 L0) ───────────────────────────
+    // Popup da aprire DOPO il disegno della barra: una voce scelta dentro il menu
+    // «...» chiamerebbe OpenPopup da un livello di ID diverso, e il popup resterebbe
+    // aperto senza essere disegnato (il modale invisibile del changelog 164).
+    std::string m_pendingPopup;
+    float m_savedFlash = 0.0f;       // "Salvato!" per qualche istante dopo Ctrl+S
+    editor::toolbar::Report m_tbReport;   // quante voci sono rientrate: misura senza occhi
+    void  drawSnapCombo();
+    void  drawNavmeshWidget();
+    [[nodiscard]] float navmeshWidgetWidth() const;
+    // Appoggia / accosta: sposta la selezione finché tocca la geometria vicina.
+    // `axis` 0=X 1=Y 2=Z, `dir` -1 o +1. Ritorna quanti elementi si sono mossi.
+    int  snapSelectionToSurface(int axis, int dir);
     void deleteSelection();                       // elimina TUTTI i selezionati
     // Restituisce il CODICE della copia (-1 se non duplicabile). Non è un extra:
     // le box si inseriscono accanto all'originale, quindi il codice della copia non
@@ -325,7 +395,43 @@ private:
         std::vector<int> badPositions;      // indici in m_positions
         std::vector<int> badPosts;          // indici in m_posts
         float buildSeconds = 0.0f;
+        // ── QUANTO SONO GRANDI, E DOVE ───────────────────────────────────
+        // "10 isole" senza la dimensione è un numero che non si può usare: dieci
+        // schegge da tre triangoli e dieci stanze scollegate sono due mappe
+        // diversissime, e l'indicatore le diceva allo stesso modo. Segnalato
+        // dall'utente su Warfare Ground — *"tutto verde, però mi segna 10 isole"*:
+        // i triangoli rossi c'erano, erano solo troppo piccoli per notarli.
+        // L'AREA, non il numero di triangoli: `minRegionArea` di Recast scarta le
+        // regioni sotto 2,56 m², quindi un'isola che è sopravvissuta è grande almeno
+        // così — e "2,6 m²" dice quanto pavimento è tagliato fuori, "3 triangoli" no
+        // (un triangolo può essere grande quanto una stanza).
+        struct Island { int tris = 0; float area = 0.0f; glm::vec3 center{0.0f};
+                        float covered = 0.0f; };   // frazione sotto un ostacolo
+        std::vector<Island> islands;        // ordinate per area, la più grande prima
     };
+
+    // ── UN SOLO ELENCO DI PROBLEMI (doc 53 L5, richiesta utente 2026-08-11) ──
+    // Prima erano TRE posti diversi con tre presentazioni diverse: la salute tattica
+    // nel pannello di sinistra, l'esito del navmesh scritto in barra, il gate dei
+    // dati sotto l'elenco. Tre modi di dire "qui c'è un problema" sono tre cose da
+    // imparare, e quella in barra restava rossa in permanenza per delle schegge.
+    // Una sola finestra, raggruppata per tipo, ogni voce ti porta sul posto.
+    struct Problem {
+        int         sev = 0;          // 0 avviso, 1 problema
+        std::string group;            // titolo del gruppo (l'elenco si raggruppa qui)
+        std::string text;
+        int         sel = -1;         // codice di selezione, -1 = nessun elemento
+        bool        hasPos = false;
+        glm::vec3   pos{0.0f};
+        float       radius = 6.0f;    // quanto inquadrare: un'isola da 40 m² non è un box
+        // Un'isola non è un elemento selezionabile: arrivando sul posto non ci
+        // sarebbe niente di evidenziato. Serve accendere l'overlay del navmesh —
+        // il rosso È il difetto.
+        bool        needsNav = false;
+    };
+    [[nodiscard]] std::vector<Problem> collectProblems() const;
+    void drawProblemsWindow();   // chiamata da drawFloatingWindows()
+    bool m_showProblems = false;
     NavReport m_navReport;
     void validateNavmesh();
     // Impronta della geometria: se cambia, il risultato della verifica è vecchio.
@@ -431,6 +537,53 @@ private:
         std::string id;                     // filename stem; vuoto = mai salvato
         mini::StructureTypeDef def;
         bool dirty = false;
+
+        // ── CHE COSA si sta modificando ──────────────────────────────────
+        // `Library`  — il TIPO in `data/structures/`: cambia ogni sua copia, ovunque.
+        // `Instance` — UNA sola struttura in mappa (richiesta utente 2026-08-10:
+        //   *"ne piazzo 4 diverse, ma su una devo fare una modifica specifica"*).
+        //   Il risultato finisce nelle PARTI LOCALI dell'istanza, cioè nel file
+        //   della mappa; il tipo resta intatto e le altre tre copie non si accorgono
+        //   di niente. È la distinzione fra Prefab Mode e override d'istanza in
+        //   Unity, e senza di essa l'unica strada era duplicare il tipo.
+        enum class Target { Library, Instance };
+        Target      target  = Target::Library;
+        int         instIdx = -1;          // indice in m_structures (solo Instance)
+        std::string originType;            // tipo da cui deriva (etichetta e ritorno)
+
+        // ── ISOLAMENTO ───────────────────────────────────────────────────
+        // -1 = si lavora sulla struttura intera. Altrimenti è l'indice della
+        // parte-RIFERIMENTO che si sta modificando "da dentro": l'elenco, il gizmo e
+        // l'anteprima mostrano solo le sue parti, e alla fine tutto si richiude in un
+        // oggetto solo. È la vista locale di Blender, applicata a un assemblaggio.
+        int isolated = -1;
+
+        // Le parti su cui agiscono TUTTI i comandi. Un accessore solo, così un
+        // comando nuovo non può dimenticarsi dell'isolamento — che è esattamente il
+        // modo in cui una modalità si rompe.
+        [[nodiscard]] std::vector<mini::StructurePart>& parts()
+        {
+            if (isolated >= 0 && isolated < (int)def.parts.size())
+                return def.parts[isolated].localParts;
+            return def.parts;
+        }
+        [[nodiscard]] const std::vector<mini::StructurePart>& parts() const
+        {
+            if (isolated >= 0 && isolated < (int)def.parts.size())
+                return def.parts[isolated].localParts;
+            return def.parts;
+        }
+        // La struttura EFFETTIVAMENTE in lavorazione: in isolamento è sintetica,
+        // fatta delle sole parti locali del riferimento. Serve a espansione,
+        // anteprima e verifica, che ragionano su un tipo intero.
+        [[nodiscard]] mini::StructureTypeDef activeDef() const
+        {
+            if (isolated < 0) return def;
+            mini::StructureTypeDef d;
+            d.kind  = def.kind;
+            d.parts = parts();
+            return d;
+        }
         // Esito della verifica sulla struttura ISOLATA (doc 48 §Osservabilità).
         struct Check {
             bool  run = false;
@@ -467,6 +620,14 @@ private:
     // premere su un tab in secondo piano, e agire su `m_activeTab` scarterebbe il
     // lavoro sbagliato.
     int  m_pendingCloseTab = -1;
+    // Tab da aprire DOPO il ciclo di disegno: aprirlo durante invaliderebbe il
+    // riferimento all'elemento corrente di `m_structTabs`.
+    std::string m_pendingOpenType;
+    int         m_pendingEditInstance = -1;   // idem, per "Modifica solo QUESTA"
+    // Apre un tab legato a UNA struttura in mappa (parti locali), non al tipo.
+    void openInstanceTab(int idx);
+    // Riporta le parti del tab nell'istanza. Nessun file toccato: è roba di mappa.
+    void applyInstanceTab(StructTab& t);
     // Filtro per nome delle liste. Solo visivo, non si salva.
     char m_listFilter[64] = "";
     // Viewport SEPARATA, una sola riusata dal tab attivo: mostra la sola struttura.
@@ -491,8 +652,13 @@ private:
     void checkStructType(StructTab& t);
     void refreshStructTypeIds();
     void rebuildStructTabPreview(StructTab& t);
-    static void expandTypeForEdit(const mini::StructureTypeDef& def,
-                                  std::vector<mini::MapGeometryBox>& out);
+    // Non statica: deve poter risolvere i riferimenti ad altri tipi (ADR-056
+    // rivisto) attraverso il registry dei prefab.
+    void expandTypeForEdit(const mini::StructureTypeDef& def,
+                           std::vector<mini::MapGeometryBox>& out) const;
+    // Come si risolve un id di tipo: attraverso il registry dei prefab. Costruito
+    // una volta nel costruttore, così ogni espansione usa la stessa strada.
+    mini::mapstructures::TypeResolver m_typeResolver;
     int  m_selPart = -1;   // parte selezionata nel tab assemblaggio
     void placePartClear(const StructTab& t, mini::StructurePart& p);
     // L'origine di un assemblaggio è il perno di rotazione e il punto del gizmo in

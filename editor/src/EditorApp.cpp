@@ -4,6 +4,7 @@
 #include "viewport/FreeCameraViewport.hpp"
 #include "mini/render/Camera.hpp"
 #include "framework/Dialogs.hpp"     // finestre modali condivise (doc 52 F4)
+#include "framework/Toolbar.hpp"     // barra che non puo' tagliare (doc 53 L0)
 #include <glm/glm.hpp>
 #include <cmath>
 #include "modules/BalanceEditor.hpp"
@@ -186,7 +187,7 @@ void EditorApp::shutdown()
     SDL_Quit();
 }
 
-void EditorApp::launchGame()
+void EditorApp::launchGame(const std::string& args)
 {
     // Trova GFEngine.exe nella stessa cartella di GFEditor.exe
     char* base = SDL_GetBasePath();
@@ -209,7 +210,7 @@ void EditorApp::launchGame()
         nullptr,          // hwnd
         "open",           // operazione
         exePath.c_str(),  // file da aprire
-        "--direct-prematch", // parametri
+        args.c_str(),     // parametri
         dir.c_str(),      // working directory
         SW_SHOWNORMAL     // modalità finestra
     );
@@ -219,11 +220,11 @@ void EditorApp::launchGame()
         return;
     }
 #else
-    std::string cmd = "\"" + exePath + "\" --direct-prematch &";
+    std::string cmd = "\"" + exePath + "\" " + args + " &";
     std::system(cmd.c_str());
 #endif
 
-    std::cout << "[GFEditor] GFEngine avviato: " << exePath << "\n";
+    std::cout << "[GFEditor] GFEngine avviato: " << exePath << " " << args << "\n";
 }
 
 void EditorApp::launchSandbox()
@@ -367,6 +368,32 @@ void EditorApp::renderMenuBar()
     // (Rimosso il pulsante rosso "X Esci": era un workaround di inizio progetto
     // quando la finestra era tagliata e non si raggiungeva la X nativa. Ora si
     // chiude con la X della finestra o dal menu "File → Chiudi GFEditor".)
+
+    // ── QUALE BINARIO STO GUARDANDO ───────────────────────────────────────
+    // Due volte in due giorni la conversazione si è impantanata sulla stessa
+    // domanda senza risposta: *"è rimasto tutto uguale"* — codice giusto, binario
+    // vecchio (2026-08-10: avevo costruito solo la Debug) oppure editor non
+    // riavviato (2026-08-11). Da fuori i due casi sono identici, e nessuno dei due
+    // si può escludere ragionando.
+    //
+    // `__DATE__`/`__TIME__` di QUESTA unità di compilazione: si aggiorna a ogni
+    // build perché EditorApp.cpp viene ricompilato ogni volta. Un timbro in un
+    // angolo costa nulla e chiude la domanda in un colpo d'occhio — per l'utente e
+    // per me, che posso chiedergli semplicemente di leggerlo.
+    {
+        static char stamp[64] = {0};
+        if (stamp[0] == '\0')
+            std::snprintf(stamp, sizeof(stamp), "build %s %s", __DATE__, __TIME__);
+        const float w = ImGui::CalcTextSize(stamp).x;
+        const float avail = ImGui::GetContentRegionAvail().x;
+        if (avail > w + 12.0f) ImGui::SameLine(ImGui::GetCursorPosX() + avail - w - 8.0f);
+        else                   ImGui::SameLine();
+        ImGui::TextDisabled("%s", stamp);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Data e ora in cui questo eseguibile e' stato compilato.\n"
+                              "Se non corrisponde all'ultima build, stai lanciando un\n"
+                              "binario vecchio o l'editor non e' stato riavviato.");
+    }
 
     ImGui::EndMainMenuBar();
 }
@@ -556,12 +583,38 @@ void EditorApp::render()
     }
     else if (m_active == ActiveModule::MapEditor)
     {
+        // ── IL MODULO È UNA PAGINA, NON UNA FINESTRA ──────────────────────
+        // Prima era una finestra mobile e ridimensionabile posata sopra a GFEditor.
+        // Ingrandendola a mano diventava "una finestra dentro una finestra", e
+        // passare fra lei e la finestra Problemi era confusionario (segnalato
+        // dall'utente). Peggio: aprire una finestra a schermo intero *dentro* il suo
+        // Begin/End produceva il tremolio.
+        // Ora occupa l'area di lavoro e basta: niente da spostare, niente da
+        // ridimensionare, niente sovrapposizioni. Le finestre vere — Problemi, la
+        // guida — ci galleggiano sopra, che è la relazione giusta.
         const ImGuiViewport* vp2 = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x+10,vp2->WorkPos.y+25), ImGuiCond_Appearing);
-        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x-20,vp2->WorkSize.y-35), ImGuiCond_Appearing);
-        ImGui::Begin("Map Editor", nullptr);
+        ImGui::SetNextWindowPos(ImVec2(vp2->WorkPos.x, vp2->WorkPos.y + 20.0f),
+                                ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vp2->WorkSize.x, vp2->WorkSize.y - 20.0f),
+                                 ImGuiCond_Always);
+        ImGui::Begin("Map Editor", nullptr,
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+                   | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar
+                   | ImGuiWindowFlags_NoBringToFrontOnFocus);
         m_mapEditor->draw();
         ImGui::End();
+        // ── LE FINESTRE A SÉ SI CREANO AL LIVELLO PIÙ ESTERNO ─────────────
+        // `Begin` annidato dentro un altro `Begin` è lecito ma fragile: la finestra
+        // Problemi nasceva dentro quella del Map Editor, e a schermo intero le due
+        // si contendevano il layout — il tremolio nero, terzo episodio. Qui il
+        // `Begin("Map Editor")` è chiuso: la finestra Problemi è una pari, non
+        // un'ospite.
+        m_mapEditor->drawFloatingWindows();
+        // "Prova da qui" (doc 53 L4): il modulo dichiara l'intenzione, l'avvio del
+        // processo resta qui — un modulo che lancia eseguibili è un modulo che sa
+        // troppo, e sarebbe il secondo posto da cui si avvia il gioco.
+        if (const std::string a = m_mapEditor->takePlaytestRequest(); !a.empty())
+            launchGame(a);
     }
     else if (m_active == ActiveModule::WeaponEditor)
     {
@@ -874,6 +927,85 @@ int EditorApp::viewFramingSelfTest()
 // Collaudo della PILA DI ANNULLAMENTO condivisa (doc 52 F2). È il primo componente
 // del framework che si può verificare senza aprire una finestra — ed è metà del
 // motivo per cui vale la pena averlo condiviso invece che riscritto per modulo.
+// ── LA BARRA CHE NON PUÒ TAGLIARE (doc 53 L0) ────────────────────────────────
+// Perché questo collaudo esiste. "Mai far tagliare i comandi" è una regola del
+// progetto da mesi, ed è stata violata tre volte — l'ultima con "Prova da qui",
+// consegnato e mai trovato dall'utente. La causa non è la distrazione: **io non
+// vedo lo schermo**, quindi una regola che chiede di guardare il risultato non
+// posso rispettarla. Questo è il sostituto degli occhi.
+//
+// Si collauda `fitCount`, che è PURA apposta: nessuna dipendenza da ImGui, quindi
+// gira headless. L'invariante che conta non è "sta tutto in barra" (falso per
+// costruzione a finestra stretta) ma **nessuna voce sparisce**, e in particolare
+// che il pulsante «...» — quello che raccoglie l'eccedenza — ci stia lui stesso.
+static int toolbarSelfTest()
+{
+    using editor::toolbar::fitCount;
+    int failed = 0;
+    auto check = [&](bool ok, const char* what) {
+        std::printf("  [%s] %s\n", ok ? "OK  " : "FALL", what);
+        if (!ok) ++failed;
+    };
+
+    const std::vector<float> w = { 60, 80, 100, 70, 120, 90 };   // sei comandi
+    const float sp = 8.0f, ov = 30.0f;
+    float total = 0.0f;
+    for (std::size_t i = 0; i < w.size(); ++i) total += w[i] + (i ? sp : 0.0f);
+
+    check(fitCount(w, total, sp, ov) == (int)w.size(),
+          "barra: con lo spazio esatto ci stanno tutte, senza menu");
+    check(fitCount(w, total + 500.0f, sp, ov) == (int)w.size(),
+          "barra: con spazio abbondante nessuna voce va nel menu");
+    check(fitCount(w, 0.0f, sp, ov) == 0 && fitCount(w, -50.0f, sp, ov) == 0,
+          "barra: spazio nullo o negativo non produce indici assurdi");
+    check(fitCount(w, 40.0f, sp, ov) == 0,
+          "barra: se non ci sta nemmeno la prima, va tutto nel menu");
+    check(fitCount({}, 500.0f, sp, ov) == 0, "barra: elenco vuoto non rompe niente");
+
+    // L'INVARIANTE CENTRALE, su tutte le larghezze: ciò che resta in barra —
+    // **compreso il pulsante «...» quando serve** — non supera mai lo spazio.
+    // È qui che vive l'errore classico di questo pattern: si riserva lo spazio del
+    // menu "a occhio" e il menu finisce fuori, portandosi via i comandi che doveva
+    // salvare. Senza questo controllo lo scoprirebbe l'utente, come le altre volte.
+    // CASO DEGENERE, dichiarato invece che nascosto: sotto la larghezza del solo
+    // pulsante «...» non c'è niente da salvare — non entra nemmeno lui. Lì
+    // l'invariante non si può soddisfare e non è un difetto: è un pannello di
+    // trenta pixel. Il collaudo lo NOMINA, così nessuno lo scambia per un bug e
+    // nessuno lo "risolve" allargando la soglia fino a nascondere quelli veri.
+    bool everFits = true, monotone = true;
+    float firstBadAvail = -1.0f;
+    int prev = -1;
+    for (float avail = ov; avail <= total + 200.0f; avail += 3.0f)
+    {
+        const int n = fitCount(w, avail, sp, ov);
+        if (n < 0 || n > (int)w.size()) { everFits = false; firstBadAvail = avail; break; }
+        float used = 0.0f;
+        for (int i = 0; i < n; ++i) used += w[i] + (i ? sp : 0.0f);
+        if (n < (int)w.size() && n > 0) used += sp + ov;   // il menu deve starci
+        else if (n == 0) used = ov;                        // solo il menu
+        if (used > avail + 0.001f) { everFits = false; firstBadAvail = avail; break; }
+        if (n < prev) monotone = false;
+        prev = n;
+    }
+    if (!everFits)
+        std::printf("        prima larghezza che sfora: %.1f px\n", firstBadAvail);
+    check(everFits, "barra: a OGNI larghezza cio' che resta in barra ci sta davvero");
+    check(fitCount(w, ov * 0.5f, sp, ov) == 0,
+          "barra: sotto la larghezza del menu stesso, zero voci (caso degenere noto)");
+    check(monotone, "barra: piu' spazio non fa mai entrare MENO comandi");
+
+    // Il caso che ha rotto la barra tre volte: si aggiunge un comando. Le voci
+    // precedenti non devono uscire dalla barra *e sparire*: al massimo scivolano
+    // nel menu, e la somma resta.
+    std::vector<float> w2 = w;
+    w2.push_back(110.0f);
+    const int before = fitCount(w,  total, sp, ov);
+    const int after  = fitCount(w2, total, sp, ov);
+    check(after <= before && after + ((int)w2.size() - after) == (int)w2.size(),
+          "barra: aggiungere un comando non ne fa sparire nessuno");
+    return failed;
+}
+
 static int undoStackSelfTest()
 {
     int failed = 0;
@@ -966,8 +1098,13 @@ int EditorApp::dirtyCoverageSelfTest()
 
 int EditorApp::runSelfTests()
 {
+    // Il timbro anche qui: quando chiedo all'utente di leggerlo a schermo, devo
+    // poterlo confrontare con quello del binario che ho appena costruito io.
+    std::cout << "[selftest] build " << __DATE__ << " " << __TIME__ << std::endl;
+    std::cout << "[selftest] barra dei comandi (niente puo' finire tagliato)" << std::endl;
+    int failed = toolbarSelfTest();
     std::cout << "[selftest] pila di annullamento condivisa" << std::endl;
-    int failed = undoStackSelfTest();
+    failed += undoStackSelfTest();
     std::cout << "[selftest] camera ortografica" << std::endl;
     failed += cameraSelfTest();
     std::cout << "[selftest] inquadratura al cambio vista" << std::endl;

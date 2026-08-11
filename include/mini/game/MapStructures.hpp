@@ -5,6 +5,8 @@
 
 #include <cmath>
 #include <cstddef>
+#include <algorithm>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -812,6 +814,24 @@ inline MapGeometryBox transformPartBox(const MapGeometryBox& b,
     return r;
 }
 
+// La stessa trasformazione applicata a una PARTE invece che a un box: serve a
+// "esplodere" un riferimento, cioè a riscrivere le parti del sottotipo nello spazio
+// di chi lo contiene. Una parte primitiva (o un riferimento) porta la sua posa in
+// `prim.x/y/z/ry`: si compone lì, con la stessa `Frame` di `transformPartBox` — due
+// convenzioni di rotazione qui e le parti esploderebbero ruotate al contrario.
+inline StructurePart transformPart(const StructurePart& p,
+                                   float ox, float oy, float oz, float ryDeg)
+{
+    StructurePart r = p;
+    if (p.isBox) { r.box = transformPartBox(p.box, ox, oy, oz, ryDeg); return r; }
+    const detail::Frame f = detail::frameOf(ox, oz, ryDeg);
+    r.prim.x  = f.wx(p.prim.x, p.prim.z);
+    r.prim.z  = f.wz(p.prim.x, p.prim.z);
+    r.prim.y  = oy + p.prim.y;
+    r.prim.ry = p.prim.ry + ryDeg;
+    return r;
+}
+
 // Il tipo è un assemblaggio? (`parts` non vuoto)
 inline bool isAssembly(const StructureTypeDef& t) { return !t.parts.empty(); }
 
@@ -819,27 +839,158 @@ inline bool isAssembly(const StructureTypeDef& t) { return !t.parts.empty(); }
 // e poi si trasformano: espanderle già trasformate avrebbe richiesto di propagare la
 // posa dentro ogni ramo di `expand`, cioè di duplicare la trasformazione in nove
 // posti — e il nono sarebbe stato sbagliato.
-inline void expandAssembly(const StructureTypeDef& t, const StructureDef& inst,
-                           std::vector<MapGeometryBox>& out)
+// Come si trova un tipo dal suo id. Passato dall'esterno perché `mapstructures` non
+// conosce il registry — e non deve: qui c'è la REGOLA di espansione, non i dati.
+using TypeResolver = std::function<const StructureTypeDef*(const std::string&)>;
+
+// Profondità massima dell'annidamento. Un tetto è obbligatorio, non prudenziale:
+// due strutture che si contengono a vicenda produrrebbero un'espansione infinita —
+// cioè l'editor che si pianta senza un messaggio. La lista `chain` ferma anche i
+// cicli più corti (A dentro A).
+inline constexpr int kMaxAssemblyDepth = 4;
+
+// Espande un ELENCO di parti nella posa di un'istanza. Estratta da `expandAssembly`
+// perché adesso le parti da espandere non vengono solo da un tipo: possono venire
+// dalle PARTI LOCALI di un'istanza modificata o di un riferimento isolato. Una sola
+// funzione per tutti e tre i casi — tre copie divergerebbero al primo caso nuovo.
+inline void expandParts(const std::vector<StructurePart>& parts,
+                        const std::string& ownerId, const StructureDef& inst,
+                        std::vector<MapGeometryBox>& out,
+                        const TypeResolver& resolve = {},
+                        std::vector<std::string>* chain = nullptr,
+                        int depth = 0)
 {
+    std::vector<std::string> localChain;
+    if (!chain) chain = &localChain;
+    // `chain` = i tipi che si stanno espandendo ADESSO, dal più esterno al più
+    // interno. Ci si entra una volta sola: è questo che rende impossibile il ciclo,
+    // non il tetto di profondità (che è la rete sotto, per i casi senza id).
+    if (!ownerId.empty()) chain->push_back(ownerId);
+
     std::vector<MapGeometryBox> local;
-    for (const auto& p : t.parts)
+    for (const auto& p : parts)
     {
         local.clear();
-        if (p.isBox) local.push_back(p.box);
-        else         expand(p.prim, local);
+
+        if (p.isRef())
+        {
+            // La posa della parte, comune a tutti i rami del riferimento.
+            StructureDef sub_inst;
+            sub_inst.x = p.prim.x; sub_inst.y = p.prim.y;
+            sub_inst.z = p.prim.z; sub_inst.ry = p.prim.ry;
+
+            if (!p.localParts.empty())
+            {
+                // ISOLATA E MODIFICATA: le parti locali VINCONO sul tipo riferito.
+                // Nessuna risoluzione, quindi nessun ciclo possibile per questa
+                // strada — le parti sono già qui, scritte per esteso.
+                if (depth >= kMaxAssemblyDepth) continue;
+                expandParts(p.localParts, {}, sub_inst, local, resolve, chain, depth + 1);
+            }
+            else
+            {
+                // Un riferimento: la struttura intera, non una copia delle sue parti.
+                if (!resolve || depth >= kMaxAssemblyDepth) continue;
+                // Ciclo: se questo tipo è già nella catena, fermarsi. Silenziosamente
+                // e senza espandere — meglio una parte mancante che un blocco totale.
+                if (std::find(chain->begin(), chain->end(), p.refType) != chain->end()) continue;
+                const StructureTypeDef* sub = resolve(p.refType);
+                if (!sub || sub->parts.empty()) continue;
+
+                // Si espande il sottotipo NELLA POSA DELLA PARTE (spazio locale del
+                // padre), poi il risultato subisce la posa dell'istanza: le due
+                // trasformazioni si compongono senza casi speciali.
+                expandParts(sub->parts, sub->id, sub_inst, local, resolve, chain, depth + 1);
+            }
+        }
+        else if (p.isBox) local.push_back(p.box);
+        else              expand(p.prim, local);
+
         for (const auto& b : local)
             out.push_back(transformPartBox(b, inst.x, inst.y, inst.z, inst.ry));
     }
+
+    if (!ownerId.empty()) chain->pop_back();
+}
+
+inline void expandAssembly(const StructureTypeDef& t, const StructureDef& inst,
+                           std::vector<MapGeometryBox>& out,
+                           const TypeResolver& resolve = {},
+                           std::vector<std::string>* chain = nullptr,
+                           int depth = 0)
+{
+    expandParts(t.parts, t.id, inst, out, resolve, chain, depth);
+}
+
+// ── LE DUE DOMANDE DA FARE PRIMA DI INSERIRE UN RIFERIMENTO ─────────────────
+// L'espansione si difende da sola (catena + tetto), ma difendersi in silenzio
+// significa una parte che sparisce senza spiegazione. Queste due rispondono PRIMA
+// del clic, così l'editor può dire *perché* quella composita non si può mettere.
+
+// `id` compare fra le parti di `t`, anche indirettamente?
+inline bool assemblyUses(const StructureTypeDef& t, const std::string& id,
+                         const TypeResolver& resolve, int depth = 0)
+{
+    if (id.empty() || depth > kMaxAssemblyDepth) return false;
+    for (const auto& p : t.parts)
+    {
+        if (!p.isRef()) continue;
+        if (p.refType == id) return true;
+        // Una parte isolata e modificata non risolve più il tipo: quello che conta
+        // sono le sue parti locali, e il ciclo può nascondersi lì dentro.
+        if (!p.localParts.empty())
+        {
+            StructureTypeDef tmp; tmp.parts = p.localParts;
+            if (assemblyUses(tmp, id, resolve, depth + 1)) return true;
+            continue;
+        }
+        if (!resolve) continue;
+        if (const StructureTypeDef* sub = resolve(p.refType))
+            if (assemblyUses(*sub, id, resolve, depth + 1)) return true;
+    }
+    return false;
+}
+
+// Quanti livelli di annidamento porta con sé `t` (0 = solo primitive e box).
+inline int assemblyDepth(const StructureTypeDef& t, const TypeResolver& resolve,
+                         int depth = 0)
+{
+    if (depth > kMaxAssemblyDepth) return depth;
+    int deepest = 0;
+    for (const auto& p : t.parts)
+    {
+        if (!p.isRef()) continue;
+        int d = 0;
+        if (!p.localParts.empty())
+        {
+            StructureTypeDef tmp; tmp.parts = p.localParts;
+            d = 1 + assemblyDepth(tmp, resolve, depth + 1);
+        }
+        else
+        {
+            if (!resolve) continue;
+            const StructureTypeDef* sub = resolve(p.refType);
+            if (!sub) continue;
+            d = 1 + assemblyDepth(*sub, resolve, depth + 1);
+        }
+        if (d > deepest) deepest = d;
+    }
+    return deepest;
 }
 
 // Espansione di un'istanza SAPENDO il suo tipo (può essere nullptr).
 // UN SOLO punto in cui si decide fra "assemblaggio" e "primitiva singola": il
 // registry, l'editor e il gate passano tutti di qui, quindi non possono divergere.
 inline void expandInstance(const StructureDef& inst, const StructureTypeDef* type,
-                           std::vector<MapGeometryBox>& out)
+                           std::vector<MapGeometryBox>& out,
+                           const TypeResolver& resolve = {})
 {
-    if (type && isAssembly(*type)) { expandAssembly(*type, inst, out); return; }
+    // Le PARTI LOCALI vincono su tutto: questa istanza è stata modificata solo qui,
+    // e il tipo non ha più voce sulla sua geometria. Prima di guardare il tipo,
+    // altrimenti una modifica d'istanza verrebbe ignorata proprio dove serve.
+    if (!inst.localParts.empty())
+    { expandParts(inst.localParts, {}, inst, out, resolve); return; }
+    if (type && isAssembly(*type)) { expandAssembly(*type, inst, out, resolve); return; }
     expand(inst, out);   // tipo semplice o nessun tipo: comportamento di ADR-053
 }
 

@@ -11,6 +11,44 @@ Sotto la barra, da sinistra a destra:
 
 I pannelli laterali si allargano trascinando il loro bordo interno.
 
+> **Se stai costruendo, vai prima al capitolo "Costruire velocemente".** Disegna, tira una faccia,
+> passo di griglia con Ctrl+rotella, allinea e distribuisci: e' li' che sta la differenza fra sei
+> gesti a box e due.
+
+## La barra dei comandi: dove sta cosa
+
+I comandi sono raggruppati in quattro menu. Sono pochi apposta: una barra che cresce a ogni
+funzione nuova finisce per tagliare gli ultimi comandi, e un comando tagliato **non esiste** per
+chi lo usa.
+
+| Menu | Cosa contiene |
+|---|---|
+| **Mappa** | Salva (**Ctrl+S**), Rinomina..., Nuova mappa... |
+| **Crea** | Box, Struttura parametrica..., Disegna sulla griglia (con altezza e quota) |
+| **Modifica** | Duplica, Serie..., Precisione..., Elimina |
+| **Vista** | filtri per tipo, taglio in quota, figura di scala, difetti, Solido |
+
+Fuori dai menu restano solo le cose che servono a colpo d'occhio o di continuo: **quale mappa**
+stai modificando, l'**asterisco** delle modifiche non salvate, il **passo di aggancio**,
+**Annulla/Ripristina**, **Prova da qui**, **Problemi (N)** e la **verifica navmesh**.
+
+**Problemi (N)** e' l'unico posto dove si guardano i difetti della mappa: salute tattica,
+navmesh e controllo dei dati insieme, raggruppati per tipo, ognuno cliccabile per andarci.
+Vedi il capitolo *Navmesh e metriche*.
+
+### Il pulsante «...»
+Se restringi la finestra, i comandi che non entrano **non spariscono**: finiscono dentro un
+pulsante `...` in fondo alla barra, e il suo suggerimento ti dice quanti ne contiene. Allarga la
+finestra e tornano al loro posto.
+
+### Salvare
+**Ctrl+S** salva e basta — non apre nessuna finestra: compare la scritta verde *Salvato* accanto
+al nome della mappa e sparisce da sola. Funziona anche dai tab delle strutture, e fa la cosa
+giusta per quello che stai guardando: la mappa, il tipo di struttura, o la singola struttura
+modificata.
+
+L'**asterisco arancione** accanto al nome della mappa dice che ci sono modifiche non salvate.
+
 ## Sapere quanto e' grande la mappa
 In cima al pannello di sinistra c'e' sempre l'ingombro reale: `71.3 x 92.4 m` e l'escursione
 di quota. Tiene conto della ROTAZIONE dei box e comprende anche i box generati dalle primitive.
@@ -64,6 +102,59 @@ diventano quelli filtrati.
 
 Nell'intestazione di un gruppo di posizioni compare anche quante sono "cieche" — cosi' vedi
 da fuori dove c'e' un problema senza aprirle tutte.
+
+## Strutture composite in mappa
+Una composita (una torre, un bunker) e' **UN elemento**: si sposta, si ruota e si aggiorna
+insieme alla sua definizione. Selezionandola, il pannello di destra non mostra alzate e pedate —
+non sono sue, sono del tipo — ma quattro cose:
+
+- **nome** e **posa** (X, Y, Z, rotazione);
+- **Modifica solo QUESTA...**: apre l'editor strutture su questa sola struttura;
+- **Modifica il TIPO (tutte le copie)**: apre la struttura di libreria;
+- **Esplodi in parti**: la scioglie negli elementi della mappa, ognuno modificabile da solo.
+
+### Modificare UNA copia sola
+Hai quattro Tactic Bunker in mappa e su uno serve una modifica specifica. **Modifica solo
+QUESTA...** apre l'editor strutture in un tab intitolato *"Tactic Bunker (solo questa)"*, con una
+fascia gialla in cima che ricorda cosa stai toccando. Ci lavori come sempre — aggiungi, togli,
+sposta parti — poi **Applica alla struttura**.
+
+Da quel momento quella copia porta un **asterisco**: nell'elenco appare `[+] Tactic Bunker *`, e
+nel pannello c'e' scritto "modificata solo qui". Il tipo in libreria e le altre tre copie **non
+sono state toccate**: modificando il tipo, quella con l'asterisco non cambia piu'.
+
+- **Ripristina dall'originale** butta via le modifiche e la fa tornare a seguire il tipo.
+- **Promuovi a tipo di libreria...** (dentro il tab) trasforma la variante in un tipo vero, se
+  scopri che ti serve anche altrove.
+
+> Le modifiche di una copia sola stanno nel **file della mappa**, non in libreria: si salvano
+> salvando la mappa.
+
+### Le due strade, da non confondere
+| Vuoi... | Comando | Effetto |
+|---|---|---|
+| sistemare **tutti** i bunker | Modifica il TIPO | cambia ovunque, anche nelle altre mappe |
+| sistemare **questo** bunker | Modifica solo QUESTA | cambia solo qui, il tipo resta intatto |
+| smontarlo del tutto | Esplodi in parti | non e' piu' un bunker: sono elementi sciolti |
+
+### Quando esplodere, e cosa comporta
+Serve per le modifiche ad hoc di UN punto: la barricata storta perche' li' c'e' una roccia.
+Senza, l'unica strada era duplicare l'intero tipo in libreria per una modifica di mezzo metro.
+
+Le parti primitive **restano primitive** (conservano ricetta e vincoli: alzate a norma,
+larghezze minime), le parti che erano riferimenti restano composite. Esplodere e' un passo, non
+una demolizione fino ai box.
+
+> **Attenzione**: da quel momento il legame col tipo e' sciolto. Correggere l'originale non
+> cambia piu' quelle parti. **Ctrl+Z** annulla.
+
+### Il ritorno: raggruppare
+Seleziona due o piu' elementi (Ctrl+clic, o Ctrl+A) e premi **Raggruppa in una composita...**:
+crea un TIPO con quegli elementi — origine al loro baricentro — e li sostituisce con una sola
+istanza. E' il modo per prendere qualcosa costruito a mano qui e renderlo riusabile ovunque.
+
+La struttura nasce **non verificata**: aprila nell'editor strutture e premi Verifica prima di
+riusarla altrove.
 
 ## Salvataggio e sicurezza
 - **Salva** scrive il file della mappa. Ogni scrittura crea un `.bak`.

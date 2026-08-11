@@ -141,7 +141,10 @@ private:
     void renderValidationPanel();   // ADR-018 (usa validateContent, mai una copia)
     void renderDockSpace();
 
-    void launchGame();    // Lancia GFEngine.exe con --direct-prematch
+    // Lancia GFEngine.exe. Senza argomenti va al pre-partita come sempre; con
+    // argomenti serve a "Prova da qui" del Map Editor (doc 53 L4), che passa
+    // `--map <mappa> --at x,z`.
+    void launchGame(const std::string& args = "--direct-prematch");
     void launchSandbox(); // Lancia GFEngine.exe con --sandbox
 };
 

@@ -579,6 +579,8 @@ struct StructureParamRule
     float max = 0.0f;
 };
 
+struct StructurePart;   // definita più sotto: contiene uno StructureDef per valore
+
 struct StructureDef
 {
     StructureKind kind = StructureKind::Stair;
@@ -586,6 +588,22 @@ struct StructureDef
     // Tipo di appartenenza (ADR-055). VUOTO = comportamento di prima, con i minimi
     // per primitiva: il fallback documentato della transizione (CLAUDE.md §2).
     std::string   type;
+
+    // ── PARTI LOCALI: questa istanza è una versione MODIFICATA del suo tipo ──
+    // (ADR-056 rivisto 2026-08-10, richiesta dell'utente: quattro Tactic Bunker in
+    // mappa, e su UNO serve una modifica specifica.)
+    // Non vuoto = si espandono QUESTE invece delle parti del tipo. Il campo `type`
+    // resta: serve a dire da cosa deriva ("Tactic Bunker, modificata") e a poterci
+    // tornare. Le modifiche vivono sull'ISTANZA, cioè nel file della mappa, dove
+    // stanno le decisioni che valgono per quel punto e basta.
+    //
+    // Perché non creare invece un tipo nuovo in libreria: perché la libreria
+    // diventerebbe un elenco di varianti quasi identiche di cui nessuno ricorda la
+    // differenza — lo stesso motivo per cui i riferimenti hanno sostituito le copie.
+    // È il modello degli override d'istanza di Unity, e per la stessa ragione.
+    std::vector<StructurePart> localParts;
+    [[nodiscard]] bool isModifiedInstance() const
+    { return !type.empty() && !localParts.empty(); }
 
     // Origine e orientamento. `ry` = direzione di SALITA (scala/rampa), di sviluppo
     // (muro), del ripiano (piattaforma).
@@ -654,6 +672,22 @@ struct StructurePart
     StructureDef     prim;            // valida se !isBox (x,y,z,ry = posa LOCALE)
     MapGeometryBox   box;             // valida se isBox  (idem)
     std::string      label;
+    // RIFERIMENTO a un altro tipo composito (ADR-056 rivisto 2026-08-08 su richiesta
+    // dell'utente: *"preferirei le lasciassi normali"*). Non vuoto = questa parte è
+    // un'altra struttura intera, non una copia delle sue parti: modificando
+    // l'originale cambiano anche gli usi.
+    // La posa sta in `prim.x/y/z/ry` — riusare quei campi evita un terzo blocco di
+    // coordinate che poi qualcuno dimentica di leggere o di scrivere.
+    std::string      refType;
+    [[nodiscard]] bool isRef() const { return !refType.empty(); }
+
+    // Le PARTI LOCALI di un riferimento: stessa idea di `StructureDef::localParts`,
+    // un livello più dentro. Non vuoto = questa copia della struttura riferita è
+    // stata modificata **qui e solo qui** (comando "Isola e modifica"). Il tipo
+    // riferito resta scritto: si sa da cosa deriva e ci si può tornare.
+    std::vector<StructurePart> localParts;
+    [[nodiscard]] bool isModifiedRef() const
+    { return !refType.empty() && !localParts.empty(); }
 };
 
 // Un TIPO di struttura: preset nominato di una primitiva, con i suoi vincoli
@@ -663,9 +697,16 @@ struct StructurePart
 // ASSEMBLAGGIO (ADR-056): se `parts` non è vuoto il tipo è un assemblaggio e
 // `defaults` non viene espanso. Se è vuoto, il tipo resta quello di ADR-055 — una
 // sola primitiva — e nulla cambia per i tipi già scritti.
-// **Un assemblaggio non può contenere assemblaggi**: le parti sono primitive o box,
-// punto. È il limite preso dalla pratica delle famiglie annidate di Revit, e serve a
-// non moltiplicare i modi in cui il navmesh si rompe senza che si capisca dove.
+//
+// ANNIDAMENTO (ADR-056 rivisto 2026-08-08): un assemblaggio PUÒ contenere altri
+// assemblaggi, per riferimento (`StructurePart::refType`). Il divieto originale
+// veniva dalle famiglie annidate di Revit ed era motivato — l'annidamento moltiplica
+// i modi in cui il navmesh si rompe — ma il rimedio (copiare le parti) creava una
+// libreria di varianti divergenti: correggere una torre non correggeva i suoi usi.
+// Il rischio si paga in tre modi invece che col divieto:
+//   · catena anti-ciclo + tetto `kMaxAssemblyDepth` in `expandAssembly`;
+//   · si possono riferire solo composite già VERIFICATE (navmesh percorribile);
+//   · il gate `--validate` segnala riferimenti rotti, cicli e annidamento eccessivo.
 struct StructureTypeDef
 {
     std::string   id;

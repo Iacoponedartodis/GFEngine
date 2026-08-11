@@ -1,0 +1,145 @@
+{
+    "category": "Tacticals",
+    "defaults": {
+        "access": [
+            true,
+            false,
+            false,
+            false
+        ],
+        "ceiling": false,
+        "railing": false,
+        "rise": 2.0,
+        "riser": 0.0,
+        "tread": 0.0,
+        "width": 2.0
+    },
+    "kind": "stair",
+    "label": "Basic Highground",
+    "note": "",
+    "parts": [
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 4.0,
+            "sy": 2.0,
+            "sz": 4.0,
+            "type": "wall",
+            "x": -0.01001325435936451,
+            "y": 1.0,
+            "z": -0.011025603860616684
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.0,
+            "riser": 0.0,
+            "ry": 180.0,
+            "tread": 0.0,
+            "width": 4.0,
+            "x": -0.007980139926075935,
+            "y": 0.0,
+            "z": 4.962394714355469
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.0,
+            "riser": 0.0,
+            "ry": -90.0,
+            "tread": 0.0,
+            "width": 4.0,
+            "x": 4.970409393310547,
+            "y": 0.0,
+            "z": 0.016864025965332985
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.0,
+            "riser": 0.0,
+            "ry": 0.0,
+            "tread": 0.30000001192092896,
+            "width": 4.0,
+            "x": 0.01119978167116642,
+            "y": 0.0,
+            "z": -5.001962661743164
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 2.0,
+            "riser": 0.0,
+            "ry": 90.0,
+            "tread": 0.30000001192092896,
+            "width": 4.0,
+            "x": -4.977038860321045,
+            "y": 0.0,
+            "z": 0.005870398133993149
+        }
+    ],
+    "rules": {
+        "rise": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "riser": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "tread": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "width": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        }
+    },
+    "verified": true
+}

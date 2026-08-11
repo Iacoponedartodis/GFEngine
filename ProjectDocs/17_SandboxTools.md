@@ -20,6 +20,18 @@ in meno di un minuto, senza riavviare il processo e senza leggere file di log es
 - Prove specifiche (es. 5v5 AI) richiedevano modifiche al codice.
 
 ## Scope
+0. **`--walk`: la sandbox SENZA manichini** (aggiunto 2026-08-11, doc 53 L4, changelog 192).
+   È il motore di "Prova da qui" del Map Editor: si entra direttamente nella mappa, da soli, per
+   provare com'è **percorrerla**. Non è un game mode nuovo — la sandbox porta già geometria,
+   strutture, veicoli, controller e nessun menu; l'unica cosa che non serve a una prova di
+   percorribilità sono i bersagli.
+   **Attenzione (trappola reale)**: azzerare `team1AiCount`/`team2AiCount` **non** disattiva i
+   manichini. La sandbox spawna deliberatamente almeno un manichino **per ogni definizione
+   registrata** (`std::max(count, ids.size())`), così ogni unità autorata è subito provabile — ed
+   è giusto che sia così. Serve l'interruttore esplicito `SandboxMode::spawnDummies`, portato da
+   `MatchSettings::sandboxDummies` (non serializzato: è una scelta di avvio, non una preferenza).
+   Il pannello della sandbox resta disponibile anche in `--walk`: se a metà prova serve un
+   bersaglio, lo si fa comparire da lì.
 1. **Menu sandbox (TAB in partita, solo sandbox)** — overlay Ui2D a due pagine:
    - *Armi*: lista completa dal registry, scrollabile, slot primaria/secondaria.
    - *Simulazione*: battaglia AI-vs-AI personalizzabile (modalità Conquista/Assalto/

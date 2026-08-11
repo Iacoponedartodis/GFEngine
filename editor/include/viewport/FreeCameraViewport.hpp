@@ -59,6 +59,9 @@ public:
     // è il modo sicuro di inquadrare il vuoto.
     void setContentBounds(const glm::vec3& mn, const glm::vec3& mx);
     void frameContent();   // "inquadra tutto" — il rimedio universale al perdersi
+    // Inquadra UN punto (doc 53 L5, "portami lì"): non tocca l'ingombro del
+    // contenuto, quindi `F` continua a inquadrare tutta la mappa.
+    void focusOn(const glm::vec3& center, float radius = 4.0f);
     // Sola lettura, per il collaudo: permette di verificare che dopo un cambio di
     // vista il contenuto sia DAVVERO inquadrato, invece di dichiararlo.
     [[nodiscard]] const mini::Camera& camera() const { return *m_camera; }
@@ -136,7 +139,12 @@ public:
     // Tre modalità stile DCC: Sposta (frecce), Ruota (anelli), Scala (maniglie
     // quadrate + quadrato centrale per scala uniforme). Scorciatoie 1/2/3 con
     // mouse sul viewport (non in cattura).
-    enum class GizmoMode { Translate, Rotate, Scale };
+    // `Face` è il gesto primario di costruzione secondo tre riferimenti su quattro
+    // (CubeGrid di Unreal, TrenchBroom, "A Simpler 3D Level Editor"): si afferra una
+    // FACCIA e la si tira. Non è "scala": la faccia opposta resta ferma, quindi si
+    // allunga un muro senza doverlo anche ricentrare. Con la scala ogni allungamento
+    // costa due gesti — ed è il motivo per cui costruire qui costava sei gesti a box.
+    enum class GizmoMode { Translate, Rotate, Scale, Face };
 
     void      setGizmoTarget(glm::vec3 pos, bool enabled);
     void      setGizmoMode(GizmoMode m)      { m_gizmoMode = m; }
@@ -154,6 +162,33 @@ public:
     bool popGizmoDelta(glm::vec3& outDelta);        // world, modalità Sposta
     bool popGizmoRotDelta(glm::vec3& outEulerDeg);  // delta euler (gradi) per asse
     bool popGizmoScaleDelta(glm::vec3& outDelta);   // world units per asse
+
+    // ── MODALITÀ FACCIA (doc 53 L1) ──────────────────────────────────────
+    // L'ingombro della selezione, da chi lo conosce: serve a mettere le sei
+    // maniglie sulle facce. Senza, il gizmo non saprebbe dove sono.
+    void setGizmoBounds(const glm::vec3& mn, const glm::vec3& mx, bool valid);
+    // Faccia: 0=-X 1=+X 2=-Y 3=+Y 4=-Z 5=+Z. `outDelta` è positivo VERSO L'ESTERNO
+    // (la faccia si allontana dal centro) ed è sempre un multiplo del passo di
+    // griglia: una costruzione che non si aggancia produce fessure sotto la soglia
+    // di erosione del navmesh, cioè difetti che non si vedono.
+    bool popGizmoFaceDelta(int& outFace, float& outDelta);
+    [[nodiscard]] int activeFace() const { return m_faceLast; }
+
+    // ── DISEGNA UN BOX (doc 53 L1) ───────────────────────────────────────
+    // Trascinamento sul piano di lavoro: definisce l'impronta in pianta. È il gesto
+    // con cui nasce un muro in Hammer e in CubeGrid — uno, invece dei quattro di
+    // "crea a misura fissa, poi tre campi numerici".
+    void setDrawBoxActive(bool on);
+    [[nodiscard]] bool drawBoxActive() const { return m_drawActive; }
+    void setDrawPlaneY(float y) { m_drawPlaneY = y; }
+    [[nodiscard]] float drawPlaneY() const { return m_drawPlaneY; }
+    // Rettangolo appena disegnato, in coordinate mondo sul piano di lavoro.
+    bool popDrawnRect(glm::vec3& outMin, glm::vec3& outMax);
+
+    // Ctrl+rotella ha chiesto di cambiare il passo di griglia: +1 più grande,
+    // -1 più piccolo. Il viewport non conosce i passi ammessi — li decide il
+    // modulo, che è anche quello che li salva.
+    bool popGridStepRequest(int& outDir);
 
     // ── Camera pan ───────────────────────────────────────────────────────
     void panCamera(float rightDelta, float upDelta);
@@ -216,6 +251,10 @@ private:
     void buildRulerGeometry();
 
     void buildGrid(float size, int div);
+    // Griglia che segue la vista e adatta il passo: si ricostruisce solo quando la
+    // cella o il passo cambiano, quindi costa nulla nei frame fermi.
+    void updateInfiniteGrid();
+    float m_gridStep = -1.0f, m_gridCx = 0.0f, m_gridCz = 0.0f;
     void drawArray(const std::vector<float>& data, int count,
                    unsigned int glMode, const glm::mat4& vp);
     void renderScene();
@@ -294,6 +333,29 @@ private:
     int  m_clickedBoxId  = MapBoxDraw::kNoPick;
     bool m_hasClickedBox = false;
     bool m_gizmoBarHovered = false;  // click sui pulsanti modalità → non selezionare dietro
+
+    // ── Modalità FACCIA (doc 53 L1) ──────────────────────────────────────
+    bool      m_boundsValid = false;
+    glm::vec3 m_boundsMin{0.0f}, m_boundsMax{0.0f};
+    int       m_faceActive  = -1;    // faccia afferrata adesso (0..5), -1 = nessuna
+    int       m_faceLast    = 3;     // ultima usata; +Y perché "alza il muro" è il caso comune
+    float     m_faceAccum   = 0.0f;  // metri accumulati non ancora emessi (sotto un passo)
+    float     m_facePending = 0.0f;  // metri già agganciati, in attesa che il modulo li prenda
+    bool      m_faceHas     = false;
+
+    // ── Disegna un box ───────────────────────────────────────────────────
+    bool      m_drawActive  = false;
+    bool      m_drawDragging = false;
+    float     m_drawPlaneY  = 0.0f;
+    glm::vec3 m_drawA{0.0f}, m_drawB{0.0f};
+    bool      m_drawHas     = false;   // rettangolo pronto da ritirare
+    glm::vec3 m_drawMin{0.0f}, m_drawMax{0.0f};
+
+    int  m_gridStepReq = 0;          // Ctrl+rotella: +1/-1, azzerato quando ritirato
+    // Proiezione mondo → schermo, condivisa da gizmo e sovrapposizioni.
+    [[nodiscard]] bool worldToScreen(const glm::vec3& w, ImVec2& out) const;
+    void drawFaceGizmo();
+    void drawBoxTool(bool hovered);
 
     void drawGizmoOverlay();
     void drawMarkerLabels();   // etichette testo dei marker (attach point ecc.)

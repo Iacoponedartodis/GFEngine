@@ -84,6 +84,23 @@ struct TacticalDefect
                       // Un punto che il gioco CHIEDE di raggiungere e che la
                       // navigazione non può raggiungere è un difetto di mappa.
                       UnreachablePoint,
+                      // ── Due modi in cui una superficie DICHIARATA calpestabile
+                      // non diventa navmesh, entrambi invisibili guardando la mappa
+                      // (doc 53 L5). Le soglie non sono scelte a occhio: vengono da
+                      // `MapMetrics`, che le ricava dai filtri di Recast.
+                      //
+                      // `TooSmallElevated` — un ripiano sopraelevato perde una cella
+                      // per lato come strapiombo, poi `AGENT_RADIUS` per lato di
+                      // erosione, poi le regioni sotto ~2,56 m² vengono scartate:
+                      // sotto `ELEVATED_MIN_SPAN` (3,00 m) non resta niente. Il
+                      // ripiano è perfetto nei dati e inesistente per l'AI.
+                      TooSmallElevated,
+                      // `NarrowGap` — due superfici complanari separate da una
+                      // fessura più stretta del diametro dell'agente non si
+                      // collegano: l'erosione mangia i bordi e il passaggio non
+                      // esiste. È il difetto che nasce accostando due box "a occhio"
+                      // — a 3 cm di distanza sembrano attaccati.
+                      NarrowGap,
                       Count };
     Target      target   = Target::Position;
     Kind        kind     = Kind::NoCoverage;

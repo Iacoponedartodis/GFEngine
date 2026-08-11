@@ -1,0 +1,193 @@
+{
+    "category": "Building Pieces",
+    "defaults": {
+        "access": [
+            true,
+            false,
+            false,
+            false
+        ],
+        "ceiling": false,
+        "railing": false,
+        "rise": 2.0,
+        "riser": 0.0,
+        "tread": 0.0,
+        "width": 2.0
+    },
+    "kind": "stair",
+    "label": "Spiral Staircases",
+    "note": "",
+    "parts": [
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 1.0,
+            "riser": 0.0,
+            "ry": 0.0,
+            "tread": 0.0,
+            "width": 1.600000023841858,
+            "x": -1.5961182117462158,
+            "y": 0.0,
+            "z": -0.6833839416503906
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 3.200000047683716,
+            "sy": 0.25,
+            "sz": 1.600000023841858,
+            "type": "wall",
+            "x": -0.7964375019073486,
+            "y": 0.8762993812561035,
+            "z": 1.6071414947509766
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 1.0,
+            "riser": 0.0,
+            "ry": 90.0,
+            "tread": 0.0,
+            "width": 1.600000023841858,
+            "x": -0.6965874433517456,
+            "y": 1.0,
+            "z": 1.5978636741638184
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 1.600000023841858,
+            "sy": 0.25,
+            "sz": 3.200000047683716,
+            "type": "wall",
+            "x": 1.5962551832199097,
+            "y": 1.8754818439483643,
+            "z": 0.7888128757476807
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 1.0,
+            "riser": 0.0,
+            "ry": 180.0,
+            "tread": 0.0,
+            "width": 1.600000023841858,
+            "x": 1.598265290260315,
+            "y": 2.0,
+            "z": 0.6903653144836426
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 3.200000047683716,
+            "sy": 0.25,
+            "sz": 1.600000023841858,
+            "type": "wall",
+            "x": 0.7956333160400391,
+            "y": 2.877352714538574,
+            "z": -1.605483889579773
+        },
+        {
+            "access": [
+                true,
+                false,
+                false,
+                false
+            ],
+            "ceiling": false,
+            "kind": "stair",
+            "label": "stair",
+            "part": "prim",
+            "railing": false,
+            "rise": 1.0,
+            "riser": 0.0,
+            "ry": -90.0,
+            "tread": 0.0,
+            "width": 1.600000023841858,
+            "x": 0.6961790919303894,
+            "y": 3.0,
+            "z": -1.60538911819458
+        },
+        {
+            "b": 0.2800000011920929,
+            "collider": true,
+            "g": 0.3199999928474426,
+            "label": "box",
+            "part": "box",
+            "r": 0.3499999940395355,
+            "ry": 0.0,
+            "sx": 1.600000023841858,
+            "sy": 0.25,
+            "sz": 3.200000047683716,
+            "type": "wall",
+            "x": -1.5982654094696045,
+            "y": 3.8716351985931396,
+            "z": -0.8071414232254028
+        }
+    ],
+    "rules": {
+        "rise": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "riser": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "tread": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        },
+        "width": {
+            "editable": true,
+            "max": 0.0,
+            "min": 0.0
+        }
+    },
+    "verified": true
+}

@@ -2758,7 +2758,7 @@ autorato.
 **Status: Proposed.** Passa ad Accepted quando i tipi sono implementati, un tipo reale è in uso su una
 mappa e la verifica navmesh isolata è stata confrontata con il comportamento in partita.
 
-## ADR-056 — Assemblaggio e prefab sono UN SOLO sistema, non due (Accepted — approvato dall'utente 2026-08-06)
+## ADR-056 — Assemblaggio e prefab sono UN SOLO sistema, non due (Accepted — approvato dall'utente 2026-08-06; **revisionato 2026-08-08**: l'annidamento per riferimento è ammesso, vedi in fondo)
 
 **Contesto.** ADR-055 ha dato alle strutture un livello di **tipo**: preset vincolati di **una**
 primitiva. L'utente ha subito segnalato il limite (2026-08-06): *"l'editor strutture mi permette di
@@ -2831,3 +2831,149 @@ Va aggiunto un componente **`ViewportEditing`** all'elenco dei pezzi condivisi (
 (VehicleEditor, 349 righe — il più piccolo proprio perché li usa; MapEditor ne ha 6258 senza).
 La migrazione "un modulo alla volta" prevista dall'ADR si è fermata dopo il pilota e va ripresa:
 è il piano di doc 52.
+
+### ADR-056 — precisazione 2026-08-08: inserire una composita è COPIARE, non annidare
+L'utente ha chiesto di poter mettere strutture composite dentro un assemblaggio. L'ADR **vieta
+l'annidamento**, per la ragione presa dalle famiglie Revit: un assemblaggio dentro un altro
+moltiplica i modi in cui il navmesh si rompe senza che si capisca dove, e toglie alla verifica
+isolata il suo potere diagnostico.
+
+**Il divieto resta, e la richiesta è soddisfatta lo stesso**: il comando `+ Composita` **copia le
+parti** dell'altro tipo dentro questo, appiattite, mantenendone le posizioni relative. Si riusa il
+lavoro di authoring — che è ciò che serve davvero — senza creare un RIFERIMENTO che possa annidarsi
+all'infinito. Le parti restano primitive o box, come prescritto, e la verifica continua a poter
+indicare la singola parte che non produce superficie.
+
+**Conseguenza dichiarata all'utente nella UI**: sono copie, non istanze. Modificando la torre
+originale, le copie già inserite non cambiano. È il compromesso di ogni sistema che appiattisce
+(le esplosioni di blocco in CAD si comportano così), ed è preferibile a una gerarchia che nessuno
+riesce più a diagnosticare.
+
+> **Superata il 2026-08-08 dalla revisione qui sotto.** L'utente, messo davanti a questa
+> conseguenza, ha scelto il contrario. La precisazione resta scritta perché il ragionamento è
+> corretto e il rischio che descrive è reale: è quello che la revisione deve pagare.
+
+### ADR-056 — REVISIONE 2026-08-08: l'annidamento è AMMESSO, per riferimento
+
+**Decisione dell'utente**, testuale: *"per quanto riguarda le composite, preferirei le lasciassi
+normali, mettendo al massimo la limitazione per cui puoi aggiungere composite solo se sono state
+verificate"*. Il divieto di annidamento cade.
+
+**Perché il divieto era sbagliato nella pratica.** Appiattire risolve il problema dell'espansione
+e ne crea uno peggiore a monte: la libreria diventa un archivio di copie che divergono. Una torre
+corretta una volta va corretta in ogni posto dove è stata copiata, a mano, ricordandosi quali
+sono. È esattamente il difetto che ADR-001 (id = filename stem) e il comando di rinomina esistono
+per impedire altrove — una verità duplicata è una verità che si sfalda. Il costo si paga al primo
+ripensamento su un pezzo riusato, cioè sempre.
+
+**Cosa cambia nello schema.** `StructurePart` acquista `refType` (chiave JSON `ref`). Non vuoto =
+la parte **È** un altro tipo composito, non una copia delle sue parti. La posa vive in
+`prim.x/y/z/ry`: riusare quei campi evita un terzo blocco di coordinate che poi qualcuno dimentica
+di leggere o di scrivere. Assente = niente cambia, e nessun file esistente si tocca.
+
+**Il rischio del divieto originale resta vero, e si paga in quattro modi** invece che vietando:
+
+1. **Catena anti-ciclo + tetto di profondità** (`kMaxAssemblyDepth = 4`) dentro `expandAssembly`.
+   Due strutture che si contengono a vicenda producevano un'espansione infinita: l'editor che si
+   pianta senza un messaggio. La catena tiene i tipi che si stanno espandendo *adesso* e rifiuta
+   di rientrarci; il tetto è la rete sotto, per i tipi senza id (un tab mai salvato).
+2. **Solo composite VERIFICATE** si possono riferire — il limite chiesto dall'utente, e il più
+   efficace: un riferimento porta dentro geometria di cui si sa già che il navmesh la attraversa.
+   Nel menu le altre si vedono comunque, in grigio, **col motivo** (ADR-023: una voce che sparisce
+   insegna che la capacità non esiste).
+3. **Il gate `--validate` non lascia niente di muto**: riferimento a un tipo inesistente (Error —
+   a runtime la parte sparisce e basta), riferimento a un tipo non composito (Error), a un tipo
+   non verificato (Warn), ciclo (Error), annidamento oltre il tetto (Warn). Più, in mappa,
+   l'istanza con un `type` che non esiste più. Erano tutti errori **silenziosi**: la struttura
+   nasce, si vede, e le manca un pezzo.
+4. **`Esplodi`** è la via d'uscita in entrambe le direzioni (vedi sotto): quando l'annidamento
+   diventa difficile da diagnosticare, lo si scioglie e si torna a parti piatte.
+
+**Un solo serializzatore per le parti.** Le parti avevano due serializzatori — lettore nel
+registry, scrittore nell'editor: la stessa configurazione che aveva già perso il campo `type` e
+causato una perdita dati permanente. Sono diventati uno (`mini::structjson::partFromJson` /
+`partToJson`, più `boxFromJson`/`boxToJson`) **prima** di aggiungere `ref`, perché `ref` sarebbe
+stato il quarto campo ad arrivare in un lettore su due.
+
+### ADR-056 — ESPLODI / RAGGRUPPA (2026-08-08)
+
+Richiesta testuale: *"una funzione per le composite che ti permette di passare da un oggetto
+unico, alla struttura come insieme di parti, funzione utile anche nel map editor normale in caso
+di bisogno di modifiche ad hoc per delle situazioni specifiche"*.
+
+È il complemento necessario del riferimento, non un extra. Il riferimento è la forma giusta
+finché la struttura va bene com'è; quando serve cambiarne un pezzo **in quel punto e solo lì** —
+la barricata storta perché c'è una roccia — senza `Esplodi` l'unica strada era duplicare l'intero
+tipo in libreria per una modifica di mezzo metro. È lo stesso gesto di *Explode* in CAD e di
+*Unpack Prefab* in Unity, e per lo stesso motivo.
+
+- **Nell'editor strutture**: `Esplodi` su una parte-riferimento la sostituisce con le parti vere
+  del sottotipo, alla stessa posa. Da lì in poi sono parti di questa struttura.
+- **Nel Map Editor**: `Esplodi in parti` su un'istanza composita la scioglie negli elementi della
+  mappa. Le parti primitive **restano primitive** (conservano la ricetta e i vincoli di ADR-053:
+  appiattirle a box butterebbe via la garanzia sulle alzate); le parti-riferimento restano
+  composite, un livello più in basso. Esplodere è un passo, non una demolizione fino ai box.
+- **Il ritorno**, sempre nel Map Editor: `Raggruppa in una composita...` su una selezione multipla
+  crea un TIPO con quegli elementi (origine al loro baricentro) e li sostituisce con una sola
+  istanza. Senza, `Esplodi` sarebbe una porta a senso unico e la modifica ad hoc di oggi
+  resterebbe per sempre geometria sciolta. Il tipo si scrive con lo **stesso** `saveStructType`
+  dei tab, e nasce non verificato.
+
+**Invariante collaudato** (`--editor-selftest`): esplodere non sposta la geometria di un
+millimetro, in entrambi gli editor. Uno strumento che rompe la mappa mentre la aiuta se ne
+accorgerebbe solo chi guarda.
+
+**Conseguenza dichiarata**: `Esplodi` **scioglie il legame col tipo**. È ciò che si vuole in quel
+momento, ma da lì in poi correggere l'originale non cambia più quelle parti — l'esatto contrario
+della proprietà per cui esiste il riferimento. Ctrl+Z lo annulla.
+
+### ADR-056 — PARTI LOCALI: modificare UNA copia sola (2026-08-10)
+
+Richiesta testuale: *"uso la composita Tactic Bunker, ne piazzo 4 diverse, ma su una devo fare
+una modifica specifica, quindi la seleziono e apro l'editor per quella singola composita, che poi
+appare sempre come Tactic Bunker ma con magari un segnetto per indicare che è una versione
+modificata"*.
+
+**Perché `Esplodi` non bastava.** Esplodere risolve "voglio cambiare un pezzo qui", ma al prezzo
+di perdere il confine e il nome: dopo, non è più un Tactic Bunker, sono dodici box sciolti. Si
+perde la capacità di dire *"questo è un bunker, con una modifica"* — che è precisamente
+l'informazione che serve fra tre settimane, guardando la mappa. Le altre due strade erano
+peggiori: duplicare il tipo in libreria (varianti quasi identiche di cui nessuno ricorda la
+differenza) o modificare il tipo (rovinare gli altri tre bunker per sistemarne uno).
+
+**Decisione.** `StructureDef::localParts` e `StructurePart::localParts` (chiave JSON
+`local_parts`). Non vuoto = **queste parti vincono sul tipo**; `type`/`refType` resta scritto, e
+serve a due cose: dire da cosa deriva ("Tactic Bunker *") e poterci tornare
+("Ripristina dall'originale"). Assente = niente cambia, e nessuna mappa esistente si tocca.
+
+È il modello degli **override d'istanza** di Unity, adottato per la stessa ragione: le decisioni
+che valgono per un punto solo devono vivere nel documento di quel punto — cioè nel file della
+mappa, non nella libreria.
+
+**Un solo posto in cui la regola è scritta**: `expandParts`, estratta da `expandAssembly`. Le
+parti da espandere ora vengono da tre sorgenti (un tipo, le parti locali di un'istanza, le parti
+locali di un riferimento isolato) e la funzione è una sola — tre copie divergerebbero al primo
+caso nuovo, che è la storia di questo sottosistema.
+
+**Le due strade, dichiarate una accanto all'altra.** Nel pannello di una composita in mappa:
+`Modifica solo QUESTA...` e `Modifica il TIPO (tutte le copie)`. Sono la stessa azione con due
+portate opposte, e sbagliare porta costa tre bunker o quattro correzioni ripetute: stanno vicine
+apposta, con la portata scritta **nel testo del pulsante**, non solo nel tooltip.
+
+**Lo stesso editor, non un secondo semplificato.** Il tab si apre in modo `Instance`: cambia il
+bersaglio (`Applica alla struttura` invece di `Salva`), non gli strumenti. Un secondo editor
+sarebbe rimasto indietro di qualche funzione per sempre.
+
+**`Isola e modifica`** è la stessa cosa un livello dentro: si entra in una parte-riferimento, si
+modifica *quella copia*, e alla chiusura si richiude in un oggetto solo. Differenza da `Esplodi`,
+che è la domanda giusta da farsi: **esplodere demolisce il confine, isolare lo tiene e cambia cosa
+c'è dentro.** Servono tutti e due, e il modo di dirlo è tenerli accanto con due verbi diversi.
+
+**Guardia sull'identità posizionale (KI #100).** `applyInstanceTab` scrive per indice, e fra
+l'apertura del tab e l'applicazione la struttura può essere sparita o essere stata sostituita.
+L'indice **più** il tipo di origine sono la controprova: se non combaciano, si rifiuta con un
+messaggio invece di modificare la struttura sbagliata.
+
+**Invarianti collaudati** (`--editor-selftest`): quattro copie, se ne modifica una, le altre tre
+restano identiche; il tipo di libreria non cambia; `local_parts` sopravvive al giro su disco; il
+ripristino riporta all'originale; l'espansione isolata usa le parti locali e non il tipo.

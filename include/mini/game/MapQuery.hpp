@@ -89,13 +89,23 @@ inline void findFreeSpot(const MapDef* map, float& x, float& z,
 // aria) o dentro un muro. `eyeHeight` = distanza centro/occhi dal suolo
 // (= PLAYER_HALF_Y per il giocatore). push(X,Z) = verso in cui liberarsi
 // dagli ostacoli (di default verso il centro campo lungo -Z).
+// `maxWalkableTop` = soffitto della ricerca: si sceglie la superficie più alta **al di
+// sotto** di questa quota. Il valore di riporto (1e9) non filtra niente, quindi ogni
+// chiamante esistente si comporta esattamente come prima.
+//
+// Serve a "Prova da qui" del Map Editor (doc 53 L4): posando la telecamera sopra una
+// passerella si vuole nascere SULLA passerella, non sul pavimento sotto. Senza un
+// soffitto, `groundHeightAt` prende comunque la superficie più alta a quelle
+// coordinate — che a volte è il tetto sbagliato, e in una mappa a più livelli
+// "il più alto" e "quello su cui sono" non coincidono quasi mai.
 inline glm::vec3 groundedSpawn(const MapDef* map, float x, float z,
                                float halfX, float halfY, float halfZ,
                                float eyeHeight,
-                               float pushX = 0.0f, float pushZ = -1.0f)
+                               float pushX = 0.0f, float pushZ = -1.0f,
+                               float maxWalkableTop = 1e9f)
 {
     findFreeSpot(map, x, z, pushX, pushZ, halfX, halfY, halfZ);
-    return { x, groundHeightAt(map, x, z) + eyeHeight, z };
+    return { x, groundHeightAt(map, x, z, maxWalkableTop) + eyeHeight, z };
 }
 
 } // namespace mini::mapquery

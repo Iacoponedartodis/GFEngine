@@ -21,6 +21,8 @@ public:
         playerHp   = s.playerHp;
         allyCount  = s.team1AiCount;
         enemyCount = s.team2AiCount;
+        spawnDummies = s.sandboxDummies;
+        spawnCeiling = s.spawnCeiling;
         m_mapId    = s.mapId.empty() ? "firebase" : s.mapId;   // R3
     }
     void start(World& world, Mesh* defaultMesh, Texture* texture,
@@ -39,6 +41,18 @@ public:
     float playerHp   = 100.0f;
     int   allyCount  = 3;   // manichini team1 (da MatchSettings.team1AiCount)
     int   enemyCount = 5;   // manichini team2 (da MatchSettings.team2AiCount)
+
+    // ── NESSUN MANICHINO (`--walk`, doc 53 L4) ───────────────────────────
+    // Serve un interruttore ESPLICITO, non `allyCount = 0`: la sandbox spawna
+    // deliberatamente **almeno un manichino per ogni definizione registrata**
+    // (`std::max(count, ids.size())`), così ogni unità autorata è subito testabile.
+    // È una scelta giusta per la sandbox e sbagliata per una prova di
+    // percorribilità, e mettere i conteggi a zero non la disattiva: li ignora.
+    // Un flag dice cosa si vuole; un conteggio a zero dice solo un numero.
+    bool  spawnDummies = true;
+
+    // Soffitto per la ricerca del suolo allo spawn (0 = nessuno). Vedi MatchSettings.
+    float spawnCeiling = 0.0f;
 
 private:
     EntityId  m_playerEntity = 0;

@@ -70,6 +70,10 @@ public:
 
     [[nodiscard]] EntityId  getPlayerEntity()  const override { return m_playerEntity; }
     [[nodiscard]] glm::vec3 getSpawnPos()      const override { return m_spawnPos; }
+    // Soffitto per la ricerca del suolo allo spawn (0 = nessuno). Vedi MatchSettings:
+    // lo stesso valore lo legge anche SandboxMode, o "Prova da qui" funzionerebbe in
+    // una modalita. e non nell.altra.
+    float m_spawnCeiling = 0.0f;
     // Spawn base + ogni command post posseduto dagli alleati (team 1): il
     // giocatore può scegliere da dove rientrare tra questi (doc 25).
     [[nodiscard]] std::vector<SpawnPoint> availableSpawns() const override;

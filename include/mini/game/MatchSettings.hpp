@@ -45,6 +45,21 @@ struct MatchSettings
     float respawnDelay  = 4.0f;
     std::string presetName;
 
+    // Sandbox: piazzare i manichini? Falso solo con `--walk` (doc 53 L4), che serve
+    // a provare com'è PERCORRERE una mappa, non a combattere.
+    // **Deliberatamente NON serializzato**: è una scelta di come si è avviato QUESTO
+    // processo, non una preferenza dell'utente. Scriverla nel file la renderebbe
+    // appiccicosa — si proverebbe una mappa con `--walk` e la sandbox resterebbe
+    // vuota per sempre, senza che nessuno sappia perché.
+    bool  sandboxDummies = true;
+
+    // Soffitto per la ricerca del suolo allo spawn del giocatore: si nasce sulla
+    // superficie più alta **sotto** questa quota. 0 = nessun soffitto (comportamento
+    // di sempre). Lo imposta solo `--at x,y,z`, cioè "Prova da qui" del Map Editor:
+    // posando la telecamera sopra una passerella si vuole nascere sulla passerella.
+    // Non serializzato, per la stessa ragione di `sandboxDummies`.
+    float spawnCeiling = 0.0f;
+
     // ── Loadout giocatore ─────────────────────────────────────────────
     // Una CLASSE (14_ClassSystem) è un loadout confezionato: se impostata, i tre
     // campi sotto vengono riempiti risolvendola dal registry. Vuota = scelta

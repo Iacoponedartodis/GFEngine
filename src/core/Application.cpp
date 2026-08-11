@@ -156,7 +156,8 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                       const std::string& mapOverride, int stressAiCount,
                       const std::string& missionId,
                       const std::string& classId,
-                      int simTicks)
+                      int simTicks,
+                      DevLaunch devLaunch)
 {
     using namespace config;
     initialize();
@@ -278,6 +279,34 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
                       << cliMission->id << "' impone la mappa '"
                       << cliMission->mapId << "'\n";
         requestedMapId = cliMission->mapId;
+    }
+
+    // ── `--at x,z`: si nasce DOVE si stava guardando nell'editor (doc 53 L4) ──
+    // Applicato sullo spawn della MapDef e non dentro i game mode: `spawnTeam1` lo
+    // leggono in due punti diversi (Conquest e Sandbox), e una seconda strada qui
+    // significherebbe che "Prova da qui" funziona in una modalità e non nell'altra.
+    // Con l'override sul dato, ogni lettore lo vede — compreso quello che verrà.
+    if (devLaunch.hasSpawn)
+    {
+        const std::string target = !requestedMapId.empty() ? requestedMapId
+                                 : (registry.maps().empty() ? std::string()
+                                                            : registry.maps().begin()->first);
+        // Su stderr e non solo nel log: `--at` è un flag di sviluppo, e l'unica cosa
+        // che serve saperne è SE ha avuto effetto. Un flag che tace è indistinguibile
+        // da un flag ignorato — è il difetto già trovato in `--stress`.
+        if (!target.empty() && registry.overrideSpawn(target, devLaunch.x, devLaunch.z))
+        {
+            std::cerr << "[--at] spawn del giocatore su '" << target << "' spostato a "
+                      << devLaunch.x << ", " << devLaunch.z;
+            // La quota si applica più sotto, dove esistono le impostazioni della
+            // partita: qui `currentSettings` non è ancora dichiarata.
+            if (devLaunch.hasY)
+                std::cerr << " (dal piano sotto quota " << devLaunch.y << ")";
+            std::cerr << "\n";
+            telemetry::logInfo("--at: spawn spostato su '" + target + "'");
+        }
+        else
+            std::cerr << "[--at] mappa '" << target << "' non trovata: spawn invariato\n";
     }
 
     // Popola la lista armi del PreMatchMenu — solo Republic e Neutral (non Separatist)
@@ -511,6 +540,32 @@ void Application::run(bool directPreMatch, bool sandbox, bool autoSim,
         else
             std::cerr << "[Map] id sconosciuto: '" << requestedMapId
                       << "' — resta '" << currentSettings.mapId << "'\n";
+    }
+    // ── `--walk`: la mappa e basta (doc 53 L4) ────────────────────────────
+    // Tecnicamente è la sandbox con zero manichini. Non un game mode nuovo: la
+    // sandbox porta già geometria, strutture, veicoli, controller del giocatore,
+    // nessun menu e nessuna condizione di vittoria — cioè tutto quello che serve a
+    // camminare in una mappa. L'unica cosa che NON serve a una prova di
+    // percorribilità sono i bersagli, e quelli sono due numeri.
+    // Applicato QUI, dopo che le impostazioni sono complete e prima che il mode le
+    // legga: metterlo prima lo farebbe sovrascrivere dal file di impostazioni.
+    // Quota della telecamera dell'editor: si nasce sulla superficie più alta SOTTO
+    // di essa. Il margine c'è perché la telecamera sta *sopra* il piano su cui si
+    // vuole comparire, non esattamente alla sua quota. Vale per ENTRAMBI i mode —
+    // "funziona in una modalità e tace nell'altra" è già stato il difetto di `--at`.
+    if (devLaunch.hasY) currentSettings.spawnCeiling = devLaunch.y + 0.5f;
+
+    if (devLaunch.walkOnly)
+    {
+        // Un INTERRUTTORE, non due conteggi a zero: la sandbox spawna comunque
+        // almeno un manichino per definizione registrata (`max(count, ids.size())`),
+        // quindi azzerare i numeri non la disattiva — li ignora. Trovato provando
+        // `--walk` invece di dichiararlo funzionante.
+        currentSettings.sandboxDummies = false;
+        currentSettings.team1AiCount = 0;
+        currentSettings.team2AiCount = 0;
+        std::cerr << "[--walk] sandbox senza manichini su '"
+                  << currentSettings.mapId << "': si cammina e basta\n";
     }
     sbMenu.allyCount    = std::max(1, currentSettings.team1AiCount);
     sbMenu.enemyCount   = std::max(1, currentSettings.team2AiCount);

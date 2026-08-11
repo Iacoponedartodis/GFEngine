@@ -1,5 +1,197 @@
 # 05 — Current State
 
+## 2026-08-11 — Il Map Editor è una PAGINA + le isole hanno una distanza (changelog 200)
+
+- **Il modulo non è più una finestra mobile**: `NoMove | NoResize | NoTitleBar`, ancorato
+  all'area di lavoro. Le finestre vere (Problemi, guida) ci galleggiano sopra.
+- **`MapEditor::drawFloatingWindows()`** chiamata da `EditorApp` **dopo** `ImGui::End()` del
+  modulo: la finestra Problemi non nasce più annidata dentro quella del Map Editor. È la causa
+  strutturale del tremolio, terzo e ultimo episodio.
+- **`Island::distToMain`** in `--navcheck` (distanza 3D dal navmesh raggiungibile): distingue una
+  **sacca** (sotto il metro, la separa solo l'erosione → allargare il varco) da una **zona**
+  staccata (metri, serve un accesso). Prima misuravo solo in pianta e ogni chiazza sopra/sotto
+  un'altra dava 0,00 m con il consiglio sbagliato attaccato.
+- **Training Ground**: i quattro angoli hanno ~43 m² ciascuno a **1,00 m** dal navmesh buono →
+  170 m² recuperabili allargando quattro varchi. Non geometria sbagliata: erosione.
+- **Timbro `build <data> <ora>`** in fondo alla barra dei menu e in `--editor-selftest`.
+
+> **Disallineamento noto**: la distanza c'è in `--navcheck` ma non ancora nel pannello Problemi.
+
+## 2026-08-11 — `--navcheck`: il navmesh è finalmente esaminabile headless (changelog 198)
+
+- **`GFEngine --navcheck [--map "X"]`**: navmesh VERO (stesso `NavManager`), senza finestra.
+  Per mappa: poligoni, m² navigabili, componenti, **ogni isola con area, posizione e frazione
+  sotto un ostacolo**, posizioni e post irraggiungibili. Exit code ≠ 0 = isole vere o post
+  incatturabili → usabile come gate.
+- **`navcheck::coveredFraction`** distingue "pavimento chiuso sotto un cubo" (normale) da isola
+  vera, con campionamento **pesato per area**. La usa anche l'editor: una verità sola.
+- **Fotografia iniziale**: Arena 0 isole · Warfare Ground 11 (624 m², 4 vere, la maggiore
+  **566 m² scoperti al centro**) · firebase 9 (205 m²) · Training Ground 12 (359 m²).
+- Due blocchi dell'editor corretti nello stesso giorno, entrambi di layout:
+  `TextWrapped` dopo `SameLine` (wrap ≈ 0) e `GetItemRectSize()` letto **dopo** aver disegnato
+  un'altra finestra. Regole in CLAUDE.md §6-ter.
+
+> **Regola generale registrata** (CLAUDE.md §6-ter): quando un sottosistema si osserva solo
+> aprendo una finestra, io non lo posso osservare, e finisco a ragionare su descrizioni di seconda
+> mano. Lo strumento headless viene **prima** della correzione.
+
+## 2026-08-11 — Un solo posto per i problemi (changelog 196)
+
+- **Finestra `Problemi`**, aperta dalla voce omonima in barra (conteggio + colore del grado).
+  Contiene **salute tattica + navmesh + gate dei dati**, raggruppati per tipo, ogni voce
+  cliccabile → seleziona e inquadra. I due pulsanti di verifica sono in cima alla finestra.
+- `collectProblems()` **raccoglie, non ricalcola**: le tre analisi restano dove sono e condivise
+  col gate. Una quarta analisi sarebbe stata la quarta verità sullo stesso mondo.
+- **Rimossi** il blocco salute tattica dal pannello di sinistra e il riepilogo per esteso in barra
+  (restava rosso in permanenza anche per 24 triangoli su 484).
+- **Gravità delle isole dall'AREA**: sotto 6 m² avviso, sopra problema. Le isole riportano m².
+- **Deciso e scritto**: le schegge agli spigoli NON si risolvono alzando `minRegionArea`
+  (già 2,56 m²) — si silenzierebbe il rapporto peggiorando il navmesh. È authoring: allargare il
+  pianerottolo dove le scale incontrano la piattaforma.
+
+## 2026-08-11 — Verifica navmesh: tre cause separate, e le isole hanno una dimensione (changelog 195)
+
+- `N isole (M tri su T)`; sotto l'1% del navmesh scrive **"schegge"** e passa al giallo.
+- Pulsante **Vai**: inquadra l'isola più grande (`NavReport::islands`, ordinate, col centroide).
+- **Posizioni** e **post** irraggiungibili dette a parte: prima ogni causa si leggeva "N isole",
+  perché `bad` era vero per tre condizioni e il testo ne stampava una sola.
+- Nessun difetto nei dati: le isole c'erano, erano schegge invisibili fra migliaia di triangoli.
+  Il difetto era l'indicatore — **un numero senza grandezza è un aneddoto** (KI #86).
+
+## 2026-08-11 — L5: pannello Problemi utilizzabile (changelog 194, doc 53 L5)
+
+- **"Portami lì"**: cliccando una voce l'elemento si seleziona **e la telecamera lo inquadra**
+  (`FreeCameraViewport::focusOn`, non tocca l'ingombro del contenuto).
+- **Due difetti muti nuovi**, dentro `analyzeTacticalHealth` (quindi anche in `--validate`):
+  `TooSmallElevated` (ripiano sopraelevato sotto `ELEVATED_MIN_SPAN` → sparisce dal navmesh) e
+  `NarrowGap` (due ripiani complanari sotto `2 × AGENT_RADIUS` → il passaggio non si forma).
+  Soglie da `MapMetrics`, nessuna scelta a occhio.
+- **Il gate dentro il Map Editor**: `Controlla i dati...` esegue lo stesso `validateContent`,
+  filtrato su questa mappa. Su richiesta (ricarica il registry).
+- **Trappola registrata**: la prima versione dava 412 segnalazioni, tutte pedate di scala. Filtro
+  corretto = `REF_UNIT_WIDTH` (1,20 m). Ora 14, di cui 2 piattaforme che sparirebbero davvero.
+- Rete provocata in entrambi i versi prima di fidarsene (1,00 m → tace, 0,50 m → segnala).
+
+## 2026-08-11 — "Prova da qui" rispetta la quota (changelog 193)
+
+- Si usa la **posizione della telecamera**, non il punto guardato: `groundFocusPoint()` proietta
+  su y=0 e su una passerella dà il punto sbagliato.
+- **`--at x,y,z`**: si nasce sulla superficie più alta **sotto** quella quota. La forma `x,z`
+  resta valida e invariata.
+- Meccanismo riusato, non inventato: `groundHeightAt` aveva già `maxWalkableTop` inutilizzato;
+  ora passa da `groundedSpawn` (riporto `1e9` = nessun filtro → zero cambiamenti altrove) e
+  arriva da `MatchSettings::spawnCeiling`, non serializzato.
+- **Letto da entrambi i mode** (Sandbox e Conquest): in uno solo sarebbe di nuovo "funziona in una
+  modalità e tace nell'altra".
+- Nuova riga: `[Sandbox] Giocatore a x, y, z (piano più alto sotto quota Q)`.
+- Verificato su Warfare Ground, stesso punto in pianta: quota 1,5 → y 0,85 (terra); quota 12 →
+  y 3,85 (piano a 3 m); forma vecchia → 3,85 invariata.
+
+## 2026-08-11 — `--walk`: la sandbox senza manichini (changelog 192, doc 17 §0)
+
+- **`Prova da qui` ora entra DIRETTAMENTE nella mappa**, da solo. Prima passava
+  `--direct-prematch` e apriva un menu.
+- **`--walk`** = sandbox con `spawnDummies = false`. Non un game mode nuovo (ADR-014): la sandbox
+  ha già tutto il resto.
+- **Trappola documentata**: azzerare i conteggi NON disattiva i manichini — la sandbox ne spawna
+  almeno uno **per definizione registrata**. Serve l'interruttore esplicito.
+- Nuova riga di osservabilità a ogni avvio: `[Sandbox] Manichini: N nemici, M alleati`.
+- Verificato con esecuzioni vere: `--walk` → 0/0; `--sandbox` → 6/4, invariato.
+
+## 2026-08-11 — La barra non può più tagliare (changelog 191, CLAUDE.md §6-ter)
+
+- **`editor/include/framework/Toolbar.hpp`**: la barra si **dichiara** come elenco; il componente
+  misura e manda l'eccedenza in un menu `...`. Ordine dell'elenco = priorità. Pattern *priority+*.
+- **`toolbar::fitCount` è puro** (niente ImGui) → collaudabile headless: **9 controlli nuovi**,
+  fra cui *a ogni larghezza ciò che resta in barra, compreso il «...», ci sta davvero*.
+  **Questo è il sostituto dei miei occhi**: senza, la regola "mai tagliare" era invisibile a me.
+- Map Editor: da **18 controlli in fila** a **4 menu** (Mappa · Crea · Modifica · Vista) + 5 voci
+  sempre visibili (mappa corrente, asterisco non salvato, passo di aggancio, Annulla/Ripristina,
+  Prova da qui, navmesh).
+- **Ctrl+S** salva quello che stai guardando: mappa, tipo, o istanza modificata. Nessun popup:
+  scritta *Salvato* che sfuma.
+- **Regola nuova in CLAUDE.md §6-ter** — una regola di layout senza controllo eseguibile è una
+  speranza. Vale oltre le barre.
+
+## 2026-08-11 — Provare camminando + appoggia (changelog 190, doc 53 L4/L2)
+
+- **`Prova da qui`** nel Map Editor: salva e avvia il gioco col giocatore dove guarda la
+  telecamera. Motore: **`--at x,z`**, applicato sullo spawn della MapDef (un punto solo, lo
+  vedono sia Conquest sia Sandbox) via `DefinitionRegistry::overrideSpawn`. Il flag riporta su
+  stderr se ha avuto effetto.
+- **`Appoggia`** (6 direzioni, dentro `Precisione...`): sposta la selezione finché tocca, come
+  **corpo unico**; il suolo conta come superficie; senza ostacoli davanti non muove nulla.
+- `--editor-selftest`: **6 controlli in più** (19 in totale sugli strumenti di costruzione), 0
+  falliti in Debug e Release. `--at` provato con esecuzioni vere su tutti e tre i percorsi.
+- Guida: `15_Costruire.md` esteso, `90_RigaDiComando.md` documenta `--at`.
+
+## 2026-08-10 — Strumenti di costruzione L1 + mezza L2 (changelog 189, doc 53)
+
+- **Ctrl+rotella** = passo di griglia (7 passi, 0,10–8,0 m), stesso elenco del combo.
+- **`Disegna`**: box dall'impronta tracciata, misure visibili durante il gesto; `h` e `quota`
+  (= base) nella barra. Il clic appartiene allo strumento e non seleziona.
+- **`Faccia`**: quarta modalità del gizmo, sei maniglie, **la faccia opposta resta ferma**.
+  `E`/`Q` push-pull di un passo (solo fuori dal volo). Aggancio obbligatorio a multipli del passo.
+  Su una struttura tira la misura della ricetta, non i box.
+- **`Precisione...`**: sposta di offset, allinea **a filo** (sui bordi, non sui centri),
+  distribuisci a estremi fermi.
+- **Prestazioni**: i derivati non si ricalcolano più durante il trascinamento (doc 51 §1) — via il
+  caso peggiore misurato di 21–34 ms per frame alla scala della mappa grande.
+- `--editor-selftest`: **13 controlli in più**, 0 falliti in Debug e Release.
+- Guida F1: nuovo capitolo **"Costruire velocemente"**.
+
+> **Debito dichiarato**: il gizmo del Map Editor **non** è stato migrato a `ViewportEditing`
+> nonostante doc 53 lo indicasse come prerequisito. Motivo scritto in doc 53 §L1 e changelog 189:
+> il rischio che lo motivava è stato coperto mettendo i gesti nuovi dentro `FreeCameraViewport`,
+> e un rifacimento non collaudabile senza mouse subito prima di settimane d'uso è il profilo
+> esatto delle regressioni di doc 49. Da fare quando non si sta costruendo.
+
+## 2026-08-10 — Modificare UNA copia sola (changelog 187, ADR-056 parti locali)
+
+- **`localParts`** su `StructureDef` (istanza in mappa) e su `StructurePart` (riferimento
+  isolato), chiave JSON `local_parts`. Non vuoto = **vincono sul tipo**; `type` resta scritto per
+  dire da cosa deriva e per poterci tornare. Assente = niente cambia.
+- **Map Editor**: `Modifica solo QUESTA...` accanto a `Modifica il TIPO (tutte le copie)`, con la
+  portata nel testo del pulsante. Segno `*` nell'elenco e nel pannello.
+  `Ripristina dall'originale` e `Promuovi a tipo di libreria...` sono le due uscite.
+- **Editor strutture**: `Isola e modifica` su una parte-riferimento (entra nella copia, `Fine`
+  richiude). Distinto da `Esplodi`, che invece scioglie il confine.
+- **`expandParts`** estratta da `expandAssembly`: una sola regola per le tre sorgenti di parti.
+- **`StructTab::parts()`** — accessore unico: un comando nuovo non può dimenticarsi
+  dell'isolamento.
+- Guardia KI #100 su `applyInstanceTab`: indice **+** tipo di origine, o si rifiuta.
+
+> **Processo (changelog 187 §0)**: la consegna precedente non era arrivata all'utente perché
+> avevo costruito solo la Debug, che è ASan e non parte senza la sua DLL. **Ogni change set
+> costruisce Debug e Release.**
+
+## 2026-08-08 — Composite per RIFERIMENTO + esplodi/raggruppa (changelog 186, ADR-056 rivisto)
+
+**Cosa è cambiato rispetto a ieri.** Una struttura composita può contenerne un'altra **davvero**,
+non per copia: `StructurePart::refType` (chiave JSON `ref`). Correggere l'originale corregge ogni
+uso. Il divieto di annidamento di ADR-056 è caduto su decisione dell'utente, e il rischio che
+motivava il divieto è pagato in quattro modi:
+
+- catena anti-ciclo + tetto `kMaxAssemblyDepth = 4` in `expandAssembly`;
+- **solo composite verificate** si possono riferire; le altre restano visibili, in grigio, col
+  motivo;
+- gate `--validate`, **nuova categoria `Struct`**: ref inesistente / non composito / non
+  verificato, ciclo, annidamento eccessivo, istanza in mappa con `type` sparito;
+- **`Esplodi`** come via d'uscita, nei due editor.
+
+Altre conseguenze già in codice:
+- **`mini::structjson` serializza anche le PARTI e i BOX** (`partFromJson`/`partToJson`,
+  `boxFromJson`/`boxToJson`). Le parti avevano due serializzatori — la stessa configurazione che
+  aveva perso il campo `type`. Unificati **prima** di aggiungere `ref`.
+- **Map Editor**: un'istanza composita ha il **suo** pannello (nome, posa, apri il tipo, esplodi).
+  Prima mostrava alzate e pedate di una scala su una torre di dodici parti.
+- **`Raggruppa in una composita...`** dalla selezione multipla: crea il tipo e sostituisce gli
+  elementi con una sola istanza.
+- **Griglia ancorata al mondo** (passo 2 m, ±1000 m): non segue più la vista — seguirla era il
+  difetto, non la soluzione.
+- `--editor-selftest`: **47 controlli**, 0 falliti. Fra i nuovi: esplodere non sposta la geometria,
+  il ciclo termina, `ref` sopravvive al giro su disco.
+
 ## 2026-08-07 — Framework condiviso dell'editor + strumenti di misura (changelog 167-179)
 
 **Cosa esiste ORA che prima non esisteva.**
