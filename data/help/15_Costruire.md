@@ -105,6 +105,21 @@ dal navmesh senza errori, ed e' il tipo di difetto che si scopre giorni dopo.
 
 ---
 
+## I campi numerici del pannello
+
+Ogni misura nel pannello di destra e' un **campo di trascinamento**: lo trascini per regolare, e
+con **Ctrl+clic** ci scrivi dentro il valore esatto. Gli slider sono stati tolti: erano nati per
+vedere l'effetto in tempo reale, mestiere che ora e' del gizmo, e su intervalli larghi (0,1 →
+120 m) un pixel valeva piu' di un metro — da cui gli scatti grossi e irregolari.
+
+> **Il passo di aggancio NON tocca i numeri che scrivi.** Governa i gesti nel viewport — disegnare,
+> trascinare il gizmo, tirare una faccia — dove serve a far combaciare le cose. Se scrivi 2,40
+> resta 2,40, anche col passo a 0,5. (Prima veniva agganciato anche il valore digitato, ed era il
+> motivo per cui certe misure erano impossibili da mettere.)
+
+L'unico limite che resta sulle dimensioni e' **5 cm**: sotto, un box sparisce dal navmesh senza
+dire niente.
+
 ## Precisione: quando l'occhio non basta
 
 Menu **Modifica → Precisione...**: una finestra con quattro gruppi. Agisce sulla selezione corrente,

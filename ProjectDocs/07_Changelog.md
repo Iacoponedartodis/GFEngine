@@ -2,6 +2,55 @@
 
 Dated engineering changes and their architectural effect.
 
+## 2026-08-11 (201) — Via gli slider dalle misure, e i campi non tagliano più la mappa
+
+### La richiesta
+*"Avevamo messo gli slider per vedere in tempo reale i cambiamenti … ma adesso abbiamo i gizmo,
+quindi non serve più ed è molto limitato: non posso mettere una box larga 2.40, ma solo 2.50 …
+oggettivamente la funzione slider non ci serve più, e va corretta ovunque."*
+
+### La causa era doppia, e la seconda era la peggiore
+1. **Lo slider.** `sliderRow` disegnava uno `SliderFloat` mappato su intervalli larghi (0,1 →
+   120 m) dentro poche decine di pixel: **un pixel valeva più di un metro**, quindi scatti grossi
+   e apparentemente irregolari. Nato per vedere l'effetto in tempo reale — mestiere che dal
+   gizmo in poi è del gizmo.
+2. **`snap()` sui valori DIGITATI.** Il pannello faceva `b.sx = snap(b.sx)` dopo *ogni* modifica:
+   con passo 0,5 un 2,40 scritto a mano diventava 2,50, e **ogni misura fuori griglia era
+   inesprimibile**. Questa è la ragione vera dell'esempio dell'utente.
+
+**L'aggancio governa i GESTI nel viewport** — disegnare, trascinare il gizmo, tirare una faccia —
+dove serve a far combaciare le cose. **Nel pannello si scrive un numero: quel numero è la
+richiesta.** Confondere le due cose rende il pannello inutile proprio quando serve.
+
+### Cosa è cambiato
+- `sliderRow` ora disegna **etichetta + campo di trascinamento**, niente slider. Nome invariato:
+  lo chiamano ~70 punti in cinque moduli, e rinominarli sarebbe stato lavoro senza guadagno.
+  La correzione è in **un posto solo** e vale ovunque, come chiesto.
+- **Niente `snap()`** su posizioni e dimensioni digitate. Resta il pavimento a 5 cm sulle misure,
+  che non è una preferenza: sotto, il box sparisce dal navmesh senza dire niente.
+- **Ctrl+clic per il valore esatto** scritto nel suggerimento: era già possibile e non si poteva
+  sapere (§6-bis — il percorso per invocare una funzione fa parte della funzione).
+- **Gli slider restano in 7 punti**, e di proposito: sono fattori normalizzati 0..1
+  (aggressività, precisione, preferenza di copertura…). Su un intervallo così stretto un pixel
+  vale 0,005 e il difetto non esiste; anche lì il tooltip dice del Ctrl+clic.
+
+### Il difetto latente trovato per strada, e che sarebbe costato caro
+I campi di posizione erano limitati a **±60 m**, scelti quando le mappe erano piccole. Su una
+mappa 300 × 200 **metà degli elementi non si sarebbe potuta né digitare né trascinare**: il campo
+li avrebbe riportati dentro i 60 m, in silenzio. Un limite che taglia i dati invece di proteggerli
+è peggio di nessun limite, e si sarebbe scoperto costruendo. Ora `kPosLimit = 1000` (mappe fino a
+2000 × 2000) e quota `−50 … 200`, con i valori dichiarati una volta accanto al pannello.
+
+### Il timbro di build mentiva, e l'ho corretto
+`__DATE__`/`__TIME__` dicono quando è stata compilata **quella unità di traduzione**: modificando
+solo altri file il timbro restava fermo mentre il binario cambiava — cioè mentiva proprio nel caso
+per cui esiste. Ora viene dalla **data del file eseguibile**, che non può sbagliare
+(`build gg/mm hh:mm`, verificato uguale al `LastWriteTime` dell'exe).
+
+Build pulite Debug e Release, `--editor-selftest` 0 falliti, `--validate` 0 errori.
+
+---
+
 ## 2026-08-11 (200) — Il modulo è una PAGINA, non una finestra + le isole hanno una distanza
 
 ### Il tremolio, terzo e ultimo episodio: `Begin` annidato

@@ -7539,6 +7539,17 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 {
     float sliderW = panelW - 16.0f;
 
+    // ── I LIMITI DEI CAMPI NON POSSONO ESSERE PIÙ PICCOLI DELLA MAPPA ─────
+    // Erano **±60 m**, scelti quando le mappe erano piccole: su una 300 × 200 metà
+    // degli elementi non si sarebbe potuta né digitare né trascinare, perché il
+    // campo li avrebbe riportati dentro i 60 m. Un limite che taglia i dati invece
+    // di proteggerli è peggio di nessun limite, e si sarebbe scoperto costruendo.
+    // Restano dei limiti (un errore di digitazione non deve mandare un post a
+    // 10 000 m), ma tarati sulla mappa più grande che ha senso costruire.
+    constexpr float kPosLimit = 1000.0f;   // XZ: mappe fino a 2000 × 2000 m
+    constexpr float kElevLo   = -50.0f;    // sotto il livello del mare
+    constexpr float kElevHi   = 200.0f;    // torri e passerelle alte
+
     // ── SELEZIONE MULTIPLA (G3) ───────────────────────────────────────────
     // Non si mostrano i campi di un elemento solo: sarebbe ambiguo su quale dei
     // dieci si sta agendo. Si mostra COSA c'è dentro e cosa si può farci.
@@ -8097,8 +8108,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
                             "ADR-044). Non combatte: si difende soltanto.");
 
         ImGui::TextDisabled("Posizione (retrovie, al sicuro)");
-        changed |= editor::ui::sliderRow("X##cmd", m_commander.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z##cmd", m_commander.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X##cmd", m_commander.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z##cmd", m_commander.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
 
         ImGui::TextDisabled("Raggio di movimento (leash)");
         changed |= editor::ui::sliderRow("Raggio (m)##cmd", m_commander.leashRadius,
@@ -8124,9 +8135,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         ImGui::TextColored({0.8f,0.8f,0.2f,1.0f}, "%s", teamName);
         ImGui::Separator();
         bool changed = false;
-        changed |= editor::ui::sliderRow("X", sp[0], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", sp[0], -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Y", sp[1],   0.f,  5.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", sp[2], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", sp[2], -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         if (changed) { m_dirty = true; updateViewport(); }
         return;
     }
@@ -8174,8 +8185,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         if (editor::ui::textRow("Nome", buf, sizeof(buf))) { s.label = buf; changed = true; }
 
         ImGui::TextDisabled("Area");
-        changed |= editor::ui::sliderRow("X", s.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", s.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", s.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", s.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Raggio", s.radius, 2.f, 40.f, 0.5f, "%.1f");
 
         ImGui::TextDisabled("Valore strategico");
@@ -8213,9 +8224,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
                                          : "Punto d'osservazione");
 
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", p.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Y", p.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", p.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", p.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", p.y, -kElevLo, kElevHi, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", p.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Fronte", p.facing, -180.f, 180.f, 1.f, "%.0f");
 
         ImGui::TextDisabled("Riparo");
@@ -8307,9 +8318,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         ImGui::Separator();
         bool changed = false;
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", d.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Y", d.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", d.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", d.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", d.y, -kElevLo, kElevHi, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", d.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         ImGui::TextDisabled("Area");
         changed |= editor::ui::sliderRow("Raggio", d.radius, 0.5f, 30.f, 0.1f, "%.1f");
         changed |= editor::ui::sliderRow("Pericolo", d.level, 0.f, 1.f, 0.01f, "%.2f");
@@ -8334,8 +8345,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         if (editor::ui::textRow("Label##tg", t.label, sizeof(t.label))) changed = true;
         ImGui::TextDisabled("La label e' il nome referenziato dall'obiettivo destroy_target.");
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X##tg", t.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z##tg", t.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X##tg", t.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z##tg", t.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         changed |= editor::ui::sliderRow("Y (altezza)##tg", t.y, 0.f, 30.f, 0.1f, "%.2f m", 18.0f);
         ImGui::TextDisabled("Altezza sopra il suolo: 0 = a terra, >0 = alzata (es. su\n"
                             "una piattaforma). La struttura e' statica: resta dove la metti.");
@@ -8421,8 +8432,8 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         }
 
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", v.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", v.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", v.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", v.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         ImGui::TextDisabled("Orientamento");
         changed |= editor::ui::sliderRow("Yaw°", v.ry, -180.f, 180.f, 1.f, "%.0f");
         ImGui::TextDisabled("Il runtime decollide lo spawn e appoggia al suolo.");
@@ -8479,9 +8490,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         {
             auto& pt = r.points[m_selRoutePt];
             ImGui::TextDisabled("Posizione punto %d", m_selRoutePt + 1);
-            changed |= editor::ui::sliderRow("X", pt[0], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-            changed |= editor::ui::sliderRow("Y", pt[1], -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-            changed |= editor::ui::sliderRow("Z", pt[2], -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+            changed |= editor::ui::sliderRow("X", pt[0], -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+            changed |= editor::ui::sliderRow("Y", pt[1], -kElevLo, kElevHi, 0.05f, "%.2f", 18.0f);
+            changed |= editor::ui::sliderRow("Z", pt[2], -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
         }
 
         if (changed) { m_dirty = true; updateViewport(); }
@@ -8508,9 +8519,9 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
         if (editor::ui::comboRow("Team iniziale##cpt", p.team, teams, 3)) changed = true;
 
         ImGui::TextDisabled("Posizione");
-        changed |= editor::ui::sliderRow("X", p.x, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Y", p.y, -2.f, 10.f, 0.05f, "%.2f", 18.0f);
-        changed |= editor::ui::sliderRow("Z", p.z, -60.f, 60.f, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("X", p.x, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Y", p.y, -kElevLo, kElevHi, 0.05f, "%.2f", 18.0f);
+        changed |= editor::ui::sliderRow("Z", p.z, -kPosLimit, kPosLimit, 0.1f, "%.2f", 18.0f);
 
         ImGui::TextDisabled("Cattura");
         changed |= editor::ui::sliderRow("Raggio", p.radius, 1.f, 20.f, 0.1f, "%.1f");
@@ -8559,14 +8570,20 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
     if (ImGui::Checkbox("Collider", &b.isCollider)) changed = true;
 
     ImGui::Separator();
+    // ── I NUMERI DIGITATI NON SI AGGANCIANO ALLA GRIGLIA ──────────────────
+    // Qui c'era `b.x = snap(b.x)` dopo ogni modifica: con passo 0,5 un 2,40 scritto
+    // a mano diventava 2,50, e ogni valore fuori griglia era **inesprimibile**
+    // (segnalato dall'utente). L'aggancio governa i GESTI nel viewport — disegnare,
+    // trascinare il gizmo, tirare una faccia — dove serve a far combaciare le cose.
+    // Nel pannello si scrive un numero: quel numero è la richiesta, e va rispettata.
     ImGui::TextDisabled("Posizione");
     const float posSpeed = m_gridSnap > 0 ? m_gridSnap : 0.1f;
-    if (editor::ui::sliderRow("X", b.x, -60.f, 60.f, posSpeed, "%.2f", 18.0f))
-        { b.x = snap(b.x); changed = true; }
-    if (editor::ui::sliderRow("Y", b.y, -2.f, 10.f, posSpeed * 0.5f, "%.2f", 18.0f))
-        { b.y = snap(b.y); changed = true; }
-    if (editor::ui::sliderRow("Z", b.z, -60.f, 60.f, posSpeed, "%.2f", 18.0f))
-        { b.z = snap(b.z); changed = true; }
+    if (editor::ui::sliderRow("X", b.x, -1000.f, 1000.f, posSpeed, "%.2f", 18.0f))
+        changed = true;
+    if (editor::ui::sliderRow("Y", b.y, -50.f, 200.f, posSpeed * 0.5f, "%.2f", 18.0f))
+        changed = true;
+    if (editor::ui::sliderRow("Z", b.z, -1000.f, 1000.f, posSpeed, "%.2f", 18.0f))
+        changed = true;
 
     ImGui::TextDisabled("Rotazione");
     if (editor::ui::sliderRow("Y°", b.ry, -180.f, 180.f, 1.0f, "%.1f", 18.0f))
@@ -8574,12 +8591,15 @@ void MapEditor::drawProperties(float panelW, float /*panelH*/)
 
     ImGui::Separator();
     ImGui::TextDisabled("Dimensioni");
-    if (editor::ui::sliderRow("W", b.sx, 0.1f, 120.f, posSpeed, "%.2f", 18.0f))
-        { b.sx = snap(b.sx); if (b.sx < 0.1f) b.sx = 0.1f; changed = true; }
-    if (editor::ui::sliderRow("H", b.sy, 0.1f, 20.f, posSpeed * 0.5f, "%.2f", 18.0f))
-        { b.sy = snap(b.sy); if (b.sy < 0.1f) b.sy = 0.1f; changed = true; }
-    if (editor::ui::sliderRow("D", b.sz, 0.1f, 120.f, posSpeed, "%.2f", 18.0f))
-        { b.sz = snap(b.sz); if (b.sz < 0.1f) b.sz = 0.1f; changed = true; }
+    // Niente `snap()` nemmeno qui: una misura si scrive come la si vuole. Resta il
+    // pavimento a 5 cm, che non è una preferenza — sotto, il box sparisce dal
+    // navmesh senza dire niente.
+    if (editor::ui::sliderRow("W", b.sx, 0.05f, 500.f, posSpeed, "%.2f", 18.0f))
+        { if (b.sx < 0.05f) b.sx = 0.05f; changed = true; }
+    if (editor::ui::sliderRow("H", b.sy, 0.05f, 200.f, posSpeed * 0.5f, "%.2f", 18.0f))
+        { if (b.sy < 0.05f) b.sy = 0.05f; changed = true; }
+    if (editor::ui::sliderRow("D", b.sz, 0.05f, 500.f, posSpeed, "%.2f", 18.0f))
+        { if (b.sz < 0.05f) b.sz = 0.05f; changed = true; }
 
     ImGui::Separator();
     ImGui::TextDisabled("Colore");

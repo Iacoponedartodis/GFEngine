@@ -8,16 +8,31 @@
 namespace editor::ui
 {
 
-// Ritorna true se il valore è cambiato. labelW = spazio riservato all'etichetta.
+// ── LO SLIDER È STATO TOLTO (2026-08-11, richiesta dell'utente) ─────────────
 //
-// ADATTIVA (2026-08-06): sotto una certa larghezza la riga si RIORGANIZZA invece di
-// tagliare. Prima slider + campo + etichetta stavano sempre su una riga sola: stringendo
-// il pannello l'etichetta usciva dal bordo e spariva, cioè si perdeva il NOME del valore
-// che si sta modificando — la parte che serve di più.
-// Comportamento chiesto dall'utente e preso dal software serio: *"si restringono finché
-// c'è spazio e poi passano a un'impostazione più verticalizzata e meno ingombrante"*.
-// In Dear ImGui non esiste layout a vincoli: il ramo va scritto a mano interrogando
-// `GetContentRegionAvail` (confermato dalla discussione a monte, issue #6775).
+// Il nome resta `sliderRow` perché lo chiamano ~70 punti in cinque moduli, e
+// cambiarlo ovunque sarebbe stato un rinominare senza guadagno. Quello che disegna
+// è cambiato: **etichetta + campo numerico**, niente slider.
+//
+// Perché. Gli slider erano nati per vedere l'effetto di un valore in tempo reale
+// senza scrivere numeri a mano. Da quando c'è il gizmo quel mestiere è del gizmo, e
+// lo slider era rimasto solo con i suoi difetti: mappato su un intervallo largo
+// (0,1 → 120 m) dentro poche decine di pixel, un pixel valeva più di un metro,
+// quindi si muoveva a scatti grossi e irregolari. Testuale: *"non posso mettere una
+// box larga 2.40, ma solo 2.50 … la funzione slider non ci serve più"*.
+//
+// Il campo di trascinamento non ha intervallo mappato: la velocità è in unità al
+// pixel, quindi la precisione non dipende da quanto è largo il pannello. E il
+// **Ctrl+clic** apre la digitazione diretta — è il modo con cui si mette un valore
+// esatto, e va detto (vedi il suggerimento).
+//
+// `vmin`/`vmax` restano e restano CLAMP: molti sono pavimenti fisici (le soglie del
+// navmesh), non preferenze. Cambiano solo di ruolo: prima erano gli estremi di una
+// corsa, adesso sono limiti.
+//
+// ADATTIVA: sotto una certa larghezza l'etichetta va sopra invece di essere tagliata
+// dal bordo. In Dear ImGui non esiste layout a vincoli: il ramo si scrive a mano
+// interrogando `GetContentRegionAvail`.
 inline bool sliderRow(const char* label, float& v,
                       float vmin, float vmax, float dragSpeed,
                       const char* fmt = "%.3f", float labelW = 58.0f)
@@ -30,37 +45,30 @@ inline bool sliderRow(const char* label, float& v,
     while (*end && !(end[0] == '#' && end[1] == '#')) ++end;
     const float textW = ImGui::CalcTextSize(label, end).x;
 
-    // Soglia: servono almeno il campo numerico (60), l'etichetta e uno slider
-    // ancora afferrabile (60). Sotto, si impila.
-    const float needed = 60.0f + textW + 60.0f + 12.0f;
-    if (avail < needed)
-    {
-        // Impilata: etichetta sopra (mai tagliata), poi slider e campo sotto.
-        ImGui::TextUnformatted(label, end);
-        float w = avail - 64.0f;
-        if (w < 40.0f) w = 40.0f;
+    auto field = [&](float w) {
+        if (w < 50.0f) w = 50.0f;
         ImGui::SetNextItemWidth(w);
-        if (ImGui::SliderFloat("##sl", &v, vmin, vmax, fmt)) changed = true;
-        ImGui::SameLine(0, 4);
-        ImGui::SetNextItemWidth(60.0f);
         if (ImGui::DragFloat("##dg", &v, dragSpeed, vmin, vmax, fmt)) changed = true;
-        ImGui::PopID();
-        return changed;
+        // Il modo per mettere un valore ESATTO non si indovina: si dice.
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Trascina per regolare · Ctrl+clic per scrivere il valore esatto"
+                              "\nlimiti: %.2f … %.2f", vmin, vmax);
+    };
+
+    // Serve spazio per l'etichetta e per un campo ancora usabile; sotto, si impila.
+    if (avail < textW + 90.0f)
+    {
+        ImGui::TextUnformatted(label, end);
+        field(avail);
     }
-
-    // La larghezza dell'etichetta è quella VERA, non un 58 fisso: con un'etichetta
-    // lunga il valore fisso lasciava comunque uscire il testo.
-    const float lw = (textW > labelW) ? textW : labelW;
-    float sliderW = avail - 66.0f - lw;
-    if (sliderW < 40.0f) sliderW = 40.0f;
-
-    ImGui::SetNextItemWidth(sliderW);
-    if (ImGui::SliderFloat("##sl", &v, vmin, vmax, fmt)) changed = true;
-    ImGui::SameLine(0, 4);
-    ImGui::SetNextItemWidth(60.0f);
-    if (ImGui::DragFloat("##dg", &v, dragSpeed, vmin, vmax, fmt)) changed = true;
-    ImGui::SameLine(0, 4);
-    ImGui::TextUnformatted(label, end);
+    else
+    {
+        const float lw = (textW > labelW) ? textW : labelW;
+        ImGui::TextUnformatted(label, end);
+        ImGui::SameLine(0, 4);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (lw - textW));
+        field(ImGui::GetContentRegionAvail().x);
+    }
     ImGui::PopID();
     return changed;
 }
@@ -105,8 +113,13 @@ inline bool dragRow(const char* label, float& v, float speed,
     return ch;
 }
 
-// Come dragRow ma con uno SLIDER (per valori a range fisso, es. 0..1). Etichetta
-// a SINISTRA (mai tagliata), slider che riempie il resto del pannello.
+// Come dragRow ma con uno SLIDER. **È l'unico posto in cui lo slider è rimasto**,
+// e di proposito: qui i valori sono FATTORI normalizzati (aggressività, precisione,
+// preferenza di copertura… tutti 0..1). Su un intervallo così stretto uno slider è
+// il controllo giusto — un pixel vale 0,005 — e il difetto che ha fatto togliere gli
+// altri (intervallo largo schiacciato in pochi pixel, quindi scatti grossi) qui non
+// esiste. Per il valore esatto c'è comunque **Ctrl+clic**, che ora è scritto nel
+// suggerimento invece di doverlo sapere.
 inline bool sliderRowLR(const char* label, float& v, float lo, float hi,
                         const char* fmt = "%.2f")
 {
@@ -119,6 +132,9 @@ inline bool sliderRowLR(const char* label, float& v, float lo, float hi,
     if (w < 60.0f) w = 60.0f;
     ImGui::SetNextItemWidth(w);
     const bool ch = ImGui::SliderFloat("##v", &v, lo, hi, fmt);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Trascina · Ctrl+clic per scrivere il valore esatto (%.2f … %.2f)",
+                          lo, hi);
     ImGui::PopID();
     return ch;
 }

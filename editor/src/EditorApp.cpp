@@ -21,6 +21,8 @@
 #include <imgui_impl_opengl3.h>
 #include <SDL2/SDL.h>
 #include <filesystem>
+#include <chrono>
+#include <ctime>
 #include <mini/platform/OpenGL.hpp>
 #include <mini/core/Telemetry.hpp>
 #include <nlohmann/json.hpp>
@@ -302,6 +304,34 @@ void EditorApp::tick(float dt)
         { mini::telemetry::ScopedPhase p("tick VehicleEditor"); m_vehicleEditor->tick(dt); }
 }
 
+// ── QUANDO È STATO COSTRUITO QUESTO ESEGUIBILE ───────────────────────────────
+// Dalla DATA DEL FILE, non da `__DATE__`/`__TIME__`. La prima versione usava le
+// macro del preprocessore, che però dicono quando è stata compilata **questa unità
+// di traduzione**: modificando solo altri file il timbro restava fermo mentre il
+// binario cambiava — cioè mentiva proprio nel caso per cui esiste. La data del file
+// è l'unica che non può sbagliare.
+static const char* buildStamp()
+{
+    static char s[64] = {0};
+    if (s[0]) return s;
+    char* base = SDL_GetBasePath();
+    const std::string exe = std::string(base ? base : "./") + "GFEditor.exe";
+    if (base) SDL_free(base);
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(exe, ec);
+    if (ec) { std::snprintf(s, sizeof(s), "build ?"); return s; }
+    const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(t);
+    const std::time_t tt = std::chrono::system_clock::to_time_t(sys);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    std::strftime(s, sizeof(s), "build %d/%m %H:%M", &tm);
+    return s;
+}
+
 void EditorApp::renderMenuBar()
 {
     if (!ImGui::BeginMainMenuBar()) return;
@@ -382,8 +412,7 @@ void EditorApp::renderMenuBar()
     // per me, che posso chiedergli semplicemente di leggerlo.
     {
         static char stamp[64] = {0};
-        if (stamp[0] == '\0')
-            std::snprintf(stamp, sizeof(stamp), "build %s %s", __DATE__, __TIME__);
+        if (stamp[0] == '\0') std::snprintf(stamp, sizeof(stamp), "%s", buildStamp());
         const float w = ImGui::CalcTextSize(stamp).x;
         const float avail = ImGui::GetContentRegionAvail().x;
         if (avail > w + 12.0f) ImGui::SameLine(ImGui::GetCursorPosX() + avail - w - 8.0f);
@@ -1100,7 +1129,7 @@ int EditorApp::runSelfTests()
 {
     // Il timbro anche qui: quando chiedo all'utente di leggerlo a schermo, devo
     // poterlo confrontare con quello del binario che ho appena costruito io.
-    std::cout << "[selftest] build " << __DATE__ << " " << __TIME__ << std::endl;
+    std::cout << "[selftest] " << buildStamp() << std::endl;
     std::cout << "[selftest] barra dei comandi (niente puo' finire tagliato)" << std::endl;
     int failed = toolbarSelfTest();
     std::cout << "[selftest] pila di annullamento condivisa" << std::endl;

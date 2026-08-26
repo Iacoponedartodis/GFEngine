@@ -1,5 +1,19 @@
 # 05 — Current State
 
+## 2026-08-11 — Campi numerici: via gli slider, via l'aggancio sui numeri digitati (changelog 201)
+
+- **`editor::ui::sliderRow` non disegna più uno slider**: etichetta + campo di trascinamento.
+  Nome invariato → la correzione vale nei ~70 punti che lo usano, in cinque moduli.
+- **Nessun `snap()` sui valori digitati** (posizioni e dimensioni). L'aggancio governa i **gesti
+  nel viewport**, non l'inserimento numerico: era il motivo per cui 2,40 diventava 2,50.
+- **Ctrl+clic per il valore esatto** dichiarato nel tooltip (valeva già, non si poteva sapere).
+- **Slider rimasti solo sui fattori 0..1** (7 punti, AI): lì l'intervallo è stretto e lo slider è
+  il controllo giusto.
+- **Limiti dei campi posizione da ±60 m a ±1000 m**: su una mappa 300 × 200 metà degli elementi
+  non si sarebbe potuta digitare. Difetto latente, trovato prima che costasse.
+- **Timbro di build dalla data del FILE**, non da `__DATE__`: le macro non cambiano se si
+  modificano altri file, quindi il timbro mentiva proprio nel caso per cui esiste.
+
 ## 2026-08-11 — Il Map Editor è una PAGINA + le isole hanno una distanza (changelog 200)
 
 - **Il modulo non è più una finestra mobile**: `NoMove | NoResize | NoTitleBar`, ancorato
